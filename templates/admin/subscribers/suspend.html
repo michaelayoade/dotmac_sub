@@ -1,0 +1,168 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Suspend Subscriber - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/subscribers" class="hover:text-primary-600">Subscribers</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/subscribers/{{ subscriber.id }}" class="hover:text-primary-600">
+                    {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
+                </a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Suspend Service</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Suspend Subscriber Service</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Temporarily suspend service for this subscriber</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Form -->
+        <div class="lg:col-span-2">
+            <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/suspend" class="space-y-6">
+                <!-- Warning Banner -->
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800/50 dark:bg-amber-900/20">
+                    <div class="flex gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                        <div>
+                            <h3 class="text-sm font-medium text-amber-800 dark:text-amber-300">Service Suspension Warning</h3>
+                            <p class="mt-1 text-sm text-amber-700 dark:text-amber-400">Suspending this subscriber will immediately disconnect their service. This action can be reversed by reactivating the account.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Suspension Details</h2>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        {% if error %}
+                        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                            {{ error }}
+                        </div>
+                        {% endif %}
+
+                        <div>
+                            <label for="reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Suspension Reason <span class="text-red-500">*</span></label>
+                            <select name="reason" id="reason" required
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Select a reason...</option>
+                                <option value="non_payment">Non-Payment</option>
+                                <option value="customer_request">Customer Request</option>
+                                <option value="terms_violation">Terms of Service Violation</option>
+                                <option value="fraud">Suspected Fraud</option>
+                                <option value="temporary_hold">Temporary Hold</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="effective_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective Date</label>
+                            <input type="datetime-local" name="effective_date" id="effective_date"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank for immediate suspension</p>
+                        </div>
+
+                        <div>
+                            <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                            <textarea name="notes" id="notes" rows="4"
+                                placeholder="Additional details about the suspension..."
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                        </div>
+
+                        <div>
+                            <label class="flex items-center gap-2">
+                                <input type="checkbox" name="notify_subscriber" value="true" checked
+                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Send notification to subscriber</span>
+                            </label>
+                            <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">An email will be sent to the subscriber's primary contact</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-3">
+                    <a href="/admin/subscribers/{{ subscriber.id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        Cancel
+                    </a>
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                        Suspend Service
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Subscriber Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Subscriber</h2>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-12 w-12 items-center justify-center rounded-xl text-sm font-bold
+                            {% if subscriber.is_active %}bg-gradient-to-br from-primary-500 to-primary-600 text-white
+                            {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            {% if subscriber.person %}
+                                {{ subscriber.person.first_name[0] }}{{ subscriber.person.last_name[0] if subscriber.person.last_name else '' }}
+                            {% else %}
+                                {{ subscriber.organization.name[0:2] | upper }}
+                            {% endif %}
+                        </div>
+                        <div>
+                            <p class="font-medium text-slate-900 dark:text-white">
+                                {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
+                            </p>
+                            <p class="text-sm text-slate-500 dark:text-slate-400">{{ subscriber.subscriber_type | title }}</p>
+                        </div>
+                    </div>
+                    <dl class="mt-4 space-y-3 text-sm">
+                        <div>
+                            <dt class="text-slate-500 dark:text-slate-400">Status</dt>
+                            <dd class="mt-0.5">
+                                {% if subscriber.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-slate-500 dark:text-slate-400">Customer Since</dt>
+                            <dd class="mt-0.5 text-slate-900 dark:text-white">{{ subscriber.created_at.strftime('%B %d, %Y') if subscriber.created_at else '-' }}</dd>
+                        </div>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Active Services -->
+            {% if accounts %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Active Services</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for account in accounts %}
+                    {% if account.status.value == 'active' %}
+                    <div class="px-6 py-3">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ account.account_number }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ account.service_plan.name if account.service_plan else 'No plan' }}</p>
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

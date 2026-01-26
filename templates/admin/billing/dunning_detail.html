@@ -1,0 +1,284 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Dunning Case - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/billing/dunning" class="hover:text-primary-600">Dunning</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Case Details</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Dunning Case</h1>
+        </div>
+        <div class="flex items-center gap-3">
+            {% if case.status.value == 'open' %}
+            <button
+                hx-post="/admin/billing/dunning/{{ case.id }}/pause"
+                hx-swap="none"
+                class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-600 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40"
+            >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Pause Case
+            </button>
+            {% elif case.status.value == 'paused' %}
+            <button
+                hx-post="/admin/billing/dunning/{{ case.id }}/resume"
+                hx-swap="none"
+                class="inline-flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-100 dark:border-green-600 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/40"
+            >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Resume Case
+            </button>
+            {% endif %}
+            {% if case.status.value not in ['closed', 'resolved'] %}
+            <button
+                hx-post="/admin/billing/dunning/{{ case.id }}/close"
+                hx-swap="none"
+                hx-confirm="Are you sure you want to close this case? This action cannot be undone."
+                class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+            >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                Close Case
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Case Details -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Status Card -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Case Status</h2>
+                    {% set status_class = {
+                        'open': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+                        'paused': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
+                        'resolved': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                        'closed': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                    } %}
+                    <span class="inline-flex items-center rounded-full px-3 py-1 text-sm font-medium {{ status_class.get(case.status.value, 'bg-slate-100 text-slate-600') }}">
+                        {{ case.status.value | capitalize }}
+                    </span>
+                </div>
+                <dl class="grid grid-cols-2 gap-4">
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Current Step</dt>
+                        <dd class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+                            {% if case.current_step is not none %}Day {{ case.current_step }}{% else %}-{% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Started</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {{ case.started_at.strftime('%b %d, %Y %H:%M') if case.started_at else 'N/A' }}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Resolved</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {{ case.resolved_at.strftime('%b %d, %Y %H:%M') if case.resolved_at else '-' }}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Policy Set</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {% if case.policy_set %}{{ case.policy_set.name }}{% else %}-{% endif %}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Action History -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Action History</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if actions %}
+                    {% for action in actions %}
+                    <div class="px-6 py-4">
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-start gap-3">
+                                {% set action_icons = {
+                                    'notify': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>',
+                                    'suspend': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>',
+                                    'throttle': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>',
+                                    'reject': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>'
+                                } %}
+                                <div class="flex-shrink-0 w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+                                    <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        {{ action_icons.get(action.action.value, action_icons['notify']) | safe }}
+                                    </svg>
+                                </div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                        {{ action.action.value | capitalize }}
+                                        {% if action.step_day is not none %}<span class="text-slate-500 dark:text-slate-400">- Day {{ action.step_day }}</span>{% endif %}
+                                    </p>
+                                    {% if action.outcome %}
+                                    <p class="text-sm text-slate-500 dark:text-slate-400">Outcome: {{ action.outcome }}</p>
+                                    {% endif %}
+                                    {% if action.notes %}
+                                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ action.notes }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">
+                                {{ action.executed_at.strftime('%b %d, %Y %H:%M') if action.executed_at else '' }}
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        No actions recorded yet
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Related Invoices -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Overdue Invoices</h2>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice</th>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due Date</th>
+                                <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Balance</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                            {% if invoices %}
+                            {% for invoice in invoices %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-6 py-4">
+                                    <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                        {{ invoice.invoice_number or invoice.id | string | truncate(12, True, '') }}
+                                    </a>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                                    {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}
+                                </td>
+                                <td class="px-6 py-4 text-right text-sm font-medium text-slate-900 dark:text-white">
+                                    {{ invoice.currency }} {{ '{:,.2f}'.format(invoice.balance_due or 0) }}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% else %}
+                            <tr>
+                                <td colspan="3" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                                    No overdue invoices
+                                </td>
+                            </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Account Info -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Account</h3>
+                {% if account %}
+                <div class="space-y-3">
+                    <div>
+                        <a href="/admin/billing/accounts/{{ account.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            {% if account.subscriber and account.subscriber.person %}
+                                {{ account.subscriber.person.display_name or account.subscriber.person.first_name }}
+                            {% else %}
+                                {{ account.account_number or (account.id | string | truncate(12, True, '')) }}
+                            {% endif %}
+                        </a>
+                    </div>
+                    {% if account.account_number %}
+                    <div class="text-sm text-slate-500 dark:text-slate-400">
+                        Account #{{ account.account_number }}
+                    </div>
+                    {% endif %}
+                    <div class="flex items-center gap-2">
+                        {% set account_status_class = {
+                            'active': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                            'suspended': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+                            'canceled': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+                            'delinquent': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                        } %}
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ account_status_class.get(account.status.value, 'bg-slate-100 text-slate-600') }}">
+                            {{ account.status.value | capitalize }}
+                        </span>
+                    </div>
+                    {% if account.subscriber and account.subscriber.person %}
+                    <div class="pt-2 border-t border-slate-200 dark:border-slate-700">
+                        {% if account.subscriber.person.email %}
+                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.subscriber.person.email }}</p>
+                        {% endif %}
+                        {% if account.subscriber.person.phone %}
+                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.subscriber.person.phone }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Account not found</p>
+                {% endif %}
+            </div>
+
+            <!-- Notes -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Notes</h3>
+                {% if case.notes %}
+                <div class="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{{ case.notes }}</div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400 italic">No notes added</p>
+                {% endif %}
+                <form hx-post="/admin/billing/dunning/{{ case.id }}/notes" hx-swap="none" class="mt-4">
+                    {% include "components/forms/csrf_input.html" %}
+                    <textarea
+                        name="note"
+                        rows="3"
+                        placeholder="Add a note..."
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                    ></textarea>
+                    <button
+                        type="submit"
+                        class="mt-2 w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                    >
+                        Add Note
+                    </button>
+                </form>
+            </div>
+
+            <!-- Quick Links -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Quick Links</h3>
+                <div class="space-y-2">
+                    <a href="/admin/billing/accounts/{{ case.account_id }}" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                        View Account
+                    </a>
+                    <a href="/admin/billing/invoices?account_id={{ case.account_id }}" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        All Invoices
+                    </a>
+                    <a href="/admin/billing/payments/new?account_id={{ case.account_id }}" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                        Record Payment
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

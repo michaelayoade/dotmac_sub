@@ -1,0 +1,199 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Request Payment Arrangement - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/portal/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/portal/billing/arrangements" class="hover:text-primary-600">Arrangements</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Request</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Request Payment Arrangement</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set up a payment plan for your outstanding balance</p>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-900/20">
+        <p class="text-sm text-red-700 dark:text-red-400">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    {% if not eligible %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900 dark:bg-amber-900/20">
+        <div class="flex gap-4">
+            <svg class="h-6 w-6 text-amber-600 dark:text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <div>
+                <h3 class="text-sm font-medium text-amber-800 dark:text-amber-300">Not Eligible</h3>
+                <p class="mt-1 text-sm text-amber-700 dark:text-amber-400">{{ ineligible_reason or 'You are not currently eligible for a payment arrangement. Please contact support for assistance.' }}</p>
+                <a href="/portal/support/new" class="mt-2 inline-flex text-sm font-medium text-amber-800 hover:text-amber-900 dark:text-amber-300">
+                    Contact Support
+                    <svg class="ml-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+
+    <!-- Outstanding Balance -->
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Outstanding Balance</h2>
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-3xl font-bold text-slate-900 dark:text-white">NGN {{ '{:,.2f}'.format(outstanding_balance or 0) }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Total amount due</p>
+            </div>
+            {% if overdue_invoices %}
+            <div class="text-right">
+                <p class="text-sm font-medium text-red-600 dark:text-red-400">{{ overdue_invoices | length }} overdue invoice(s)</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Oldest due {{ oldest_due_date.strftime('%b %d, %Y') if oldest_due_date else 'N/A' }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <form action="/portal/billing/arrangements" method="POST" class="space-y-6">
+        <!-- Arrangement Options -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Payment Schedule</h2>
+
+            <div class="space-y-4">
+                <!-- Payment Frequency -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Payment Frequency</label>
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <label class="relative cursor-pointer">
+                            <input type="radio" name="frequency" value="weekly" class="peer sr-only" onchange="calculateInstallments()">
+                            <div class="rounded-lg border-2 border-slate-200 bg-white p-4 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600">
+                                <p class="font-medium text-slate-900 dark:text-white">Weekly</p>
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Every 7 days</p>
+                            </div>
+                        </label>
+                        <label class="relative cursor-pointer">
+                            <input type="radio" name="frequency" value="biweekly" class="peer sr-only" onchange="calculateInstallments()">
+                            <div class="rounded-lg border-2 border-slate-200 bg-white p-4 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600">
+                                <p class="font-medium text-slate-900 dark:text-white">Bi-weekly</p>
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Every 14 days</p>
+                            </div>
+                        </label>
+                        <label class="relative cursor-pointer">
+                            <input type="radio" name="frequency" value="monthly" class="peer sr-only" checked onchange="calculateInstallments()">
+                            <div class="rounded-lg border-2 border-slate-200 bg-white p-4 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600">
+                                <p class="font-medium text-slate-900 dark:text-white">Monthly</p>
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Every 30 days</p>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Number of Installments -->
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="installments" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Installments</label>
+                        <select id="installments" name="installments" required onchange="calculateInstallments()"
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="2">2 installments</option>
+                            <option value="3" selected>3 installments</option>
+                            <option value="4">4 installments</option>
+                            <option value="6">6 installments</option>
+                            <option value="12">12 installments</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
+                        <input type="date" id="start_date" name="start_date" required
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+
+                <!-- Installment Preview -->
+                <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                    <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-2">Payment Summary</h3>
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Each installment:</span>
+                        <span id="installment-amount" class="text-lg font-bold text-primary-600 dark:text-primary-400">
+                            NGN {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }}
+                        </span>
+                    </div>
+                    <p id="payment-schedule" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        3 payments of NGN {{ '{:,.2f}'.format((outstanding_balance or 0) / 3) }} (monthly)
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notes -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Additional Information</h2>
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (optional)</label>
+                <textarea id="notes" name="notes" rows="3"
+                          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                          placeholder="Any additional information or special circumstances..."></textarea>
+            </div>
+        </div>
+
+        <!-- Terms -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-start gap-3">
+                <input type="checkbox" id="terms" name="terms" required
+                       class="mt-1 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                <label for="terms" class="text-sm text-slate-600 dark:text-slate-400">
+                    I understand that this payment arrangement is subject to approval. I agree to make all payments on time.
+                    Failure to meet payment obligations may result in the arrangement being canceled and additional collection actions.
+                </label>
+            </div>
+        </div>
+
+        <!-- Submit -->
+        <div class="flex items-center justify-between pt-4">
+            <a href="/portal/billing/arrangements" class="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                Cancel
+            </a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700">
+                Submit Request
+            </button>
+        </div>
+    </form>
+    {% endif %}
+</div>
+
+<script>
+    // Set default start date to tomorrow
+    const startDateInput = document.getElementById('start_date');
+    if (startDateInput && !startDateInput.value) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        startDateInput.value = tomorrow.toISOString().split('T')[0];
+        startDateInput.min = tomorrow.toISOString().split('T')[0];
+    }
+
+    const totalAmount = {{ outstanding_balance or 0 }};
+
+    function calculateInstallments() {
+        const installments = parseInt(document.getElementById('installments').value);
+        const frequencyInputs = document.querySelectorAll('input[name="frequency"]');
+        let frequency = 'monthly';
+        frequencyInputs.forEach(input => {
+            if (input.checked) frequency = input.value;
+        });
+
+        const installmentAmount = totalAmount / installments;
+        const formattedAmount = installmentAmount.toLocaleString('en-NG', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+
+        document.getElementById('installment-amount').textContent = 'NGN ' + formattedAmount;
+        document.getElementById('payment-schedule').textContent =
+            installments + ' payments of NGN ' + formattedAmount + ' (' + frequency + ')';
+    }
+</script>
+{% endblock %}

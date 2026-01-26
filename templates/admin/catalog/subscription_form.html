@@ -1,0 +1,337 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if subscription.id else 'New' }} Subscription - Admin{% endblock %}
+
+{% block content %}
+{% set has_subscriber_context = subscription.subscriber_id or subscription.account_id %}
+{% set is_new = not subscription.id %}
+
+<div class="mx-auto max-w-2xl space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            {% if subscription.subscriber_id and subscriber_label %}
+            <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="hover:text-primary-600">{{ subscriber_label }}</a>
+            {% else %}
+            <a href="/admin/subscribers" class="hover:text-primary-600">Subscribers</a>
+            {% endif %}
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ 'Edit Subscription' if subscription.id else 'Add Subscription' }}</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Subscription' if subscription.id else 'Add Subscription' }}</h1>
+        {% if is_new and subscriber_label %}
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Select a plan for {{ subscriber_label }}</p>
+        {% endif %}
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% if error %}
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        {# Hidden fields for subscriber/account context #}
+        {% if subscription.subscriber_id %}
+        <input type="hidden" name="subscriber_id" value="{{ subscription.subscriber_id }}">
+        {% endif %}
+        {% if subscription.account_id %}
+        <input type="hidden" name="account_id" value="{{ subscription.account_id }}">
+        {% endif %}
+
+        {# Main subscription details #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Plan Selection</h2>
+            </div>
+            <div class="p-6 space-y-6" x-data="{ billingMode: '{{ subscription.billing_mode or "prepaid" }}' }">
+                {# Show account/subscriber selectors only if no context provided #}
+                {% if not has_subscriber_context %}
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="account_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account <span class="text-red-500">*</span></label>
+                        <select name="account_id" id="account_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select an account</option>
+                            {% for account in accounts or [] %}
+                                {% set account_label = account.subscriber.person.first_name ~ ' ' ~ account.subscriber.person.last_name if account.subscriber and account.subscriber.person else (account.subscriber.organization.name if account.subscriber and account.subscriber.organization else 'Account') %}
+                                {% if account.account_number %}{% set account_label = account_label ~ ' (' ~ account.account_number ~ ')' %}{% endif %}
+                                <option value="{{ account.id }}" {% if subscription.account_id == account.id|string %}selected{% endif %}>{{ account_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
+                        <div class="relative" data-typeahead-url="/api/v1/search/subscribers" data-typeahead-min="2" data-typeahead-limit="8">
+                            <input type="text" name="subscriber_search" data-typeahead-input
+                                   value="{{ subscriber_label }}"
+                                   placeholder="Search subscribers..."
+                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="hidden" name="subscriber_id" data-typeahead-hidden value="{{ subscription.subscriber_id | default('') }}">
+                            <div data-typeahead-results></div>
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500">Pick subscriber to auto-create account</p>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="offer_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Plan / Tariff <span class="text-red-500">*</span></label>
+                        <select name="offer_id" id="offer_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" disabled {% if not subscription.offer_id %}selected{% endif %}>Select a plan</option>
+                            {% for offer in offers or [] %}
+                                <option value="{{ offer.id }}" {% if subscription.offer_id == offer.id|string %}selected{% endif %}>
+                                    {{ offer.name }}{% if offer.prices and offer.prices|length > 0 %} - ₦{{ "{:,.0f}".format(offer.prices[0].amount) }}/mo{% endif %}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        {% if not offers %}
+                        <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No active plans found. Create a tariff first.</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="contract_term" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contract Term</label>
+                        <select name="contract_term" id="contract_term"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for term in contract_terms %}
+                            <option value="{{ term }}" {% if subscription.contract_term == term %}selected{% endif %}>{{ term.replace('_', ' ') | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                        <select name="status" id="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for status in subscription_statuses %}
+                            <option value="{{ status }}" {% if subscription.status == status or (is_new and status == 'pending') %}selected{% endif %}>{{ status | title }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if is_new %}
+                        <p class="mt-1 text-xs text-slate-500">Pending subscriptions create a service order for installation</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="billing_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Mode</label>
+                        <select name="billing_mode" id="billing_mode" x-model="billingMode"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for mode in billing_modes %}
+                            <option value="{{ mode }}" {% if subscription.billing_mode == mode or (is_new and mode == 'prepaid') %}selected{% endif %}>{{ mode | title }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500">{{ billing_mode_help_text }}</p>
+                    </div>
+                </div>
+
+                <div x-show="billingMode === 'postpaid'" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                    {{ billing_mode_postpaid_notice }}
+                </div>
+                <div x-show="billingMode === 'prepaid'" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                    {{ billing_mode_prepaid_notice }}
+                </div>
+            </div>
+        </div>
+
+        {# Advanced options - collapsible #}
+        <div x-data="{ open: {{ 'true' if subscription.id else 'false' }} }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="button" @click="open = !open" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Advanced Options</h2>
+                <svg class="h-5 w-5 text-slate-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+            </button>
+            <div x-show="open" x-collapse class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="start_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start Date</label>
+                        <input type="datetime-local" name="start_at" id="start_at"
+                            value="{{ subscription.start_at }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500">Auto-set when activated</p>
+                    </div>
+
+                    <div>
+                        <label for="next_billing_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Next Billing Date</label>
+                        <input type="datetime-local" name="next_billing_at" id="next_billing_at"
+                            value="{{ subscription.next_billing_at }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500">Auto-calculated from billing cycle</p>
+                    </div>
+
+                    <div>
+                        <label for="end_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End Date</label>
+                        <input type="datetime-local" name="end_at" id="end_at"
+                            value="{{ subscription.end_at }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    {% if subscription.id %}
+                    <div>
+                        <label for="canceled_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Canceled At</label>
+                        <input type="datetime-local" name="canceled_at" id="canceled_at"
+                            value="{{ subscription.canceled_at }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="cancel_reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Cancel Reason</label>
+                        <input type="text" name="cancel_reason" id="cancel_reason"
+                            value="{{ subscription.cancel_reason }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        {# Technical/Provisioning - only show for edit or power users #}
+        {% if subscription.id %}
+        <div x-data="{ open: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="button" @click="open = !open" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Technical Details</h2>
+                <svg class="h-5 w-5 text-slate-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+            </button>
+            <div x-show="open" x-collapse class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="login" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Login / Username</label>
+                        <input type="text" name="login" id="login" value="{{ subscription.login }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="ipv4_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv4 Address</label>
+                        <input type="text" name="ipv4_address" id="ipv4_address" value="{{ subscription.ipv4_address }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="ipv6_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv6 Address</label>
+                        <input type="text" name="ipv6_address" id="ipv6_address" value="{{ subscription.ipv6_address }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="mac_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
+                        <input type="text" name="mac_address" id="mac_address" value="{{ subscription.mac_address }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="router_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Router ID</label>
+                        <input type="number" name="router_id" id="router_id" value="{{ subscription.router_id }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="splynx_service_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">External Service ID</label>
+                        <input type="number" name="splynx_service_id" id="splynx_service_id" value="{{ subscription.splynx_service_id }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="provisioning_nas_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">NAS Device</label>
+                        <select name="provisioning_nas_device_id" id="provisioning_nas_device_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for nas in nas_devices or [] %}
+                            <option value="{{ nas.id }}" {% if subscription.provisioning_nas_device_id == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500">NAS device for RADIUS provisioning</p>
+                    </div>
+                    <div>
+                        <label for="radius_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Profile</label>
+                        <select name="radius_profile_id" id="radius_profile_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for profile in radius_profiles or [] %}
+                            <option value="{{ profile.id }}" {% if subscription.radius_profile_id == profile.id|string %}selected{% endif %}>{{ profile.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500">RADIUS profile for bandwidth limits</p>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label for="service_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="service_description" id="service_description" rows="2"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ subscription.service_description }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+            </div>
+            <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% if activities %}
+                {% for activity in activities %}
+                <div class="px-6 py-4">
+                    <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                    {% if activity.description %}
+                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                    {% endif %}
+                    {% if activity.occurred_at %}
+                    <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# Quick Options for new subscriptions #}
+        {% if is_new %}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Quick Options</h2>
+            </div>
+            <div class="p-6 space-y-4">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name="activate_immediately" value="1"
+                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Activate immediately</span>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Set status to Active instead of Pending (skips service order)</p>
+                    </div>
+                </label>
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name="generate_invoice" value="1"
+                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Generate first invoice</span>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Create and issue the first billing invoice immediately</p>
+                    </div>
+                </label>
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name="send_welcome_email" value="1"
+                           class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Send welcome email</span>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Notify customer about their new subscription</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="flex items-center justify-end gap-3">
+            {% if subscription.subscriber_id %}
+            <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            {% else %}
+            <a href="/admin/subscribers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            {% endif %}
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if subscription.id else 'Add Subscription' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

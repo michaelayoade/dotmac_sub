@@ -1,0 +1,214 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/system" class="hover:text-primary-600">System</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/notifications/templates" class="hover:text-primary-600">Notification Templates</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit' if template else 'New' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ form_title }}</h1>
+        </div>
+        {% if template %}
+        <div class="flex items-center gap-3">
+            <button
+                hx-post="/admin/notifications/templates/{{ template.id }}/delete"
+                hx-confirm="Are you sure you want to delete this template?"
+                hx-swap="none"
+                class="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-600 dark:bg-slate-700 dark:text-red-400 dark:hover:bg-red-900/20"
+            >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                Delete
+            </button>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-900/20">
+        <p class="text-sm text-red-700 dark:text-red-400">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div class="lg:col-span-2">
+            <form action="{{ action_url }}" method="POST" class="space-y-6">
+                <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Template Details</h3>
+
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name</label>
+                            <input
+                                type="text"
+                                id="name"
+                                name="name"
+                                value="{{ template.name if template else '' }}"
+                                required
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                                placeholder="e.g., Invoice Reminder"
+                            >
+                        </div>
+
+                        <div>
+                            <label for="code" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Code</label>
+                            <input
+                                type="text"
+                                id="code"
+                                name="code"
+                                value="{{ template.code if template else '' }}"
+                                required
+                                pattern="[a-z0-9_]+"
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                                placeholder="e.g., invoice_reminder"
+                            >
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Lowercase letters, numbers, and underscores only</p>
+                        </div>
+
+                        <div>
+                            <label for="channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Channel</label>
+                            <select
+                                id="channel"
+                                name="channel"
+                                required
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                            >
+                                {% for ch in channels %}
+                                <option value="{{ ch }}" {{ 'selected' if template and template.channel.value == ch else '' }}>{{ ch | capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        {% if template %}
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
+                            <label class="inline-flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    name="is_active"
+                                    value="true"
+                                    {{ 'checked' if template.is_active else '' }}
+                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700"
+                                >
+                                <span class="text-sm text-slate-700 dark:text-slate-300">Active</span>
+                            </label>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mt-4" id="subject-field">
+                        <label for="subject" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subject <span class="text-slate-400">(for email)</span></label>
+                        <input
+                            type="text"
+                            id="subject"
+                            name="subject"
+                            value="{{ template.subject if template else '' }}"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                            placeholder="e.g., Your invoice is ready"
+                        >
+                    </div>
+
+                    <div class="mt-4">
+                        <label for="body" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Body</label>
+                        <textarea
+                            id="body"
+                            name="body"
+                            rows="10"
+                            required
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                            placeholder="Enter the message body. Use {{variable}} for dynamic content."
+                        >{{ template.body if template else '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Use <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">{{variable_name}}</code> for dynamic content. Supports HTML for email templates.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-3">
+                    <a href="/admin/notifications/templates"
+                       class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Cancel
+                    </a>
+                    <button
+                        type="submit"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                    >
+                        {{ submit_label }}
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            {% if template %}
+            <!-- Test Notification -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Send Test</h3>
+                <form hx-post="/admin/notifications/templates/{{ template.id }}/test" hx-swap="none">
+                    <div class="mb-3">
+                        <label for="test_recipient" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Recipient</label>
+                        <input
+                            type="text"
+                            id="test_recipient"
+                            name="test_recipient"
+                            required
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                            placeholder="{{ 'email@example.com' if template.channel.value == 'email' else '+2348012345678' }}"
+                        >
+                    </div>
+                    <button
+                        type="submit"
+                        class="w-full rounded-lg border border-primary-600 px-4 py-2 text-sm font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
+                    >
+                        Send Test Message
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+
+            <!-- Variables Help -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Template Variables</h3>
+                <div class="space-y-2 text-sm">
+                    <p class="text-slate-600 dark:text-slate-400">Common variables you can use:</p>
+                    <div class="space-y-1">
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{customer_name}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{account_number}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{invoice_number}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{amount_due}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{due_date}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{technician_name}}</code>
+                        <code class="block rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">{{eta_time}}</code>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Links -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Quick Links</h3>
+                <div class="space-y-2">
+                    <a href="/admin/notifications/templates" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                        All Templates
+                    </a>
+                    <a href="/admin/notifications/queue" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Notification Queue
+                    </a>
+                    <a href="/admin/notifications/history" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                        Delivery History
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

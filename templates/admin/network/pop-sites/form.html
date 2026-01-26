@@ -1,0 +1,263 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if pop_site else 'New' }} POP Site - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/pop-sites" class="hover:text-primary-600">POP Sites</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Site' if pop_site else 'New Site' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit POP Site' if pop_site else 'Add POP Site' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update site configuration' if pop_site else 'Register a new point of presence location' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Site Information</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Site Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ pop_site.name if pop_site else '' }}"
+                            placeholder="Downtown Data Center"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="code" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Site Code</label>
+                        <input type="text" name="code" id="code" maxlength="60"
+                            value="{{ pop_site.code if pop_site else '' }}"
+                            placeholder="POP-DC-01"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Unique identifier for this site</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2 mt-7">
+                            <input type="checkbox" name="is_active" value="true" {% if not pop_site or pop_site.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Wireless Mast -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Wireless Mast (optional)</h2>
+            </div>
+            <div class="p-6 space-y-4">
+                {% if mast_error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ mast_error }}
+                </div>
+                {% endif %}
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" id="add_mast" name="add_mast" value="true" {% if mast_enabled %}checked{% endif %}
+                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Add a wireless mast for this site</span>
+                </label>
+
+                <div id="mast-fields" class="{% if not mast_enabled %}hidden{% endif %}">
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div class="sm:col-span-2">
+                            <label for="mast_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Mast Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="mast_name" id="mast_name" maxlength="160"
+                                value="{{ mast_defaults.name if mast_defaults else '' }}"
+                                placeholder="Mast - {{ pop_site.name if pop_site else 'POP Site' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label for="mast_latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latitude</label>
+                            <input type="number" name="mast_latitude" id="mast_latitude" step="0.000001" min="-90" max="90"
+                                value="{{ mast_defaults.latitude if mast_defaults else '' }}"
+                                placeholder="40.7128"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to use POP site coordinates.</p>
+                        </div>
+
+                        <div>
+                            <label for="mast_longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Longitude</label>
+                            <input type="number" name="mast_longitude" id="mast_longitude" step="0.000001" min="-180" max="180"
+                                value="{{ mast_defaults.longitude if mast_defaults else '' }}"
+                                placeholder="-74.0060"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label for="mast_height_m" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Height (m)</label>
+                            <input type="number" name="mast_height_m" id="mast_height_m" step="0.1" min="0" max="300"
+                                value="{{ mast_defaults.height_m if mast_defaults else '' }}"
+                                placeholder="30"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label for="mast_structure_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Structure Type</label>
+                            <input type="text" name="mast_structure_type" id="mast_structure_type" maxlength="80"
+                                value="{{ mast_defaults.structure_type if mast_defaults else '' }}"
+                                placeholder="Self-supporting"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label for="mast_owner" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Owner</label>
+                            <input type="text" name="mast_owner" id="mast_owner" maxlength="160"
+                                value="{{ mast_defaults.owner if mast_defaults else '' }}"
+                                placeholder="Dotmac"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label for="mast_status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                            <input type="text" name="mast_status" id="mast_status" maxlength="40"
+                                value="{{ mast_defaults.status if mast_defaults else 'active' }}"
+                                placeholder="active"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+
+                        <div>
+                            <label class="flex items-center gap-2 mt-7">
+                                <input type="checkbox" name="mast_is_active" value="true" {% if mast_defaults is not defined or mast_defaults.is_active %}checked{% endif %}
+                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                            </label>
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label for="mast_notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                            <textarea name="mast_notes" id="mast_notes" rows="3"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ mast_defaults.notes if mast_defaults else '' }}</textarea>
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label for="mast_metadata" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Metadata (JSON)</label>
+                            <textarea name="mast_metadata" id="mast_metadata" rows="3"
+                                placeholder='{"vendor":"XYZ","model":"ABC"}'
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ mast_defaults.metadata if mast_defaults else '' }}</textarea>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional JSON metadata for the mast.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Address -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Location</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="address_line1" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Address Line 1</label>
+                        <input type="text" name="address_line1" id="address_line1" maxlength="120"
+                            value="{{ pop_site.address_line1 if pop_site else '' }}"
+                            placeholder="123 Network Street"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="address_line2" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Address Line 2</label>
+                        <input type="text" name="address_line2" id="address_line2" maxlength="120"
+                            value="{{ pop_site.address_line2 if pop_site else '' }}"
+                            placeholder="Suite 100"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="city" class="block text-sm font-medium text-slate-700 dark:text-slate-300">City</label>
+                        <input type="text" name="city" id="city" maxlength="80"
+                            value="{{ pop_site.city if pop_site else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="region" class="block text-sm font-medium text-slate-700 dark:text-slate-300">State / Region</label>
+                        <input type="text" name="region" id="region" maxlength="80"
+                            value="{{ pop_site.region if pop_site else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="postal_code" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Postal Code</label>
+                        <input type="text" name="postal_code" id="postal_code" maxlength="20"
+                            value="{{ pop_site.postal_code if pop_site else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="country_code" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Country Code</label>
+                        <input type="text" name="country_code" id="country_code" maxlength="2"
+                            value="{{ pop_site.country_code if pop_site else '' }}"
+                            placeholder="US"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white uppercase">
+                    </div>
+
+                    <div>
+                        <label for="latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latitude</label>
+                        <input type="number" name="latitude" id="latitude" step="0.000001" min="-90" max="90"
+                            value="{{ pop_site.latitude if pop_site else '' }}"
+                            placeholder="40.7128"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Longitude</label>
+                        <input type="number" name="longitude" id="longitude" step="0.000001" min="-180" max="180"
+                            value="{{ pop_site.longitude if pop_site else '' }}"
+                            placeholder="-74.0060"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ pop_site.notes if pop_site else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/pop-sites" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if pop_site else 'Create Site' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const toggle = document.getElementById('add_mast');
+    const fields = document.getElementById('mast-fields');
+    if (!toggle || !fields) return;
+    const sync = () => fields.classList.toggle('hidden', !toggle.checked);
+    toggle.addEventListener('change', sync);
+    sync();
+})();
+</script>
+{% endblock %}

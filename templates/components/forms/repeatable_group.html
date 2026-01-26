@@ -1,0 +1,171 @@
+{#
+   Repeatable Field Group Component
+   ================================
+   A Jinja2 macro for creating dynamic field groups that can be added/removed.
+   Uses Alpine.js for reactivity.
+
+   Usage:
+   {% from "components/forms/repeatable_group.html" import repeatable_group %}
+
+   {% call repeatable_group(
+       name="line_items",
+       title="Line Items",
+       add_label="Add Line Item",
+       min=1,
+       max=50
+   ) %}
+       <template x-for="(item, index) in items" :key="item.id">
+           <div class="repeatable-item">
+               <!-- Your item template here -->
+           </div>
+       </template>
+   {% endcall %}
+#}
+
+{% macro repeatable_group(name, title="", add_label="Add Item", remove_label="Remove", min=0, max=100, show_reorder=False, color="primary") %}
+<div class="repeatable-group"
+     x-data="repeatableFields({ min: {{ min }}, max: {{ max }}, fieldPrefix: '{{ name }}' })">
+
+    {% if title %}
+    <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+        <button type="button"
+                @click="addItem()"
+                :disabled="!canAdd()"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-{{ color }}-300 bg-{{ color }}-50 px-3 py-1.5 text-xs font-medium text-{{ color }}-700 hover:bg-{{ color }}-100 transition disabled:opacity-50 disabled:cursor-not-allowed dark:border-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400 dark:hover:bg-{{ color }}-900/50">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            {{ add_label }}
+        </button>
+    </div>
+    {% endif %}
+
+    <div class="repeatable-items space-y-4">
+        {{ caller() }}
+    </div>
+
+    <!-- Empty state -->
+    <div x-show="items.length === 0" class="text-center py-8 text-slate-500 dark:text-slate-400">
+        <p class="text-sm">No items added yet.</p>
+        <button type="button"
+                @click="addItem()"
+                class="mt-2 text-sm font-medium text-{{ color }}-600 hover:text-{{ color }}-700 dark:text-{{ color }}-400">
+            {{ add_label }}
+        </button>
+    </div>
+
+    <!-- Hidden input for form submission (JSON format) -->
+    <input type="hidden" :name="'{{ name }}_json'" :value="toJSON()">
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   REPEATABLE ITEM WRAPPER
+   Wrapper for individual items in a repeatable group
+   ============================================ #}
+{% macro repeatable_item(index_var="index", show_number=True, show_remove=True, show_reorder=False, color="primary") %}
+<div class="relative rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0 transform -translate-y-2"
+     x-transition:enter-end="opacity-100 transform translate-y-0">
+
+    {% if show_number %}
+    <div class="absolute -top-2 -left-2 flex h-6 w-6 items-center justify-center rounded-full bg-{{ color }}-500 text-xs font-bold text-white shadow-sm"
+         x-text="{{ index_var }} + 1"></div>
+    {% endif %}
+
+    <div class="item-content">
+        {{ caller() }}
+    </div>
+
+    <!-- Item actions -->
+    <div class="mt-4 flex items-center justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+        {% if show_reorder %}
+        <button type="button"
+                @click="moveUp({{ index_var }})"
+                :disabled="{{ index_var }} === 0"
+                class="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+            </svg>
+        </button>
+        <button type="button"
+                @click="moveDown({{ index_var }})"
+                :disabled="{{ index_var }} === items.length - 1"
+                class="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        {% endif %}
+
+        {% if show_remove %}
+        <button type="button"
+                @click="removeItem({{ index_var }})"
+                :disabled="!canRemove()"
+                class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition disabled:opacity-50 disabled:cursor-not-allowed">
+            Remove
+        </button>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   LINE ITEM INPUT ROW
+   Standard row for invoice/order line items
+   ============================================ #}
+{% macro line_item_row(index_var="index", item_var="item", show_tax=True, tax_rates=[]) %}
+<div class="grid gap-4 sm:grid-cols-12">
+    <div class="sm:col-span-5">
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Description</label>
+        <input type="text"
+               x-model="{{ item_var }}.description"
+               placeholder="Item description"
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+    </div>
+
+    <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Quantity</label>
+        <input type="number"
+               x-model.number="{{ item_var }}.quantity"
+               step="0.001"
+               min="0.001"
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-right focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+    </div>
+
+    <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Unit Price</label>
+        <input type="number"
+               x-model.number="{{ item_var }}.unitPrice"
+               step="0.01"
+               min="0"
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-right focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+    </div>
+
+    {% if show_tax and tax_rates %}
+    <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Tax</label>
+        <select x-model="{{ item_var }}.taxRateId"
+                @change="updateLineItemTaxRate({{ index_var }})"
+                class="block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="">None</option>
+            {% for rate in tax_rates %}
+            <option value="{{ rate.id }}">{{ rate.name }} ({{ (rate.rate * 100)|round(2) }}%)</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+
+    <div class="sm:col-span-1 flex items-end justify-end">
+        <div class="text-right">
+            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Total</label>
+            <span class="text-sm font-semibold text-slate-900 dark:text-white"
+                  x-text="formatCurrency(getLineItemGross({{ item_var }}))"></span>
+        </div>
+    </div>
+</div>
+{% endmacro %}

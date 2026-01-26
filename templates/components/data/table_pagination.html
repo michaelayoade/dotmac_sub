@@ -1,0 +1,83 @@
+{#
+   Table Pagination Component
+   Usage: {% include "components/data/table_pagination.html" %}
+
+   Parameters:
+   - total: Total number of items
+   - limit: Items per page
+   - offset: Current offset
+   - htmx_url: URL for HTMX requests
+   - htmx_target: Target element ID
+#}
+{% set current_page = (offset // limit) + 1 if limit else 1 %}
+{% set total_pages = ((total - 1) // limit) + 1 if limit and total else 1 %}
+{% set start_item = offset + 1 if total else 0 %}
+{% set end_item = [offset + limit, total] | min if total else 0 %}
+
+<div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+    <!-- Info -->
+    <p class="text-sm text-slate-500 dark:text-slate-400">
+        Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ start_item }}</span>
+        to <span class="font-medium text-slate-700 dark:text-slate-200">{{ end_item }}</span>
+        of <span class="font-medium text-slate-700 dark:text-slate-200">{{ total }}</span> results
+    </p>
+
+    <!-- Navigation -->
+    <nav class="flex items-center gap-1">
+        <!-- Previous -->
+        {% if current_page > 1 %}
+        <button hx-get="{{ htmx_url }}?offset={{ offset - limit }}&limit={{ limit }}"
+                hx-target="#{{ htmx_target }}"
+                hx-include="[name='search'],[name='order_by'],[name='order_dir']"
+                class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+        </button>
+        {% else %}
+        <button disabled
+                class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+        </button>
+        {% endif %}
+
+        <!-- Page numbers -->
+        {% for page in range(1, total_pages + 1) %}
+            {% if page == current_page %}
+            <button class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-sm font-medium text-white">
+                {{ page }}
+            </button>
+            {% elif page == 1 or page == total_pages or (page >= current_page - 1 and page <= current_page + 1) %}
+            <button hx-get="{{ htmx_url }}?offset={{ (page - 1) * limit }}&limit={{ limit }}"
+                    hx-target="#{{ htmx_target }}"
+                    hx-include="[name='search'],[name='order_by'],[name='order_dir']"
+                    class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                {{ page }}
+            </button>
+            {% elif page == current_page - 2 or page == current_page + 2 %}
+            <span class="inline-flex h-9 w-9 items-center justify-center text-slate-400">...</span>
+            {% endif %}
+        {% endfor %}
+
+        <!-- Next -->
+        {% if current_page < total_pages %}
+        <button hx-get="{{ htmx_url }}?offset={{ offset + limit }}&limit={{ limit }}"
+                hx-target="#{{ htmx_target }}"
+                hx-include="[name='search'],[name='order_by'],[name='order_dir']"
+                class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+        </button>
+        {% else %}
+        <button disabled
+                class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+        </button>
+        {% endif %}
+    </nav>
+</div>

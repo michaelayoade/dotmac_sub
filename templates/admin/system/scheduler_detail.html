@@ -1,0 +1,218 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ task.name }} - Scheduler - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/system/scheduler" class="hover:text-primary-600">Scheduler</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ task.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ task.name }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ task.task_name }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <form method="POST" action="/admin/system/scheduler/{{ task.id }}/run" class="inline">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Run Now
+                </button>
+            </form>
+            {% if task.enabled %}
+            <form method="POST" action="/admin/system/scheduler/{{ task.id }}/disable" class="inline">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Disable
+                </button>
+            </form>
+            {% else %}
+            <form method="POST" action="/admin/system/scheduler/{{ task.id }}/enable" class="inline">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Enable
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Info -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Task Configuration -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Task Configuration</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Task Name</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ task.task_name }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Schedule Type</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ task.schedule_type.value | title }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Interval</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% set seconds = task.interval_seconds %}
+                                {% if seconds >= 86400 %}
+                                    {{ (seconds // 86400) }} day{% if seconds // 86400 > 1 %}s{% endif %}
+                                {% elif seconds >= 3600 %}
+                                    {{ (seconds // 3600) }} hour{% if seconds // 3600 > 1 %}s{% endif %}
+                                {% elif seconds >= 60 %}
+                                    {{ (seconds // 60) }} minute{% if seconds // 60 > 1 %}s{% endif %}
+                                {% else %}
+                                    {{ seconds }} second{% if seconds > 1 %}s{% endif %}
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                            <dd class="mt-1">
+                                {% if task.enabled %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                                    Enabled
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                                    Disabled
+                                </span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Task Arguments -->
+            {% if task.args_json or task.kwargs_json %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Task Arguments</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    {% if task.args_json %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">Positional Arguments</dt>
+                        <dd class="rounded-lg bg-slate-50 dark:bg-slate-900 p-4 font-mono text-sm text-slate-900 dark:text-white overflow-x-auto">
+                            <pre>{{ task.args_json | tojson(indent=2) }}</pre>
+                        </dd>
+                    </div>
+                    {% endif %}
+                    {% if task.kwargs_json %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">Keyword Arguments</dt>
+                        <dd class="rounded-lg bg-slate-50 dark:bg-slate-900 p-4 font-mono text-sm text-slate-900 dark:text-white overflow-x-auto">
+                            <pre>{{ task.kwargs_json | tojson(indent=2) }}</pre>
+                        </dd>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Recent Runs -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Execution History</h2>
+                </div>
+                <div class="p-6">
+                    {% if runs %}
+                    <div class="space-y-3">
+                        {% for run in runs %}
+                        <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <div class="flex items-center gap-3">
+                                {% if run.success %}
+                                <div class="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                                    <svg class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                </div>
+                                {% else %}
+                                <div class="flex h-8 w-8 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                                    <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </div>
+                                {% endif %}
+                                <div>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d, %Y %H:%M:%S') if run.started_at else 'Unknown' }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Duration: {{ run.duration_ms }}ms</p>
+                                </div>
+                            </div>
+                            {% if run.success %}
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Success</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">Failed</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No execution history available.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Task ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ task.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Run</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.last_run_at.strftime('%B %d, %Y %H:%M') if task.last_run_at else 'Never' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Next Run</p>
+                        <p class="text-sm text-slate-900 dark:text-white">
+                            {% if task.enabled and task.last_run_at %}
+                                {{ next_run.strftime('%B %d, %Y %H:%M') if next_run else 'Calculating...' }}
+                            {% elif task.enabled %}
+                                On scheduler start
+                            {% else %}
+                                Disabled
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.created_at.strftime('%B %d, %Y') if task.created_at else '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.updated_at.strftime('%B %d, %Y %H:%M') if task.updated_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Danger Zone -->
+            <div class="rounded-xl border border-red-200 bg-white shadow-sm dark:border-red-800/50 dark:bg-slate-800">
+                <div class="border-b border-red-200 px-6 py-4 dark:border-red-800/50">
+                    <h2 class="font-semibold text-red-700 dark:text-red-400">Danger Zone</h2>
+                </div>
+                <div class="p-6">
+                    <form method="POST" action="/admin/system/scheduler/{{ task.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this scheduled task? This action cannot be undone.')">
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-slate-800 dark:text-red-400">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            Delete Task
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

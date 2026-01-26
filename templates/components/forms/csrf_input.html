@@ -1,0 +1,10 @@
+{# CSRF Token Hidden Input
+   Include this in all forms that perform state-changing operations (POST, PUT, DELETE).
+
+   Usage:
+   <form method="post">
+       {% include "components/forms/csrf_input.html" %}
+       <!-- rest of form -->
+   </form>
+#}
+<input type="hidden" name="_csrf_token" value="{{ csrf_token }}">

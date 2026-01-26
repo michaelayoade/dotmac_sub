@@ -1,0 +1,399 @@
+{% extends "layouts/reseller.html" %}
+
+{% block title %}Fiber Map - Reseller{% endblock %}
+
+{% block head %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #fiber-map {
+        height: calc(100vh - 260px);
+        min-height: 520px;
+        border-radius: 0.75rem;
+    }
+    .leaflet-popup-content-wrapper {
+        border-radius: 0.5rem;
+    }
+    .dark .leaflet-popup-content-wrapper {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .dark .leaflet-popup-tip {
+        background: #1e293b;
+    }
+    .fiber-popup-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .fiber-popup-type {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.7;
+        margin-bottom: 0.25rem;
+    }
+    .fiber-popup-detail {
+        font-size: 0.875rem;
+        margin: 0.25rem 0;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    .legend-icon {
+        width: 1.25rem;
+        height: 1.25rem;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .map-search {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        width: 300px;
+        z-index: 1000;
+    }
+    .map-search-container {
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        border: 1px solid #e2e8f0;
+    }
+    .dark .map-search-container {
+        background: #1e293b;
+        border-color: #334155;
+    }
+    .map-search input {
+        width: 100%;
+        padding: 10px 12px;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 14px;
+        color: #0f172a;
+    }
+    .dark .map-search input {
+        color: #f1f5f9;
+    }
+    .map-search input::placeholder {
+        color: #94a3b8;
+    }
+    .map-search-clear {
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        padding: 4px;
+        border-radius: 50%;
+        color: #64748b;
+        opacity: 0;
+        transition: opacity 0.2s;
+    }
+    .map-search-clear.visible {
+        opacity: 1;
+    }
+    .search-results {
+        max-height: 240px;
+        overflow-y: auto;
+        border-top: 1px solid #e2e8f0;
+        display: none;
+    }
+    .dark .search-results {
+        border-top-color: #334155;
+    }
+    .search-results.visible {
+        display: block;
+    }
+    .search-result-item {
+        padding: 10px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #f1f5f9;
+    }
+    .dark .search-result-item {
+        border-bottom-color: #334155;
+    }
+    .search-result-item:hover {
+        background: #f8fafc;
+    }
+    .dark .search-result-item:hover {
+        background: #0f172a;
+    }
+    .search-result-title {
+        font-weight: 600;
+        font-size: 14px;
+        color: #0f172a;
+    }
+    .dark .search-result-title {
+        color: #f1f5f9;
+    }
+    .search-result-type {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 2px;
+    }
+    .dark .search-result-type {
+        color: #94a3b8;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/reseller/dashboard" class="hover:text-primary-600">Dashboard</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Fiber Map</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber Map</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Read-only view of the fiber network footprint.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Read-only
+            </span>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <div class="lg:col-span-3">
+            <div class="relative rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+                <div id="fiber-map"></div>
+                <div class="map-search">
+                    <div class="map-search-container">
+                        <input type="text" id="map-search-input" placeholder="Search cabinets, closures..." class="dark:bg-slate-800 dark:text-white" autocomplete="off">
+                        <button id="map-search-clear" class="map-search-clear" type="button">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                        <div id="search-results" class="search-results"></div>
+                    </div>
+                </div>
+                <div id="planning-panel" class="planning-panel hidden"></div>
+            </div>
+            <div id="drag-coords" class="drag-coords"></div>
+        </div>
+
+        <div class="space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Stats</h2>
+                <div class="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+                    <div class="flex items-center justify-between">
+                        <span>FDH Cabinets</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ stats.fdh_cabinets }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Splice Closures</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ stats.splice_closures }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Splitters</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ stats.splitters }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Splices</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ stats.total_splices }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Segments</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ stats.segments }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Legend</h2>
+                <div class="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                    <div class="legend-item">
+                        <span class="legend-icon" style="background:#f97316"></span>
+                        <span>FDH Cabinet</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-icon" style="background:#14b8a6"></span>
+                        <span>Splice Closure</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-icon" style="background:#ef4444"></span>
+                        <span>Feeder Segment</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-icon" style="background:#3b82f6"></span>
+                        <span>Distribution Segment</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-icon" style="background:#22c55e"></span>
+                        <span>Drop Segment</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const costSettings = {{ cost_settings | tojson | safe }};
+    const readOnly = {{ read_only | tojson | safe }};
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    const map = L.map('fiber-map').setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
+
+    const layers = {
+        fdh: L.layerGroup().addTo(map),
+        closures: L.layerGroup().addTo(map),
+        feeder: L.layerGroup().addTo(map),
+        distribution: L.layerGroup().addTo(map),
+        drop: L.layerGroup().addTo(map)
+    };
+
+    const icons = {
+        fdh_cabinet: L.divIcon({
+            html: '<div style="background:#f97316;width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            className: '',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+            popupAnchor: [0, -12]
+        }),
+        splice_closure: L.divIcon({
+            html: '<div style="background:#14b8a6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        })
+    };
+
+    const segmentStyles = {
+        feeder: { color: '#ef4444', weight: 4, opacity: 0.9 },
+        distribution: { color: '#3b82f6', weight: 3, opacity: 0.8 },
+        drop: { color: '#22c55e', weight: 2, opacity: 0.7 }
+    };
+
+    const allFeatures = [];
+    const geojsonData = {{ geojson_data | tojson | safe }};
+    const bounds = [];
+
+    if (geojsonData.features) {
+        geojsonData.features.forEach(feature => {
+            const geom = feature.geometry;
+            const props = feature.properties || {};
+            allFeatures.push(feature);
+            if (geom.type === 'Point') {
+                const coords = [geom.coordinates[1], geom.coordinates[0]];
+                bounds.push(coords);
+                let marker = null;
+                if (props.type === 'fdh_cabinet') {
+                    const content = `
+                        <div class="fiber-popup-type">FDH Cabinet</div>
+                        <div class="fiber-popup-title">${escapeHtml(props.name || 'Unnamed')}</div>
+                        ${props.code ? `<div class="fiber-popup-detail">Code: ${escapeHtml(props.code)}</div>` : ''}
+                        <div class="fiber-popup-detail">Splitters: ${props.splitter_count || 0}</div>
+                    `;
+                    marker = L.marker(coords, { icon: icons.fdh_cabinet }).bindPopup(content);
+                    marker.addTo(layers.fdh);
+                } else if (props.type === 'splice_closure') {
+                    const content = `
+                        <div class="fiber-popup-type">Splice Closure</div>
+                        <div class="fiber-popup-title">${escapeHtml(props.name || 'Unnamed')}</div>
+                        <div class="fiber-popup-detail">Splices: ${props.splice_count || 0}</div>
+                        <div class="fiber-popup-detail">Trays: ${props.tray_count || 0}</div>
+                    `;
+                    marker = L.marker(coords, { icon: icons.splice_closure }).bindPopup(content);
+                    marker.addTo(layers.closures);
+                }
+            } else if (geom.type === 'LineString') {
+                const coords = geom.coordinates.map(c => [c[1], c[0]]);
+                coords.forEach(c => bounds.push(c));
+                const segType = props.segment_type || 'distribution';
+                const style = segmentStyles[segType] || segmentStyles.distribution;
+                L.polyline(coords, style).addTo(layers[segType] || layers.distribution);
+            }
+        });
+    }
+
+    if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [50, 50] });
+    }
+
+    const searchInput = document.getElementById('map-search-input');
+    const searchResults = document.getElementById('search-results');
+    const searchClear = document.getElementById('map-search-clear');
+
+    function renderSearchResults(results) {
+        if (!results.length) {
+            searchResults.innerHTML = '<div class="search-result-item"><div class="search-result-title">No matches</div></div>';
+            searchResults.classList.add('visible');
+            return;
+        }
+        searchResults.innerHTML = results.map(item => `
+            <div class="search-result-item" data-id="${item.properties.id}">
+                <div class="search-result-title">${escapeHtml(item.properties.name || item.properties.code || 'Unnamed')}</div>
+                <div class="search-result-type">${escapeHtml(item.properties.type || '')}</div>
+            </div>
+        `).join('');
+        searchResults.classList.add('visible');
+    }
+
+    searchInput.addEventListener('input', function() {
+        const query = this.value.trim().toLowerCase();
+        if (!query) {
+            searchResults.classList.remove('visible');
+            searchClear.classList.remove('visible');
+            return;
+        }
+        searchClear.classList.add('visible');
+        const matches = allFeatures.filter(feature => {
+            const props = feature.properties || {};
+            return (props.name || '').toLowerCase().includes(query)
+                || (props.code || '').toLowerCase().includes(query);
+        }).slice(0, 20);
+        renderSearchResults(matches);
+    });
+
+    searchClear.addEventListener('click', function() {
+        searchInput.value = '';
+        searchResults.classList.remove('visible');
+        searchClear.classList.remove('visible');
+    });
+
+    searchResults.addEventListener('click', function(e) {
+        const item = e.target.closest('.search-result-item');
+        if (!item) return;
+        const id = item.getAttribute('data-id');
+        const feature = allFeatures.find(f => f.properties && f.properties.id === id);
+        if (!feature || feature.geometry.type !== 'Point') return;
+        const coords = [feature.geometry.coordinates[1], feature.geometry.coordinates[0]];
+        map.setView(coords, 17);
+    });
+
+    if (readOnly) {
+        return;
+    }
+
+    // Placeholder for future interactive actions if needed.
+})();
+</script>
+{% endblock %}

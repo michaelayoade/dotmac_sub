@@ -1,0 +1,192 @@
+{% extends "layouts/admin.html" %}
+{% block title %}{{ 'Edit' if policy.id else 'New' }} Policy Set - Catalog Settings{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="policySetForm()">
+    <div class="flex items-center gap-4">
+        <a href="/admin/catalog/settings/policy-sets" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ 'Edit' if policy.id else 'New' }} Policy Set</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update policy set details' if policy.id else 'Define proration, trials, dunning, and refund policies' }}</p>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="text-sm font-medium text-red-800 dark:text-red-200">{{ error }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <!-- Basic Details -->
+        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-medium text-slate-900 dark:text-white">Policy Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                    <input type="text" name="name" id="name" required maxlength="120" value="{{ policy.name }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="proration_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Proration Policy</label>
+                        <select name="proration_policy" id="proration_policy"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for p in proration_policies %}
+                            <option value="{{ p }}" {{ 'selected' if policy.proration_policy == p else '' }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">When upgrades/downgrades take effect</p>
+                    </div>
+
+                    <div>
+                        <label for="downgrade_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Downgrade Policy</label>
+                        <select name="downgrade_policy" id="downgrade_policy"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for p in proration_policies %}
+                            <option value="{{ p }}" {{ 'selected' if policy.downgrade_policy == p else '' }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="trial_days" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Trial Days</label>
+                        <input type="number" name="trial_days" id="trial_days" min="0" value="{{ policy.trial_days }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="grace_days" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Grace Days</label>
+                        <input type="number" name="grace_days" id="grace_days" min="0" value="{{ policy.grace_days }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="suspension_action" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Suspension Action</label>
+                        <select name="suspension_action" id="suspension_action"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for a in suspension_actions %}
+                            <option value="{{ a }}" {{ 'selected' if policy.suspension_action == a else '' }}>{{ a }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="refund_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Refund Policy</label>
+                        <select name="refund_policy" id="refund_policy"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for r in refund_policies %}
+                            <option value="{{ r }}" {{ 'selected' if policy.refund_policy == r else '' }}>{{ r }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="refund_window_days" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Refund Window (days)</label>
+                        <input type="number" name="refund_window_days" id="refund_window_days" min="0" value="{{ policy.refund_window_days }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="trial_card_required" value="true" {{ 'checked' if policy.trial_card_required else '' }}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Trial requires payment card</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                    <div class="mt-2 flex items-center gap-4">
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="is_active" value="true" {{ 'checked' if policy.is_active else '' }} class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="is_active" value="false" {{ 'checked' if not policy.is_active else '' }} class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Inactive</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dunning Steps -->
+        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+                <h2 class="text-lg font-medium text-slate-900 dark:text-white">Dunning Steps</h2>
+                <button type="button" @click="addStep()"
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Add Step
+                </button>
+            </div>
+            <div class="p-6">
+                <div class="space-y-4" x-show="steps.length > 0">
+                    <template x-for="(step, index) in steps" :key="index">
+                        <div class="flex items-start gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-600 dark:bg-slate-700/50">
+                            <input type="hidden" :name="'dunning_steps[' + index + '][id]'" :value="step.id || ''">
+                            <div class="flex-1 grid gap-4 sm:grid-cols-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400">Day Offset</label>
+                                    <input type="number" :name="'dunning_steps[' + index + '][day_offset]'" x-model="step.day_offset" min="0" required
+                                           class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400">Action</label>
+                                    <select :name="'dunning_steps[' + index + '][action]'" x-model="step.action" required
+                                            class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                        {% for a in dunning_actions %}
+                                        <option value="{{ a }}">{{ a }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400">Note</label>
+                                    <input type="text" :name="'dunning_steps[' + index + '][note]'" x-model="step.note" maxlength="200"
+                                           class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                            </div>
+                            <button type="button" @click="removeStep(index)" class="mt-5 rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+                <div x-show="steps.length === 0" class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">
+                    No dunning steps configured. Click "Add Step" to define the dunning timeline.
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/catalog/settings/policy-sets" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Cancel</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">{{ 'Save Changes' if policy.id else 'Create Policy Set' }}</button>
+        </div>
+    </form>
+</div>
+
+<script>
+function policySetForm() {
+    return {
+        steps: {{ policy.dunning_steps | tojson if policy.dunning_steps else '[]' }},
+        addStep() {
+            this.steps.push({ day_offset: '', action: 'notify', note: '' });
+        },
+        removeStep(index) {
+            this.steps.splice(index, 1);
+        }
+    };
+}
+</script>
+{% endblock %}

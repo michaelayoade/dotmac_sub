@@ -1,0 +1,181 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Network Alarms - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Network Alarms</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Active alerts and network events</p>
+        </div>
+        <form method="GET" action="/admin/network/alarms" class="flex items-center gap-2">
+            <select name="severity" id="severity-filter" onchange="this.form.submit()" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All Severities</option>
+                <option value="critical" {% if severity == 'critical' %}selected{% endif %}>Critical</option>
+                <option value="warning" {% if severity == 'warning' %}selected{% endif %}>Warning</option>
+                <option value="info" {% if severity == 'info' %}selected{% endif %}>Info</option>
+            </select>
+            <select name="status" id="status-filter" onchange="this.form.submit()" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All</option>
+                <option value="open" {% if status == 'open' %}selected{% endif %}>Open</option>
+                <option value="acknowledged" {% if status == 'acknowledged' %}selected{% endif %}>Acknowledged</option>
+                <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved</option>
+            </select>
+        </form>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Critical</p>
+            <p class="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">{{ stats.critical }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Active alerts</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Warning</p>
+            <p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">{{ stats.warning }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Active alerts</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Info</p>
+            <p class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">{{ stats.info }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Active alerts</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Open</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_open }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Require attention</p>
+        </div>
+    </div>
+
+    <!-- Alarms List -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Active Alarms</h2>
+        </div>
+        {% if alarms %}
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for alarm in alarms %}
+            <div class="p-4 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                <div class="flex items-start justify-between gap-4">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg {% if alarm.severity.value == 'critical' %}bg-red-100 dark:bg-red-900/30{% elif alarm.severity.value == 'warning' %}bg-amber-100 dark:bg-amber-900/30{% else %}bg-blue-100 dark:bg-blue-900/30{% endif %}">
+                            {% if alarm.severity.value == 'critical' %}
+                            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            {% elif alarm.severity.value == 'warning' %}
+                            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            {% else %}
+                            <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            {% endif %}
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                    {{ alarm.rule.name if alarm.rule else 'Unknown Alert' }}
+                                </p>
+                                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if alarm.status.value == 'open' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif alarm.status.value == 'acknowledged' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% endif %}">
+                                    {{ alarm.status.value | title }}
+                                </span>
+                            </div>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                                {% if alarm.device %}
+                                <a href="/admin/network/core-devices/{{ alarm.device.id }}" class="text-primary-600 hover:text-primary-700">{{ alarm.device.name }}</a>
+                                {% if alarm.interface %} / {{ alarm.interface.name }}{% endif %}
+                                {% else %}Unknown device{% endif %}
+                            </p>
+                            <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                                {{ alarm.metric_type.value }}: {{ alarm.measured_value }} | Triggered: {{ alarm.triggered_at.strftime('%b %d, %Y %H:%M') if alarm.triggered_at else '-' }}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        {% if alarm.status.value == 'open' %}
+                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/acknowledge">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-sm text-primary-600 hover:text-primary-700">Acknowledge</button>
+                        </form>
+                        {% endif %}
+                        {% if alarm.status.value != 'resolved' %}
+                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/resolve">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-sm text-green-600 hover:text-green-700">Resolve</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="p-6">
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No active alarms</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All systems are operating normally.</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Alert Rules -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex items-center justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Alert Rules</h2>
+                <a href="/admin/network/alarms/rules/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Rule</a>
+            </div>
+        </div>
+        {% if rules %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Rule Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Metric</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Condition</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Severity</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for rule in rules %}
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ rule.name }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ rule.metric_type.value }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400 font-mono">{{ rule.operator.value }} {{ rule.threshold }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if rule.severity.value == 'critical' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif rule.severity.value == 'warning' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                {{ rule.severity.value | title }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if rule.is_active %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                                Active
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                                Disabled
+                            </span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-6">
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No alert rules configured</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create rules to monitor network metrics and receive alerts.</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

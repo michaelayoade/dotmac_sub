@@ -1,0 +1,20 @@
+<div>
+    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customer <span class="text-red-500">*</span></label>
+    <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
+        <input type="text" data-typeahead-input
+               value="{{ customer_label or '' }}"
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+               placeholder="Search customers..." required>
+        <input type="hidden" name="customer_ref" data-typeahead-hidden required value="{{ customer_ref or '' }}">
+        <div data-typeahead-results></div>
+    </div>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose the customer; we’ll pick the subscriber.</p>
+</div>
+
+<div hx-get="/admin/billing/customer-subscribers"
+     hx-trigger="load, change from:input[name='customer_ref']"
+     hx-include="closest form"
+     hx-target="#customer-subscriber-select"
+     hx-swap="outerHTML">
+    {% include "admin/billing/_customer_subscriber_select.html" with context %}
+</div>

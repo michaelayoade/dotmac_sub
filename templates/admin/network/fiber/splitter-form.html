@@ -1,0 +1,108 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if splitter else 'New' }} Splitter - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/splitters" class="hover:text-primary-600">Splitters</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Splitter' if splitter else 'New Splitter' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Splitter' if splitter else 'Add Splitter' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update splitter configuration' if splitter else 'Register a new optical splitter' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Splitter Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Splitter Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ splitter.name if splitter else '' }}"
+                            placeholder="SPL-01-A"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="fdh_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">FDH Cabinet</label>
+                        <select name="fdh_id" id="fdh_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">No cabinet (standalone)</option>
+                            {% for cab in cabinets %}
+                            <option value="{{ cab.id }}" {% if splitter and splitter.fdh_id == cab.id %}selected{% elif selected_fdh_id and selected_fdh_id == cab.id | string %}selected{% endif %}>{{ cab.name }} ({{ cab.code or 'No code' }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="splitter_ratio" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Splitter Ratio</label>
+                        <select name="splitter_ratio" id="splitter_ratio"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select ratio...</option>
+                            <option value="1:2" {% if splitter and splitter.splitter_ratio == '1:2' %}selected{% endif %}>1:2</option>
+                            <option value="1:4" {% if splitter and splitter.splitter_ratio == '1:4' %}selected{% endif %}>1:4</option>
+                            <option value="1:8" {% if splitter and splitter.splitter_ratio == '1:8' %}selected{% endif %}>1:8</option>
+                            <option value="1:16" {% if splitter and splitter.splitter_ratio == '1:16' %}selected{% endif %}>1:16</option>
+                            <option value="1:32" {% if splitter and splitter.splitter_ratio == '1:32' %}selected{% endif %}>1:32</option>
+                            <option value="1:64" {% if splitter and splitter.splitter_ratio == '1:64' %}selected{% endif %}>1:64</option>
+                            <option value="2:32" {% if splitter and splitter.splitter_ratio == '2:32' %}selected{% endif %}>2:32</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="input_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Input Ports</label>
+                        <input type="number" name="input_ports" id="input_ports" min="1" max="16"
+                            value="{{ splitter.input_ports if splitter else 1 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="output_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Output Ports</label>
+                        <input type="number" name="output_ports" id="output_ports" min="1" max="128"
+                            value="{{ splitter.output_ports if splitter else 8 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ splitter.notes if splitter else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not splitter or splitter.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/splitters" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if splitter else 'Create Splitter' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

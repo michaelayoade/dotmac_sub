@@ -1,0 +1,87 @@
+{# Step 3: Address Information #}
+<div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="mb-6">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Address</h2>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            <span x-show="customerType === 'person'">Enter the customer's physical address (optional)</span>
+            <span x-show="customerType === 'organization'">Enter the organization's business address (optional)</span>
+        </p>
+    </div>
+
+    <div class="space-y-5">
+        <div>
+            <label for="address_line1" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">
+                Address Line 1
+            </label>
+            <input type="text" id="address_line1" x-model="addressLine1"
+                   placeholder="123 Main Street"
+                   class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+        </div>
+
+        <div>
+            <label for="address_line2" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">
+                Address Line 2
+            </label>
+            <input type="text" id="address_line2" x-model="addressLine2"
+                   placeholder="Apt 4B, Floor 2"
+                   class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div class="col-span-2 sm:col-span-1">
+                <label for="city" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">City</label>
+                <input type="text" id="city" x-model="city"
+                       placeholder="Lagos"
+                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+            </div>
+            <div>
+                <label for="region" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">State/Region</label>
+                <input type="text" id="region" x-model="region"
+                       placeholder="Lagos State"
+                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+            </div>
+            <div>
+                <label for="postal_code" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">Postal Code</label>
+                <input type="text" id="postal_code" x-model="postalCode"
+                       placeholder="100001"
+                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+            </div>
+            <div>
+                <label for="country_code" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">Country</label>
+                <select id="country_code" x-model="countryCode"
+                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    <option value="">Select...</option>
+                    <option value="NG">Nigeria</option>
+                    <option value="GH">Ghana</option>
+                    <option value="KE">Kenya</option>
+                    <option value="ZA">South Africa</option>
+                    <option value="GB">United Kingdom</option>
+                    <option value="US">United States</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Preview (placeholder for future integration) -->
+    <div class="mt-6 rounded-xl bg-slate-100 dark:bg-slate-900/50 p-6 text-center border-2 border-dashed border-slate-300 dark:border-slate-700"
+         x-show="addressLine1 || city">
+        <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            <span x-text="[addressLine1, city, region, countryCode].filter(Boolean).join(', ') || 'Address preview'"></span>
+        </p>
+    </div>
+
+    <div class="mt-6 flex items-center justify-end">
+        <button type="button"
+                @click="skipAddress()"
+                class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            Skip address for now
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+        </button>
+    </div>
+</div>

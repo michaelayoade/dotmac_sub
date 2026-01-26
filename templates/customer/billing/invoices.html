@@ -1,0 +1,191 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Invoices - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Invoices</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">View and download your billing statements</p>
+        </div>
+        {% if account.balance < 0 %}
+        <a href="/customer/billing/pay"
+           class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+            </svg>
+            Pay Now (₦{{ "%.2f" | format(account.balance | abs) }})
+        </a>
+        {% endif %}
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Current Balance</p>
+            <p class="mt-1 text-2xl font-bold {% if account.balance < 0 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}">
+                ₦{{ "%.2f" | format(account.balance | abs) }}
+                {% if account.balance >= 0 %}<span class="text-sm font-normal text-slate-500"> credit</span>{% endif %}
+            </p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Payment</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(last_payment.amount) if last_payment else '0.00' }}</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">{{ last_payment.date.strftime('%b %d, %Y') if last_payment else 'No payments' }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Next Invoice</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(account.next_bill_amount) }}</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Due {{ account.next_bill_date.strftime('%b %d, %Y') }}</p>
+        </div>
+    </div>
+
+    <!-- Invoices List -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex items-center justify-between">
+                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Invoice History</h2>
+                <select name="year"
+                        hx-get="/customer/billing/invoices"
+                        hx-trigger="change"
+                        hx-target="#invoices-list"
+                        class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="2024">2024</option>
+                    <option value="2023">2023</option>
+                    <option value="2022">2022</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="invoices-list" class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for invoice in invoices %}
+            <div class="px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                <div class="flex items-center gap-4">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg
+                        {% if invoice.status == 'paid' %}bg-green-100 dark:bg-green-900/30
+                        {% elif invoice.status == 'overdue' %}bg-red-100 dark:bg-red-900/30
+                        {% else %}bg-blue-100 dark:bg-blue-900/30{% endif %}">
+                        <svg class="h-5 w-5 {% if invoice.status == 'paid' %}text-green-600 dark:text-green-400{% elif invoice.status == 'overdue' %}text-red-600 dark:text-red-400{% else %}text-blue-600 dark:text-blue-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">Invoice #{{ invoice.number }}</p>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ invoice.period }}</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">₦{{ "%.2f" | format(invoice.total) }}</p>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                            {% if invoice.status == 'paid' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
+                            {% elif invoice.status == 'overdue' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                            {% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                            {{ invoice.status | capitalize }}
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <a href="/customer/billing/invoices/{{ invoice.id }}"
+                           class="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                           title="View">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                            </svg>
+                        </a>
+                        <a href="/customer/billing/invoices/{{ invoice.id }}/pdf"
+                           class="rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                           title="Download PDF">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                        </a>
+                        {% if invoice.status != 'paid' %}
+                        <a href="/customer/billing/pay?invoice={{ invoice.id }}"
+                           class="rounded p-1.5 text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20"
+                           title="Pay">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                            </svg>
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="px-6 py-12 text-center">
+                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                <h3 class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No invoices found</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Your invoices will appear here once generated.</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if pagination %}
+        <div class="border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+            {% include "components/data/table_pagination.html" %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Payment Methods -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Payment Methods</h2>
+            <button type="button"
+                    x-data
+                    x-on:click="$dispatch('open-modal', {name: 'add-payment-method'})"
+                    class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                Add New
+            </button>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for method in payment_methods %}
+            <div class="px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                        {% if method.type == 'card' %}
+                        <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                        </svg>
+                        {% else %}
+                        <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z"/>
+                        </svg>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">
+                            {{ method.brand | capitalize }} ending in {{ method.last4 }}
+                        </p>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">
+                            {% if method.type == 'card' %}Expires {{ method.exp_month }}/{{ method.exp_year }}{% else %}{{ method.bank_name }}{% endif %}
+                        </p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    {% if method.is_default %}
+                    <span class="inline-flex items-center rounded-full bg-primary-100 px-2.5 py-0.5 text-xs font-medium text-primary-800 dark:bg-primary-900/30 dark:text-primary-400">
+                        Default
+                    </span>
+                    {% endif %}
+                    <button hx-delete="/customer/billing/payment-methods/{{ method.id }}"
+                            hx-confirm="Are you sure you want to remove this payment method?"
+                            class="text-sm text-red-600 hover:text-red-700 dark:text-red-400">
+                        Remove
+                    </button>
+                </div>
+            </div>
+            {% else %}
+            <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                No payment methods on file. <button type="button" x-data x-on:click="$dispatch('open-modal', {name: 'add-payment-method'})" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Add one now</button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

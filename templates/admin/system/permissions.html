@@ -1,0 +1,143 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Permissions - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Permissions</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ permissions | length }} granular access permissions</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/admin/system/roles" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                Back to Roles
+            </a>
+            <a href="/admin/system/permissions/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                New Permission
+            </a>
+        </div>
+    </div>
+
+    {# Search and filter #}
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div class="flex-1">
+            <input type="text" id="permission_search" placeholder="Search permissions (e.g., billing, invoice, read)"
+                   class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        </div>
+        <div class="flex items-center gap-2">
+            <select id="domain_filter" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All Domains</option>
+                {% set domains_seen = [] %}
+                {% for permission in permissions | sort(attribute='key') %}
+                    {% set domain = permission.key.split(':')[0] %}
+                    {% if domain not in domains_seen %}
+                        {% set _ = domains_seen.append(domain) %}
+                        <option value="{{ domain }}">{{ domain | title }}</option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700" id="permissions_table">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Domain</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Permission Key</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800" id="permissions_tbody">
+                    {% if permissions %}
+                    {% for permission in permissions | sort(attribute='key') %}
+                    {% set parts = permission.key.split(':') %}
+                    {% set domain = parts[0] if parts | length >= 1 else 'other' %}
+                    <tr class="permission-row hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                        data-key="{{ permission.key }}"
+                        data-domain="{{ domain }}"
+                        data-description="{{ permission.description or '' }}">
+                        <td class="px-6 py-3 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ domain }}</span>
+                        </td>
+                        <td class="px-6 py-3 whitespace-nowrap">
+                            <code class="text-sm font-medium text-slate-900 dark:text-white">{{ permission.key }}</code>
+                        </td>
+                        <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ permission.description | default('—') }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap">
+                            {% if permission.is_active %}
+                            {{ status_badge("Active", "active", size="sm") }}
+                            {% else %}
+                            {{ status_badge("Inactive", "inactive", size="sm") }}
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-3 whitespace-nowrap text-right">
+                            <a href="/admin/system/permissions/{{ permission.id }}/edit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr id="empty_row">
+                        <td colspan="5" class="px-6 py-12">
+                            {% set title = "No permissions found" %}
+                            {% set message = "Create a permission to start defining access." %}
+                            {% include "components/data/empty_state.html" %}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                <span id="visible_count">{{ permissions | length }}</span> of {{ permissions | length }} permissions
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const searchInput = document.getElementById("permission_search");
+    const domainFilter = document.getElementById("domain_filter");
+    const tbody = document.getElementById("permissions_tbody");
+    const visibleCountEl = document.getElementById("visible_count");
+    if (!tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll(".permission-row"));
+
+    const filterRows = () => {
+        const query = (searchInput?.value || "").trim().toLowerCase();
+        const domain = domainFilter?.value || "";
+        let visibleCount = 0;
+
+        rows.forEach(row => {
+            const key = (row.dataset.key || "").toLowerCase();
+            const rowDomain = row.dataset.domain || "";
+            const description = (row.dataset.description || "").toLowerCase();
+
+            const matchesSearch = !query || key.includes(query) || description.includes(query);
+            const matchesDomain = !domain || rowDomain === domain;
+            const visible = matchesSearch && matchesDomain;
+
+            row.classList.toggle("hidden", !visible);
+            if (visible) visibleCount++;
+        });
+
+        if (visibleCountEl) visibleCountEl.textContent = visibleCount;
+    };
+
+    searchInput?.addEventListener("input", filterRows);
+    domainFilter?.addEventListener("change", filterRows);
+})();
+</script>
+{% endblock %}

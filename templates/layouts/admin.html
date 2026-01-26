@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div x-data="{ sidebarOpen: window.innerWidth >= 1024, sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true', isDesktop: window.innerWidth >= 1024 }"
+     x-init="
+        $watch('sidebarCollapsed', val => localStorage.setItem('sidebarCollapsed', val));
+        const updateSidebar = () => {
+            isDesktop = window.innerWidth >= 1024;
+            sidebarOpen = isDesktop;
+        };
+        updateSidebar();
+        window.addEventListener('resize', updateSidebar);
+     "
+     class="flex h-screen overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside :class="[
+               sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+               (isDesktop && sidebarCollapsed) ? 'w-20' : 'w-64'
+           ]"
+           class="fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200 bg-white transition-all duration-300 dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0">
+
+        <!-- Logo -->
+        <div class="flex h-16 items-center justify-between px-4 border-b border-slate-200 dark:border-slate-800">
+            <a href="/admin/dashboard" class="flex items-center gap-3">
+                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600">
+                    <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                </div>
+                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">Dotmac SM</span>
+            </a>
+            <button x-on:click="sidebarCollapsed = !sidebarCollapsed"
+                    aria-label="Toggle sidebar collapse"
+                    :aria-pressed="sidebarCollapsed.toString()"
+                    class="hidden lg:flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">
+                <svg x-show="!sidebarCollapsed" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
+                </svg>
+                <svg x-show="sidebarCollapsed" x-cloak class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 overflow-y-auto py-4 px-3">
+            {% include "components/navigation/admin_sidebar.html" %}
+        </nav>
+
+        <!-- User Profile (bottom) -->
+        <div class="border-t border-slate-200 p-4 dark:border-slate-800">
+            <div class="flex items-center gap-3">
+                <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-white">
+                    {{ current_user.initials if current_user is defined and current_user else 'AD' }}
+                </div>
+                <div x-show="!sidebarCollapsed" class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-slate-900 truncate dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
+                    <p class="text-xs text-slate-500 truncate dark:text-slate-400">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Mobile sidebar backdrop -->
+    <div x-show="sidebarOpen"
+         x-on:click="sidebarOpen = false"
+         x-transition:enter="transition-opacity ease-linear duration-300"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition-opacity ease-linear duration-300"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         class="fixed inset-0 z-30 bg-slate-900/80 lg:hidden"
+         x-cloak></div>
+
+    <!-- Main Content Area -->
+    <div class="flex flex-1 flex-col overflow-hidden">
+        <!-- Top Navigation -->
+        <header class="relative z-40 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 pointer-events-auto dark:border-slate-700 dark:bg-slate-800">
+            <!-- Mobile menu button -->
+            <button x-on:click="sidebarOpen = !sidebarOpen"
+                    aria-label="Toggle navigation"
+                    :aria-expanded="sidebarOpen.toString()"
+                    class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 lg:hidden">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+            </button>
+
+            <!-- Breadcrumbs -->
+            <div class="hidden lg:flex items-center gap-2 text-sm">
+                {% block breadcrumbs %}
+                <a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a>
+                {% endblock %}
+            </div>
+
+            <!-- Right side actions -->
+            <div class="flex items-center gap-2 pointer-events-auto">
+                <!-- Global Search with Suggestions -->
+                <div class="hidden sm:block"
+                     x-data="globalSearch()"
+                     x-on:click.away="close()"
+                     x-on:keydown.escape.window="close()">
+                    <div class="relative">
+                        <input type="search"
+                               x-ref="searchInput"
+                               x-model="query"
+                               x-on:input.debounce.300ms="search()"
+                               x-on:focus="open = query.length >= 2"
+                               x-on:keydown.down.prevent="navigateDown()"
+                               x-on:keydown.up.prevent="navigateUp()"
+                               x-on:keydown.enter.prevent="selectCurrent()"
+                               placeholder="Search customers, invoices..."
+                               autocomplete="off"
+                               class="w-72 rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-4 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
+                        <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                        <div x-show="loading" class="absolute right-3 top-2.5">
+                            <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                    </div>
+
+                    <!-- Search Results Dropdown -->
+                    <div x-show="open && (results.categories?.length > 0 || (query.length >= 2 && !loading))"
+                         x-transition:enter="transition ease-out duration-100"
+                         x-transition:enter-start="opacity-0 scale-95"
+                         x-transition:enter-end="opacity-100 scale-100"
+                         x-transition:leave="transition ease-in duration-75"
+                         x-transition:leave-start="opacity-100 scale-100"
+                         x-transition:leave-end="opacity-0 scale-95"
+                         x-cloak
+                         class="absolute right-0 mt-2 w-96 max-h-[28rem] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800 z-50">
+
+                        <!-- No Results -->
+                        <template x-if="query.length >= 2 && !loading && results.categories?.length === 0">
+                            <div class="px-4 py-8 text-center">
+                                <svg class="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                                </svg>
+                                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No results for "<span x-text="query"></span>"</p>
+                            </div>
+                        </template>
+
+                        <!-- Results by Category -->
+                        <template x-for="(category, catIndex) in results.categories" :key="category.name">
+                            <div class="border-b border-slate-100 last:border-0 dark:border-slate-700">
+                                <div class="px-3 py-2 bg-slate-50 dark:bg-slate-800/50">
+                                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400" x-text="category.name"></span>
+                                </div>
+                                <template x-for="(item, itemIndex) in category.items" :key="item.id">
+                                    <a :href="item.url"
+                                       :class="{'bg-primary-50 dark:bg-primary-900/20': isSelected(catIndex, itemIndex)}"
+                                       class="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer"
+                                       x-on:mouseenter="selectedIndex = flatIndex(catIndex, itemIndex)"
+                                       x-on:click="close()">
+                                        <!-- Icon based on type -->
+                                        <div class="flex-shrink-0">
+                                            <template x-if="category.icon === 'users'">
+                                                <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                                                </svg>
+                                            </template>
+                                            <template x-if="category.icon === 'credit-card'">
+                                                <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                                                </svg>
+                                            </template>
+                                            <template x-if="category.icon === 'document-text'">
+                                                <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                                </svg>
+                                            </template>
+                                            <template x-if="category.icon === 'ticket'">
+                                                <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z"/>
+                                                </svg>
+                                            </template>
+                                            <template x-if="category.icon === 'wrench'">
+                                                <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                                </svg>
+                                            </template>
+                                        </div>
+                                        <div class="flex-1 min-w-0">
+                                            <p class="text-sm font-medium text-slate-900 dark:text-white truncate" x-text="item.label"></p>
+                                        </div>
+                                        <svg class="h-4 w-4 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                        </svg>
+                                    </a>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Keyboard hint -->
+                        <div class="px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700">
+                            <div class="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+                                <div class="flex items-center gap-2">
+                                    <kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono">↑↓</kbd>
+                                    <span>navigate</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono">↵</kbd>
+                                    <span>select</span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono">esc</kbd>
+                                    <span>close</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dark mode toggle -->
+                <button x-on:click="$store.darkMode.toggle()"
+                        aria-label="Toggle dark mode"
+                        :aria-pressed="$store.darkMode.on.toString()"
+                        class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">
+                    <svg x-show="!$store.darkMode.on" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                    </svg>
+                    <svg x-show="$store.darkMode.on" x-cloak class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                    </svg>
+                </button>
+
+                <!-- Notifications -->
+                <div x-data="{ open: false }" class="relative">
+                    <button x-on:click="open = !open"
+                            aria-label="View notifications"
+                            :aria-expanded="open.toString()"
+                            aria-controls="admin-notifications-menu"
+                            class="relative flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                        </svg>
+                        <span class="absolute right-1.5 top-1.5 flex h-2 w-2">
+                            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
+                            <span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
+                        </span>
+                    </button>
+
+                    <div x-show="open"
+                         x-on:click.outside="open = false"
+                         x-transition
+                         x-cloak
+                         id="admin-notifications-menu"
+                         role="menu"
+                         class="absolute right-0 mt-2 w-80 rounded-xl border border-slate-200 bg-white py-2 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                        <div hx-get="/admin/notifications"
+                             hx-trigger="load"
+                             hx-swap="innerHTML"
+                             class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+                            Loading notifications...
+                        </div>
+                    </div>
+                </div>
+
+                <!-- User dropdown -->
+                <div x-data="{ open: false }" class="relative">
+                    <button x-on:click="open = !open"
+                            aria-label="Open user menu"
+                            :aria-expanded="open.toString()"
+                            aria-controls="admin-user-menu"
+                            data-dropdown-trigger="admin-user-menu"
+                            class="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-full bg-primary-600 text-sm font-medium text-white">
+                            {{ current_user.initials if current_user is defined and current_user else 'AD' }}
+                        </div>
+                        <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+
+                    <div x-show="open"
+                         x-on:click.outside="open = false"
+                         x-transition
+                         x-cloak
+                         id="admin-user-menu"
+                         data-dropdown-menu="admin-user-menu"
+                         role="menu"
+                         class="absolute right-0 mt-2 w-56 rounded-xl border border-slate-200 bg-white py-2 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                        <div class="px-4 py-2 border-b border-slate-200 dark:border-slate-700">
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
+                        </div>
+                        <a href="/admin/system/users/profile" role="menuitem" class="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                            </svg>
+                            Profile
+                        </a>
+                        <a href="/admin/system/settings" role="menuitem" class="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                            Settings
+                        </a>
+                        <div class="border-t border-slate-200 dark:border-slate-700 my-1"></div>
+                        <a href="/auth/logout" role="menuitem" class="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                            </svg>
+                            Sign out
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Page Content -->
+        <main class="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 bg-noise bg-mesh">
+            <div class="relative z-10 mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 {% block content_container_class %}{% endblock %}">
+                {% block page_header %}{% endblock %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+</div>
+{% endblock %}

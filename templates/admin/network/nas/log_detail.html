@@ -1,0 +1,184 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Provisioning Log - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex items-center gap-4">
+        <a href="/admin/network/nas/logs{% if device %}?device_id={{ device.id }}{% endif %}" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Provisioning Log</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Command Sent -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Command Sent</h2>
+                </div>
+                <div class="p-6">
+                    {% if log.command_sent %}
+                    <pre class="rounded-lg bg-slate-900 p-4 text-sm text-green-400 overflow-x-auto whitespace-pre-wrap">{{ log.command_sent }}</pre>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No command recorded</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Response -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Response</h2>
+                </div>
+                <div class="p-6">
+                    {% if log.response %}
+                    <pre class="rounded-lg bg-slate-900 p-4 text-sm text-slate-300 overflow-x-auto whitespace-pre-wrap">{{ log.response }}</pre>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No response recorded</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Error Message -->
+            {% if log.error_message %}
+            <div class="rounded-xl border border-red-200 bg-red-50 shadow-sm dark:border-red-900/50 dark:bg-red-900/10">
+                <div class="border-b border-red-200 px-6 py-4 dark:border-red-900/50">
+                    <h2 class="font-semibold text-red-800 dark:text-red-300">Error Message</h2>
+                </div>
+                <div class="p-6">
+                    <pre class="rounded-lg bg-red-900 p-4 text-sm text-red-200 overflow-x-auto whitespace-pre-wrap">{{ log.error_message }}</pre>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Variables -->
+            {% if log.variables %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Variables Used</h2>
+                </div>
+                <div class="p-6">
+                    <div class="space-y-2">
+                        {% for key, value in log.variables.items() %}
+                        <div class="flex items-start gap-2 text-sm">
+                            <span class="font-mono text-slate-500 dark:text-slate-400 min-w-[120px]">{{ key }}:</span>
+                            <span class="font-mono text-slate-900 dark:text-white break-all">
+                                {% if key == 'password' %}********{% else %}{{ value }}{% endif %}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Status Card -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Status</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="flex items-center justify-center">
+                        {% if log.status == 'success' %}
+                        <div class="flex flex-col items-center">
+                            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                                <svg class="h-8 w-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                            </div>
+                            <span class="mt-2 text-lg font-medium text-green-700 dark:text-green-400">Success</span>
+                        </div>
+                        {% elif log.status == 'failed' %}
+                        <div class="flex flex-col items-center">
+                            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+                                <svg class="h-8 w-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </div>
+                            <span class="mt-2 text-lg font-medium text-red-700 dark:text-red-400">Failed</span>
+                        </div>
+                        {% else %}
+                        <div class="flex flex-col items-center">
+                            <div class="flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                                <svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            </div>
+                            <span class="mt-2 text-lg font-medium text-amber-700 dark:text-amber-400">Pending</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Details -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Details</h2>
+                </div>
+                <div class="p-6 space-y-4 text-sm">
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Action</span>
+                        <p class="mt-1">
+                            <span class="inline-flex items-center rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                                {{ log.action.value.replace('_', ' ') | title }}
+                            </span>
+                        </p>
+                    </div>
+                    {% if device %}
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Device</span>
+                        <p class="mt-1">
+                            <a href="/admin/network/nas/devices/{{ device.id }}" class="font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
+                                {{ device.name }}
+                            </a>
+                        </p>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Triggered By</span>
+                        <p class="mt-1 text-slate-900 dark:text-white">{{ log.triggered_by or 'System' }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Timestamp</span>
+                        <p class="mt-1 text-slate-900 dark:text-white">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+                    </div>
+                    {% if log.execution_time_ms %}
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Execution Time</span>
+                        <p class="mt-1 text-slate-900 dark:text-white">{{ log.execution_time_ms }} ms</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

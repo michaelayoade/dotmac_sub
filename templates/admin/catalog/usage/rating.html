@@ -1,0 +1,134 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Usage Rating{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Usage Rating</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Process usage records into billable charges</p>
+        </div>
+        <a href="/admin/catalog/usage" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Run Rating Form -->
+    <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-white">Run Rating</h2>
+        </div>
+        <div class="p-6">
+            <form method="post" action="/admin/catalog/usage/rating/run" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Run the rating engine to process usage records and generate charges. This will:
+                </p>
+                <ul class="list-disc list-inside text-sm text-slate-600 dark:text-slate-400 space-y-1 ml-2">
+                    <li>Scan all active subscriptions with usage-based pricing</li>
+                    <li>Calculate usage for the billing period</li>
+                    <li>Apply usage allowances and overage rates</li>
+                    <li>Create staged charges ready for review</li>
+                </ul>
+
+                <div class="grid gap-4 sm:grid-cols-2 mt-4">
+                    <div>
+                        <label for="period_start" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Period Start</label>
+                        <input type="date" name="period_start" id="period_start"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to use last billing period</p>
+                    </div>
+                    <div>
+                        <label for="period_end" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Period End</label>
+                        <input type="date" name="period_end" id="period_end"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to use last billing period</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4 pt-4">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        Run Rating Now
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Rating Run History -->
+    <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-white">Rating Run History</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-700/50">
+                    <tr>
+                        <th scope="col" class="py-3.5 pl-6 pr-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Run Time</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Period</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriptions</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Charges Created</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th scope="col" class="relative py-3.5 pl-3 pr-6"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for run in runs %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
+                        <td class="whitespace-nowrap py-4 pl-6 pr-3 text-sm text-slate-900 dark:text-white">
+                            {{ run.run_at.strftime('%Y-%m-%d %H:%M') if run.run_at else '-' }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ run.period_start.strftime('%Y-%m-%d') if run.period_start else '-' }} - {{ run.period_end.strftime('%Y-%m-%d') if run.period_end else '-' }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ run.subscriptions_scanned or 0 }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ run.charges_created or 0 }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
+                                {% if run.status.value == 'success' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
+                                {% elif run.status.value == 'failed' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                                {% elif run.status.value == 'running' %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400
+                                {% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
+                                {{ run.status.value }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap py-4 pl-3 pr-6 text-right text-sm">
+                            <a href="/admin/catalog/usage/rating/{{ run.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
+                                View Details
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No rating runs yet. Run the rating engine to process usage records.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% if total_pages > 1 %}
+    <div class="flex items-center justify-between border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800 sm:px-6 rounded-lg">
+        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-700 dark:text-slate-300">Showing {{ (page - 1) * per_page + 1 }} to {{ [page * per_page, total]|min }} of {{ total }}</p>
+            <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm">
+                {% if page > 1 %}<a href="?page={{ page - 1 }}" class="relative inline-flex items-center rounded-l-md px-2 py-2 text-slate-400 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 dark:ring-slate-600 dark:hover:bg-slate-700"><svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg></a>{% endif %}
+                <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-inset ring-slate-300 dark:text-white dark:ring-slate-600">{{ page }}</span>
+                {% if page < total_pages %}<a href="?page={{ page + 1 }}" class="relative inline-flex items-center rounded-r-md px-2 py-2 text-slate-400 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 dark:ring-slate-600 dark:hover:bg-slate-700"><svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></a>{% endif %}
+            </nav>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

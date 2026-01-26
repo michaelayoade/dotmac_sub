@@ -1,0 +1,135 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Wireless Site Surveys - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network" class="hover:text-primary-600">Network</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Site Surveys</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Wireless Site Surveys</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Plan and analyze wireless link installations</p>
+        </div>
+        <a href="/admin/network/site-survey/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New Survey
+        </a>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex-1 min-w-[220px]">
+                <label class="sr-only" for="survey-search">Search surveys</label>
+                <input id="survey-search" type="text" placeholder="Search surveys..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            </div>
+            <div class="w-44">
+                <label class="sr-only" for="survey-status">Status</label>
+                <select id="survey-status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    <option value="">All Status</option>
+                    <option value="draft">Draft</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                    <option value="archived">Archived</option>
+                </select>
+            </div>
+        </div>
+        {% if surveys %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Frequency</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Default Height</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for survey in surveys %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                        data-row-text="{{ survey.name }} {{ survey.description or '' }} {{ survey.status.value }} {{ survey.frequency_mhz or '' }}">
+                        <td class="px-6 py-4">
+                            <a href="/admin/network/site-survey/{{ survey.id }}" class="font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
+                                {{ survey.name }}
+                            </a>
+                            {% if survey.description %}
+                            <p class="text-sm text-slate-500 dark:text-slate-400 line-clamp-1">{{ survey.description }}</p>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set status_colors = {
+                                'draft': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
+                                'in_progress': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+                                'completed': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                                'archived': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_colors.get(survey.status.value, status_colors.draft) }}">
+                                {{ survey.status.value | replace('_', ' ') | title }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {% if survey.frequency_mhz %}
+                                {{ survey.frequency_mhz }} MHz
+                            {% else %}
+                                <span class="text-slate-400">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ survey.default_antenna_height_m }} m
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ survey.created_at.strftime('%Y-%m-%d') }}
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <a href="/admin/network/site-survey/{{ survey.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                View
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-12 text-center">
+            <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+            </svg>
+            <h3 class="mt-4 text-lg font-medium text-slate-900 dark:text-white">No site surveys yet</h3>
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Get started by creating your first wireless site survey.</p>
+            <a href="/admin/network/site-survey/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                New Survey
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+const surveySearch = document.getElementById('survey-search');
+const surveyStatus = document.getElementById('survey-status');
+const surveyRows = Array.from(document.querySelectorAll('tbody tr[data-row-text]'));
+
+function filterSurveys() {
+    const query = (surveySearch?.value || '').trim().toLowerCase();
+    const status = surveyStatus?.value || '';
+    surveyRows.forEach((row) => {
+        const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+        const matchesText = !query || text.includes(query);
+        const matchesStatus = !status || text.includes(status);
+        row.style.display = matchesText && matchesStatus ? '' : 'none';
+    });
+}
+
+if (surveySearch) surveySearch.addEventListener('input', filterSurveys);
+if (surveyStatus) surveyStatus.addEventListener('change', filterSurveys);
+</script>
+{% endblock %}

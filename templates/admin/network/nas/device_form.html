@@ -1,0 +1,391 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import submit_button %}
+
+{% block title %}{% if device %}Edit{% else %}New{% endif %} NAS Device - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex items-center gap-4">
+        <a href="{% if device %}/admin/network/nas/devices/{{ device.id }}{% else %}/admin/network/nas{% endif %}" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{% if device %}Edit{% else %}New{% endif %} NAS Device</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {% if device %}Update device configuration{% else %}Add a new Network Access Server{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <!-- Errors -->
+    {% if errors %}
+    <div class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-900/20">
+        <div class="flex items-start gap-3">
+            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <div>
+                <h3 class="font-medium text-red-800 dark:text-red-300">There were errors with your submission</h3>
+                <ul class="mt-2 list-disc pl-5 text-sm text-red-700 dark:text-red-400">
+                    {% for error in errors %}
+                    <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" class="space-y-6" x-data="{ submitting: false }" @submit="submitting = true">
+        {% include "components/forms/csrf_input.html" %}
+
+        <!-- Noscript fallback for connection types -->
+        <noscript>
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/50 dark:bg-amber-900/20">
+                <p class="text-sm text-amber-800 dark:text-amber-300">
+                    JavaScript is required for connection type selection. Please enable JavaScript to use all features.
+                </p>
+            </div>
+        </noscript>
+
+        <!-- Basic Information -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Basic Information</h2>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Device Name *</label>
+                        <input type="text" name="name" value="{{ device.name if device else (form_data.name if form_data else '') }}" required
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., Core-Router-POP1">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address *</label>
+                        <input type="text" name="ip_address" value="{{ device.ip_address if device else (form_data.ip_address if form_data else '') }}" required
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="192.168.1.1">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor *</label>
+                        <select name="vendor" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select Vendor</option>
+                            {% for v in vendors %}
+                            <option value="{{ v.value }}" {% if (device and device.vendor.value == v.value) or (form_data and form_data.vendor == v.value) %}selected{% endif %}>{{ v.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Model</label>
+                        <input type="text" name="model" value="{{ device.model if device else (form_data.model if form_data else '') }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., CCR2004-16G-2S+">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
+                        <select name="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for s in statuses %}
+                            <option value="{{ s.value }}" {% if (device and device.status.value == s.value) or (not device and s.value == 'active') %}selected{% endif %}>{{ s.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">POP Site</label>
+                        <div class="relative" data-typeahead-url="/api/v1/search/pop-sites">
+                            <input type="text" data-typeahead-input
+                                   value="{{ pop_site_label or '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="Search POP sites...">
+                            <input type="hidden" name="pop_site_id" data-typeahead-hidden value="{{ device.pop_site_id|string if device and device.pop_site_id else '' }}">
+                            <div data-typeahead-results></div>
+                        </div>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+                        <textarea name="description" rows="2"
+                                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                  placeholder="Optional description">{{ device.description if device else (form_data.description if form_data else '') }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Types -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Connection Types</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Select the authentication methods supported by this device</p>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {% for ct in connection_types %}
+                    <label class="flex items-center gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="conn_type_{{ ct.value }}" value="{{ ct.value }}"
+                               {% if device and device.supported_connection_types and ct.value in device.supported_connection_types|map(attribute='value')|list %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        <div>
+                            <span class="block text-sm font-medium text-slate-900 dark:text-white">{{ ct.label }}</span>
+                            <span class="block text-xs text-slate-500 dark:text-slate-400">
+                                {% if ct.value == 'pppoe' %}Point-to-Point Protocol over Ethernet{% endif %}
+                                {% if ct.value == 'dhcp' %}Dynamic Host Configuration Protocol{% endif %}
+                                {% if ct.value == 'ipoe' %}IP over Ethernet with RADIUS{% endif %}
+                                {% if ct.value == 'static' %}Static IP assignment{% endif %}
+                                {% if ct.value == 'hotspot' %}Web portal authentication{% endif %}
+                            </span>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
+                <input type="hidden" name="supported_connection_types" id="supported_connection_types" value="">
+
+                <div class="mt-4">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Default Connection Type</label>
+                    <select name="default_connection_type" class="w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for ct in connection_types %}
+                        <option value="{{ ct.value }}" {% if device and device.default_connection_type and device.default_connection_type.value == ct.value %}selected{% endif %}>{{ ct.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Management Credentials -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Management Credentials</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">SSH and API access for provisioning commands</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <!-- SSH Settings -->
+                <div>
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">SSH Access</h3>
+                    <div class="grid gap-4 sm:grid-cols-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Username</label>
+                            <input type="text" name="ssh_username" value="{{ device.ssh_username if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="admin">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Password</label>
+                            <input type="password" name="ssh_password" value="{{ device.ssh_password if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="********">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Port</label>
+                            <input type="number" name="ssh_port" value="{{ device.management_port if device else 22 }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-3">
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">SSH Private Key (optional)</label>
+                            <textarea name="ssh_key" rows="3"
+                                      class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">{{ device.ssh_key if device else '' }}</textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- API Settings -->
+                <div>
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">API Access</h3>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API URL</label>
+                            <input type="text" name="api_url" value="{{ device.api_url if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="https://192.168.1.1/rest">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Username</label>
+                            <input type="text" name="api_username" value="{{ device.api_username if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="api-user">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Password</label>
+                            <input type="password" name="api_password" value="{{ device.api_password if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="********">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Token (optional)</label>
+                            <input type="text" name="api_key" value="{{ device.api_token if device else '' }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="Bearer token or API key">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SNMP Settings -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">SNMP Settings</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">For monitoring and backup operations</p>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-4 sm:grid-cols-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Community String</label>
+                        <input type="text" name="snmp_community" value="{{ device.snmp_community if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="public">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Version</label>
+                        <select name="snmp_version" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="1" {% if device and device.snmp_version == '1' %}selected{% endif %}>v1</option>
+                            <option value="2c" {% if not device or device.snmp_version == '2c' %}selected{% endif %}>v2c</option>
+                            <option value="3" {% if device and device.snmp_version == '3' %}selected{% endif %}>v3</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Port</label>
+                        <input type="number" name="snmp_port" value="{{ device.snmp_port if device else 161 }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RADIUS Settings -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS Settings</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure this device as a RADIUS NAS client</p>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-4 sm:grid-cols-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">RADIUS Shared Secret</label>
+                        <input type="password" name="radius_secret" value="{{ device.shared_secret if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="Shared secret for RADIUS">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NAS Identifier (Code)</label>
+                        <input type="text" name="nas_identifier" value="{{ device.code if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., core-router-01">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">CoA Port</label>
+                        <input type="number" name="coa_port" value="{{ device.coa_port if device else 3799 }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="3799">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backup Settings -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Backup Settings</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Automatic configuration backup</p>
+            </div>
+            <div class="p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <input type="checkbox" name="backup_enabled" id="backup_enabled" value="true"
+                           {% if device and device.backup_enabled %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="backup_enabled" class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable automatic backups</label>
+                </div>
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Backup Method</label>
+                        <select name="backup_method" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select Method</option>
+                            {% for m in backup_methods %}
+                            <option value="{{ m.value }}" {% if device and device.backup_method and device.backup_method.value == m.value %}selected{% endif %}>{{ m.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Backup Schedule (cron)</label>
+                        <input type="text" name="backup_schedule" value="{{ device.backup_schedule if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="0 2 * * *">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Additional Information -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Additional Information</h2>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Firmware Version</label>
+                        <input type="text" name="firmware_version" value="{{ device.firmware_version if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="7.12.1">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Serial Number</label>
+                        <input type="text" name="serial_number" value="{{ device.serial_number if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-3">
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Rack Position / Location</label>
+                        <input type="text" name="location" value="{{ device.rack_position if device else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="Rack 5, Unit 22">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-3">
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Notes</label>
+                        <textarea name="notes" rows="3"
+                                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                  placeholder="Additional notes...">{{ device.notes if device else '' }}</textarea>
+                    </div>
+                </div>
+                <div class="mt-4 flex items-center gap-3">
+                    <input type="checkbox" name="is_active" id="is_active" value="true"
+                           {% if not device or device.is_active %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="is_active" class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Form Actions -->
+        <div class="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-6 py-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <a href="{% if device %}/admin/network/nas/devices/{{ device.id }}{% else %}/admin/network/nas{% endif %}"
+               class="text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                Cancel
+            </a>
+            <button type="submit"
+                    :disabled="submitting"
+                    :class="{ 'opacity-50 cursor-wait': submitting }"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:hover:bg-primary-600">
+                <span x-show="!submitting" class="inline-flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    {% if device %}Update Device{% else %}Create Device{% endif %}
+                </span>
+                <span x-show="submitting" x-cloak class="inline-flex items-center gap-2">
+                    <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                </span>
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+// Collect checked connection types into JSON array before form submit
+document.querySelector('form').addEventListener('submit', function(e) {
+    const checkboxes = document.querySelectorAll('input[name^="conn_type_"]:checked');
+    const types = Array.from(checkboxes).map(cb => cb.value);
+    document.getElementById('supported_connection_types').value = JSON.stringify(types);
+});
+</script>
+{% endblock %}

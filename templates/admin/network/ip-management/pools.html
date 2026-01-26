@@ -1,0 +1,321 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, empty_state, action_button, icon_plus %}
+
+{% block title %}IP Pools & Blocks - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+
+<div class="relative space-y-6">
+    <!-- Page Header -->
+    {% call page_header(
+        title="IP Pools & Blocks",
+        subtitle="Manage IP address pools and CIDR blocks",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+        color="indigo",
+        color2="violet"
+    ) %}
+        <a href="/admin/network/ip-management/blocks/new"
+           class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-violet-500 dark:hover:bg-violet-900/20 dark:hover:text-violet-400">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+            </svg>
+            Add Block
+        </a>
+        {{ action_button("Add Pool", "/admin/network/ip-management/pools/new", icon_plus(), "primary", "indigo", "violet") }}
+    {% endcall %}
+
+    <!-- Stats -->
+    <div class="grid gap-4 sm:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-indigo-500/10 to-violet-500/10 blur-2xl"></div>
+            <div class="relative">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Pools</p>
+                <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_pools }}</p>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-cyan-500/10 to-blue-500/10 blur-2xl"></div>
+            <div class="relative">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Blocks</p>
+                <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_blocks }}</p>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-blue-500/10 to-indigo-500/10 blur-2xl"></div>
+            <div class="relative">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">IPv4 Pools</p>
+                <p class="mt-1 text-3xl font-bold text-blue-600 dark:text-blue-400">{{ stats.ipv4_pools }}</p>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-purple-500/10 to-violet-500/10 blur-2xl"></div>
+            <div class="relative">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">IPv6 Pools</p>
+                <p class="mt-1 text-3xl font-bold text-purple-600 dark:text-purple-400">{{ stats.ipv6_pools }}</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pools Table -->
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;" data-table-id="ip-pools-list">
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">IP Pools</h2>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+            <div class="flex-1 min-w-[200px]">
+                <label class="sr-only" for="ip-pools-search">Search pools</label>
+                <input id="ip-pools-search" type="text" data-search-input placeholder="Search pools..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span data-selected-count>0 selected</span>
+                <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Version</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CIDR</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Gateway</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% if pools %}
+                    {% for pool in pools %}
+                    <tr class="group hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                        data-row-text="{{ pool.name }} {{ pool.cidr or '' }} {{ pool.gateway or '' }} {{ pool.ip_version.value if pool.ip_version else '' }}"
+                        data-row-copy="{{ pool.name }}">
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <a href="/admin/network/ip-management/pools/{{ pool.id }}" class="font-medium text-slate-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
+                                {{ pool.name }}
+                            </a>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                                {% if pool.ip_version.value == 'ipv4' %}
+                                    bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                                {% else %}
+                                    bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                {% endif %}">
+                                {{ pool.ip_version.value | upper }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 font-mono text-sm text-slate-600 dark:text-slate-300">
+                            {{ pool.cidr or '-' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 font-mono text-sm text-slate-600 dark:text-slate-300">
+                            {{ pool.gateway or '-' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {{ status_badge("Active" if pool.is_active else "Inactive", "active" if pool.is_active else "inactive") }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                <a href="/admin/network/ip-management/pools/{{ pool.id }}" class="rounded-lg p-2 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-900/20 dark:hover:text-indigo-400" title="View">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                </a>
+                                <a href="/admin/network/ip-management/pools/{{ pool.id }}/edit" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300" title="Edit">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-12">
+                            {{ empty_state(
+                                title="No IP pools",
+                                message="Get started by creating your first IP pool.",
+                                icon='<svg class="h-8 w-8 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+                                color="indigo",
+                                color2="violet",
+                                action_label="Add Pool",
+                                action_href="/admin/network/ip-management/pools/new",
+                                colspan=6
+                            ) }}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Blocks Table -->
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;" data-table-id="ip-blocks-list">
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">IP Blocks / Subnets</h2>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+            <div class="flex-1 min-w-[200px]">
+                <label class="sr-only" for="ip-blocks-search">Search blocks</label>
+                <input id="ip-blocks-search" type="text" data-search-input placeholder="Search blocks..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span data-selected-count>0 selected</span>
+                <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CIDR Block</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pool</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Notes</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% if blocks %}
+                    {% for block in blocks %}
+                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                        data-row-text="{{ block.cidr }} {{ block.pool.name if block.pool else '' }} {{ block.notes or '' }}"
+                        data-row-copy="{{ block.cidr }}">
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 font-mono text-sm font-medium text-slate-900 dark:text-white">
+                            {{ block.cidr }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if block.pool %}
+                                <a href="/admin/network/ip-management/pools/{{ block.pool.id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">
+                                    {{ block.pool.name }}
+                                </a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {{ status_badge("Active" if block.is_active else "Inactive", "active" if block.is_active else "inactive") }}
+                        </td>
+                        <td class="max-w-xs truncate px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ block.notes or '-' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-12">
+                            {{ empty_state(
+                                title="No IP blocks",
+                                message="Add blocks to organize IP address ranges within pools.",
+                                icon='<svg class="h-8 w-8 text-cyan-600 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>',
+                                color="cyan",
+                                color2="blue",
+                                action_label="Add Block",
+                                action_href="/admin/network/ip-management/blocks/new",
+                                colspan=4
+                            ) }}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function setupTableTools(tableEl) {
+    const searchInput = tableEl.querySelector('[data-search-input]');
+    const selectAll = tableEl.querySelector('[data-select-all]');
+    const rowChecks = Array.from(tableEl.querySelectorAll('[data-row-check]'));
+    const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+    const selectedCount = tableEl.querySelector('[data-selected-count]');
+    const copyBtn = tableEl.querySelector('[data-copy-selected]');
+    const clearBtn = tableEl.querySelector('[data-clear-selected]');
+
+    const updateSelectedCount = () => {
+        if (!selectedCount) return;
+        const count = rowChecks.filter((check) => check.checked).length;
+        selectedCount.textContent = `${count} selected`;
+    };
+
+    const filterRows = () => {
+        if (!searchInput) return;
+        const query = searchInput.value.trim().toLowerCase();
+        rows.forEach((row) => {
+            const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+            row.style.display = !query || text.includes(query) ? '' : 'none';
+        });
+    };
+
+    if (searchInput) {
+        searchInput.addEventListener('input', filterRows);
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            rows.forEach((row) => {
+                if (row.style.display === 'none') return;
+                const checkbox = row.querySelector('[data-row-check]');
+                if (checkbox) {
+                    checkbox.checked = selectAll.checked;
+                }
+            });
+            updateSelectedCount();
+        });
+    }
+
+    rowChecks.forEach((check) => {
+        check.addEventListener('change', updateSelectedCount);
+    });
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+            const values = rows
+                .filter((row) => row.querySelector('[data-row-check]')?.checked)
+                .map((row) => row.getAttribute('data-row-copy'))
+                .filter(Boolean);
+            if (!values.length) return;
+            const text = values.join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                textarea.remove();
+            }
+        });
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            rowChecks.forEach((check) => { check.checked = false; });
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
+        });
+    }
+
+    updateSelectedCount();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-table-id]').forEach(setupTableTools);
+});
+</script>
+{% endblock %}

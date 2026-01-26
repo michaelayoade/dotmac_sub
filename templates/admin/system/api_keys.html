@@ -1,0 +1,118 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}API Keys - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">API Keys</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage API keys for programmatic access</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/system/api-keys/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Create API Key
+            </a>
+        </div>
+    </div>
+
+    {% if new_key %}
+    <div class="rounded-xl border border-green-200 bg-green-50 p-6 dark:border-green-800 dark:bg-green-900/30">
+        <div class="flex items-start gap-4">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/50">
+                <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div class="flex-1">
+                <h3 class="text-lg font-semibold text-green-800 dark:text-green-300">API Key Created</h3>
+                <p class="mt-1 text-sm text-green-700 dark:text-green-400">Copy your API key now. You won't be able to see it again!</p>
+                <div class="mt-4 flex items-center gap-2">
+                    <code class="flex-1 rounded-lg bg-white px-4 py-2 font-mono text-sm text-slate-900 dark:bg-slate-800 dark:text-white">{{ new_key }}</code>
+                    <button onclick="navigator.clipboard.writeText('{{ new_key }}')" class="inline-flex items-center gap-2 rounded-lg border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 dark:border-green-700 dark:bg-slate-800 dark:text-green-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- API Keys List -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Your API Keys</h2>
+        </div>
+        <div class="p-6">
+            {% if api_keys %}
+            <div class="space-y-4">
+                {% for key in api_keys %}
+                <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                    <div class="flex items-center gap-4">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg {% if key.is_active and not key.revoked_at %}bg-indigo-100 dark:bg-indigo-900/30{% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
+                            <svg class="h-5 w-5 {% if key.is_active and not key.revoked_at %}text-indigo-600 dark:text-indigo-400{% else %}text-slate-400{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ key.label or 'Unnamed Key' }}</p>
+                            <div class="flex items-center gap-3 mt-1">
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                    Created {{ key.created_at.strftime('%b %d, %Y') if key.created_at else '-' }}
+                                </p>
+                                {% if key.last_used_at %}
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                    Last used {{ key.last_used_at.strftime('%b %d, %Y') }}
+                                </p>
+                                {% endif %}
+                                {% if key.expires_at %}
+                                <p class="text-xs {% if key.expires_at < now %}text-red-500{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                                    {% if key.expires_at < now %}Expired{% else %}Expires{% endif %} {{ key.expires_at.strftime('%b %d, %Y') }}
+                                </p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        {% if key.revoked_at %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">
+                            Revoked
+                        </span>
+                        {% elif not key.is_active %}
+                        {{ status_badge("Inactive", "inactive", size="sm") }}
+                        {% else %}
+                        {{ status_badge("Active", "active", size="sm") }}
+                        {% endif %}
+                        {% if key.is_active and not key.revoked_at %}
+                        <form method="POST" action="/admin/system/api-keys/{{ key.id }}/revoke" onsubmit="return confirm('Are you sure you want to revoke this API key? This action cannot be undone.')">
+                            <button type="submit" class="text-sm text-red-600 hover:text-red-700">Revoke</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                <p class="mt-4 text-sm text-slate-500 dark:text-slate-400">No API keys yet</p>
+                <p class="text-sm text-slate-400 dark:text-slate-500">Create an API key to access the API programmatically</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Usage Info -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Using API Keys</h2>
+        </div>
+        <div class="p-6">
+            <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">Include your API key in the <code class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-sm">Authorization</code> header:</p>
+            <div class="rounded-lg bg-slate-900 p-4 font-mono text-sm text-green-400">
+                <p>curl -H "Authorization: Bearer YOUR_API_KEY" \</p>
+                <p class="ml-4">https://api.example.com/v1/subscribers</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if document else 'New' }} Legal Document - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/system/legal" class="hover:text-primary-600">Legal Documents</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ 'Edit' if document else 'New' }} Document</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit' if document else 'New' }} Legal Document</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg bg-red-50 border border-red-200 p-4 dark:bg-red-900/30 dark:border-red-800">
+        <div class="flex">
+            <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="ml-3 text-sm text-red-700 dark:text-red-200">{{ error }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="POST" action="{{ '/admin/system/legal/' ~ document.id ~ '/edit' if document else '/admin/system/legal/new' }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Document Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="title" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Title <span class="text-red-500">*</span></label>
+                        <input type="text" name="title" id="title" required value="{{ document.title if document else '' }}" placeholder="Privacy Policy"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    </div>
+                    <div>
+                        <label for="slug" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">URL Slug <span class="text-red-500">*</span></label>
+                        <input type="text" name="slug" id="slug" required value="{{ document.slug if document else '' }}" placeholder="privacy-policy"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Public URL: /legal/{{ document.slug if document else '<slug>' }}</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {% if not document %}
+                    <div>
+                        <label for="document_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Document Type <span class="text-red-500">*</span></label>
+                        <select name="document_type" id="document_type" required
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" disabled selected>Select type...</option>
+                            {% for value, label in document_types %}
+                            <option value="{{ value }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <label for="version" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Version</label>
+                        <input type="text" name="version" id="version" value="{{ document.version if document else '1.0' }}" placeholder="1.0"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    </div>
+                    <div>
+                        <label for="effective_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Effective Date</label>
+                        <input type="date" name="effective_date" id="effective_date" value="{{ document.effective_date.strftime('%Y-%m-%d') if document and document.effective_date else '' }}"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    </div>
+                </div>
+
+                <div>
+                    <label for="summary" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Summary</label>
+                    <textarea name="summary" id="summary" rows="2" placeholder="Brief description of the document..."
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ document.summary if document else '' }}</textarea>
+                </div>
+
+                <div>
+                    <label for="content" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Content</label>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">HTML content for the document. You can also upload a PDF/document file separately.</p>
+                    <textarea name="content" id="content" rows="15" placeholder="<h2>Section 1</h2><p>Content here...</p>"
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-mono placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ document.content if document else '' }}</textarea>
+                </div>
+
+                {% if document %}
+                <div class="flex items-center gap-6">
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="is_current" value="true" {% if document.is_current %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Set as current version</span>
+                    </label>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="is_published" value="true" {% if document.is_published %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Published</span>
+                    </label>
+                </div>
+                {% else %}
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" name="is_published" value="true"
+                           class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                    <span class="text-sm text-slate-700 dark:text-slate-300">Publish immediately</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-800/50 flex items-center justify-end gap-3">
+                <a href="/admin/system/legal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+                <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+                    {{ 'Update Document' if document else 'Create Document' }}
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}

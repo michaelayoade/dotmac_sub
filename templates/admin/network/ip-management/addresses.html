@@ -1,0 +1,288 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, empty_state %}
+
+{% set is_ipv4 = ip_version == 'ipv4' %}
+{% set color1 = 'blue' if is_ipv4 else 'purple' %}
+{% set color2 = 'indigo' if is_ipv4 else 'violet' %}
+
+{% block title %}{{ 'IPv4' if is_ipv4 else 'IPv6' }} Addresses - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background(color1, color2) }}
+
+<div class="relative space-y-6">
+    <!-- Page Header -->
+    {% call page_header(
+        title=('IPv4 Addresses' if is_ipv4 else 'IPv6 Addresses'),
+        subtitle=('Manage IPv4 address allocations and reservations' if is_ipv4 else 'Manage IPv6 address allocations and reservations'),
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+        color=color1,
+        color2=color2
+    ) %}
+    {% endcall %}
+
+    <!-- Stats -->
+    <div class="grid gap-4 sm:grid-cols-3 animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-{{ color1 }}-500/10 to-{{ color2 }}-500/10 blur-2xl"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Addresses</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-{{ color1 }}-500 to-{{ color2 }}-600 shadow-lg">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-green-500/10 to-emerald-500/10 blur-2xl"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Available</p>
+                    <p class="mt-1 text-3xl font-bold text-green-600 dark:text-green-400">{{ stats.available }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 shadow-lg shadow-green-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-orange-500/10 blur-2xl"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Reserved</p>
+                    <p class="mt-1 text-3xl font-bold text-amber-600 dark:text-amber-400">{{ stats.reserved }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg shadow-amber-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-200/60 dark:divide-slate-700/60">
+            {% if activities %}
+            {% for activity in activities %}
+            <div class="px-6 py-4">
+                <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% if activity.description %}
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                {% endif %}
+                {% if activity.occurred_at %}
+                <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Filter by Pool -->
+    {% if pools %}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-slate-600 dark:text-slate-400">Filter by Pool:</span>
+            <a href="/admin/network/ip-management/{{ 'ipv4' if is_ipv4 else 'ipv6' }}"
+               class="rounded-lg px-3 py-1.5 text-sm font-medium transition
+                      {{ 'bg-' ~ color1 ~ '-500 text-white' if not request.query_params.get('pool_id') else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">
+                All
+            </a>
+            {% for pool in pools %}
+            <a href="/admin/network/ip-management/{{ 'ipv4' if is_ipv4 else 'ipv6' }}?pool_id={{ pool.id }}"
+               class="rounded-lg px-3 py-1.5 text-sm font-medium transition
+                      {{ 'bg-' ~ color1 ~ '-500 text-white' if request.query_params.get('pool_id') == pool.id|string else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300' }}">
+                {{ pool.name }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Addresses Table -->
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;" data-table-id="ip-addresses-list">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">{{ 'IPv4' if is_ipv4 else 'IPv6' }} Addresses</h2>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+            <div class="flex-1 min-w-[200px]">
+                <label class="sr-only" for="ip-addresses-search">Search addresses</label>
+                <input id="ip-addresses-search" type="text" data-search-input placeholder="Search addresses..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-{{ color1 }}-500 focus:ring-{{ color1 }}-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span data-selected-count>0 selected</span>
+                <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-{{ color1 }}-600 focus:ring-{{ color1 }}-500">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pool</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Assignment</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Notes</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% if addresses %}
+                    {% for addr in addresses %}
+                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                        data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ addr.notes or '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                        data-row-copy="{{ addr.address }}">
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-{{ color1 }}-600 focus:ring-{{ color1 }}-500">
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ addr.address }}</span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if addr.pool %}
+                                <a href="/admin/network/ip-management/pools/{{ addr.pool.id }}" class="text-{{ color1 }}-600 hover:text-{{ color1 }}-700 dark:text-{{ color1 }}-400">
+                                    {{ addr.pool.name }}
+                                </a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if addr.is_reserved %}
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                    Reserved
+                                </span>
+                            {% elif addr.assignment %}
+                                <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                    Assigned
+                                </span>
+                            {% else %}
+                                <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                    Available
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if addr.assignment and addr.assignment.account %}
+                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-{{ color1 }}-600 hover:text-{{ color1 }}-700 dark:text-{{ color1 }}-400">
+                                    {{ addr.assignment.account.account_number or 'View Account' }}
+                                </a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="max-w-xs truncate px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ addr.notes or '-' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12">
+                            {{ empty_state(
+                                title="No " ~ ('IPv4' if is_ipv4 else 'IPv6') ~ " addresses",
+                                message="Add addresses to a pool to see them here.",
+                                icon='<svg class="h-8 w-8 text-' ~ color1 ~ '-600 dark:text-' ~ color1 ~ '-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+                                color=color1,
+                                color2=color2,
+                                colspan=5
+                            ) }}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function setupTableTools(tableEl) {
+    const searchInput = tableEl.querySelector('[data-search-input]');
+    const selectAll = tableEl.querySelector('[data-select-all]');
+    const rowChecks = Array.from(tableEl.querySelectorAll('[data-row-check]'));
+    const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+    const selectedCount = tableEl.querySelector('[data-selected-count]');
+    const copyBtn = tableEl.querySelector('[data-copy-selected]');
+    const clearBtn = tableEl.querySelector('[data-clear-selected]');
+
+    const updateSelectedCount = () => {
+        if (!selectedCount) return;
+        const count = rowChecks.filter((check) => check.checked).length;
+        selectedCount.textContent = `${count} selected`;
+    };
+
+    const filterRows = () => {
+        if (!searchInput) return;
+        const query = searchInput.value.trim().toLowerCase();
+        rows.forEach((row) => {
+            const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+            row.style.display = !query || text.includes(query) ? '' : 'none';
+        });
+    };
+
+    if (searchInput) searchInput.addEventListener('input', filterRows);
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            rows.forEach((row) => {
+                if (row.style.display === 'none') return;
+                const checkbox = row.querySelector('[data-row-check]');
+                if (checkbox) checkbox.checked = selectAll.checked;
+            });
+            updateSelectedCount();
+        });
+    }
+    rowChecks.forEach((check) => check.addEventListener('change', updateSelectedCount));
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+            const values = rows
+                .filter((row) => row.querySelector('[data-row-check]')?.checked)
+                .map((row) => row.getAttribute('data-row-copy'))
+                .filter(Boolean);
+            if (!values.length) return;
+            const text = values.join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                textarea.remove();
+            }
+        });
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            rowChecks.forEach((check) => { check.checked = false; });
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
+        });
+    }
+    updateSelectedCount();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-table-id]').forEach(setupTableTools);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,45 @@
+{#
+   Textarea Component
+   Usage: {% include "components/forms/textarea.html" %}
+
+   Parameters:
+   - name: Field name (required)
+   - label: Field label
+   - value: Current value
+   - placeholder: Placeholder text
+   - rows: Number of rows (default: 4)
+   - required: Boolean
+   - disabled: Boolean
+   - error: Error message
+   - help_text: Help text
+   - maxlength: Maximum character length
+#}
+<div class="mb-4 {{ class }}">
+    {% if label %}
+    <label for="{{ name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+        {{ label }}
+        {% if required %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+    </label>
+    {% endif %}
+
+    <textarea name="{{ name }}"
+              id="{{ name }}"
+              rows="{{ rows | default(4) }}"
+              placeholder="{{ placeholder | default('') }}"
+              {% if required %}required{% endif %}
+              {% if disabled %}disabled{% endif %}
+              {% if maxlength %}maxlength="{{ maxlength }}"{% endif %}
+              class="block w-full rounded-lg border px-3 py-2.5 text-sm shadow-sm transition-colors resize-y
+                     {{ 'border-red-500 focus:border-red-500 focus:ring-red-500/20' if error else 'border-slate-300 dark:border-slate-600 focus:border-primary-500 focus:ring-primary-500/20' }}
+                     bg-white dark:bg-slate-800
+                     text-slate-900 dark:text-slate-100
+                     placeholder-slate-400 dark:placeholder-slate-500
+                     focus:outline-none focus:ring-2
+                     disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed dark:disabled:bg-slate-700">{{ value | default('') }}</textarea>
+
+    {% if error %}
+    <p class="mt-1.5 text-sm text-red-500">{{ error }}</p>
+    {% elif help_text %}
+    <p class="mt-1.5 text-sm text-slate-500 dark:text-slate-400">{{ help_text }}</p>
+    {% endif %}
+</div>

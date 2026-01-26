@@ -1,0 +1,46 @@
+{% if show_invoice_typeahead %}
+<div id="invoice-select">
+    <div class="relative"
+         data-typeahead-url="/api/v1/search/invoices"
+         data-typeahead-min="2"
+         data-typeahead-limit="8"
+         hx-get="/admin/billing/payments/invoice-details"
+         hx-trigger="change from:[name='invoice_id']"
+         hx-include="closest form"
+         hx-target="#payment-amount-field"
+         hx-swap="outerHTML">
+        <input type="text" data-typeahead-input
+               value="{{ invoice_label or '' }}"
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+               placeholder="Search invoices...">
+        <input type="hidden" name="invoice_id" data-typeahead-hidden value="{{ selected_invoice_id or '' }}">
+        <div data-typeahead-results></div>
+    </div>
+</div>
+{% else %}
+<div id="invoice-select">
+    {% if invoices and invoices|length > 0 %}
+    <select name="invoice_id"
+            hx-get="/admin/billing/payments/invoice-details"
+            hx-trigger="change"
+            hx-include="closest form"
+            hx-target="#payment-amount-field"
+            hx-swap="outerHTML"
+            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        <option value="">Select invoice...</option>
+        {% for invoice in invoices %}
+            {% set invoice_label = invoice.invoice_number | default('Invoice') %}
+            {% set balance = invoice.balance_due if invoice.balance_due is defined and invoice.balance_due is not none else invoice.total %}
+        <option value="{{ invoice.id }}" {% if selected_invoice_id and selected_invoice_id|string == invoice.id|string %}selected{% endif %}>
+            {{ invoice_label }}{% if balance is not none %} - {{ invoice.currency }} {{ '{:,.2f}'.format(balance) }}{% endif %}
+        </option>
+    {% endfor %}
+    </select>
+    {% else %}
+    <select name="invoice_id" disabled
+            class="block w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+        <option>No open invoices for this account</option>
+    </select>
+    {% endif %}
+</div>
+{% endif %}

@@ -1,0 +1,108 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Add Payment Provider - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center gap-4">
+        <a href="/admin/integrations/providers" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Add Payment Provider</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Register a payment gateway integration</p>
+        </div>
+    </div>
+
+    <form method="POST" action="/admin/integrations/providers" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Provider Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ form.name if form is defined else '' }}"
+                            placeholder="Stripe Payments"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="provider_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Provider Type</label>
+                        <select name="provider_type" id="provider_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for provider_type in provider_types %}
+                            <option value="{{ provider_type }}"
+                                {% if form is defined and form.provider_type == provider_type %}selected{% elif form is not defined and provider_type == 'custom' %}selected{% endif %}>
+                                {{ provider_type | replace('_', ' ') | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="connector_config_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Connector</label>
+                        <select name="connector_config_id" id="connector_config_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" {% if form is not defined or not form.connector_config_id %}selected{% endif %}>No connector</option>
+                            {% for connector in connectors %}
+                            <option value="{{ connector.id }}"
+                                {% if form is defined and form.connector_config_id == connector.id|string %}selected{% endif %}>
+                                {{ connector.name }} ({{ connector.connector_type.value if connector.connector_type else 'custom' }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if not connectors %}
+                        <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">No active connectors available yet.</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="webhook_secret_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Webhook Secret Reference</label>
+                        <input type="text" name="webhook_secret_ref" id="webhook_secret_ref" maxlength="255"
+                            value="{{ form.webhook_secret_ref if form is defined else '' }}"
+                            placeholder="vault://payments/stripe/webhook-secret"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional secret reference for webhook validation.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            placeholder="Notes about this provider..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.notes if form is defined else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true"
+                                {% if form is defined and form.is_active %}checked{% elif form is not defined %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable this provider for payments.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/integrations/providers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Create Provider
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

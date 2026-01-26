@@ -1,0 +1,261 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Billing - My Account{% endblock %}
+
+{% block content %}
+{% set stats = namespace(total=0, overdue=0, unpaid=0) %}
+{% for invoice in invoices %}
+    {% set amount = invoice.total_amount or invoice.total or 0 %}
+    {% set status = invoice.status | default('pending') %}
+    {% set status_val = status.value if status is not string else status %}
+    {% set stats.total = stats.total + amount %}
+    {% if status_val in ['overdue'] %}{% set stats.overdue = stats.overdue + amount %}{% endif %}
+    {% if status_val not in ['paid', 'voided', 'cancelled'] %}{% set stats.unpaid = stats.unpaid + amount %}{% endif %}
+{% endfor %}
+
+<div class="space-y-8">
+    <!-- Page Header with action -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Billing</h1>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Manage invoices and payment history</p>
+        </div>
+        <a href="/portal/billing" class="group inline-flex items-center gap-2 rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all hover:border-stone-300 hover:shadow-md dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:border-stone-600">
+            <svg class="h-5 w-5 text-stone-400 transition-colors group-hover:text-stone-600 dark:group-hover:text-stone-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+            </svg>
+            Payment Methods
+        </a>
+    </div>
+
+    <!-- Stats Cards - Visual hierarchy with escalating urgency -->
+    <div class="grid gap-4 sm:grid-cols-3 stagger-children">
+        <!-- Total Billed - Neutral -->
+        <div class="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white p-6 shadow-premium card-hover dark:border-stone-700 dark:bg-stone-800">
+            <div class="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-stone-500/5 blur-2xl"></div>
+            <div class="relative">
+                <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Total Billed</p>
+                <p class="mt-3 text-3xl font-display font-bold text-stone-900 dark:text-white">
+                    {{ "{:,.0f}".format(stats.total) }}
+                    <span class="text-lg font-medium text-stone-400">.{{ "{:.2f}".format(stats.total).split('.')[1] if '.' in "{:.2f}".format(stats.total) else '00' }}</span>
+                    <span class="text-base font-medium text-stone-400">NGN</span>
+                </p>
+                <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">All time</p>
+            </div>
+        </div>
+
+        <!-- Outstanding - Warning color -->
+        <div class="group relative overflow-hidden rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-6 shadow-premium card-hover dark:border-amber-900/50 dark:from-amber-900/20 dark:to-stone-800">
+            <div class="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-amber-500/10 blur-2xl"></div>
+            <div class="relative">
+                <div class="flex items-center gap-2">
+                    <p class="text-sm font-medium text-amber-700 dark:text-amber-400">Outstanding</p>
+                    {% if stats.unpaid > 0 %}
+                    <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/50">
+                        <svg class="h-3 w-3 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/>
+                        </svg>
+                    </span>
+                    {% endif %}
+                </div>
+                <p class="mt-3 text-3xl font-display font-bold text-amber-700 dark:text-amber-400">
+                    {{ "{:,.0f}".format(stats.unpaid) }}
+                    <span class="text-lg font-medium text-amber-500">.{{ "{:.2f}".format(stats.unpaid).split('.')[1] if '.' in "{:.2f}".format(stats.unpaid) else '00' }}</span>
+                    <span class="text-base font-medium text-amber-500">NGN</span>
+                </p>
+                <p class="mt-2 text-sm text-amber-600/80 dark:text-amber-400/70">Awaiting payment</p>
+            </div>
+        </div>
+
+        <!-- Overdue - Danger/urgent color -->
+        <div class="group relative overflow-hidden rounded-2xl border border-red-200 bg-gradient-to-br from-red-50 to-white p-6 shadow-premium card-hover dark:border-red-900/50 dark:from-red-900/20 dark:to-stone-800">
+            <div class="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-red-500/10 blur-2xl"></div>
+            <div class="relative">
+                <div class="flex items-center gap-2">
+                    <p class="text-sm font-medium text-red-700 dark:text-red-400">Overdue</p>
+                    {% if stats.overdue > 0 %}
+                    <span class="relative flex h-2.5 w-2.5">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                    </span>
+                    {% endif %}
+                </div>
+                <p class="mt-3 text-3xl font-display font-bold text-red-700 dark:text-red-400">
+                    {{ "{:,.0f}".format(stats.overdue) }}
+                    <span class="text-lg font-medium text-red-500">.{{ "{:.2f}".format(stats.overdue).split('.')[1] if '.' in "{:.2f}".format(stats.overdue) else '00' }}</span>
+                    <span class="text-base font-medium text-red-500">NGN</span>
+                </p>
+                {% if stats.overdue > 0 %}
+                <a href="#" class="mt-2 inline-flex items-center gap-1 text-sm font-medium text-red-600 hover:text-red-700 dark:text-red-400">
+                    Pay now
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                    </svg>
+                </a>
+                {% else %}
+                <p class="mt-2 text-sm text-red-600/60 dark:text-red-400/60">No overdue invoices</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <form class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div class="flex-1">
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Filter by Status</label>
+                <select name="status" class="block w-full rounded-xl border-2 border-stone-200 bg-white py-2.5 pl-4 pr-10 text-sm font-medium text-stone-700 transition-colors focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    <option value="">All Status</option>
+                    <option value="draft" {% if status == 'draft' %}selected{% endif %}>Draft</option>
+                    <option value="issued" {% if status == 'issued' %}selected{% endif %}>Issued</option>
+                    <option value="partially_paid" {% if status == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
+                    <option value="paid" {% if status == 'paid' %}selected{% endif %}>Paid</option>
+                    <option value="overdue" {% if status == 'overdue' %}selected{% endif %}>Overdue</option>
+                    <option value="void" {% if status == 'void' %}selected{% endif %}>Void</option>
+                </select>
+            </div>
+            <div>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:border-stone-500">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                    </svg>
+                    Apply Filter
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Invoice Table -->
+    <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
+        <div class="border-b border-stone-100 px-6 py-4 dark:border-stone-700">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Invoice History</h2>
+                    <p class="text-sm text-stone-500 dark:text-stone-400">All your billing records</p>
+                </div>
+                <span class="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-3 py-1.5 text-xs font-medium text-stone-600 dark:bg-stone-700 dark:text-stone-400">
+                    Page {{ page }}
+                </span>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-stone-100 dark:border-stone-700">
+                        <th class="px-6 py-4 text-left text-xs font-semibold text-stone-500 dark:text-stone-400">Invoice</th>
+                        <th class="px-6 py-4 text-left text-xs font-semibold text-stone-500 dark:text-stone-400">Amount</th>
+                        <th class="px-6 py-4 text-left text-xs font-semibold text-stone-500 dark:text-stone-400">Status</th>
+                        <th class="px-6 py-4 text-left text-xs font-semibold text-stone-500 dark:text-stone-400">Issued</th>
+                        <th class="px-6 py-4 text-left text-xs font-semibold text-stone-500 dark:text-stone-400">Due</th>
+                        <th class="relative px-6 py-4"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-100 dark:divide-stone-700">
+                    {% if invoices %}
+                    {% for invoice in invoices %}
+                    {% set status = invoice.status | default('pending') %}
+                    {% set status_val = status.value if status is not string else status %}
+                    <tr class="group hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
+                        <td class="px-6 py-4">
+                            <p class="text-sm font-semibold text-stone-900 dark:text-white">INV-{{ invoice.id | string | truncate(8, True, '') | upper }}</p>
+                        </td>
+                        <td class="px-6 py-4">
+                            <p class="text-sm font-semibold tabular-nums text-stone-900 dark:text-white">{{ "{:,.2f}".format(invoice.total_amount or invoice.total or 0) }} <span class="text-stone-400 font-normal">NGN</span></p>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if status_val == 'paid' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                                Paid
+                            </span>
+                            {% elif status_val == 'issued' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                                Issued
+                            </span>
+                            {% elif status_val == 'partially_paid' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/>
+                                </svg>
+                                Partial
+                            </span>
+                            {% elif status_val == 'overdue' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                <span class="relative flex h-2 w-2">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                                </span>
+                                Overdue
+                            </span>
+                            {% elif status_val == 'void' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-500 dark:bg-stone-700 dark:text-stone-400">
+                                Void
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-400">
+                                {{ status_val | title }}
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
+                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                        <td class="px-6 py-4 text-right">
+                            <a href="/portal/billing/invoices/{{ invoice.id }}" class="inline-flex items-center gap-1 text-sm font-semibold text-[var(--color-brand-600)] hover:text-[var(--color-brand-700)] dark:text-[var(--color-brand-400)] transition-colors">
+                                View
+                                <svg class="h-4 w-4 opacity-0 -translate-x-1 transition-all group-hover:opacity-100 group-hover:translate-x-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                </svg>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-16 text-center">
+                            <div class="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-100 dark:bg-stone-700 mb-4">
+                                <svg class="h-8 w-8 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                            </div>
+                            <p class="text-base font-semibold text-stone-900 dark:text-white">No invoices yet</p>
+                            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Your invoices will appear here once generated.</p>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+        {% if total_pages and total_pages > 1 %}
+        {% set status_param = '&status=' ~ status if status else '' %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-stone-100 px-6 py-4 dark:border-stone-700 sm:flex-row">
+            <p class="text-sm text-stone-500 dark:text-stone-400">
+                Page <span class="font-semibold text-stone-700 dark:text-stone-300">{{ page }}</span> of <span class="font-semibold text-stone-700 dark:text-stone-300">{{ total_pages }}</span>
+            </p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/portal/billing?page={{ page - 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                    </svg>
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="/portal/billing?page={{ page + 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                    Next
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

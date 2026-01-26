@@ -1,0 +1,136 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}AR Aging - Admin{% endblock %}
+
+{% block charts_js %}
+<script src="/static/js/vendor/chart.min.js"></script>
+<script src="/static/js/charts.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">AR Aging</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Accounts Receivable Aging</h1>
+        </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Current</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals.current or 0) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">1-30 Days</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["1_30"] or 0) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">31-60 Days</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["31_60"] or 0) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">61-90 Days</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["61_90"] or 0) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">90+ Days</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["90_plus"] or 0) }}</p>
+        </div>
+    </div>
+
+    <!-- AR Aging Chart -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Aging Distribution</h2>
+        </div>
+        <div class="p-6">
+            <div class="chart-container" style="min-height: 280px;">
+                <canvas id="ar-aging-chart"></canvas>
+            </div>
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('ar-aging-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days'],
+                    datasets: [{
+                        label: 'Outstanding Amount',
+                        data: [
+                            {{ totals.current or 0 }},
+                            {{ totals["1_30"] or 0 }},
+                            {{ totals["31_60"] or 0 }},
+                            {{ totals["61_90"] or 0 }},
+                            {{ totals["90_plus"] or 0 }}
+                        ],
+                        backgroundColor: ['#10b981', '#06b6d4', '#f59e0b', '#f97316', '#ef4444']
+                    }]
+                };
+                const chart = DotmacCharts.createBarChart(ctx, chartData, {
+                    plugins: { legend: { display: false } }
+                });
+                DotmacCharts.registerChart('ar-aging-chart', chart);
+            });
+            </script>
+        </div>
+    </div>
+
+    {% for label, items in [
+        ("Current", buckets.current),
+        ("1-30 Days", buckets["1_30"]),
+        ("31-60 Days", buckets["31_60"]),
+        ("61-90 Days", buckets["61_90"]),
+        ("90+ Days", buckets["90_plus"])
+    ] %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ label }}</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Balance Due</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due Date</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% if items %}
+                    {% for invoice in items %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">
+                            <a class="text-primary-600 hover:text-primary-700 dark:text-primary-400" href="/admin/billing/invoices/{{ invoice.id }}">{{ invoice.invoice_number | default('Invoice') }}</a>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {% if invoice.account and invoice.account.subscriber %}
+                                {% if invoice.account.subscriber.person %}
+                                    {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
+                                {% elif invoice.account.subscriber.organization %}
+                                    {{ invoice.account.subscriber.organization.name }}
+                                {% else %}
+                                    Account
+                                {% endif %}
+                            {% else %}
+                                Account
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr><td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No invoices</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

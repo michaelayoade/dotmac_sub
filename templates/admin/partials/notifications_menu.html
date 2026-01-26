@@ -1,0 +1,27 @@
+{% if notifications %}
+<div class="px-4 pb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Recent notifications</div>
+<div class="max-h-80 overflow-y-auto">
+    {% for notification in notifications %}
+    <div class="px-4 py-3 border-t border-slate-100 dark:border-slate-700">
+        <div class="flex items-center justify-between">
+            <p class="text-sm font-medium text-slate-900 dark:text-white">
+                {{ notification.subject or 'Notification' }}
+            </p>
+            <span class="text-xs text-slate-400">
+                {{ notification.created_at.strftime('%b %d, %H:%M') if notification.created_at else '' }}
+            </span>
+        </div>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">
+            {{ notification.recipient }}
+        </p>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Status: {{ notification.status.value if notification.status else 'queued' }}
+        </p>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
+    No notifications yet.
+</div>
+{% endif %}

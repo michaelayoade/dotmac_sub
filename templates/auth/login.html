@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block title %}Sign In - DotMac SM{% endblock %}
+
+{% block body %}
+<div class="min-h-screen flex bg-slate-900" x-data="{ loading: false }">
+    <!-- Left Panel - Branding -->
+    <div class="hidden lg:flex lg:w-1/2 relative overflow-hidden">
+        <!-- Gradient Background -->
+        <div class="absolute inset-0 bg-gradient-to-br from-primary-600 via-primary-700 to-accent-700"></div>
+
+        <!-- Animated Background Pattern -->
+        <div class="absolute inset-0 opacity-10">
+            <div class="absolute top-0 left-0 w-96 h-96 bg-white rounded-full mix-blend-overlay filter blur-3xl animate-pulse"></div>
+            <div class="absolute bottom-0 right-0 w-96 h-96 bg-accent-400 rounded-full mix-blend-overlay filter blur-3xl animate-pulse" style="animation-delay: 1s;"></div>
+            <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-white rounded-full mix-blend-overlay filter blur-2xl animate-pulse" style="animation-delay: 0.5s;"></div>
+        </div>
+
+        <!-- Grid Pattern Overlay -->
+        <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PHBhdGggZD0iTTM2IDM0aC0ydi00aDJ2NHptMC02di00aC0ydjRoMnptLTYgNnYtNGgtMnY0aDJ6bTAtNnYtNGgtMnY0aDJ6Ii8+PC9nPjwvZz48L3N2Zz4=')] opacity-40"></div>
+
+        <!-- Content -->
+        <div class="relative z-10 flex flex-col justify-between p-12 text-white">
+            <!-- Logo -->
+            <div>
+                <a href="/" class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
+                        <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <span class="text-2xl font-bold font-display">DotMac<span class="text-primary-200">SM</span></span>
+                </a>
+            </div>
+
+            <!-- Main Content -->
+            <div class="space-y-8">
+                <div>
+                    <h1 class="text-4xl font-bold font-display leading-tight">
+                        Subscriber Management
+                        <br/>
+                        <span class="text-primary-200">Made Simple.</span>
+                    </h1>
+                    <p class="mt-4 text-lg text-primary-100 max-w-md">
+                        Manage billing, network provisioning, and customer relationships from one powerful platform.
+                    </p>
+                </div>
+
+                <!-- Feature List -->
+                <div class="space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
+                            <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <span class="text-primary-100">Automated billing & invoicing</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
+                            <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <span class="text-primary-100">Network device provisioning</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
+                            <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <span class="text-primary-100">Real-time analytics & reports</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="text-sm text-primary-200">
+                &copy; 2026 DotMac Subscriber Management
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Panel - Login Form -->
+    <div class="flex-1 flex items-center justify-center p-8 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
+        <div class="w-full max-w-md">
+            <!-- Mobile Logo -->
+            <div class="lg:hidden text-center mb-8">
+                <a href="/" class="inline-flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/25">
+                        <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <span class="text-2xl font-bold text-slate-900 dark:text-white font-display">DotMac<span class="text-primary-600">SM</span></span>
+                </a>
+            </div>
+
+            <!-- Login Card -->
+            <div class="rounded-3xl bg-white p-8 shadow-2xl shadow-slate-200/50 dark:bg-slate-800 dark:shadow-slate-900/50 border border-slate-200/50 dark:border-slate-700/50">
+                <!-- Header -->
+                <div class="text-center mb-8">
+                    <div class="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-gradient-to-br from-primary-100 to-primary-200 dark:from-primary-900/40 dark:to-primary-800/30 mb-4">
+                        <svg class="h-8 w-8 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+                        </svg>
+                    </div>
+                    <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display">Welcome back</h1>
+                    <p class="mt-2 text-slate-500 dark:text-slate-400">Sign in to access your dashboard</p>
+                </div>
+
+                <!-- Error Alert -->
+                {% if error %}
+                <div class="mb-6 rounded-xl bg-red-50 border border-red-200 p-4 dark:bg-red-900/20 dark:border-red-800/50">
+                    <div class="flex items-start gap-3">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <p class="text-sm text-red-700 dark:text-red-300">{{ error }}</p>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Success Alert for Password Reset -->
+                {% if request.query_params.get('reset') == 'success' %}
+                <div class="mb-6 rounded-xl bg-green-50 border border-green-200 p-4 dark:bg-green-900/20 dark:border-green-800/50">
+                    <div class="flex items-start gap-3">
+                        <div class="flex-shrink-0">
+                            <svg class="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <p class="text-sm text-green-700 dark:text-green-300">Password reset successful. Please sign in with your new password.</p>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Login Form -->
+                <form method="post" action="/auth/login" class="space-y-5" x-on:submit="loading = true">
+                    {% if next %}
+                    <input type="hidden" name="next" value="{{ next }}" />
+                    {% endif %}
+
+                    <!-- Username -->
+                    <div>
+                        <label for="username" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                            Email or Username
+                        </label>
+                        <div class="relative group">
+                            <input type="text"
+                                   name="username"
+                                   id="username"
+                                   required
+                                   autocomplete="username"
+                                   placeholder="you@example.com"
+                                   class="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-3 pl-12 text-slate-900 placeholder-slate-400 transition-all duration-200 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-primary-500 dark:focus:bg-slate-700" />
+                            <div class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Password -->
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <label for="password" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                Password
+                            </label>
+                            <a href="/auth/forgot-password" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 transition-colors">
+                                Forgot password?
+                            </a>
+                        </div>
+                        <div class="relative group" x-data="{ showPassword: false }">
+                            <input :type="showPassword ? 'text' : 'password'"
+                                   name="password"
+                                   id="password"
+                                   required
+                                   autocomplete="current-password"
+                                   placeholder="Enter your password"
+                                   class="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-3 pl-12 pr-12 text-slate-900 placeholder-slate-400 transition-all duration-200 focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-primary-500/10 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-primary-500 dark:focus:bg-slate-700" />
+                            <div class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary-500 transition-colors">
+                                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                                </svg>
+                            </div>
+                            <button type="button"
+                                    x-on:click="showPassword = !showPassword"
+                                    class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                                <svg x-show="!showPassword" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                </svg>
+                                <svg x-show="showPassword" x-cloak class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Remember Me -->
+                    <div class="flex items-center">
+                        <input type="checkbox"
+                               name="remember"
+                               id="remember"
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700" />
+                        <label for="remember" class="ml-3 text-sm text-slate-600 dark:text-slate-400">
+                            Remember me for 30 days
+                        </label>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit"
+                            :disabled="loading"
+                            class="relative flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-primary-500/25 transition-all duration-200 hover:shadow-xl hover:shadow-primary-500/30 hover:from-primary-500 hover:to-primary-400 focus:outline-none focus:ring-4 focus:ring-primary-500/50 disabled:opacity-70 disabled:cursor-not-allowed">
+                        <svg x-show="loading" class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span x-text="loading ? 'Signing in...' : 'Sign in'">Sign in</span>
+                        <svg x-show="!loading" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                        </svg>
+                    </button>
+                </form>
+
+                <!-- Portal Links -->
+                <div class="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+                    <p class="text-center text-sm text-slate-500 dark:text-slate-400 mb-4">Access other portals</p>
+                    <div class="grid grid-cols-3 gap-3">
+                        <a href="/portal" class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 p-3 text-center hover:border-green-300 hover:bg-green-50 dark:border-slate-700 dark:hover:border-green-700 dark:hover:bg-green-900/20 transition-all">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
+                                <svg class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Customer</span>
+                        </a>
+                        <a href="/reseller" class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 p-3 text-center hover:border-accent-300 hover:bg-accent-50 dark:border-slate-700 dark:hover:border-accent-700 dark:hover:bg-accent-900/20 transition-all">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-100 dark:bg-accent-900/30">
+                                <svg class="h-4 w-4 text-accent-600 dark:text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Reseller</span>
+                        </a>
+                        <a href="/vendor" class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 p-3 text-center hover:border-amber-300 hover:bg-amber-50 dark:border-slate-700 dark:hover:border-amber-700 dark:hover:bg-amber-900/20 transition-all">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                                <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Vendor</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back to Home -->
+            <div class="mt-6 text-center">
+                <a href="/" class="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                    Back to home
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

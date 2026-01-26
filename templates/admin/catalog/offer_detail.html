@@ -1,0 +1,237 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ offer.name }} - Tariffs - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/catalog" class="hover:text-primary-600">Services</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ offer.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ offer.name }}</h1>
+            {% if offer.code %}<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Code: {{ offer.code }}</p>{% endif %}
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/catalog/offers/{{ offer.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Info -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Tariff Details -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Tariff Details</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Type</dt>
+                            <dd class="mt-1">
+                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if offer.service_type.value == 'business' %}bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                    {{ offer.service_type.value | title }}
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Access Type</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.access_type.value | replace('_', ' ') | title }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Bandwidth</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
+                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
+                                {% else %}-{% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Billing Cycle</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.billing_cycle.value | title }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Contract Term</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.contract_term.value | replace('_', ' ') | title }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Tariff ID</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.splynx_tariff_id or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Name (Queue)</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.splynx_service_name or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">VAT Percent</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.vat_percent or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">With VAT</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Yes' if offer.with_vat else 'No' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Download/Upload</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
+                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
+                                {% else %}-{% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Aggregation</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.aggregation or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Priority</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.priority or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Show on Portal</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Yes' if offer.show_on_customer_portal else 'No' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                            <dd class="mt-1">
+                                {% set offer_status = offer.status.value %}
+                                {% if offer_status == 'active' %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% elif offer_status == 'inactive' %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ offer_status | title }}</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                        {% if offer.description %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Description</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.description }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Pricing -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Pricing</h2>
+                </div>
+                <div class="p-6">
+                    {% if prices %}
+                    <div class="space-y-3">
+                        {% for price in prices %}
+                        <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <div>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ price.price_type.value | title }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ price.description or (price.billing_cycle.value | title if price.billing_cycle else 'One-time') }}</p>
+                            </div>
+                            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ price.currency }} {{ "%.2f" | format(price.amount) }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No pricing configured yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Subscriptions -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Active Subscriptions</h2>
+                </div>
+                <div class="p-6">
+                    {% if subscriptions %}
+                    <div class="space-y-3">
+                        {% for sub in subscriptions %}
+                        <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <div>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                    {% if sub.account and sub.account.subscriber and sub.account.subscriber.person %}
+                                        {{ sub.account.subscriber.person.first_name }} {{ sub.account.subscriber.person.last_name }}
+                                    {% elif sub.account and sub.account.subscriber and sub.account.subscriber.organization %}
+                                        {{ sub.account.subscriber.organization.name }}
+                                    {% else %}
+                                        Subscription #{{ sub.id | string | truncate(8, True, '') }}
+                                    {% endif %}
+                                </p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Started {{ sub.start_at.strftime('%b %d, %Y') if sub.start_at else 'Pending' }}</p>
+                            </div>
+                            {% set sub_status = sub.status.value %}
+                            {% if sub_status == 'active' %}
+                            {{ status_badge("Active", "active", size="sm") }}
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ sub_status | title }}</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No subscriptions for this offer yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Tariff ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ offer.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Subscriptions</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ subscriptions | length }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.created_at.strftime('%B %d, %Y') if offer.created_at else '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ offer.updated_at.strftime('%B %d, %Y') if offer.updated_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,243 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ user.display_name or (user.first_name ~ ' ' ~ user.last_name) }} - Users - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/system/users" class="hover:text-primary-600">Users</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ user.display_name or (user.first_name ~ ' ' ~ user.last_name) }}</span>
+            </nav>
+            <div class="flex items-center gap-4">
+                <div class="flex h-16 w-16 items-center justify-center rounded-full bg-primary-100 text-2xl font-bold text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">
+                    {{ ((user.first_name or 'U')[0] ~ (user.last_name or 'U')[0]) | upper }}
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ user.display_name or (user.first_name ~ ' ' ~ user.last_name) }}</h1>
+                    <p class="text-slate-500 dark:text-slate-400">{{ user.email }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/system/users/{{ user.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Info -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Profile Details -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Profile Details</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">First Name</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.first_name or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Name</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.last_name or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Display Name</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.display_name or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Email</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.email or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Phone</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.phone or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                            <dd class="mt-1">
+                                {% if user.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </dd>
+                        </div>
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Roles -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Roles & Permissions</h2>
+                </div>
+                <div class="p-6">
+                    {% if roles %}
+                    <div class="flex flex-wrap gap-2">
+                        {% for role in roles %}
+                        <span class="inline-flex items-center rounded-full bg-primary-100 px-3 py-1 text-sm font-medium text-primary-800 dark:bg-primary-900/30 dark:text-primary-400">
+                            {{ role.name }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No roles assigned.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Credentials -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Login Credentials</h2>
+                </div>
+                <div class="p-6">
+                    {% if credential %}
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Username</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ credential.username }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Credential Status</dt>
+                            <dd class="mt-1">
+                                {% if credential.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">Disabled</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Password Change Required</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ 'Yes' if credential.must_change_password else 'No' }}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Password Change</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ credential.password_updated_at.strftime('%b %d, %Y %H:%M') if credential.password_updated_at else 'Never' }}
+                            </dd>
+                        </div>
+                    </dl>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No login credentials configured.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- MFA -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Multi-Factor Authentication</h2>
+                </div>
+                <div class="p-6">
+                    {% if mfa_methods %}
+                    <div class="space-y-3">
+                        {% for mfa in mfa_methods %}
+                        <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                                    <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                                </div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ mfa.method_type.value | title }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Added {{ mfa.created_at.strftime('%b %d, %Y') if mfa.created_at else 'Unknown' }}</p>
+                                </div>
+                            </div>
+                            {% if mfa.enabled %}
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Enabled</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No MFA methods configured.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">User ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ user.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ user.created_at.strftime('%B %d, %Y') if user.created_at else '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ user.updated_at.strftime('%B %d, %Y %H:%M') if user.updated_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Actions</h2>
+                </div>
+                <div class="p-6 space-y-3">
+                    <form method="POST" action="/admin/system/users/{{ user.id }}/reset-password" class="inline w-full">
+                        <button type="submit" onclick="return confirm('Send password reset?')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                            Reset Password
+                        </button>
+                    </form>
+
+                    {% if mfa_methods %}
+                    <form method="POST" action="/admin/system/users/{{ user.id }}/disable-mfa" class="inline w-full">
+                        <button type="submit" onclick="return confirm('Disable all MFA methods?')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                            Disable MFA
+                        </button>
+                    </form>
+                    {% endif %}
+
+                    {% if user.is_active %}
+                    <form method="POST" action="/admin/system/users/{{ user.id }}/deactivate" class="inline w-full">
+                        <button type="submit" onclick="return confirm('Deactivate this user?')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-slate-800 dark:text-red-400">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                            Deactivate User
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="/admin/system/users/{{ user.id }}/activate" class="inline w-full">
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            Activate User
+                        </button>
+                    </form>
+                    <button hx-delete="/admin/system/users/{{ user.id }}"
+                            hx-confirm="Delete this deactivated user? This action cannot be undone."
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-slate-800 dark:text-red-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 7h12M9 7v10m6-10v10m-7 4h8a2 2 0 002-2V7H6v12a2 2 0 002 2z"/></svg>
+                        Delete User
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

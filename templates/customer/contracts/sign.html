@@ -1,0 +1,99 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Sign Contract - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-4xl mx-auto">
+    <div class="flex flex-col gap-4">
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/portal/service-orders" class="hover:text-primary-600">Service Orders</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="/portal/service-orders/{{ service_order.id }}" class="hover:text-primary-600">SO-{{ service_order.id|string|truncate(8, True, '')|upper }}</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">Sign Contract</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Service Agreement</h1>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Please review the terms below and sign to proceed with your service order.</p>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="p-6 border-b border-slate-200 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Contract Terms</h2>
+        </div>
+        <div class="p-6">
+            <div class="prose prose-slate dark:prose-invert max-w-none text-sm text-slate-600 dark:text-slate-300 max-h-96 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg p-4 bg-slate-50 dark:bg-slate-900">
+                {# SECURITY: contract_html must be sanitized HTML from backend (see services/contracts.py) #}
+                {{ contract_html | safe }}
+            </div>
+        </div>
+    </div>
+
+    <form method="post" action="/portal/service-orders/{{ service_order.id }}/contract/sign" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        {% if document_id %}
+        <input type="hidden" name="document_id" value="{{ document_id }}">
+        {% endif %}
+
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Sign Below</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Please enter your name and email to sign this agreement.</p>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label for="signer_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Full Legal Name</label>
+                <input
+                    type="text"
+                    id="signer_name"
+                    name="signer_name"
+                    required
+                    value="{{ prefill_name }}"
+                    placeholder="Enter your full legal name"
+                    class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:text-sm"
+                >
+            </div>
+            <div>
+                <label for="signer_email" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Email Address</label>
+                <input
+                    type="email"
+                    id="signer_email"
+                    name="signer_email"
+                    required
+                    value="{{ prefill_email }}"
+                    placeholder="Enter your email address"
+                    class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:text-sm"
+                >
+            </div>
+        </div>
+
+        <div class="flex items-start">
+            <div class="flex h-5 items-center">
+                <input
+                    type="checkbox"
+                    id="agree"
+                    name="agree"
+                    value="true"
+                    required
+                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700"
+                >
+            </div>
+            <label for="agree" class="ml-3 text-sm text-slate-600 dark:text-slate-300">
+                I have read and agree to the terms and conditions above. I understand that by clicking "Sign Agreement" below, I am electronically signing this contract.
+            </label>
+        </div>
+
+        <div class="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-700">
+            <a href="/portal/service-orders/{{ service_order.id }}" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-6 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                Sign Agreement
+            </button>
+        </div>
+    </form>
+
+    <div class="text-center text-xs text-slate-500 dark:text-slate-400">
+        <p>Your IP address and browser information will be recorded as part of this electronic signature.</p>
+    </div>
+</div>
+{% endblock %}

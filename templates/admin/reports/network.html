@@ -1,0 +1,220 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Network Usage Report - Admin{% endblock %}
+
+{% block charts_js %}
+<script src="/static/js/vendor/chart.min.js"></script>
+<script src="/static/js/charts.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Network Usage</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review network utilization and infrastructure status</p>
+        </div>
+        <form method="GET" action="/admin/reports/network/export" class="flex items-center gap-2">
+            <label for="hours" class="sr-only">Export period</label>
+            <select id="hours" name="hours" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="24">Last 24 Hours</option>
+                <option value="168">Last 7 Days</option>
+                <option value="720">Last 30 Days</option>
+            </select>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Export
+            </button>
+        </form>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active OLTs</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ active_olts | default(0) }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">of {{ total_olts | default(0) }} total</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Connected ONTs</p>
+            <p class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">{{ connected_onts | default(0) }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">of {{ total_onts | default(0) }} deployed</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">IP Pool Usage</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ "%.1f" | format(ip_pool_usage | default(0)) }}%</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ used_ips | default(0) }}/{{ total_ips | default(0) }} addresses</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">VLANs Active</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ active_vlans | default(0) }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configured</p>
+        </div>
+    </div>
+
+    <!-- Network Overview Charts -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <!-- Device Status Doughnut -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Device Health Overview</h2>
+            </div>
+            <div class="p-6">
+                <div class="chart-container" style="min-height: 220px;">
+                    <canvas id="device-health-chart"></canvas>
+                </div>
+                <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    const ctx = document.getElementById('device-health-chart');
+                    if (!ctx) return;
+                    const chartData = {
+                        labels: ['Online OLTs', 'Offline OLTs', 'Connected ONTs', 'Disconnected ONTs'],
+                        values: [{{ active_olts | default(0) }}, {{ (total_olts | default(0)) - (active_olts | default(0)) }}, {{ connected_onts | default(0) }}, {{ (total_onts | default(0)) - (connected_onts | default(0)) }}],
+                        colors: ['#10b981', '#ef4444', '#06b6d4', '#f59e0b']
+                    };
+                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+                    DotmacCharts.registerChart('device-health-chart', chart);
+                });
+                </script>
+            </div>
+        </div>
+        <!-- IP Pool Usage Chart -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IP Pool Utilization</h2>
+            </div>
+            <div class="p-6">
+                <div class="chart-container" style="min-height: 220px;">
+                    <canvas id="ip-pool-chart"></canvas>
+                </div>
+                <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    const ctx = document.getElementById('ip-pool-chart');
+                    if (!ctx) return;
+                    const chartData = {
+                        labels: ['Used IPs', 'Available IPs'],
+                        values: [{{ used_ips | default(0) }}, {{ (total_ips | default(0)) - (used_ips | default(0)) }}],
+                        colors: ['#06b6d4', '#e2e8f0']
+                    };
+                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+                    DotmacCharts.registerChart('ip-pool-chart', chart);
+                });
+                </script>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Status -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">OLT Status</h2>
+            </div>
+            <div class="p-6">
+                {% if olts %}
+                <div class="space-y-3">
+                    {% for olt in olts[:10] %}
+                    <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                                <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                            </div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ olt.name or olt.serial_number }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ olt.management_ip or 'No IP' }}</p>
+                            </div>
+                        </div>
+                        {% if olt.is_active %}
+                        {{ status_badge("Online", "online", size="sm") }}
+                        {% else %}
+                        {{ status_badge("Offline", "offline", size="sm") }}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="mt-4 text-center">
+                    <a href="/admin/network/olts" class="text-sm text-primary-600 hover:text-primary-700">View all OLTs</a>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No OLTs configured.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IP Pool Allocation</h2>
+            </div>
+            <div class="p-6">
+                {% if ip_pools %}
+                <div class="space-y-4">
+                    {% for pool in ip_pools[:5] %}
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span class="text-slate-700 dark:text-slate-300">{{ pool.name }}</span>
+                            <span class="text-slate-500 dark:text-slate-400">{{ pool.cidr }}</span>
+                        </div>
+                        <div class="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700">
+                            <div class="h-2 rounded-full bg-blue-500" style="width: {{ (pool.used_count / pool.total_count * 100) if pool.total_count > 0 else 0 }}%"></div>
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ pool.used_count | default(0) }}/{{ pool.total_count | default(0) }} used</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="mt-4 text-center">
+                    <a href="/admin/network/ip-management" class="text-sm text-primary-600 hover:text-primary-700">Manage IP Pools</a>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No IP pools configured.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Network Events -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent ONT Activity</h2>
+        </div>
+        <div class="p-6">
+            {% if recent_ont_activity %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Device</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Serial</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">OLT</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for ont in recent_ont_activity %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ ont.model or 'Unknown' }}</td>
+                            <td class="px-4 py-3 text-sm font-mono text-slate-500 dark:text-slate-400">{{ ont.serial_number }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ ont.olt.name if ont.olt else '-' }}</td>
+                            <td class="px-4 py-3">
+                                {% if ont.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No recent ONT activity.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% set activity_title = "Reports Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

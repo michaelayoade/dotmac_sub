@@ -1,0 +1,61 @@
+{#
+   Dropdown Menu Component
+   Usage: {% include "components/navigation/dropdown.html" %}
+
+   Parameters:
+   - trigger: Button/element HTML that triggers the dropdown
+   - items: List of menu items [{label, href, icon, divider, danger}]
+   - position: Position - left, right (default: right)
+   - width: Width class (default: w-48)
+   - class: Additional CSS classes
+#}
+<div x-data="{ open: false }"
+     x-on:click.outside="open = false"
+     x-on:keydown.escape.window="open = false"
+     class="relative inline-block text-left {{ class }}">
+
+    <!-- Trigger -->
+    <div x-on:click="open = !open">
+        {% if trigger %}
+        {{ trigger | safe }}
+        {% else %}
+        <button type="button" class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            Options
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        {% endif %}
+    </div>
+
+    <!-- Dropdown Menu -->
+    <div x-show="open"
+         x-transition:enter="transition ease-out duration-100"
+         x-transition:enter-start="transform opacity-0 scale-95"
+         x-transition:enter-end="transform opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-75"
+         x-transition:leave-start="transform opacity-100 scale-100"
+         x-transition:leave-end="transform opacity-0 scale-95"
+         x-cloak
+         class="absolute {{ 'right-0' if position != 'left' else 'left-0' }} z-50 mt-2 {{ width | default('w-48') }} origin-top-{{ position | default('right') }} rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800"
+         role="menu"
+         aria-orientation="vertical">
+        {% for item in items %}
+            {% if item.divider %}
+            <div class="my-1 border-t border-slate-200 dark:border-slate-700"></div>
+            {% else %}
+            <a href="{{ item.href | default('#') }}"
+               x-on:click="open = false"
+               class="flex items-center gap-2 px-4 py-2 text-sm {{ 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20' if item.danger else 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700' }}"
+               role="menuitem">
+                {% if item.icon %}
+                <svg class="h-4 w-4 {{ 'text-red-500' if item.danger else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {{ item.icon | safe }}
+                </svg>
+                {% endif %}
+                {{ item.label }}
+            </a>
+            {% endif %}
+        {% endfor %}
+    </div>
+</div>

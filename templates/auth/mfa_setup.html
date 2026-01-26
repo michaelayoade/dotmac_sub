@@ -1,0 +1,158 @@
+{% extends "layouts/auth.html" %}
+
+{% block title %}Set Up Two-Factor Authentication - Dotmac SM{% endblock %}
+
+{% block content %}
+<div class="rounded-2xl bg-white p-8 shadow-xl dark:bg-slate-800 max-w-lg mx-auto">
+    <div class="text-center mb-8">
+        <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+            <svg class="h-7 w-7 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+        </div>
+        <h1 class="mt-4 text-2xl font-bold text-slate-900 dark:text-white">Secure Your Account</h1>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Set up two-factor authentication for enhanced security</p>
+    </div>
+
+    <!-- Setup Steps -->
+    <div x-data="{ step: 1, code: '', loading: false }" class="space-y-6">
+
+        <!-- Step 1: Download App -->
+        <div x-show="step === 1" x-transition>
+            <div class="mb-6">
+                <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-3">Step 1: Download an authenticator app</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                    If you don't already have one, download an authenticator app like:
+                </p>
+                <ul class="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                    <li class="flex items-center gap-2">
+                        <svg class="h-4 w-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        Google Authenticator
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <svg class="h-4 w-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        Microsoft Authenticator
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <svg class="h-4 w-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        Authy
+                    </li>
+                </ul>
+            </div>
+            <button type="button"
+                    x-on:click="step = 2"
+                    class="w-full rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                Continue
+            </button>
+        </div>
+
+        <!-- Step 2: Scan QR Code -->
+        <div x-show="step === 2" x-transition>
+            <div class="mb-6">
+                <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-3">Step 2: Scan the QR code</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                    Open your authenticator app and scan this QR code:
+                </p>
+
+                <!-- QR Code Container -->
+                <div class="flex justify-center mb-4">
+                    <div class="rounded-lg bg-white p-4 shadow-sm border border-slate-200 dark:border-slate-600">
+                        {% if qr_code_url %}
+                        <img src="{{ qr_code_url }}" alt="QR Code" class="h-48 w-48">
+                        {% else %}
+                        <div class="h-48 w-48 bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">QR Code</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Manual Entry -->
+                <div x-data="{ showManual: false }">
+                    <button type="button"
+                            x-on:click="showManual = !showManual"
+                            class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <span x-text="showManual ? 'Hide manual entry code' : 'Can\\'t scan? Enter code manually'"></span>
+                    </button>
+                    <div x-show="showManual" x-collapse class="mt-3">
+                        <div class="rounded-lg bg-slate-50 dark:bg-slate-700/50 p-3">
+                            <p class="text-xs text-slate-500 dark:text-slate-400 mb-1">Secret key:</p>
+                            <code class="text-sm font-mono text-slate-900 dark:text-white break-all">{{ secret_key | default('JBSWY3DPEHPK3PXP') }}</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button type="button"
+                        x-on:click="step = 1"
+                        class="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                    Back
+                </button>
+                <button type="button"
+                        x-on:click="step = 3"
+                        class="flex-1 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                    Continue
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 3: Verify Code -->
+        <div x-show="step === 3" x-transition>
+            <form hx-post="/auth/mfa/setup/verify"
+                  hx-target="#setup-response"
+                  x-on:htmx:before-request="loading = true"
+                  x-on:htmx:after-request="loading = false">
+
+                <div class="mb-6">
+                    <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-3">Step 3: Verify setup</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                        Enter the 6-digit code from your authenticator app to verify setup:
+                    </p>
+
+                    <input type="text"
+                           name="verification_code"
+                           x-model="code"
+                           maxlength="6"
+                           inputmode="numeric"
+                           pattern="[0-9]{6}"
+                           placeholder="000000"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-2xl font-mono tracking-widest shadow-sm placeholder-slate-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-600">
+                </div>
+
+                <div id="setup-response" class="mb-4"></div>
+
+                <div class="flex gap-3">
+                    <button type="button"
+                            x-on:click="step = 2"
+                            class="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        Back
+                    </button>
+                    <button type="submit"
+                            :disabled="loading || code.length !== 6"
+                            class="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed dark:focus:ring-offset-slate-800">
+                        <svg x-show="loading" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span x-text="loading ? 'Verifying...' : 'Enable 2FA'">Enable 2FA</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Skip Option -->
+    <p class="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
+        <a href="/admin/dashboard" class="font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+            Skip for now &rarr;
+        </a>
+    </p>
+</div>
+{% endblock %}

@@ -1,0 +1,158 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Profile - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Profile</h1>
+        <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Update your personal details and preferences</p>
+    </div>
+
+    <div class="rounded-xl border border-stone-200 bg-white px-5 py-4 text-sm text-stone-600 shadow-premium dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+        Authentication is managed via RADIUS. Credentials are tied to your device service.
+    </div>
+
+    {% if success %}
+    <div class="rounded-xl border-2 border-emerald-200 bg-emerald-50 px-5 py-4 dark:border-emerald-900/50 dark:bg-emerald-900/20">
+        <div class="flex items-start gap-3">
+            <div class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+            </div>
+            <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">{{ success }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" class="space-y-6">
+        <!-- Profile Card with Avatar -->
+        <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
+            <!-- Header with gradient -->
+            <div class="relative h-32 bg-gradient-to-r from-stone-800 via-stone-700 to-stone-800">
+                <div class="absolute inset-0 bg-[url('data:image/svg+xml,%3Csvg width=&quot;60&quot; height=&quot;60&quot; viewBox=&quot;0 0 60 60&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;%3E%3Cg fill=&quot;none&quot; fill-rule=&quot;evenodd&quot;%3E%3Cg fill=&quot;%23ffffff&quot; fill-opacity=&quot;0.03&quot;%3E%3Cpath d=&quot;M36 34h-2v-4h2v4zm0-6v-4h-2v4h2zm-6 6v-4h-2v4h2zm0-6v-4h-2v4h2z&quot;/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')]"></div>
+            </div>
+
+            <div class="relative px-6 pb-6">
+                <!-- Avatar -->
+                <div class="-mt-16 mb-6">
+                    <div class="relative inline-block">
+                        <div class="flex h-32 w-32 items-center justify-center rounded-3xl bg-gradient-to-br from-[var(--color-brand-400)] to-[var(--color-brand-600)] text-4xl font-display font-bold text-white shadow-xl shadow-[var(--color-brand-500)]/30 ring-4 ring-white dark:ring-stone-800">
+                            {{ customer.name[:2] | upper if customer and customer.name else 'CU' }}
+                        </div>
+                        <button type="button" class="absolute bottom-0 right-0 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-stone-600 shadow-lg transition-all hover:bg-stone-50 hover:text-[var(--color-brand-600)] dark:bg-stone-700 dark:text-stone-300">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Contact Information</h2>
+                <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Update your personal contact details</p>
+
+                <div class="grid gap-5 sm:grid-cols-2">
+                    <div class="sm:col-span-2 lg:col-span-1">
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Full Name</label>
+                        <input type="text" name="name" value="{{ customer.name | default(customer.get('name') if customer else '') }}" required
+                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-1">
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Email Address</label>
+                        <input type="email" name="email" value="{{ customer.email | default(customer.get('email') if customer else '') }}" required
+                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Phone Number</label>
+                        <input type="tel" name="phone" value="{{ customer.phone | default(customer.get('phone') if customer else '') }}"
+                               class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preferences -->
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Notification Preferences</h2>
+            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">Choose how you want to receive updates</p>
+
+            <div class="space-y-4">
+                <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
+                    <div class="relative flex items-center justify-center">
+                        <input type="checkbox" name="billing_notifications" checked class="peer sr-only">
+                        <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
+                            <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="flex-1">
+                        <p class="text-sm font-semibold text-stone-900 dark:text-white">Billing Notifications</p>
+                        <p class="text-xs text-stone-500 dark:text-stone-400">Receive invoices and payment reminders via email</p>
+                    </div>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/30">
+                        <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                </label>
+
+                <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
+                    <div class="relative flex items-center justify-center">
+                        <input type="checkbox" name="sms_updates" class="peer sr-only">
+                        <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
+                            <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="flex-1">
+                        <p class="text-sm font-semibold text-stone-900 dark:text-white">SMS Updates</p>
+                        <p class="text-xs text-stone-500 dark:text-stone-400">Receive service alerts and updates via SMS</p>
+                    </div>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/30">
+                        <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- Security Section -->
+        <div id="security" class="rounded-2xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Access & Credentials</h2>
+            <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">
+                Authentication is managed via RADIUS. These credentials are used by your device service.
+            </p>
+
+            <div class="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+                <p class="text-sm font-semibold">Changing credentials can interrupt connectivity.</p>
+                <p class="mt-1 text-xs">We recommend scheduling changes with support to avoid downtime.</p>
+                <a href="/portal/support/new?topic=access" class="mt-3 inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-200 dark:hover:bg-amber-900/40">
+                    Request credential change
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </a>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex items-center justify-end gap-3">
+            <button type="reset" class="rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:border-stone-500">
+                Reset Changes
+            </button>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-500)]/20 transition-all hover:shadow-xl hover:shadow-[var(--color-brand-500)]/30 hover:-translate-y-0.5">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                Save Changes
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

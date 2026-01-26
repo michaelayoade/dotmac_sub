@@ -1,0 +1,272 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}IP Calculator - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+
+<div class="relative space-y-6">
+    <!-- Page Header -->
+    {% call page_header(
+        title="IP Subnet Calculator",
+        subtitle="Calculate subnets, ranges, and network information",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>',
+        color="indigo",
+        color2="violet"
+    ) %}
+    {% endcall %}
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Calculator Input -->
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 50ms;">
+            <h2 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Calculate Subnet</h2>
+
+            <div x-data="ipCalculator()" class="space-y-4">
+                <!-- IP Version Toggle -->
+                <div class="flex gap-2">
+                    <button @click="version = 'ipv4'"
+                            :class="version === 'ipv4' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'"
+                            class="flex-1 rounded-lg px-4 py-2 text-sm font-medium transition">
+                        IPv4
+                    </button>
+                    <button @click="version = 'ipv6'"
+                            :class="version === 'ipv6' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'"
+                            class="flex-1 rounded-lg px-4 py-2 text-sm font-medium transition">
+                        IPv6
+                    </button>
+                </div>
+
+                <!-- CIDR Input -->
+                <div>
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">CIDR Notation</label>
+                    <input type="text"
+                           x-model="cidr"
+                           @input="calculate()"
+                           :placeholder="version === 'ipv4' ? '192.168.1.0/24' : '2001:db8::/32'"
+                           class="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+
+                <!-- Quick Prefixes -->
+                <div>
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Common Prefixes</label>
+                    <div class="flex flex-wrap gap-2" x-show="version === 'ipv4'">
+                        <template x-for="prefix in ['/8', '/16', '/24', '/25', '/26', '/27', '/28', '/29', '/30', '/32']">
+                            <button @click="setPrefix(prefix)"
+                                    class="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-indigo-100 hover:text-indigo-700 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+                                    x-text="prefix"></button>
+                        </template>
+                    </div>
+                    <div class="flex flex-wrap gap-2" x-show="version === 'ipv6'">
+                        <template x-for="prefix in ['/32', '/48', '/56', '/64', '/112', '/128']">
+                            <button @click="setPrefix(prefix)"
+                                    class="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-indigo-100 hover:text-indigo-700 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+                                    x-text="prefix"></button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Calculator Results -->
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
+            <h2 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Results</h2>
+
+            <div x-data="ipCalculator()" class="space-y-3">
+                <template x-if="result">
+                    <div class="space-y-3">
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Network Address</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.network"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700" x-show="version === 'ipv4'">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Broadcast Address</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.broadcast"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">First Usable</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.firstUsable"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Last Usable</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.lastUsable"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700" x-show="version === 'ipv4'">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Subnet Mask</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.subnetMask"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700" x-show="version === 'ipv4'">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Wildcard Mask</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.wildcardMask"></span>
+                        </div>
+                        <div class="flex justify-between border-b border-slate-100 pb-2 dark:border-slate-700">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Total Addresses</span>
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white" x-text="result.totalAddresses"></span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">Usable Addresses</span>
+                            <span class="font-mono text-sm font-medium text-indigo-600 dark:text-indigo-400" x-text="result.usableAddresses"></span>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="!result">
+                    <div class="flex h-48 items-center justify-center text-center">
+                        <div>
+                            <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                            </svg>
+                            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Enter a CIDR to see results</p>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subnet Reference Table -->
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">IPv4 Subnet Reference</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CIDR</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subnet Mask</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total IPs</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Usable IPs</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Class</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% set subnets = [
+                        ('/8', '255.0.0.0', '16,777,216', '16,777,214', 'A'),
+                        ('/16', '255.255.0.0', '65,536', '65,534', 'B'),
+                        ('/24', '255.255.255.0', '256', '254', 'C'),
+                        ('/25', '255.255.255.128', '128', '126', '-'),
+                        ('/26', '255.255.255.192', '64', '62', '-'),
+                        ('/27', '255.255.255.224', '32', '30', '-'),
+                        ('/28', '255.255.255.240', '16', '14', '-'),
+                        ('/29', '255.255.255.248', '8', '6', '-'),
+                        ('/30', '255.255.255.252', '4', '2', 'P2P'),
+                        ('/31', '255.255.255.254', '2', '2', 'P2P'),
+                        ('/32', '255.255.255.255', '1', '1', 'Host'),
+                    ] %}
+                    {% for cidr, mask, total, usable, cls in subnets %}
+                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                        <td class="whitespace-nowrap px-6 py-3 font-mono text-sm font-medium text-indigo-600 dark:text-indigo-400">{{ cidr }}</td>
+                        <td class="whitespace-nowrap px-6 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ mask }}</td>
+                        <td class="whitespace-nowrap px-6 py-3 text-sm text-slate-600 dark:text-slate-300">{{ total }}</td>
+                        <td class="whitespace-nowrap px-6 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ usable }}</td>
+                        <td class="whitespace-nowrap px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ cls }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function ipCalculator() {
+    return {
+        version: 'ipv4',
+        cidr: '',
+        result: null,
+
+        setPrefix(prefix) {
+            if (this.cidr.includes('/')) {
+                this.cidr = this.cidr.split('/')[0] + prefix;
+            } else if (this.cidr) {
+                this.cidr = this.cidr + prefix;
+            }
+            this.calculate();
+        },
+
+        calculate() {
+            if (!this.cidr || !this.cidr.includes('/')) {
+                this.result = null;
+                return;
+            }
+
+            const [ip, prefixStr] = this.cidr.split('/');
+            const prefix = parseInt(prefixStr);
+
+            if (this.version === 'ipv4') {
+                this.calculateIPv4(ip, prefix);
+            } else {
+                this.calculateIPv6(ip, prefix);
+            }
+        },
+
+        calculateIPv4(ip, prefix) {
+            if (prefix < 0 || prefix > 32) {
+                this.result = null;
+                return;
+            }
+
+            const parts = ip.split('.').map(p => parseInt(p));
+            if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) {
+                this.result = null;
+                return;
+            }
+
+            const ipNum = (parts[0] << 24) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+            const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+            const network = (ipNum & mask) >>> 0;
+            const broadcast = (network | (~mask >>> 0)) >>> 0;
+
+            const numToIP = (n) => [
+                (n >>> 24) & 255,
+                (n >>> 16) & 255,
+                (n >>> 8) & 255,
+                n & 255
+            ].join('.');
+
+            const maskToIP = (bits) => {
+                const m = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+                return numToIP(m);
+            };
+
+            const wildcardToIP = (bits) => {
+                const m = bits === 32 ? 0 : ~((~0 << (32 - bits)) >>> 0) >>> 0;
+                return numToIP(m);
+            };
+
+            const totalAddresses = Math.pow(2, 32 - prefix);
+            const usableAddresses = prefix >= 31 ? totalAddresses : Math.max(0, totalAddresses - 2);
+
+            this.result = {
+                network: numToIP(network),
+                broadcast: numToIP(broadcast),
+                firstUsable: prefix >= 31 ? numToIP(network) : numToIP(network + 1),
+                lastUsable: prefix >= 31 ? numToIP(broadcast) : numToIP(broadcast - 1),
+                subnetMask: maskToIP(prefix),
+                wildcardMask: wildcardToIP(prefix),
+                totalAddresses: totalAddresses.toLocaleString(),
+                usableAddresses: usableAddresses.toLocaleString()
+            };
+        },
+
+        calculateIPv6(ip, prefix) {
+            if (prefix < 0 || prefix > 128) {
+                this.result = null;
+                return;
+            }
+
+            // Simplified IPv6 calculation
+            const totalAddresses = prefix >= 64 ? Math.pow(2, 128 - prefix) : 'Very large';
+
+            this.result = {
+                network: ip + '/' + prefix,
+                firstUsable: ip,
+                lastUsable: 'Varies',
+                totalAddresses: typeof totalAddresses === 'number' ? totalAddresses.toLocaleString() : totalAddresses,
+                usableAddresses: typeof totalAddresses === 'number' ? totalAddresses.toLocaleString() : totalAddresses
+            };
+        }
+    }
+}
+</script>
+{% endblock %}

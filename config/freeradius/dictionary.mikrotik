@@ -1,0 +1,42 @@
+# -*- text -*-
+# Mikrotik vendor-specific RADIUS attributes
+# Vendor ID: 14988
+
+VENDOR		Mikrotik			14988
+
+BEGIN-VENDOR	Mikrotik
+
+ATTRIBUTE	Mikrotik-Recv-Limit			1	integer
+ATTRIBUTE	Mikrotik-Xmit-Limit			2	integer
+ATTRIBUTE	Mikrotik-Group				3	string
+ATTRIBUTE	Mikrotik-Wireless-Forward		4	integer
+ATTRIBUTE	Mikrotik-Wireless-Skip-Dot1x		5	integer
+ATTRIBUTE	Mikrotik-Wireless-Enc-Algo		6	integer
+ATTRIBUTE	Mikrotik-Wireless-Enc-Key		7	string
+ATTRIBUTE	Mikrotik-Rate-Limit			8	string
+ATTRIBUTE	Mikrotik-Realm				9	string
+ATTRIBUTE	Mikrotik-Host-IP			10	ipaddr
+ATTRIBUTE	Mikrotik-Mark-Id			11	string
+ATTRIBUTE	Mikrotik-Advertise-URL			12	string
+ATTRIBUTE	Mikrotik-Advertise-Interval		13	integer
+ATTRIBUTE	Mikrotik-Recv-Limit-Gigawords		14	integer
+ATTRIBUTE	Mikrotik-Xmit-Limit-Gigawords		15	integer
+ATTRIBUTE	Mikrotik-Wireless-PSK			16	string
+ATTRIBUTE	Mikrotik-Total-Limit			17	integer
+ATTRIBUTE	Mikrotik-Total-Limit-Gigawords		18	integer
+ATTRIBUTE	Mikrotik-Address-List			19	string
+ATTRIBUTE	Mikrotik-Wireless-MPKey			20	string
+ATTRIBUTE	Mikrotik-Wireless-Comment		21	string
+ATTRIBUTE	Mikrotik-Delegated-IPv6-Pool		22	string
+ATTRIBUTE	Mikrotik-DHCP-Option-Set		23	string
+ATTRIBUTE	Mikrotik-DHCP-Option-Param-STR1		24	string
+ATTRIBUTE	Mikrotik-DHCP-Option-Param-STR2		25	string
+ATTRIBUTE	Mikrotik-Wireless-VLANID		26	integer
+ATTRIBUTE	Mikrotik-Wireless-VLANIDtype		27	integer
+ATTRIBUTE	Mikrotik-Wireless-Minsignal		28	string
+ATTRIBUTE	Mikrotik-Wireless-Maxsignal		29	string
+
+# Rate-Limit format: rx-rate[/tx-rate] [rx-burst-rate[/tx-burst-rate] [rx-burst-threshold[/tx-burst-threshold] [rx-burst-time[/tx-burst-time] [priority] [rx-rate-min[/tx-rate-min]]]]]
+# Example: 2M/2M 4M/4M 1M/1M 8/8 3 1M/1M
+
+END-VENDOR	Mikrotik

@@ -1,0 +1,268 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if device else 'New' }} Network Device - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/core-devices" class="hover:text-primary-600">Network Devices</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Device' if device else 'New Device' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Network Device' if device else 'Add Network Device' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update device configuration' if device else 'Register a core router, switch, or network device' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Device Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ device.name if device else '' }}"
+                            placeholder="Core-Router-01"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="hostname" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Hostname</label>
+                        <input type="text" name="hostname" id="hostname" maxlength="160"
+                            value="{{ device.hostname if device else '' }}"
+                            placeholder="core-rtr-01.network.local"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="mgmt_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP</label>
+                        <input type="text" name="mgmt_ip" id="mgmt_ip" maxlength="64"
+                            value="{{ device.mgmt_ip if device else '' }}"
+                            placeholder="192.168.1.1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="role" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Role <span class="text-red-500">*</span></label>
+                        <select name="role" id="role" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="core" {% if device and device.role.value == 'core' %}selected{% endif %}>Core</option>
+                            <option value="distribution" {% if device and device.role.value == 'distribution' %}selected{% endif %}>Distribution</option>
+                            <option value="aggregation" {% if device and device.role.value == 'aggregation' %}selected{% endif %}>Aggregation</option>
+                            <option value="access" {% if device and device.role.value == 'access' %}selected{% endif %}>Access</option>
+                            <option value="edge" {% if device and device.role.value == 'edge' %}selected{% elif not device %}selected{% endif %}>Edge</option>
+                            <option value="cpe" {% if device and device.role.value == 'cpe' %}selected{% endif %}>CPE</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="device_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Device Type</label>
+                        <select name="device_type" id="device_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select type</option>
+                            <option value="router" {% if device and device.device_type and device.device_type.value == 'router' %}selected{% endif %}>Router</option>
+                            <option value="switch" {% if device and device.device_type and device.device_type.value == 'switch' %}selected{% endif %}>Switch</option>
+                            <option value="hub" {% if device and device.device_type and device.device_type.value == 'hub' %}selected{% endif %}>Hub</option>
+                            <option value="firewall" {% if device and device.device_type and device.device_type.value == 'firewall' %}selected{% endif %}>Firewall</option>
+                            <option value="inverter" {% if device and device.device_type and device.device_type.value == 'inverter' %}selected{% endif %}>Inverter</option>
+                            <option value="access_point" {% if device and device.device_type and device.device_type.value == 'access_point' %}selected{% endif %}>Access Point</option>
+                            <option value="bridge" {% if device and device.device_type and device.device_type.value == 'bridge' %}selected{% endif %}>Bridge</option>
+                            <option value="modem" {% if device and device.device_type and device.device_type.value == 'modem' %}selected{% endif %}>Modem</option>
+                            <option value="server" {% if device and device.device_type and device.device_type.value == 'server' %}selected{% endif %}>Server</option>
+                            <option value="other" {% if device and device.device_type and device.device_type.value == 'other' %}selected{% endif %}>Other</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="pop_site_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">POP Site</label>
+                        <select name="pop_site_id" id="pop_site_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">No site assigned</option>
+                            {% for site in pop_sites %}
+                            <option value="{{ site.id }}" {% if device and device.pop_site_id == site.id %}selected{% endif %}>{{ site.name }} ({{ site.code or 'No code' }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="vendor" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
+                        <select name="vendor" id="vendor"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select vendor</option>
+                            <option value="Huawei" {% if device and device.vendor == 'Huawei' %}selected{% endif %}>Huawei</option>
+                            <option value="Cisco" {% if device and device.vendor == 'Cisco' %}selected{% endif %}>Cisco</option>
+                            <option value="MikroTik" {% if device and device.vendor == 'MikroTik' %}selected{% endif %}>MikroTik</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Model</label>
+                        <input type="text" name="model" id="model" maxlength="120"
+                            value="{{ device.model if device else '' }}"
+                            placeholder="CCR2004, ASR1001-X..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="serial_number" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Number</label>
+                        <input type="text" name="serial_number" id="serial_number" maxlength="120"
+                            value="{{ device.serial_number if device else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ device.notes if device else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not device or device.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable to include in monitoring and management</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Monitoring</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="ping_enabled" value="true" {% if not device or device.ping_enabled %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable Ping Monitoring</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Use ICMP ping checks for availability.</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="snmp_enabled" name="snmp_enabled" value="true" {% if device and device.snmp_enabled %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable SNMP Monitoring</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Collect metrics via SNMP.</p>
+                    </div>
+                </div>
+
+                    <div id="snmp-details" class="{% if not device or not device.snmp_enabled %}hidden{% endif %}">
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <label for="snmp_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Port</label>
+                            <input type="number" name="snmp_port" id="snmp_port" min="1" max="65535"
+                                value="{{ device.snmp_port if device and device.snmp_port is not none else 161 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="snmp_version" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Version</label>
+                            <select name="snmp_version" id="snmp_version"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="v2c" {% if device and device.snmp_version == 'v2c' %}selected{% elif not device %}selected{% endif %}>v2c</option>
+                                <option value="v3" {% if device and device.snmp_version == 'v3' %}selected{% endif %}>v3</option>
+                            </select>
+                        </div>
+                        <div id="snmp-v2-fields" class="contents">
+                        <div>
+                            <label for="snmp_community" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Community (v2c)</label>
+                            <input type="text" name="snmp_community" id="snmp_community" maxlength="255"
+                                value="{{ device.snmp_community if device else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        </div>
+                        </div>
+                        <div id="snmp-v3-fields" class="contents">
+                        <div>
+                            <label for="snmp_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username (v3)</label>
+                            <input type="text" name="snmp_username" id="snmp_username" maxlength="120"
+                                value="{{ device.snmp_username if device else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="snmp_auth_protocol" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Protocol</label>
+                            <select name="snmp_auth_protocol" id="snmp_auth_protocol"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">None</option>
+                                <option value="md5" {% if device and device.snmp_auth_protocol == 'md5' %}selected{% endif %}>MD5</option>
+                                <option value="sha" {% if device and device.snmp_auth_protocol == 'sha' %}selected{% endif %}>SHA</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="snmp_auth_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Secret</label>
+                            <input type="password" name="snmp_auth_secret" id="snmp_auth_secret" maxlength="255"
+                                value="{{ device.snmp_auth_secret if device else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="snmp_priv_protocol" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Privacy Protocol</label>
+                            <select name="snmp_priv_protocol" id="snmp_priv_protocol"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">None</option>
+                                <option value="des" {% if device and device.snmp_priv_protocol == 'des' %}selected{% endif %}>DES</option>
+                                <option value="aes" {% if device and device.snmp_priv_protocol == 'aes' %}selected{% endif %}>AES</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="snmp_priv_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Privacy Secret</label>
+                            <input type="password" name="snmp_priv_secret" id="snmp_priv_secret" maxlength="255"
+                                value="{{ device.snmp_priv_secret if device else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/core-devices" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if device else 'Create Device' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const toggle = document.getElementById('snmp_enabled');
+    const details = document.getElementById('snmp-details');
+    const version = document.getElementById('snmp_version');
+    const v2Fields = document.getElementById('snmp-v2-fields');
+    const v3Fields = document.getElementById('snmp-v3-fields');
+    if (!toggle || !details) return;
+    const sync = () => {
+        const enabled = toggle.checked;
+        details.classList.toggle('hidden', !enabled);
+        if (!enabled) return;
+        const useV3 = version && version.value === 'v3';
+        if (v2Fields) v2Fields.classList.toggle('hidden', useV3);
+        if (v3Fields) v3Fields.classList.toggle('hidden', !useV3);
+    };
+    toggle.addEventListener('change', sync);
+    if (version) version.addEventListener('change', sync);
+    sync();
+})();
+</script>
+{% endblock %}

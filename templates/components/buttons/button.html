@@ -1,0 +1,75 @@
+{#
+   Button Component
+   Usage: {% include "components/buttons/button.html" %}
+
+   Parameters:
+   - variant: primary, secondary, danger, ghost (default: primary)
+   - size: sm, md, lg (default: md)
+   - type: button, submit, reset (default: button)
+   - label: Button text
+   - icon: SVG path for left icon
+   - icon_right: SVG path for right icon
+   - disabled: Boolean
+   - loading: Boolean
+   - href: URL for link button
+   - class: Additional CSS classes
+   - htmx attributes: hx_get, hx_post, hx_target, hx_swap, hx_confirm
+#}
+{% set variants = {
+    'primary': 'bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500 shadow-sm',
+    'secondary': 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 focus:ring-slate-500 dark:bg-slate-700 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-600',
+    'danger': 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500 shadow-sm',
+    'ghost': 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
+} %}
+{% set sizes = {
+    'sm': 'px-3 py-1.5 text-xs gap-1.5',
+    'md': 'px-4 py-2 text-sm gap-2',
+    'lg': 'px-5 py-2.5 text-base gap-2'
+} %}
+{% set icon_sizes = {
+    'sm': 'h-3.5 w-3.5',
+    'md': 'h-4 w-4',
+    'lg': 'h-5 w-5'
+} %}
+
+{% set base_class = 'inline-flex items-center justify-center font-medium rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-800 disabled:opacity-50 disabled:cursor-not-allowed btn-hover' %}
+
+{% if href and not disabled %}
+<a href="{{ href }}"
+   class="{{ base_class }} {{ variants[variant | default('primary')] }} {{ sizes[size | default('md')] }} {{ class }}">
+{% else %}
+<button type="{{ type | default('button') }}"
+        {% if disabled or loading %}disabled{% endif %}
+        {% if hx_get %}hx-get="{{ hx_get }}"{% endif %}
+        {% if hx_post %}hx-post="{{ hx_post }}"{% endif %}
+        {% if hx_delete %}hx-delete="{{ hx_delete }}"{% endif %}
+        {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}
+        {% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}
+        {% if hx_confirm %}hx-confirm="{{ hx_confirm }}"{% endif %}
+        class="{{ base_class }} {{ variants[variant | default('primary')] }} {{ sizes[size | default('md')] }} {{ class }}">
+{% endif %}
+
+    {% if loading %}
+    <svg class="animate-spin {{ icon_sizes[size | default('md')] }}" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+    {% elif icon %}
+    <svg class="{{ icon_sizes[size | default('md')] }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {{ icon | safe }}
+    </svg>
+    {% endif %}
+
+    {{ label }}
+
+    {% if icon_right and not loading %}
+    <svg class="{{ icon_sizes[size | default('md')] }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {{ icon_right | safe }}
+    </svg>
+    {% endif %}
+
+{% if href and not disabled %}
+</a>
+{% else %}
+</button>
+{% endif %}

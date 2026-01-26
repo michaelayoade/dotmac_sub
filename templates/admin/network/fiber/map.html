@@ -1,0 +1,1661 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Fiber Plant Map - Admin{% endblock %}
+
+{% block head %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #fiber-map {
+        height: calc(100vh - 200px);
+        min-height: 500px;
+        border-radius: 1rem;
+    }
+    .leaflet-popup-content-wrapper {
+        border-radius: 0.75rem;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+    .dark .leaflet-popup-content-wrapper {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .dark .leaflet-popup-tip {
+        background: #1e293b;
+    }
+    .fiber-popup-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .fiber-popup-type {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.7;
+        margin-bottom: 0.25rem;
+    }
+    .fiber-popup-detail {
+        font-size: 0.875rem;
+        margin: 0.25rem 0;
+    }
+    .fiber-popup-link {
+        display: inline-block;
+        margin-top: 0.5rem;
+        font-size: 0.875rem;
+        color: #f97316;
+        font-weight: 500;
+    }
+    .fiber-popup-link:hover {
+        color: #ea580c;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    .legend-icon {
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 0.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .legend-line {
+        width: 1.5rem;
+        height: 3px;
+        border-radius: 2px;
+        flex-shrink: 0;
+    }
+    /* Distance labels on segments */
+    .distance-label {
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    /* Measurement tool styles */
+    .measure-tooltip {
+        background: linear-gradient(135deg, #f97316, #ea580c);
+        color: white;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        border: none;
+        box-shadow: 0 4px 12px rgba(249, 115, 22, 0.4);
+    }
+    .measure-tooltip::before { display: none; }
+    /* Dragging indicator */
+    .drag-coords {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #1e293b, #334155);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 12px;
+        font-size: 13px;
+        font-family: monospace;
+        z-index: 1000;
+        display: none;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .drag-coords.active { display: block; }
+    /* Edit mode indicator */
+    .edit-mode-badge {
+        background: linear-gradient(135deg, #f97316, #ea580c);
+        color: white;
+        padding: 6px 16px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(249, 115, 22, 0.4);
+        animation: pulse 2s infinite;
+    }
+    .plan-mode-badge {
+        background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+        color: white;
+        padding: 6px 16px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    /* Planning panel */
+    .planning-panel {
+        background: white;
+        border-radius: 1rem;
+        border: 1px solid rgba(226, 232, 240, 0.6);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        padding: 20px;
+        max-height: 70vh;
+        overflow-y: auto;
+    }
+    .dark .planning-panel {
+        background: #1e293b;
+        border-color: rgba(51, 65, 85, 0.6);
+        color: #f1f5f9;
+    }
+    .planning-panel h3 {
+        font-weight: 600;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .planning-detail {
+        font-size: 13px;
+        margin: 8px 0;
+        display: flex;
+        justify-content: space-between;
+    }
+    .planning-detail-label {
+        color: #64748b;
+    }
+    .dark .planning-detail-label {
+        color: #94a3b8;
+    }
+    .planning-detail-value {
+        font-weight: 500;
+    }
+    .planning-distance {
+        font-size: 32px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-align: center;
+        margin: 16px 0;
+    }
+    .planning-cost {
+        background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+        border-radius: 12px;
+        padding: 16px;
+        margin-top: 12px;
+    }
+    .dark .planning-cost {
+        background: linear-gradient(135deg, #334155, #1e293b);
+    }
+    /* Search box */
+    .map-search {
+        position: absolute;
+        top: 12px;
+        left: 60px;
+        z-index: 1000;
+    }
+    .map-search-container {
+        position: relative;
+    }
+    .map-search input {
+        width: 320px;
+        padding: 12px 40px 12px 16px;
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        font-size: 14px;
+        transition: box-shadow 0.2s;
+    }
+    .map-search input:focus {
+        outline: none;
+        box-shadow: 0 4px 20px rgba(249, 115, 22, 0.25);
+    }
+    .dark .map-search input {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .map-search-clear {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        color: #94a3b8;
+        display: none;
+    }
+    .map-search-clear:hover {
+        color: #64748b;
+    }
+    .map-search-clear.visible {
+        display: block;
+    }
+    .search-results {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 8px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        max-height: 350px;
+        overflow-y: auto;
+        display: none;
+    }
+    .search-results.visible {
+        display: block;
+    }
+    .dark .search-results {
+        background: #1e293b;
+    }
+    .search-result-item {
+        padding: 12px 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid #e2e8f0;
+        transition: background 0.15s;
+    }
+    .dark .search-result-item {
+        border-bottom-color: #334155;
+    }
+    .search-result-item:last-child {
+        border-bottom: none;
+    }
+    .search-result-item:hover,
+    .search-result-item.selected {
+        background: linear-gradient(90deg, rgba(249, 115, 22, 0.05), transparent);
+    }
+    .dark .search-result-item:hover,
+    .dark .search-result-item.selected {
+        background: linear-gradient(90deg, rgba(249, 115, 22, 0.1), transparent);
+    }
+    .search-result-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    .search-result-content {
+        flex: 1;
+        min-width: 0;
+    }
+    .search-result-name {
+        font-weight: 600;
+        font-size: 14px;
+        color: #1e293b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dark .search-result-name {
+        color: #f1f5f9;
+    }
+    .search-result-meta {
+        font-size: 12px;
+        color: #64748b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dark .search-result-meta {
+        color: #94a3b8;
+    }
+    .search-result-type {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #94a3b8;
+        flex-shrink: 0;
+        font-weight: 600;
+    }
+    .search-no-results {
+        padding: 20px 16px;
+        text-align: center;
+        color: #64748b;
+        font-size: 14px;
+    }
+    .dark .search-no-results {
+        color: #94a3b8;
+    }
+    .search-result-count {
+        padding: 10px 16px;
+        font-size: 12px;
+        color: #64748b;
+        background: linear-gradient(90deg, #f8fafc, white);
+        border-bottom: 1px solid #e2e8f0;
+        font-weight: 500;
+    }
+    .dark .search-result-count {
+        color: #94a3b8;
+        background: linear-gradient(90deg, #0f172a, #1e293b);
+        border-bottom-color: #334155;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Ambient Background -->
+<div class="pointer-events-none fixed inset-0 overflow-hidden">
+    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-orange-400/5 to-amber-500/5 blur-3xl"></div>
+    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-violet-400/5 to-purple-500/5 blur-3xl"></div>
+</div>
+
+<div class="relative space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between animate-fade-in-up">
+        <div class="flex items-center gap-4">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-lg shadow-orange-500/25">
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber Plant Map</h1>
+                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Interactive map of fiber network infrastructure</p>
+            </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <span id="edit-mode-indicator" class="edit-mode-badge hidden">Edit Mode</span>
+            <span id="plan-mode-indicator" class="plan-mode-badge hidden">Planning Mode</span>
+            <button id="btn-plan" class="group inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-medium text-violet-700 shadow-sm transition-all hover:bg-violet-50 hover:border-violet-300 hover:shadow-md dark:border-violet-700 dark:bg-slate-800 dark:text-violet-300 dark:hover:bg-violet-900/30" title="Plan new installation">
+                <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Plan
+            </button>
+            <button id="btn-measure" class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-md dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700" title="Measure distance">
+                <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                Measure
+            </button>
+            <button id="btn-edit" class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-md dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700" title="Toggle edit mode">
+                <svg class="h-4 w-4 transition-transform group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                Edit
+            </button>
+            <button id="btn-refresh" class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-md dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4 transition-transform group-hover:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh
+            </button>
+            <a href="/admin/network/fiber-change-requests" class="group inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-medium text-amber-800 shadow-sm transition-all hover:shadow-md dark:border-amber-700 dark:from-amber-900/30 dark:to-orange-900/20 dark:text-amber-200">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m-6-8h6M5 7h.01M5 12h.01M5 17h.01"/></svg>
+                Change Requests
+            </a>
+            <a href="/admin/network/fdh-cabinets/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 transition-all hover:shadow-xl hover:shadow-orange-500/30 hover:-translate-y-0.5">
+                <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                Add Asset
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <!-- Map -->
+        <div class="lg:col-span-3 animate-fade-in-up" style="animation-delay: 50ms;">
+            <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div id="fiber-map"></div>
+                <!-- Search box -->
+                <div class="map-search">
+                    <div class="map-search-container">
+                        <input type="text" id="map-search-input" placeholder="Search cabinets, closures, segments..." class="dark:bg-slate-800 dark:text-white" autocomplete="off">
+                        <button id="map-search-clear" class="map-search-clear" type="button">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                        <div id="search-results" class="search-results"></div>
+                    </div>
+                </div>
+            </div>
+            <!-- Drag coordinates indicator -->
+            <div id="drag-coords" class="drag-coords"></div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6 animate-fade-in-up" style="animation-delay: 100ms;">
+            <!-- Planning Panel -->
+            <div id="planning-panel" class="planning-panel hidden">
+                <div class="flex items-center justify-between">
+                    <h3 class="flex items-center gap-2 text-slate-900 dark:text-white">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 shadow-sm shadow-violet-500/25">
+                            <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                        </div>
+                        Installation Planning
+                    </h3>
+                    <button id="btn-plan-close" type="button" class="rounded-lg p-2 text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200" title="Close planning">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="planning-content" class="mt-4">
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Click anywhere on the map to find the nearest FDH cabinet and estimate drop cable distance.</p>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800/50">
+                    <h2 class="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                        <svg class="h-5 w-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                        </svg>
+                        Network Stats
+                    </h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="flex justify-between items-center group">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">FDH Cabinets</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white px-2 py-0.5 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">{{ stats.fdh_with_location }} / {{ stats.fdh_cabinets }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Splice Closures</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white px-2 py-0.5 rounded-lg bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">{{ stats.closures_with_location }} / {{ stats.splice_closures }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Splitters</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.splitters }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Total Splices</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.total_splices }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Fiber Segments</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white px-2 py-0.5 rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">{{ stats.segments }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-500 dark:text-slate-400">Access Points</span>
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white px-2 py-0.5 rounded-lg bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">{{ stats.access_points_with_location }} / {{ stats.access_points }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800/50">
+                    <h2 class="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                        <svg class="h-5 w-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/>
+                        </svg>
+                        Legend
+                    </h2>
+                </div>
+                <div class="p-6 space-y-3">
+                    <div class="legend-item">
+                        <div class="legend-icon bg-gradient-to-br from-orange-500 to-amber-600">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">FDH Cabinet</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon bg-gradient-to-br from-teal-500 to-emerald-600">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg>
+                        </div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Splice Closure</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon bg-gradient-to-br from-purple-500 to-violet-600">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Access Point</span>
+                    </div>
+                    <hr class="border-slate-200 dark:border-slate-700">
+                    <div class="legend-item">
+                        <div class="h-1 w-6 rounded-full bg-gradient-to-r from-red-500 to-rose-600"></div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Feeder Cable</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="h-0.5 w-6 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600"></div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Distribution Cable</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="h-0.5 w-6 rounded-full bg-gradient-to-r from-green-500 to-emerald-600"></div>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Drop Cable</span>
+                    </div>
+                    <hr class="border-slate-200 dark:border-slate-700">
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:0;border-top:2px dashed #64748b"></div>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">8-core Fiber</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:0;border-top:2px dotted #64748b"></div>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">12-core Fiber</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:4px;background:#64748b;border-radius:2px"></div>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">48-core Fiber</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Layer Controls -->
+            <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800/50">
+                    <h2 class="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                        <svg class="h-5 w-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                        </svg>
+                        Layers
+                    </h2>
+                </div>
+                <div class="p-6 space-y-3">
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-fdh" checked class="h-4 w-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">FDH Cabinets</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-closures" checked class="h-4 w-4 rounded border-slate-300 text-teal-500 focus:ring-teal-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">Splice Closures</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-access-points" checked class="h-4 w-4 rounded border-slate-300 text-purple-500 focus:ring-purple-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">Access Points</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-feeder" checked class="h-4 w-4 rounded border-slate-300 text-red-500 focus:ring-red-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-red-600 dark:group-hover:text-red-400 transition-colors">Feeder Cables</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-distribution" checked class="h-4 w-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Distribution Cables</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-drop" checked class="h-4 w-4 rounded border-slate-300 text-green-500 focus:ring-green-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">Drop Cables</span>
+                    </label>
+                    <hr class="my-2 border-slate-200 dark:border-slate-700">
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-distances" class="h-4 w-4 rounded border-slate-300 text-slate-500 focus:ring-slate-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-slate-100 transition-colors">Distance Labels</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    // Cost settings from server
+    const costSettings = {{ cost_settings | tojson | safe }};
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // State
+    let editMode = false;
+    let measureMode = false;
+    let planMode = false;
+    let measurePoints = [];
+    let measureLine = null;
+    let measureMarkers = [];
+    let planMarker = null;
+    let planLine = null;
+    let planCabinetMarker = null;
+    let planOptions = [];
+    let selectedCabinet = null;
+    let planTraceMode = false;
+    let tracePoints = [];
+    let traceLine = null;
+    let traceMarkers = [];
+    let planCustomerLatLng = null;
+    let planEstimate = null;
+    let planMessage = null;
+    let planSaveMessage = null;
+    const allMarkers = [];
+    const allFeatures = [];  // For search functionality
+
+    // Initialize map
+    const map = L.map('fiber-map').setView([0, 0], 2);
+
+    const planPanel = document.getElementById('planning-panel');
+    if (planPanel) {
+        L.DomEvent.disableClickPropagation(planPanel);
+        L.DomEvent.disableScrollPropagation(planPanel);
+    }
+
+    // Add tile layer (OpenStreetMap)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
+    }).addTo(map);
+
+    // Layer groups
+    const layers = {
+        fdh: L.layerGroup().addTo(map),
+        closures: L.layerGroup().addTo(map),
+        accessPoints: L.layerGroup().addTo(map),
+        feeder: L.layerGroup().addTo(map),
+        distribution: L.layerGroup().addTo(map),
+        drop: L.layerGroup().addTo(map),
+        distances: L.layerGroup()  // Off by default
+    };
+
+    // Custom icons
+    const icons = {
+        fdh_cabinet: L.divIcon({
+            html: '<div style="background:linear-gradient(135deg,#f97316,#d97706);width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 4px 8px rgba(249,115,22,0.4)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            className: '',
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+            popupAnchor: [0, -13]
+        }),
+        splice_closure: L.divIcon({
+            html: '<div style="background:linear-gradient(135deg,#14b8a6,#059669);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 4px 8px rgba(20,184,166,0.4)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
+            className: '',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+            popupAnchor: [0, -11]
+        }),
+        access_point: L.divIcon({
+            html: '<div style="background:linear-gradient(135deg,#a855f7,#7c3aed);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 4px 8px rgba(168,85,247,0.4)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+            popupAnchor: [0, -11]
+        })
+    };
+
+    // Segment styles by type
+    const segmentStyles = {
+        feeder: { color: '#ef4444', weight: 4, opacity: 0.9 },
+        distribution: { color: '#3b82f6', weight: 3, opacity: 0.8 },
+        drop: { color: '#22c55e', weight: 2, opacity: 0.7 }
+    };
+
+    const coreStyles = {
+        8: { dashArray: '6,6', weightDelta: -1 },
+        12: { dashArray: '3,6', weightDelta: 0 },
+        48: { dashArray: null, weightDelta: 1 }
+    };
+
+    function buildSegmentStyle(segmentType, fiberCount) {
+        const base = segmentStyles[segmentType] || segmentStyles.distribution;
+        const core = coreStyles[Number(fiberCount)];
+        if (!core) return { ...base };
+        return {
+            ...base,
+            weight: Math.max(1, base.weight + core.weightDelta),
+            dashArray: core.dashArray || undefined
+        };
+    }
+
+    // Calculate distance between two points (Haversine formula)
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371000; // Earth's radius in meters
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+
+    // Calculate total line distance
+    function calculateLineDistance(coords) {
+        let total = 0;
+        for (let i = 0; i < coords.length - 1; i++) {
+            total += calculateDistance(coords[i][0], coords[i][1], coords[i+1][0], coords[i+1][1]);
+        }
+        return total;
+    }
+
+    // Format distance
+    function formatDistance(meters) {
+        if (meters >= 1000) return (meters / 1000).toFixed(2) + ' km';
+        return meters.toFixed(1) + ' m';
+    }
+
+    // Generate popup content
+    function getPopupContent(feature, marker) {
+        const p = feature.properties;
+        let content = `<div class="fiber-popup-type">${escapeHtml(p.type).replace(/_/g, ' ')}</div>`;
+        content += `<div class="fiber-popup-title">${escapeHtml(p.name || 'Unnamed')}</div>`;
+
+        if (p.code) content += `<div class="fiber-popup-detail"><strong>Code:</strong> ${escapeHtml(p.code)}</div>`;
+        if (p.splitter_count !== undefined) content += `<div class="fiber-popup-detail"><strong>Splitters:</strong> ${p.splitter_count}</div>`;
+        if (p.splice_count !== undefined) content += `<div class="fiber-popup-detail"><strong>Splices:</strong> ${p.splice_count}</div>`;
+        if (p.tray_count !== undefined) content += `<div class="fiber-popup-detail"><strong>Trays:</strong> ${p.tray_count}</div>`;
+        if (p.ap_type) content += `<div class="fiber-popup-detail"><strong>Type:</strong> ${escapeHtml(p.ap_type)}</div>`;
+        if (p.placement) content += `<div class="fiber-popup-detail"><strong>Placement:</strong> ${escapeHtml(p.placement)}</div>`;
+        if (p.segment_type) content += `<div class="fiber-popup-detail"><strong>Type:</strong> ${escapeHtml(p.segment_type)}</div>`;
+        if (p.fiber_count) content += `<div class="fiber-popup-detail"><strong>Fiber Count:</strong> ${p.fiber_count} cores</div>`;
+        if (p.length_m) content += `<div class="fiber-popup-detail"><strong>Length:</strong> ${formatDistance(p.length_m)}</div>`;
+
+        // Show coordinates for markers
+        if (marker) {
+            const latlng = marker.getLatLng();
+            content += `<div class="fiber-popup-detail" style="font-family:monospace;font-size:11px;color:#666;margin-top:4px">${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}</div>`;
+        }
+
+        // Detail link
+        let detailUrl = null;
+        if (p.type === 'fdh_cabinet') detailUrl = `/admin/network/fdh-cabinets/${p.id}`;
+        else if (p.type === 'splice_closure') detailUrl = `/admin/network/splice-closures/${p.id}`;
+
+        if (detailUrl) {
+            content += `<a href="${detailUrl}" class="fiber-popup-link">View Details &rarr;</a>`;
+        }
+
+        return content;
+    }
+
+    // Update marker position on server
+    async function updateMarkerPosition(type, id, lat, lng) {
+        try {
+            const response = await fetch('/admin/network/fiber-map/update-position', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type, id, latitude: lat, longitude: lng })
+            });
+            if (!response.ok) throw new Error('Failed to save position');
+            return true;
+        } catch (e) {
+            console.error('Error saving position:', e);
+            alert('Failed to save position. Please try again.');
+            return false;
+        }
+    }
+
+    // Toggle edit mode
+    function toggleEditMode() {
+        editMode = !editMode;
+        const btn = document.getElementById('btn-edit');
+        const indicator = document.getElementById('edit-mode-indicator');
+
+        if (editMode) {
+            btn.classList.add('bg-orange-100', 'border-orange-300', 'text-orange-700');
+            btn.classList.remove('bg-white', 'text-slate-700', 'dark:bg-slate-800', 'dark:text-slate-300');
+            indicator.classList.remove('hidden');
+            allMarkers.forEach(m => {
+                if (m.dragging) m.dragging.enable();
+            });
+        } else {
+            btn.classList.remove('bg-orange-100', 'border-orange-300', 'text-orange-700');
+            btn.classList.add('bg-white', 'text-slate-700', 'dark:bg-slate-800', 'dark:text-slate-300');
+            indicator.classList.add('hidden');
+            allMarkers.forEach(m => {
+                if (m.dragging) m.dragging.disable();
+            });
+        }
+    }
+
+    // Measure mode
+    function toggleMeasureMode() {
+        measureMode = !measureMode;
+        const btn = document.getElementById('btn-measure');
+
+        if (measureMode) {
+            btn.classList.add('bg-blue-100', 'border-blue-300', 'text-blue-700');
+            btn.classList.remove('bg-white', 'text-slate-700', 'dark:bg-slate-800', 'dark:text-slate-300');
+            map.getContainer().style.cursor = 'crosshair';
+            clearMeasure();
+        } else {
+            btn.classList.remove('bg-blue-100', 'border-blue-300', 'text-blue-700');
+            btn.classList.add('bg-white', 'text-slate-700', 'dark:bg-slate-800', 'dark:text-slate-300');
+            map.getContainer().style.cursor = '';
+            clearMeasure();
+        }
+    }
+
+    function clearMeasure() {
+        if (measureLine) {
+            map.removeLayer(measureLine);
+            measureLine = null;
+        }
+        measureMarkers.forEach(m => map.removeLayer(m));
+        measureMarkers = [];
+        measurePoints = [];
+    }
+
+    function addMeasurePoint(latlng) {
+        measurePoints.push(latlng);
+
+        // Add marker
+        const marker = L.circleMarker(latlng, {
+            radius: 6,
+            fillColor: '#3b82f6',
+            color: '#fff',
+            weight: 2,
+            fillOpacity: 1
+        }).addTo(map);
+        measureMarkers.push(marker);
+
+        // Update line
+        if (measureLine) map.removeLayer(measureLine);
+        if (measurePoints.length > 1) {
+            measureLine = L.polyline(measurePoints, {
+                color: '#3b82f6',
+                weight: 3,
+                dashArray: '10, 5'
+            }).addTo(map);
+
+            // Calculate total distance
+            const totalDist = calculateLineDistance(measurePoints.map(p => [p.lat, p.lng]));
+            const midPoint = measurePoints[Math.floor(measurePoints.length / 2)];
+
+            // Show tooltip with distance
+            measureLine.bindTooltip(formatDistance(totalDist), {
+                permanent: true,
+                direction: 'center',
+                className: 'measure-tooltip'
+            }).openTooltip();
+        }
+    }
+
+    // Planning mode
+    function togglePlanMode(force) {
+        planMode = typeof force === 'boolean' ? force : !planMode;
+        const btn = document.getElementById('btn-plan');
+        const indicator = document.getElementById('plan-mode-indicator');
+        const panel = document.getElementById('planning-panel');
+
+        if (planMode) {
+            // Disable other modes
+            if (measureMode) toggleMeasureMode();
+            if (editMode) toggleEditMode();
+
+            btn.classList.add('bg-violet-100', 'border-violet-300', 'text-violet-700');
+            btn.classList.remove('bg-white', 'text-violet-700', 'dark:bg-slate-800', 'dark:text-violet-300');
+            indicator.classList.remove('hidden');
+            panel.classList.remove('hidden');
+            map.getContainer().style.cursor = 'crosshair';
+            renderPlanIntro();
+        } else {
+            btn.classList.remove('bg-violet-100', 'border-violet-300', 'text-violet-700');
+            btn.classList.add('bg-white', 'text-violet-700', 'dark:bg-slate-800', 'dark:text-violet-300');
+            indicator.classList.add('hidden');
+            panel.classList.add('hidden');
+            map.getContainer().style.cursor = '';
+            clearPlanMarkers();
+        }
+    }
+
+    function clearPlanMarkers() {
+        if (planMarker) { map.removeLayer(planMarker); planMarker = null; }
+        if (planLine) { map.removeLayer(planLine); planLine = null; }
+        if (planCabinetMarker) { map.removeLayer(planCabinetMarker); planCabinetMarker = null; }
+        if (traceLine) { map.removeLayer(traceLine); traceLine = null; }
+        traceMarkers.forEach(marker => map.removeLayer(marker));
+        traceMarkers = [];
+        tracePoints = [];
+        planOptions = [];
+        selectedCabinet = null;
+        planCustomerLatLng = null;
+        planEstimate = null;
+        planTraceMode = false;
+        planMessage = null;
+        planSaveMessage = null;
+        renderPlanIntro();
+    }
+
+    function renderPlanIntro() {
+        document.getElementById('planning-content').innerHTML =
+            '<p class="text-sm text-slate-500 dark:text-slate-400">Click anywhere on the map to list nearby FDH cabinets. Select a cabinet to auto-route or trace a custom path.</p>';
+    }
+
+    function buildEstimateHtml(distanceM, distanceLabel, routeLabel) {
+        if (!distanceM) return '';
+        const dropCablePerMeter = costSettings.drop_cable_per_meter;
+        const laborPerMeter = costSettings.labor_per_meter;
+        const ontCost = costSettings.ont_device;
+        const installationBase = costSettings.installation_base;
+        const currency = costSettings.currency;
+        const currencySymbol = currency === 'USD' ? '$' : (currency === 'EUR' ? '€' : (currency === 'GBP' ? '£' : (currency === 'NGN' ? '₦' : currency + ' ')));
+
+        const materialCost = distanceM * dropCablePerMeter;
+        const laborCost = distanceM * laborPerMeter;
+        const totalEstimate = materialCost + laborCost + ontCost + installationBase;
+
+        return `
+            <div class="planning-distance">${distanceLabel}</div>
+            <div class="text-center text-sm text-slate-500 dark:text-slate-400 mb-4">${routeLabel}</div>
+            <div class="planning-cost">
+                <div class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">Cost Estimate (${currency})</div>
+                <div class="planning-detail">
+                    <span class="planning-detail-label">Drop Cable (${distanceM.toFixed(0)}m @ ${currencySymbol}${dropCablePerMeter.toFixed(2)}/m)</span>
+                    <span class="planning-detail-value">${currencySymbol}${materialCost.toFixed(2)}</span>
+                </div>
+                <div class="planning-detail">
+                    <span class="planning-detail-label">Labor (@ ${currencySymbol}${laborPerMeter.toFixed(2)}/m)</span>
+                    <span class="planning-detail-value">${currencySymbol}${laborCost.toFixed(2)}</span>
+                </div>
+                <div class="planning-detail">
+                    <span class="planning-detail-label">ONT Device</span>
+                    <span class="planning-detail-value">${currencySymbol}${ontCost.toFixed(2)}</span>
+                </div>
+                <div class="planning-detail">
+                    <span class="planning-detail-label">Installation</span>
+                    <span class="planning-detail-value">${currencySymbol}${installationBase.toFixed(2)}</span>
+                </div>
+                <hr class="my-2 border-slate-200 dark:border-slate-600">
+                <div class="planning-detail">
+                    <span class="planning-detail-label font-semibold">Total Estimate</span>
+                    <span class="planning-detail-value text-violet-600 dark:text-violet-400 font-bold">${currencySymbol}${totalEstimate.toFixed(2)}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderPlanPanel() {
+        const content = document.getElementById('planning-content');
+        if (!planCustomerLatLng) {
+            renderPlanIntro();
+            return;
+        }
+
+        const [lat, lng] = planCustomerLatLng;
+        const optionsHtml = planOptions.length ? `
+            <div class="space-y-2">
+                ${planOptions.map(option => `
+                    <button data-cabinet-id="${option.id}" class="w-full text-left rounded-xl border px-4 py-3 text-sm transition-all ${selectedCabinet && String(selectedCabinet.id) === String(option.id) ? 'border-violet-300 bg-violet-50 text-violet-800 shadow-sm dark:border-violet-600 dark:bg-violet-900/30 dark:text-violet-200' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'}">
+                        <div class="flex items-center justify-between">
+                            <span class="font-semibold">${escapeHtml(option.name)}</span>
+                            <span class="text-xs px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-700">${option.distance_display}</span>
+                        </div>
+                        ${option.code ? `<div class="text-xs text-slate-500 dark:text-slate-400 mt-1">Code: ${escapeHtml(option.code)}</div>` : ''}
+                    </button>
+                `).join('')}
+            </div>
+        ` : '<p class="text-sm text-slate-500 dark:text-slate-400">No cabinets found nearby.</p>';
+
+        const selectedHtml = selectedCabinet ? `
+            <div class="mt-4 space-y-2">
+                <div class="planning-detail">
+                    <span class="planning-detail-label">Selected Cabinet</span>
+                    <span class="planning-detail-value">${escapeHtml(selectedCabinet.name)}</span>
+                </div>
+                <div class="planning-detail">
+                    <span class="planning-detail-label">Customer Location</span>
+                    <span class="planning-detail-value" style="font-family:monospace;font-size:11px">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>
+                </div>
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <button id="btn-plan-route" class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-xs font-semibold text-white shadow-sm shadow-violet-500/25 hover:shadow-md transition-all">Auto Route</button>
+                    <button id="btn-plan-trace" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">${planTraceMode ? 'Finish Trace' : 'Trace Route'}</button>
+                    <button id="btn-plan-clear" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+        ` : '';
+
+        const messageHtml = planMessage ? `<div class="mt-3 text-xs text-amber-600 dark:text-amber-400">${escapeHtml(planMessage)}</div>` : '';
+        const saveMessageHtml = planSaveMessage ? `<div class="mt-3 text-xs text-emerald-600 dark:text-emerald-400">${escapeHtml(planSaveMessage)}</div>` : '';
+        const estimateHtml = planEstimate
+            ? buildEstimateHtml(planEstimate.distance_m, planEstimate.distance_display, planEstimate.route_label)
+            : '';
+        const saveHtml = (planLine || traceLine) ? `
+            <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-900">
+                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Save plan to quote</label>
+                <div class="mt-2 flex gap-2">
+                    <input id="plan-quote-id" type="text" placeholder="Quote ID" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 focus:border-violet-400 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                    <button id="btn-save-plan" class="shrink-0 rounded-lg bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:shadow-md transition-all">Save</button>
+                </div>
+                ${saveMessageHtml}
+            </div>
+        ` : '';
+
+        content.innerHTML = `
+            ${optionsHtml}
+            ${selectedHtml}
+            ${messageHtml}
+            ${estimateHtml}
+            ${saveHtml}
+        `;
+
+        document.querySelectorAll('[data-cabinet-id]').forEach(button => {
+            button.addEventListener('click', () => {
+                const id = button.getAttribute('data-cabinet-id');
+                const match = planOptions.find(option => String(option.id) === String(id));
+                if (match) selectCabinet(match);
+            });
+        });
+
+        const routeBtn = document.getElementById('btn-plan-route');
+        if (routeBtn) routeBtn.addEventListener('click', () => autoRouteSelected());
+        const traceBtn = document.getElementById('btn-plan-trace');
+        if (traceBtn) traceBtn.addEventListener('click', () => toggleTraceMode());
+        const clearBtn = document.getElementById('btn-plan-clear');
+        if (clearBtn) clearBtn.addEventListener('click', () => clearPlanMarkers());
+        const saveBtn = document.getElementById('btn-save-plan');
+        if (saveBtn) saveBtn.addEventListener('click', () => savePlanToQuote());
+    }
+
+    function buildPlanGeojson() {
+        const routeLine = planLine || traceLine;
+        if (!routeLine) return null;
+        const latlngs = routeLine.getLatLngs();
+        if (!latlngs || latlngs.length < 2) return null;
+        const coords = latlngs.map(latlng => [latlng.lng, latlng.lat]);
+        return { type: 'LineString', coordinates: coords };
+    }
+
+    async function savePlanToQuote() {
+        const quoteIdInput = document.getElementById('plan-quote-id');
+        const quoteId = quoteIdInput ? quoteIdInput.value.trim() : '';
+        const geojson = buildPlanGeojson();
+        if (!quoteId) {
+            planSaveMessage = 'Quote ID is required to save.';
+            renderPlanPanel();
+            return;
+        }
+        if (!geojson) {
+            planSaveMessage = 'No route available to save.';
+            renderPlanPanel();
+            return;
+        }
+        planSaveMessage = 'Saving plan...';
+        renderPlanPanel();
+        try {
+            const lengthMeters = planEstimate ? planEstimate.distance_m : null;
+            const response = await fetch('/admin/network/fiber-map/save-plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quote_id: quoteId, geojson, length_meters: lengthMeters })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to save plan');
+            planSaveMessage = `Saved as revision ${data.revision_number}.`;
+        } catch (e) {
+            planSaveMessage = e.message || 'Failed to save plan.';
+        }
+        renderPlanPanel();
+    }
+
+    function selectCabinet(cabinet) {
+        selectedCabinet = cabinet;
+        planEstimate = null;
+        planMessage = null;
+        planSaveMessage = null;
+        if (planLine) { map.removeLayer(planLine); planLine = null; }
+        if (traceLine) { map.removeLayer(traceLine); traceLine = null; }
+        traceMarkers.forEach(marker => map.removeLayer(marker));
+        traceMarkers = [];
+        tracePoints = [];
+        planTraceMode = false;
+
+        if (planCabinetMarker) { map.removeLayer(planCabinetMarker); }
+        planCabinetMarker = L.circleMarker([cabinet.latitude, cabinet.longitude], {
+            radius: 20,
+            color: '#8b5cf6',
+            weight: 3,
+            fillColor: 'transparent',
+            fillOpacity: 0
+        }).addTo(map);
+        renderPlanPanel();
+    }
+
+    function toggleTraceMode() {
+        if (!selectedCabinet || !planCustomerLatLng) return;
+        planTraceMode = !planTraceMode;
+        planMessage = planTraceMode ? 'Click to trace the route, double-click to finish.' : null;
+        if (planTraceMode) {
+            if (planLine) { map.removeLayer(planLine); planLine = null; }
+            tracePoints = [L.latLng(planCustomerLatLng[0], planCustomerLatLng[1])];
+            traceMarkers.forEach(marker => map.removeLayer(marker));
+            traceMarkers = [];
+            if (traceLine) { map.removeLayer(traceLine); traceLine = null; }
+        }
+        renderPlanPanel();
+    }
+
+    function finishTrace() {
+        if (!planTraceMode) return;
+        planTraceMode = false;
+        if (selectedCabinet) {
+            const end = L.latLng(selectedCabinet.latitude, selectedCabinet.longitude);
+            const last = tracePoints[tracePoints.length - 1];
+            if (!last || last.lat !== end.lat || last.lng !== end.lng) {
+                tracePoints.push(end);
+            }
+        }
+        drawTraceLine();
+        const distance = calculateLineDistance(tracePoints.map(p => [p.lat, p.lng]));
+        planEstimate = {
+            distance_m: distance,
+            distance_display: formatDistance(distance),
+            route_label: 'manual trace to cabinet'
+        };
+        renderPlanPanel();
+    }
+
+    function drawTraceLine() {
+        if (traceLine) map.removeLayer(traceLine);
+        if (tracePoints.length < 2) return;
+        traceLine = L.polyline(tracePoints, {
+            color: '#8b5cf6',
+            weight: 3,
+            dashArray: '6, 6',
+            opacity: 0.8
+        }).addTo(map);
+    }
+
+    function addTracePoint(latlng) {
+        tracePoints.push(latlng);
+        const marker = L.circleMarker(latlng, {
+            radius: 4,
+            fillColor: '#8b5cf6',
+            color: '#fff',
+            weight: 1,
+            fillOpacity: 1
+        }).addTo(map);
+        traceMarkers.push(marker);
+        drawTraceLine();
+    }
+
+    async function autoRouteSelected() {
+        if (!selectedCabinet || !planCustomerLatLng) return;
+        planMessage = 'Calculating fiber route...';
+        renderPlanPanel();
+        const [lat, lng] = planCustomerLatLng;
+        try {
+            const response = await fetch(`/admin/network/fiber-map/route?lat=${lat}&lng=${lng}&cabinet_id=${selectedCabinet.id}`);
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'No fiber route found');
+            }
+            const data = await response.json();
+            if (planLine) map.removeLayer(planLine);
+            planLine = L.polyline(data.path_coords, {
+                color: '#8b5cf6',
+                weight: 3,
+                dashArray: '10, 8',
+                opacity: 0.8
+            }).addTo(map);
+            planEstimate = {
+                distance_m: data.distance_m,
+                distance_display: data.distance_display,
+                route_label: 'via fiber route to cabinet'
+            };
+            planMessage = null;
+        } catch (e) {
+            planEstimate = null;
+            planMessage = e.message || 'Auto route failed. Trace manually instead.';
+        }
+        renderPlanPanel();
+    }
+
+    async function loadPlanOptions(lat, lng) {
+        try {
+            const response = await fetch(`/admin/network/fiber-map/plan-options?lat=${lat}&lng=${lng}`);
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Failed to find cabinets');
+            }
+            const data = await response.json();
+            planOptions = data.options || [];
+            if (planOptions.length > 0) {
+                selectCabinet(planOptions[0]);
+            } else {
+                renderPlanPanel();
+            }
+        } catch (e) {
+            planOptions = [];
+            planMessage = e.message || 'Failed to load cabinets.';
+            renderPlanPanel();
+        }
+    }
+
+    async function startPlan(lat, lng) {
+        clearPlanMarkers();
+        planCustomerLatLng = [lat, lng];
+
+        planMarker = L.marker([lat, lng], {
+            icon: L.divIcon({
+                html: '<div style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 4px 12px rgba(139,92,246,0.5)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+                className: '',
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+            })
+        }).addTo(map);
+
+        planMessage = 'Finding nearby cabinets...';
+        renderPlanPanel();
+        await loadPlanOptions(lat, lng);
+    }
+
+    // Map click handler
+    map.on('click', function(e) {
+        if (measureMode) {
+            addMeasurePoint(e.latlng);
+        } else if (planMode && planTraceMode) {
+            addTracePoint(e.latlng);
+        } else if (planMode) {
+            startPlan(e.latlng.lat, e.latlng.lng);
+        }
+    });
+
+    // Double-click to end measurement or tracing
+    map.on('dblclick', function(e) {
+        if (planTraceMode) {
+            L.DomEvent.stopPropagation(e);
+            finishTrace();
+        } else if (measureMode) {
+            L.DomEvent.stopPropagation(e);
+            toggleMeasureMode();
+        }
+    });
+
+    // Load fiber plant data from server-rendered GeoJSON
+    const geojsonData = {{ geojson_data | tojson | safe }};
+    const bounds = [];
+    const dragCoords = document.getElementById('drag-coords');
+
+    if (geojsonData.features && geojsonData.features.length > 0) {
+        geojsonData.features.forEach(feature => {
+            const p = feature.properties;
+            const geom = feature.geometry;
+
+            if (geom.type === 'Point') {
+                const coords = [geom.coordinates[1], geom.coordinates[0]];
+                bounds.push(coords);
+
+                const icon = icons[p.type] || icons.splice_closure;
+                const marker = L.marker(coords, {
+                    icon: icon,
+                    draggable: false  // Start non-draggable
+                });
+                marker._lastSavedLatLng = { lat: coords[0], lng: coords[1] };
+
+                // Store feature data on marker
+                marker.featureData = feature;
+
+                marker.bindPopup(() => getPopupContent(feature, marker));
+
+                // Drag events
+                marker.on('dragstart', function() {
+                    dragCoords.classList.add('active');
+                });
+
+                marker.on('drag', function(e) {
+                    const pos = e.target.getLatLng();
+                    dragCoords.textContent = `${pos.lat.toFixed(6)}, ${pos.lng.toFixed(6)}`;
+                });
+
+                marker.on('dragend', async function(e) {
+                    dragCoords.classList.remove('active');
+                    const pos = e.target.getLatLng();
+                    const success = await updateMarkerPosition(p.type, p.id, pos.lat, pos.lng);
+                    if (!success) {
+                        // Revert position on failure
+                        e.target.setLatLng(marker._lastSavedLatLng);
+                    } else {
+                        marker._lastSavedLatLng = { lat: pos.lat, lng: pos.lng };
+                    }
+                });
+
+                allMarkers.push(marker);
+
+                // Add to searchable features
+                const searchText = [
+                    p.name || '',
+                    p.code || '',
+                    p.city || '',
+                    p.street || ''
+                ].filter(Boolean).join(' ').toLowerCase();
+
+                allFeatures.push({
+                    feature,
+                    marker,
+                    polyline: null,
+                    name: p.name || '',
+                    code: p.code || '',
+                    type: p.type,
+                    searchText
+                });
+
+                if (p.type === 'fdh_cabinet') layers.fdh.addLayer(marker);
+                else if (p.type === 'splice_closure') layers.closures.addLayer(marker);
+                else if (p.type === 'access_point') layers.accessPoints.addLayer(marker);
+
+            } else if (geom.type === 'LineString') {
+                const coords = geom.coordinates.map(c => [c[1], c[0]]);
+                bounds.push(...coords);
+
+                const segType = p.segment_type || 'distribution';
+                const style = buildSegmentStyle(segType, p.fiber_count);
+
+                const polyline = L.polyline(coords, style)
+                    .bindPopup(getPopupContent(feature));
+
+                // Add hover tooltip with distance
+                const dist = p.length_m || calculateLineDistance(coords);
+                polyline.bindTooltip(formatDistance(dist), {
+                    sticky: true,
+                    direction: 'auto'
+                });
+
+                // Add distance label at midpoint
+                const midIdx = Math.floor(coords.length / 2);
+                const labelPos = coords[midIdx];
+                const distLabel = L.marker(labelPos, {
+                    icon: L.divIcon({
+                        className: 'distance-label',
+                        html: formatDistance(dist),
+                        iconSize: [60, 16],
+                        iconAnchor: [30, 8]
+                    })
+                });
+                layers.distances.addLayer(distLabel);
+
+                // Add fiber segments to searchable features
+                const searchText = [p.name || '', p.segment_type || ''].filter(Boolean).join(' ').toLowerCase();
+                allFeatures.push({
+                    feature,
+                    marker: null,
+                    polyline,
+                    name: p.name || '',
+                    code: '',
+                    type: 'fiber_segment',
+                    segmentType: segType,
+                    searchText
+                });
+
+                if (segType === 'feeder') layers.feeder.addLayer(polyline);
+                else if (segType === 'drop') layers.drop.addLayer(polyline);
+                else layers.distribution.addLayer(polyline);
+            }
+        });
+
+        if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [50, 50] });
+        }
+    }
+
+    // Layer toggle handlers
+    document.getElementById('layer-fdh').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.fdh);
+        else map.removeLayer(layers.fdh);
+    });
+    document.getElementById('layer-closures').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.closures);
+        else map.removeLayer(layers.closures);
+    });
+    document.getElementById('layer-access-points').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.accessPoints);
+        else map.removeLayer(layers.accessPoints);
+    });
+    document.getElementById('layer-feeder').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.feeder);
+        else map.removeLayer(layers.feeder);
+    });
+    document.getElementById('layer-distribution').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.distribution);
+        else map.removeLayer(layers.distribution);
+    });
+    document.getElementById('layer-drop').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.drop);
+        else map.removeLayer(layers.drop);
+    });
+    document.getElementById('layer-distances').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.distances);
+        else map.removeLayer(layers.distances);
+    });
+
+    // Button handlers
+    document.getElementById('btn-edit').addEventListener('click', toggleEditMode);
+    document.getElementById('btn-measure').addEventListener('click', toggleMeasureMode);
+    document.getElementById('btn-plan').addEventListener('click', togglePlanMode);
+    const planCloseBtn = document.getElementById('btn-plan-close');
+    if (planCloseBtn) {
+        planCloseBtn.addEventListener('click', () => togglePlanMode(false));
+    }
+    document.getElementById('btn-refresh').addEventListener('click', function() {
+        window.location.reload();
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            if (measureMode) toggleMeasureMode();
+            if (editMode) toggleEditMode();
+            if (planMode) togglePlanMode();
+            hideSearchResults();
+        }
+    });
+
+    // ========== Search Functionality ==========
+    const searchInput = document.getElementById('map-search-input');
+    const searchResultsEl = document.getElementById('search-results');
+    const searchClear = document.getElementById('map-search-clear');
+    let selectedIndex = -1;
+    let currentMatches = [];
+
+    // Type labels and colors for search results
+    const typeConfig = {
+        fdh_cabinet: { label: 'FDH Cabinet', color: '#f97316' },
+        splice_closure: { label: 'Splice Closure', color: '#14b8a6' },
+        access_point: { label: 'Access Point', color: '#a855f7' },
+        fiber_segment: { label: 'Fiber Segment', color: '#3b82f6' },
+        coordinate: { label: 'Coordinates', color: '#0f766e' }
+    };
+
+    let coordMarker = null;
+
+    function parseLatLng(input) {
+        const match = String(input).trim().match(/^(-?\d+(?:\.\d+)?)\s*(?:,|;|\s+)\s*(-?\d+(?:\.\d+)?)$/);
+        if (!match) return null;
+        const lat = Number(match[1]);
+        const lng = Number(match[2]);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+        return { lat, lng };
+    }
+
+    function clearCoordMarker() {
+        if (coordMarker) {
+            map.removeLayer(coordMarker);
+            coordMarker = null;
+        }
+    }
+
+    function goToCoordinates(lat, lng) {
+        clearCoordMarker();
+        const latlng = L.latLng(lat, lng);
+        coordMarker = L.marker(latlng).addTo(map);
+        coordMarker.bindPopup(`Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}`).openPopup();
+        map.setView(latlng, 17);
+    }
+
+    function showSearchResults(matches, query) {
+        currentMatches = matches;
+        selectedIndex = -1;
+
+        if (matches.length === 0) {
+            searchResultsEl.innerHTML = '<div class="search-no-results">No results found for "' + escapeHtml(query) + '"</div>';
+            searchResultsEl.classList.add('visible');
+            return;
+        }
+
+        const maxResults = 12;
+        const displayMatches = matches.slice(0, maxResults);
+        const countHtml = matches.length > maxResults
+            ? `<div class="search-result-count">Showing ${maxResults} of ${matches.length} results</div>`
+            : `<div class="search-result-count">${matches.length} result${matches.length > 1 ? 's' : ''}</div>`;
+
+        let html = countHtml;
+        displayMatches.forEach((match, idx) => {
+            const config = typeConfig[match.type] || { label: match.type, color: '#64748b' };
+            const meta = match.code ? match.code : '';
+
+            html += `
+                <div class="search-result-item" data-index="${idx}">
+                    <div class="search-result-icon" style="background:${config.color}">
+                        <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <circle cx="10" cy="10" r="6"/>
+                        </svg>
+                    </div>
+                    <div class="search-result-content">
+                        <div class="search-result-name">${escapeHtml(match.name || 'Unnamed')}</div>
+                        ${meta ? `<div class="search-result-meta">${escapeHtml(meta)}</div>` : ''}
+                    </div>
+                    <span class="search-result-type">${config.label}</span>
+                </div>
+            `;
+        });
+
+        searchResultsEl.innerHTML = html;
+        searchResultsEl.classList.add('visible');
+
+        // Add click handlers
+        searchResultsEl.querySelectorAll('.search-result-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const idx = parseInt(item.dataset.index);
+                selectSearchResult(idx);
+            });
+        });
+    }
+
+    function selectSearchResult(idx) {
+        if (idx < 0 || idx >= currentMatches.length) return;
+
+        const match = currentMatches[idx];
+        if (match.coords) {
+            goToCoordinates(match.coords.lat, match.coords.lng);
+        } else if (match.marker) {
+            clearCoordMarker();
+            const latlng = match.marker.getLatLng();
+            map.setView(latlng, 17);
+            match.marker.openPopup();
+        } else if (match.polyline) {
+            clearCoordMarker();
+            map.fitBounds(match.polyline.getBounds(), { padding: [50, 50] });
+            match.polyline.openPopup();
+        }
+
+        hideSearchResults();
+        searchInput.value = match.name || '';
+        updateSearchClearButton();
+    }
+
+    function hideSearchResults() {
+        searchResultsEl.classList.remove('visible');
+        selectedIndex = -1;
+    }
+
+    function updateSelectedSearchItem() {
+        const items = searchResultsEl.querySelectorAll('.search-result-item');
+        items.forEach((item, idx) => {
+            item.classList.toggle('selected', idx === selectedIndex);
+        });
+        if (selectedIndex >= 0 && items[selectedIndex]) {
+            items[selectedIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function updateSearchClearButton() {
+        searchClear.classList.toggle('visible', searchInput.value.length > 0);
+    }
+
+    // Search input handler with debounce
+    let searchTimeout;
+    searchInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        updateSearchClearButton();
+        const rawValue = this.value.trim();
+        const query = rawValue.toLowerCase();
+        const coords = parseLatLng(rawValue);
+
+        if (coords) {
+            const coordMatch = {
+                type: 'coordinate',
+                name: `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`,
+                coords
+            };
+            showSearchResults([coordMatch], query);
+            return;
+        }
+
+        if (query.length < 2) {
+            hideSearchResults();
+            return;
+        }
+
+        searchTimeout = setTimeout(() => {
+            const matches = allFeatures.filter(f => f.searchText.includes(query));
+            showSearchResults(matches, query);
+        }, 150);
+    });
+
+    // Keyboard navigation for search
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            const coords = parseLatLng(this.value);
+            if (coords && !searchResultsEl.classList.contains('visible')) {
+                e.preventDefault();
+                goToCoordinates(coords.lat, coords.lng);
+                hideSearchResults();
+                searchInput.value = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+                updateSearchClearButton();
+                return;
+            }
+        }
+
+        if (!searchResultsEl.classList.contains('visible')) return;
+
+        const maxIdx = Math.min(currentMatches.length - 1, 11);
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedIndex = Math.min(selectedIndex + 1, maxIdx);
+            updateSelectedSearchItem();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedIndex = Math.max(selectedIndex - 1, 0);
+            updateSelectedSearchItem();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selectedIndex >= 0) {
+                selectSearchResult(selectedIndex);
+            } else if (currentMatches.length > 0) {
+                selectSearchResult(0);
+            }
+        } else if (e.key === 'Escape') {
+            hideSearchResults();
+            searchInput.blur();
+        }
+    });
+
+    // Clear button handler
+    searchClear.addEventListener('click', function() {
+        searchInput.value = '';
+        clearCoordMarker();
+        hideSearchResults();
+        updateSearchClearButton();
+        searchInput.focus();
+    });
+
+    // Close results when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.map-search-container')) {
+            hideSearchResults();
+        }
+    });
+
+    // Focus search with Ctrl+K or Cmd+K
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+        }
+    });
+})();
+</script>
+{% endblock %}

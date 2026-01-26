@@ -1,0 +1,41 @@
+{#
+   Stats Card Component
+   Usage: {% include "components/data/stats_card.html" %}
+
+   Parameters:
+   - title: Card title/label
+   - value: Main value to display
+   - icon: SVG icon HTML (optional)
+   - icon_bg: Background color class for icon (default: bg-primary-100 dark:bg-primary-900/30)
+   - icon_color: Icon color class (default: text-primary-600 dark:text-primary-400)
+   - change: Percentage change (optional)
+   - change_type: "positive", "negative", or "neutral" (default based on change value)
+   - href: Link URL (optional)
+#}
+{% set change_color = 'text-green-600 dark:text-green-400' if (change_type == 'positive' or (change_type is not defined and change > 0)) else 'text-red-600 dark:text-red-400' if (change_type == 'negative' or (change_type is not defined and change < 0)) else 'text-slate-500 dark:text-slate-400' %}
+
+<{% if href %}a href="{{ href }}"{% else %}div{% endif %} class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 {% if href %}hover:border-primary-300 hover:shadow-md transition dark:hover:border-primary-700{% endif %}">
+    <div class="flex items-center gap-4">
+        {% if icon %}
+        <div class="flex h-12 w-12 items-center justify-center rounded-lg {{ icon_bg | default('bg-primary-100 dark:bg-primary-900/30') }}">
+            <div class="{{ icon_color | default('text-primary-600 dark:text-primary-400') }}">{{ icon | safe }}</div>
+        </div>
+        {% endif %}
+        <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400 truncate">{{ title }}</p>
+            <div class="flex items-baseline gap-2">
+                <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ value }}</p>
+                {% if change is defined %}
+                <span class="inline-flex items-center text-sm font-medium {{ change_color }}">
+                    {% if change > 0 %}
+                    <svg class="h-4 w-4 mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                    {% elif change < 0 %}
+                    <svg class="h-4 w-4 mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                    {% endif %}
+                    {{ change|abs }}%
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</{% if href %}a{% else %}div{% endif %}>

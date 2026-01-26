@@ -1,0 +1,362 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card %}
+
+{% block title %}{% if server %}Edit{% else %}New{% endif %} VPN Server - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("violet", "purple") }}
+
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% set wg_icon %}
+    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+    </svg>
+    {% endset %}
+
+    {% call page_header(
+        title="Edit VPN Server" if server else "New VPN Server",
+        subtitle="Configure VPN interface settings",
+        icon=wg_icon,
+        color="violet",
+        color2="purple"
+    ) %}
+        <a href="/admin/network/vpn" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            Back
+        </a>
+    {% endcall %}
+
+    {# Errors #}
+    {% if errors %}
+    <div class="animate-fade-in-up rounded-2xl border border-red-200/60 bg-red-50 p-4 dark:border-red-800/40 dark:bg-red-900/20">
+        <div class="flex items-start gap-3">
+            <svg class="h-5 w-5 text-red-500 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <div>
+                <h3 class="font-medium text-red-800 dark:text-red-200">Please fix the following errors:</h3>
+                <ul class="mt-2 list-inside list-disc text-sm text-red-700 dark:text-red-300">
+                    {% for error in errors %}
+                    <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Form #}
+    <form action="/admin/network/vpn/servers/{% if server %}{{ server.id }}/edit{% else %}new{% endif %}" method="POST" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        {# Basic Settings #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 50ms;">
+            <h3 class="mb-4 font-semibold text-slate-900 dark:text-white">Basic Settings</h3>
+            <div class="grid gap-6 sm:grid-cols-2">
+                <div class="sm:col-span-2">
+                    <label for="name" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Server Name *</label>
+                    <input type="text" id="name" name="name" required maxlength="160"
+                           value="{{ form_data.name if form_data else server.name if server else '' }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., Production VPN">
+                </div>
+
+                <div class="sm:col-span-2">
+                    <label for="description" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                    <textarea id="description" name="description" rows="2"
+                              class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                              placeholder="Optional description">{{ form_data.description if form_data else server.description if server else '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        {# Network Settings #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
+            <h3 class="mb-4 font-semibold text-slate-900 dark:text-white">Network Settings</h3>
+            <div class="grid gap-6 sm:grid-cols-2">
+                <div>
+                    <label for="listen_port" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Listen Port</label>
+                    <input type="number" id="listen_port" name="listen_port" min="1" max="65535"
+                           value="{{ form_data.listen_port if form_data else server.listen_port if server else vpn_defaults.listen_port }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default: {{ vpn_defaults.listen_port }}</p>
+                </div>
+
+                <div>
+                    <label for="vpn_address" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">VPN Address (CIDR)</label>
+                    <input type="text" id="vpn_address" name="vpn_address"
+                           value="{{ form_data.vpn_address if form_data else server.vpn_address if server else vpn_defaults.vpn_address }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., {{ vpn_defaults.vpn_address }}">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Server's IP in the VPN network</p>
+                </div>
+
+                <div>
+                    <label for="vpn_address_v6" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">VPN Address (IPv6 CIDR)</label>
+                    <input type="text" id="vpn_address_v6" name="vpn_address_v6"
+                           value="{{ form_data.vpn_address_v6 if form_data else server.vpn_address_v6 if server else vpn_defaults.vpn_address_v6 }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., fd00::1/64">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional IPv6 address for dual-stack</p>
+                </div>
+
+                <div>
+                    <label for="public_host" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Public Host</label>
+                    <input type="text" id="public_host" name="public_host"
+                           value="{{ form_data.public_host if form_data else server.public_host if server else '' }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., vpn.example.com or 203.0.113.1">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Public IP or hostname for peers to connect</p>
+                </div>
+
+                <div>
+                    <label for="public_port" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Public Port</label>
+                    <input type="number" id="public_port" name="public_port" min="1" max="65535"
+                           value="{{ form_data.public_port if form_data else server.public_port if server else '' }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="Same as listen port if empty">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">If behind NAT, specify external port</p>
+                </div>
+
+                <div>
+                    <label for="mtu" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">MTU</label>
+                    <input type="number" id="mtu" name="mtu" min="1280" max="9000"
+                           value="{{ form_data.mtu if form_data else server.mtu if server else vpn_defaults.mtu }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default: {{ vpn_defaults.mtu }} (accounts for VPN overhead)</p>
+                </div>
+
+                <div>
+                    <label for="dns_servers" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">DNS Servers</label>
+                    <input type="text" id="dns_servers" name="dns_servers"
+                           value="{{ form_data.dns_servers if form_data else (server.dns_servers | join(', ') if server and server.dns_servers else '') }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., 8.8.8.8, 8.8.4.4">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Comma-separated list of DNS servers for peers</p>
+                </div>
+
+                <div class="sm:col-span-2">
+                    <label for="vpn_routes" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">VPN Routes (CIDR)</label>
+                    <textarea id="vpn_routes" name="vpn_routes" rows="2"
+                              class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                              placeholder="e.g., 172.20.100.0/24&#10;10.50.0.0/16">{{ form_data.vpn_routes if form_data else (server.metadata_.get('routes') | join('\n') if server and server.metadata_ and server.metadata_.get('routes') else '') }}</textarea>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">One CIDR per line (routes added on VPN up)</p>
+                </div>
+            </div>
+        </div>
+
+        {# Status #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Server Status</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Enable or disable the VPN server</p>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                    <input type="checkbox" name="is_active" value="true" class="peer sr-only"
+                           {% if form_data %}{{ 'checked' if form_data.is_active else '' }}{% elif server %}{{ 'checked' if server.is_active else '' }}{% else %}checked{% endif %}>
+                    <div class="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-violet-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:ring-4 peer-focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-700 dark:peer-focus:ring-violet-800"></div>
+                </label>
+            </div>
+        </div>
+
+        {# Interface Settings #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 175ms;">
+            <div class="mb-4">
+                <h3 class="font-semibold text-slate-900 dark:text-white">System Interface</h3>
+                <p class="text-sm text-slate-500 dark:text-slate-400">WireGuard interface configuration on this server</p>
+            </div>
+            <div class="grid gap-6 sm:grid-cols-2">
+                <div>
+                    <label for="interface_name" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Interface Name</label>
+                    <input type="text" id="interface_name" name="interface_name"
+                           value="{{ form_data.interface_name if form_data else server.interface_name if server else vpn_defaults.interface_name }}"
+                           class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="{{ vpn_defaults.interface_name }}">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Linux interface name (e.g., {{ vpn_defaults.interface_name }}, wg-infra)</p>
+                </div>
+
+                <div class="flex items-center gap-4 pt-6">
+                    <label class="relative inline-flex cursor-pointer items-center">
+                        <input type="checkbox" name="auto_deploy" value="true" class="peer sr-only"
+                               {% if form_data %}{{ 'checked' if form_data.auto_deploy else '' }}{% elif server %}{{ 'checked' if server.metadata_ and server.metadata_.get('auto_deploy') else '' }}{% else %}checked{% endif %}>
+                        <div class="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-violet-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:ring-4 peer-focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-700 dark:peer-focus:ring-violet-800"></div>
+                    </label>
+                    <div>
+                        <span class="text-sm font-medium text-slate-900 dark:text-white">Auto-deploy changes</span>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Automatically apply config when peers are added/removed</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Router API Configuration #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
+            <div class="mb-4 flex items-center justify-between">
+                <div>
+                    <h3 class="font-semibold text-slate-900 dark:text-white">MikroTik Router Sync</h3>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Optional: Configure router API credentials for automatic peer sync</p>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                    <input type="checkbox" name="router_enabled" value="true" class="peer sr-only" id="router_enabled"
+                           {% if form_data %}{{ 'checked' if form_data.router_enabled else '' }}{% elif server and server.metadata_ and server.metadata_.get('router', {}).get('enabled') %}checked{% endif %}
+                           onchange="document.getElementById('router-fields').classList.toggle('hidden', !this.checked)">
+                    <div class="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-violet-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:ring-4 peer-focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-700 dark:peer-focus:ring-violet-800"></div>
+                </label>
+            </div>
+
+            <div id="router-fields" class="{% if not (form_data and form_data.router_enabled) and not (server and server.metadata_ and server.metadata_.get('router', {}).get('enabled')) %}hidden{% endif %}">
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="router_host" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Router Host</label>
+                        <input type="text" id="router_host" name="router_host"
+                               value="{{ form_data.router_host if form_data else (server.metadata_.get('router', {}).get('host', '') if server and server.metadata_ else '') }}"
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., 192.168.88.1">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Router IP address or hostname</p>
+                    </div>
+
+                    <div>
+                        <label for="router_api_port" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">API Port</label>
+                        <input type="number" id="router_api_port" name="router_api_port" min="1" max="65535"
+                               value="{{ form_data.router_api_port if form_data else (server.metadata_.get('router', {}).get('api_port', 8728) if server and server.metadata_ else 8728) }}"
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default: 8728 (8729 for SSL)</p>
+                    </div>
+
+                    <div>
+                        <label for="router_username" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                        <input type="text" id="router_username" name="router_username"
+                               value="{{ form_data.router_username if form_data else (server.metadata_.get('router', {}).get('username', '') if server and server.metadata_ else '') }}"
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="admin">
+                    </div>
+
+                    <div>
+                        <label for="router_password" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                        <input type="password" id="router_password" name="router_password"
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="{% if server and server.metadata_ and server.metadata_.get('router', {}).get('password') %}(unchanged){% else %}Enter password{% endif %}">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to keep existing password</p>
+                    </div>
+
+                    <div>
+                        <label for="router_interface_name" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">WireGuard Interface</label>
+                        <input type="text" id="router_interface_name" name="router_interface_name"
+                               value="{{ form_data.router_interface_name if form_data else (server.metadata_.get('router', {}).get('interface_name', 'wg-infra') if server and server.metadata_ else 'wg-infra') }}"
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="wg-infra">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">WireGuard interface name on router</p>
+                    </div>
+
+                    <div class="flex items-center gap-4 pt-6">
+                        <label class="relative inline-flex cursor-pointer items-center">
+                            <input type="checkbox" name="router_api_ssl" value="true" class="peer sr-only"
+                                   {% if form_data %}{{ 'checked' if form_data.router_api_ssl else '' }}{% elif server and server.metadata_ and server.metadata_.get('router', {}).get('api_ssl') %}checked{% endif %}>
+                            <div class="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-violet-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:ring-4 peer-focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-700 dark:peer-focus:ring-violet-800"></div>
+                        </label>
+                        <div>
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">Use SSL</span>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Connect using SSL/TLS (port 8729)</p>
+                        </div>
+                    </div>
+                </div>
+
+                {% if server %}
+                {# Test Connection Button - only show when editing existing server #}
+                <div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <button type="button" id="test-router-btn"
+                            onclick="testRouterConnection('{{ server.id }}')"
+                            class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <span id="test-router-btn-text">Test Connection</span>
+                    </button>
+                    <div id="test-router-result" class="mt-2 hidden">
+                        <p id="test-router-message" class="text-sm"></p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {# Actions #}
+        <div class="animate-fade-in-up flex items-center justify-between" style="animation-delay: 225ms;">
+            <a href="/admin/network/vpn" class="text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200">
+                Cancel
+            </a>
+            <div class="flex items-center gap-3">
+                {% if server %}
+                <button type="button" onclick="if(confirm('Are you sure you want to delete this server? All peers will be deleted.')) document.getElementById('delete-form').submit()" class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-medium text-red-600 transition-all hover:bg-red-50 dark:border-red-800 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-900/20">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    Delete
+                </button>
+                {% endif %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-all hover:shadow-xl hover:shadow-violet-500/30">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    {{ 'Update Server' if server else 'Create Server' }}
+                </button>
+            </div>
+        </div>
+    </form>
+
+    {% if server %}
+    <form id="delete-form" action="/admin/network/vpn/servers/{{ server.id }}/delete" method="POST" class="hidden">
+        {% include "components/forms/csrf_input.html" %}
+    </form>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function testRouterConnection(serverId) {
+    const btn = document.getElementById('test-router-btn');
+    const btnText = document.getElementById('test-router-btn-text');
+    const resultDiv = document.getElementById('test-router-result');
+    const messageEl = document.getElementById('test-router-message');
+
+    // Disable button and show loading state
+    btn.disabled = true;
+    btnText.textContent = 'Testing...';
+    resultDiv.classList.add('hidden');
+
+    try {
+        const response = await fetch(`/admin/network/vpn/servers/${serverId}/test-router`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('input[name="_csrf_token"]').value,
+            },
+        });
+
+        const data = await response.json();
+
+        // Show result
+        resultDiv.classList.remove('hidden');
+        if (data.success) {
+            messageEl.className = 'text-sm text-green-600 dark:text-green-400';
+            let msg = data.message;
+            if (data.interface_exists === false) {
+                msg += ` (Warning: Interface '${data.interface_name}' not found on router)`;
+                messageEl.className = 'text-sm text-amber-600 dark:text-amber-400';
+            }
+            messageEl.textContent = msg;
+        } else {
+            messageEl.className = 'text-sm text-red-600 dark:text-red-400';
+            messageEl.textContent = data.message;
+        }
+    } catch (error) {
+        resultDiv.classList.remove('hidden');
+        messageEl.className = 'text-sm text-red-600 dark:text-red-400';
+        messageEl.textContent = 'Network error - please try again';
+    } finally {
+        // Re-enable button
+        btn.disabled = false;
+        btnText.textContent = 'Test Connection';
+    }
+}
+</script>
+{% endblock %}

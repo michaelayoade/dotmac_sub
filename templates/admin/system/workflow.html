@@ -1,0 +1,314 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Workflow - System{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Workflow</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review SLA policies and status transitions.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SLA Policies</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ policies | length }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SLA Targets</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ targets | length }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Transitions</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ ticket_transitions | length + work_order_transitions | length + project_task_transitions | length }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">SLA Policies</h2>
+                <details class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+                    <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">New SLA Policy</summary>
+                    <form method="post" action="/admin/system/workflow/policies" class="mt-4 space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="policy_name">Name</label>
+                            <input id="policy_name" name="name" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="policy_entity">Entity Type</label>
+                            <select id="policy_entity" name="entity_type" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Select entity</option>
+                                {% for entity in workflow_entities %}
+                                <option value="{{ entity }}">{{ entity | replace('_', ' ') | title }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="policy_description">Description</label>
+                            <textarea id="policy_description" name="description" rows="2" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                        </div>
+                        <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                            <input type="checkbox" name="is_active" value="true" checked class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                            Active
+                        </label>
+                        <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700">Create Policy</button>
+                    </form>
+                </details>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Entity</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for policy in policies %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ policy.name }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ policy.entity_type.value if policy.entity_type else '—' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ 'Active' if policy.is_active else 'Inactive' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ policy.created_at.strftime('%b %d, %Y') if policy.created_at else '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No SLA policies found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">SLA Targets</h2>
+                <details class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+                    <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">New SLA Target</summary>
+                    <form method="post" action="/admin/system/workflow/targets" class="mt-4 space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="target_policy">Policy</label>
+                            <select id="target_policy" name="policy_id" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Select policy</option>
+                                {% for policy in policies %}
+                                <option value="{{ policy.id }}">{{ policy.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="target_priority">Priority (optional)</label>
+                                <input id="target_priority" name="priority" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="target_minutes">Target Minutes</label>
+                                <input id="target_minutes" name="target_minutes" type="number" min="1" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="warning_minutes">Warning Minutes (optional)</label>
+                            <input id="warning_minutes" name="warning_minutes" type="number" min="1" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                        </div>
+                        <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                            <input type="checkbox" name="is_active" value="true" checked class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                            Active
+                        </label>
+                        <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700">Create Target</button>
+                    </form>
+                </details>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Policy</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Priority</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Target (min)</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Warning (min)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for target in targets %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ target.policy_id }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ target.priority or '—' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ target.target_minutes }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ target.warning_minutes if target.warning_minutes is not none else '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No SLA targets found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Ticket Transitions</h2>
+                    <details class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800">
+                        <summary class="cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">New</summary>
+                        <form method="post" action="/admin/system/workflow/transitions/ticket" class="mt-3 space-y-2">
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="ticket_from">From</label>
+                                <select id="ticket_from" name="from_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in ticket_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="ticket_to">To</label>
+                                <select id="ticket_to" name="to_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in ticket_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="requires_note" value="true" class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Requires note
+                            </label>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="is_active" value="true" checked class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Active
+                            </label>
+                            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-2 py-1 text-xs font-semibold text-white shadow-sm hover:bg-primary-700">Create</button>
+                        </form>
+                    </details>
+                </div>
+            </div>
+            <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for transition in ticket_transitions %}
+                <div class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                    <span class="font-medium text-slate-900 dark:text-white">{{ transition.from_status }}</span>
+                    <span class="text-slate-400">→</span>
+                    <span>{{ transition.to_status }}</span>
+                </div>
+                {% else %}
+                <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No ticket transitions.</div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Work Order Transitions</h2>
+                    <details class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800">
+                        <summary class="cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">New</summary>
+                        <form method="post" action="/admin/system/workflow/transitions/work-order" class="mt-3 space-y-2">
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="work_from">From</label>
+                                <select id="work_from" name="from_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in work_order_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="work_to">To</label>
+                                <select id="work_to" name="to_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in work_order_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="requires_note" value="true" class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Requires note
+                            </label>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="is_active" value="true" checked class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Active
+                            </label>
+                            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-2 py-1 text-xs font-semibold text-white shadow-sm hover:bg-primary-700">Create</button>
+                        </form>
+                    </details>
+                </div>
+            </div>
+            <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for transition in work_order_transitions %}
+                <div class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                    <span class="font-medium text-slate-900 dark:text-white">{{ transition.from_status }}</span>
+                    <span class="text-slate-400">→</span>
+                    <span>{{ transition.to_status }}</span>
+                </div>
+                {% else %}
+                <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No work order transitions.</div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Project Task Transitions</h2>
+                    <details class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-800">
+                        <summary class="cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">New</summary>
+                        <form method="post" action="/admin/system/workflow/transitions/project-task" class="mt-3 space-y-2">
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="task_from">From</label>
+                                <select id="task_from" name="from_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in task_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-600 dark:text-slate-400" for="task_to">To</label>
+                                <select id="task_to" name="to_status" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select</option>
+                                    {% for status in task_statuses %}
+                                    <option value="{{ status }}">{{ status | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="requires_note" value="true" class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Requires note
+                            </label>
+                            <label class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <input type="checkbox" name="is_active" value="true" checked class="h-3 w-3 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                                Active
+                            </label>
+                            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-2 py-1 text-xs font-semibold text-white shadow-sm hover:bg-primary-700">Create</button>
+                        </form>
+                    </details>
+                </div>
+            </div>
+            <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for transition in project_task_transitions %}
+                <div class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                    <span class="font-medium text-slate-900 dark:text-white">{{ transition.from_status }}</span>
+                    <span class="text-slate-400">→</span>
+                    <span>{{ transition.to_status }}</span>
+                </div>
+                {% else %}
+                <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No project task transitions.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,112 @@
+{#
+   Interactive Data Table Component
+   Usage: {% include "components/data/table_interactive.html" %}
+
+   Parameters:
+   - table_id: Unique ID for the table (required for HTMX)
+   - columns: List of column definitions [{key, label, sortable, class}]
+   - data_url: URL for fetching data via HTMX
+   - searchable: Enable search (default: true)
+   - create_url: URL for create button (optional)
+   - create_label: Label for create button (default: "Add New")
+#}
+<div x-data="{ 
+    sortColumn: '{{ sort_column | default('') }}',
+    sortDir: '{{ sort_dir | default('asc') }}',
+    searchQuery: '{{ search | default('') }}',
+    perPage: {{ per_page | default(25) }},
+    loading: false
+}" class="space-y-4">
+    
+    <!-- Table Controls -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        {% if searchable is not false %}
+        <div class="relative flex-1 max-w-md">
+            <input type="text"
+                   x-model="searchQuery"
+                   hx-get="{{ data_url }}"
+                   hx-target="#{{ table_id }}-body"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="[name='sort'], [name='dir'], [name='per_page']"
+                   name="search"
+                   placeholder="Search..."
+                   class="block w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
+            <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+        </div>
+        {% endif %}
+        
+        <div class="flex items-center gap-3">
+            <select name="per_page"
+                    x-model="perPage"
+                    hx-get="{{ data_url }}"
+                    hx-target="#{{ table_id }}-body"
+                    hx-trigger="change"
+                    hx-include="[name='search'], [name='sort'], [name='dir']"
+                    class="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-8 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="10">10 per page</option>
+                <option value="25" selected>25 per page</option>
+                <option value="50">50 per page</option>
+                <option value="100">100 per page</option>
+            </select>
+            
+            {% if create_url %}
+            <a href="{{ create_url }}" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                {{ create_label | default('Add New') }}
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Hidden inputs for sort state -->
+    <input type="hidden" name="sort" x-bind:value="sortColumn" />
+    <input type="hidden" name="dir" x-bind:value="sortDir" />
+    
+    <!-- Table -->
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        {% for col in columns %}
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 {{ col.class | default('') }}">
+                            {% if col.sortable %}
+                            <button type="button"
+                                    x-on:click="sortDir = (sortColumn === '{{ col.key }}' && sortDir === 'asc') ? 'desc' : 'asc'; sortColumn = '{{ col.key }}'"
+                                    hx-get="{{ data_url }}"
+                                    hx-target="#{{ table_id }}-body"
+                                    hx-include="[name='search'], [name='per_page']"
+                                    hx-vals='{"sort": "{{ col.key }}", "dir": sortDir}'
+                                    class="group inline-flex items-center gap-1 hover:text-slate-700 dark:hover:text-slate-200">
+                                {{ col.label }}
+                                <span class="flex flex-col">
+                                    <svg class="h-3 w-3 -mb-1" :class="sortColumn === '{{ col.key }}' && sortDir === 'asc' ? 'text-primary-600' : 'text-slate-400'" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8l-6 6h12z"/></svg>
+                                    <svg class="h-3 w-3" :class="sortColumn === '{{ col.key }}' && sortDir === 'desc' ? 'text-primary-600' : 'text-slate-400'" fill="currentColor" viewBox="0 0 24 24"><path d="M12 16l-6-6h12z"/></svg>
+                                </span>
+                            </button>
+                            {% else %}
+                            {{ col.label }}
+                            {% endif %}
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody id="{{ table_id }}-body" class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% block table_body %}{% endblock %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Loading Indicator -->
+        <div x-show="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-slate-800/50">
+            <svg class="h-8 w-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        </div>
+    </div>
+</div>

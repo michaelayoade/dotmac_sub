@@ -1,0 +1,261 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ closure.name }} - Splice Closure - Admin{% endblock %}
+
+{% block head %}
+{% if closure.latitude and closure.longitude %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #location-map { height: 180px; border-radius: 0.5rem; }
+    .dark .leaflet-popup-content-wrapper { background: #1e293b; color: #f1f5f9; }
+    .dark .leaflet-popup-tip { background: #1e293b; }
+</style>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/splice-closures" class="hover:text-primary-600">Splice Closures</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ closure.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ closure.name }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Splice Closure</p>
+        </div>
+        <div class="flex items-center gap-2">
+            {% if closure.is_active %}
+                {{ status_badge("Active", "active") }}
+            {% else %}
+                {{ status_badge("Inactive", "inactive") }}
+            {% endif %}
+            <a href="/admin/network/splice-closures/{{ closure.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Closure Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Closure Information</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Trays</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ trays | length }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Splices</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ splices | length }}</dd>
+                        </div>
+                        {% if closure.notes %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ closure.notes }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Trays -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Splice Trays</h2>
+                    <a href="/admin/network/splice-closures/{{ closure.id }}/trays/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Tray</a>
+                </div>
+                {% if trays %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Tray #</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Splices</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for tray in trays %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{{ tray.tray_number }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ tray.name or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ tray.splices | length }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+                                    <a href="/admin/network/splice-closures/{{ closure.id }}/trays/{{ tray.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-6">
+                    <div class="text-center py-8">
+                        <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No trays configured</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add splice trays to organize fiber splices.</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Splices -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Fiber Splices</h2>
+                    <a href="/admin/network/splice-closures/{{ closure.id }}/splices/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Splice</a>
+                </div>
+                {% if splices %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">From</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">To</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Loss (dB)</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Tray</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for splice in splices %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white font-mono">
+                                    {{ splice.from_strand.cable_name if splice.from_strand else '-' }}:{{ splice.from_strand.strand_number if splice.from_strand else '' }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white font-mono">
+                                    {{ splice.to_strand.cable_name if splice.to_strand else '-' }}:{{ splice.to_strand.strand_number if splice.to_strand else '' }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ splice.splice_type or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ splice.loss_db if splice.loss_db else '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ splice.tray.tray_number if splice.tray else '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+                                    <a href="/admin/network/splice-closures/{{ closure.id }}/splices/{{ splice.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-6">
+                    <div class="text-center py-8">
+                        <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No splices recorded</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Splices will appear once fiber connections are made.</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Closure ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ closure.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ closure.created_at.strftime('%B %d, %Y') if closure.created_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if closure.latitude and closure.longitude %}
+            <!-- Location Map -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Location</h2>
+                </div>
+                <div class="p-4">
+                    <div id="location-map" class="rounded-lg"></div>
+                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400 text-center">{{ closure.latitude }}, {{ closure.longitude }}</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if closure.latitude and closure.longitude %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const lat = {{ closure.latitude }};
+    const lng = {{ closure.longitude }};
+    const closureName = {{ closure.name | tojson | safe }};
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    const map = L.map('location-map').setView([lat, lng], 16);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OSM',
+        maxZoom: 19
+    }).addTo(map);
+
+    const icon = L.divIcon({
+        html: '<div style="background:#14b8a6;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
+        className: '',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+    });
+
+    L.marker([lat, lng], { icon: icon })
+        .addTo(map)
+        .bindPopup(`<strong>${escapeHtml(closureName)}</strong>`);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,363 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ device.name }} - Network Device - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/core-devices" class="hover:text-primary-600">Network Devices</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ device.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ device.name }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ device.vendor or '' }} {{ device.model or '' }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <div id="device-status-badge">
+                <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium {% if device.status.value == 'online' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% elif device.status.value == 'offline' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif device.status.value == 'degraded' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                    <span class="h-2 w-2 rounded-full {% if device.status.value == 'online' %}bg-green-500{% elif device.status.value == 'offline' %}bg-red-500{% elif device.status.value == 'degraded' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
+                    {{ device.status.value | title }}
+                </span>
+            </div>
+            <span id="device-ping-badge" class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium
+                {% if not device.ping_enabled %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300
+                {% elif device.last_ping_ok %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
+                {% elif device.last_ping_at %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                Ping:
+                {% if not device.ping_enabled %}Disabled
+                {% elif device.last_ping_ok %}OK
+                {% elif device.last_ping_at %}Failed
+                {% else %}Unknown{% endif %}
+            </span>
+            <span id="device-snmp-badge" class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium
+                {% if not device.snmp_enabled %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300
+                {% elif device.last_snmp_ok %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
+                {% elif device.last_snmp_at %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                SNMP:
+                {% if not device.snmp_enabled %}Disabled
+                {% elif device.last_snmp_ok %}OK
+                {% elif device.last_snmp_at %}Failed
+                {% else %}Unknown{% endif %}
+            </span>
+            <a href="/admin/network/core-devices/{{ device.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div class="hidden"
+             hx-post="/admin/network/core-devices/{{ device.id }}/ping"
+             hx-trigger="load"
+             hx-swap="none"></div>
+        <div class="hidden"
+             hx-post="/admin/network/core-devices/{{ device.id }}/snmp-check"
+             hx-trigger="load"
+             hx-swap="none"></div>
+        <div class="hidden"
+             hx-post="/admin/network/core-devices/{{ device.id }}/discover-interfaces?refresh=false"
+             hx-trigger="load"
+             hx-swap="none"></div>
+        <div class="hidden"
+             hx-get="/admin/network/core-devices/{{ device.id }}{% if selected_interface %}?interface_id={{ selected_interface.id }}{% endif %}"
+             hx-target="#device-interfaces-card"
+             hx-select="#device-interfaces-card"
+             hx-trigger="snmp-discovered from:body"
+             hx-swap="outerHTML"></div>
+        <div class="hidden"
+             hx-get="/admin/network/core-devices/{{ device.id }}/health{% if selected_interface %}?interface_id={{ selected_interface.id }}{% endif %}"
+             hx-trigger="load"
+             hx-swap="none"></div>
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Device Details -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Hostname</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ device.hostname or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Management IP</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ device.mgmt_ip or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Role</dt>
+                            <dd class="mt-1">
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                                    {{ device.role.value | title }}
+                                </span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">POP Site</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device.pop_site %}
+                                <a href="/admin/network/pop-sites/{{ device.pop_site.id }}" class="text-primary-600 hover:text-primary-700">{{ device.pop_site.name }}</a>
+                                {% else %}-{% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.vendor or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.model or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ device.serial_number or '-' }}</dd>
+                        </div>
+                        {% if device.notes %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ device.notes }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Interfaces -->
+            <div id="device-interfaces-card" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Interfaces</h2>
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <input id="interface-search" type="text" placeholder="Search name or description"
+                                   class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-64">
+                            <select id="interface-status" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-36">
+                                <option value="">All status</option>
+                                <option value="up">Up</option>
+                                <option value="down">Down</option>
+                                <option value="unknown">Unknown</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                {% if interfaces %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Description</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Speed</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="interfaces-body" class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for iface in interfaces %}
+                            <tr data-name="{{ iface.name | lower }}" data-description="{{ (iface.description or '') | lower }}" data-status="{{ iface.status.value | lower }}">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white font-mono">{{ iface.name }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ iface.description or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ (iface.speed_mbps | string) + ' Mbps' if iface.speed_mbps else '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {% if iface.status.value == 'up' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% elif iface.status.value == 'down' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                        <span class="h-1.5 w-1.5 rounded-full {% if iface.status.value == 'up' %}bg-green-500{% elif iface.status.value == 'down' %}bg-red-500{% else %}bg-slate-400{% endif %}"></span>
+                                        {{ iface.status.value | upper }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-6">
+                    <div class="text-center py-8">
+                        <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No interfaces</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Interface discovery has not run yet.</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Alerts -->
+            {% if alerts %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Active Alerts</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for alert in alerts %}
+                    <div class="p-4">
+                        <div class="flex items-center gap-3">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if alert.severity.value == 'critical' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif alert.severity.value == 'warning' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                {{ alert.severity.value | title }}
+                            </span>
+                            <span class="text-sm text-slate-900 dark:text-white">{{ alert.rule.name if alert.rule else 'Unknown' }}</span>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ alert.triggered_at.strftime('%b %d %H:%M') if alert.triggered_at else '' }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <div id="device-health-card" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between gap-2">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Device Health</h2>
+                        <span id="device-health-interface-label" class="text-xs text-slate-500 dark:text-slate-400">
+                            {% if selected_interface %}
+                            {{ selected_interface.name }}
+                            {% else %}
+                            Device totals
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                <div id="device-health-content" class="p-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">CPU</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ device_health.cpu }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Memory</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ device_health.memory }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Uptime</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ device_health.uptime }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                            {{ device_health.last_seen.strftime('%b %d, %Y %H:%M') if device_health.last_seen else '--' }}
+                        </p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Rx</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ device_health.rx }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Tx</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ device_health.tx }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ device.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ device.created_at.strftime('%B %d, %Y') if device.created_at else '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ device.updated_at.strftime('%B %d, %Y') if device.updated_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Actions</h2>
+                </div>
+                <div class="p-6 space-y-3">
+                    <button type="button"
+                            hx-post="/admin/network/core-devices/{{ device.id }}/ping"
+                            hx-target="#device-action-result"
+                            hx-swap="innerHTML"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        Ping Device
+                    </button>
+                    <button type="button"
+                            hx-post="/admin/network/core-devices/{{ device.id }}/discover-interfaces"
+                            hx-target="#device-action-result"
+                            hx-swap="innerHTML"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Refresh Interfaces
+                    </button>
+                    <button type="button"
+                            hx-post="/admin/network/core-devices/{{ device.id }}/snmp-debug"
+                            hx-target="#device-action-result"
+                            hx-swap="innerHTML"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m2 8H7a2 2 0 01-2-2V6a2 2 0 012-2h7l5 5v9a2 2 0 01-2 2z"/></svg>
+                        SNMP Debug
+                    </button>
+                    <div id="device-action-result"></div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+    (function () {
+        var searchInput = document.getElementById("interface-search");
+        var statusSelect = document.getElementById("interface-status");
+        var tbody = document.getElementById("interfaces-body");
+        if (!searchInput || !statusSelect || !tbody) {
+            return;
+        }
+
+        function applyFilter() {
+            var query = (searchInput.value || "").trim().toLowerCase();
+            var status = (statusSelect.value || "").trim().toLowerCase();
+            var rows = tbody.querySelectorAll("tr");
+            rows.forEach(function (row) {
+                var name = row.getAttribute("data-name") || "";
+                var desc = row.getAttribute("data-description") || "";
+                var rowStatus = row.getAttribute("data-status") || "";
+                var matchesText = !query || name.indexOf(query) !== -1 || desc.indexOf(query) !== -1;
+                var matchesStatus = !status || rowStatus === status;
+                row.style.display = matchesText && matchesStatus ? "" : "none";
+            });
+        }
+
+        searchInput.addEventListener("input", applyFilter);
+        statusSelect.addEventListener("change", applyFilter);
+
+    })();
+</script>
+{% endblock %}

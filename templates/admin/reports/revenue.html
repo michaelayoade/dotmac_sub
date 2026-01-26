@@ -1,0 +1,154 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Revenue Report - Admin{% endblock %}
+
+{% block charts_js %}
+<script src="/static/js/vendor/chart.min.js"></script>
+<script src="/static/js/charts.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Revenue Report</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track revenue trends and billing performance</p>
+        </div>
+        <form method="GET" action="/admin/reports/revenue/export" class="flex items-center gap-2">
+            <label for="days" class="sr-only">Export period</label>
+            <select id="days" name="days" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="365">Last Year</option>
+            </select>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Export
+            </button>
+        </form>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Revenue</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(total_revenue) }}</p>
+            <p class="mt-1 text-sm {% if revenue_growth >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                {% if revenue_growth >= 0 %}+{% endif %}{{ "%.1f" | format(revenue_growth) }}% vs last period
+            </p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Recurring Revenue</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(recurring_revenue) }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Monthly recurring</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Outstanding</p>
+            <p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">₦{{ "%.2f" | format(outstanding_amount) }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ outstanding_count }} invoices</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Collection Rate</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ "%.1f" | format(collection_rate) }}%</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Last 30 days</p>
+        </div>
+    </div>
+
+    <!-- Revenue Chart -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Revenue Trend</h2>
+        </div>
+        <div class="p-6">
+            <div class="chart-container" style="min-height: 280px;">
+                <canvas id="revenue-chart"></canvas>
+            </div>
+            {% set revenue_data = revenue_data|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'revenue': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('revenue-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: {{ revenue_data.labels | tojson | safe }},
+                    datasets: [
+                        {
+                            label: 'Total Revenue',
+                            data: {{ revenue_data.revenue | tojson | safe }},
+                            borderColor: '#06b6d4',
+                            backgroundColor: 'rgba(6, 182, 212, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Collected',
+                            data: {{ revenue_data.collected | tojson | safe }},
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                };
+                const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+                DotmacCharts.registerChart('revenue-chart', chart);
+            });
+            </script>
+        </div>
+    </div>
+
+    <!-- Recent Payments -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Payments</h2>
+        </div>
+        <div class="p-6">
+            {% if recent_payments %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Date</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Account</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Amount</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Method</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for payment in recent_payments %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">
+                                {{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else (payment.created_at.strftime('%b %d, %Y') if payment.created_at else '-') }}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+                                {% if payment.account and payment.account.subscriber and payment.account.subscriber.person %}
+                                    {{ payment.account.subscriber.person.first_name }} {{ payment.account.subscriber.person.last_name }}
+                                {% elif payment.account and payment.account.subscriber and payment.account.subscriber.organization %}
+                                    {{ payment.account.subscriber.organization.name }}
+                                {% else %}
+                                    {{ payment.account.account_number if payment.account and payment.account.account_number else 'Account' }}
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-sm font-medium text-green-600 dark:text-green-400">₦{{ "%.2f" | format(payment.amount) }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+                                {% if payment.payment_method %}
+                                    {{ payment.payment_method.label or payment.payment_method.method_type.value | title }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No recent payments.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% set activity_title = "Reports Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

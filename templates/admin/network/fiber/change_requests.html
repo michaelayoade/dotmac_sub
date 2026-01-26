@@ -1,0 +1,100 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Fiber Change Requests - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber change requests</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review vendor edits before they are applied.</p>
+    </div>
+
+    {% if bulk_status == "approved" %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-200">
+        Bulk approval completed. Skipped: {{ skipped or 0 }}.
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/network/fiber-change-requests/bulk-approve" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+            <div class="flex items-center gap-2">
+                <input id="select-all" type="checkbox" class="h-4 w-4 rounded border-slate-300">
+                <label for="select-all">Select all</label>
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="inline-flex items-center gap-2">
+                    <input type="checkbox" name="force_apply" value="true" class="h-4 w-4 rounded border-slate-300">
+                    Apply despite conflicts
+                </label>
+                <button type="submit" class="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700">Bulk approve</button>
+            </div>
+        </div>
+        <table class="w-full text-sm">
+            <thead class="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                <tr>
+                    <th class="px-4 py-3">Select</th>
+                    <th class="px-4 py-3">Request</th>
+                    <th class="px-4 py-3">Asset</th>
+                    <th class="px-4 py-3">Operation</th>
+                    <th class="px-4 py-3">Conflict</th>
+                    <th class="px-4 py-3">Vendor</th>
+                    <th class="px-4 py-3">Requested By</th>
+                    <th class="px-4 py-3">Submitted</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for req in requests %}
+                <tr>
+                    <td class="px-4 py-3">
+                        <input type="checkbox" name="request_ids" value="{{ req.id }}" class="h-4 w-4 rounded border-slate-300 request-select">
+                    </td>
+                    <td class="px-4 py-3 font-medium text-slate-900 dark:text-white">
+                        <a href="/admin/network/fiber-change-requests/{{ req.id }}" class="text-primary-600 hover:underline">
+                            {{ req.id }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {{ req.asset_type }}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {{ req.operation.value }}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {% if conflicts[req.id|string] %}
+                        <span class="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Yes</span>
+                        {% else %}
+                        <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {{ req.requested_vendor.name if req.requested_vendor else "-" }}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {{ req.requested_by.first_name if req.requested_by else "-" }}
+                    </td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">
+                        {{ req.created_at.strftime("%Y-%m-%d %H:%M") if req.created_at else "-" }}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td class="px-4 py-6 text-center text-slate-500 dark:text-slate-400" colspan="8">No pending requests.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </form>
+</div>
+
+<script>
+    (function() {
+        const selectAll = document.getElementById('select-all');
+        if (!selectAll) return;
+        selectAll.addEventListener('change', () => {
+            document.querySelectorAll('.request-select').forEach(input => {
+                input.checked = selectAll.checked;
+            });
+        });
+    })();
+</script>
+{% endblock %}

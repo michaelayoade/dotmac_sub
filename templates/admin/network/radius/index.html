@@ -1,0 +1,209 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}RADIUS / AAA - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">RADIUS / AAA</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Authentication, Authorization, and Accounting</p>
+        </div>
+    </div>
+
+    <!-- RADIUS Overview -->
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- RADIUS Servers -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS Servers</h2>
+                    <a href="/admin/network/radius/servers/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Server</a>
+                </div>
+            </div>
+            <div class="p-6">
+                {% if servers %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Host</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Ports</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                                <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for server in servers %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ server.name }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ server.host }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ server.auth_port }}/{{ server.acct_port }}</td>
+                                <td class="px-4 py-3 text-sm">
+                                    {% if server.is_active %}
+                                    {{ status_badge("Active", "active", size="sm") }}
+                                    {% else %}
+                                    {{ status_badge("Inactive", "inactive", size="sm") }}
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-right text-sm">
+                                    <a href="/admin/network/radius/servers/{{ server.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-8">
+                    <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                    <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No RADIUS servers configured</h3>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure RADIUS servers for subscriber authentication.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- NAS Clients -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">NAS Clients</h2>
+                    <a href="/admin/network/radius/clients/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Client</a>
+                </div>
+            </div>
+            <div class="p-6">
+                {% if clients %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Client IP</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Server</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                                <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for client in clients %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ client.client_ip }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ client.server.name if client.server else '-' }}</td>
+                                <td class="px-4 py-3 text-sm">
+                                    {% if client.is_active %}
+                                    {{ status_badge("Active", "active", size="sm") }}
+                                    {% else %}
+                                    {{ status_badge("Inactive", "inactive", size="sm") }}
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-right text-sm">
+                                    <a href="/admin/network/radius/clients/{{ client.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-8">
+                    <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                    <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No NAS clients configured</h3>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add OLT/BNG devices as RADIUS clients.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Authentication Profiles -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex items-center justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Authentication Profiles</h2>
+                <a href="/admin/network/radius/profiles/new" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Profile</a>
+            </div>
+        </div>
+        <div class="p-6">
+            {% if profiles %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800/50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for profile in profiles %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ profile.name }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ profile.vendor.value if profile.vendor else 'Other' }}</td>
+                            <td class="px-4 py-3 text-sm">
+                                {% if profile.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right text-sm">
+                                <a href="/admin/network/radius/profiles/{{ profile.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No authentication profiles</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create profiles to define speed limits, VLANs, and QoS for subscriber sessions.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% if activities %}
+            {% for activity in activities %}
+            <div class="px-6 py-4">
+                <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% if activity.description %}
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                {% endif %}
+                {% if activity.occurred_at %}
+                <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recent Sessions -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Authentication Sessions</h2>
+        </div>
+        <div class="p-6">
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No recent sessions</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Session history will appear once RADIUS is configured.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

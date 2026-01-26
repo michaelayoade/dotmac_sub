@@ -1,0 +1,146 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Admin</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Access control and system monitoring</p>
+        </div>
+    </div>
+
+    <!-- Access Control Section -->
+    <div>
+        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Access Control</h2>
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <!-- Users -->
+            <a href="/admin/system/users" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Users</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ users_active_count }} active / {{ users_count }} total</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Roles & Permissions -->
+            <a href="/admin/system/roles" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Roles & Permissions</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ roles_count }} roles</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- API Keys -->
+            <a href="/admin/system/api-keys" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">API Keys</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ api_keys_active_count }} active / {{ api_keys_count }} total</p>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <!-- Monitoring Section -->
+    <div>
+        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Monitoring</h2>
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <!-- Audit Log -->
+            <a href="/admin/system/audit" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Audit Log</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Activity history</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Tasks & Scheduler -->
+            <a href="/admin/system/scheduler" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Tasks & Scheduler</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ scheduled_tasks_count }} scheduled tasks</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Notification Queue -->
+            <a href="/admin/notifications/queue" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h4M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Notification Queue</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Pending deliveries</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Integration Jobs -->
+            <a href="/admin/integrations/jobs" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-50 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Integration Jobs</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ integration_jobs_count }} jobs</p>
+                    </div>
+                </div>
+            </a>
+
+            <!-- Workflow -->
+            <a href="/admin/system/workflow" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Workflow</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Automation rules</p>
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

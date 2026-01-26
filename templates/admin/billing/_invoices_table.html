@@ -1,0 +1,113 @@
+<div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+        <thead class="bg-slate-50 dark:bg-slate-800/50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice #</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Issued</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due</th>
+                <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+            {% if invoices %}
+            {% for invoice in invoices %}
+            {% set status = invoice.status|default('draft') %}
+            {% set status_val = status.value if status is not string else status %}
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                <td class="whitespace-nowrap px-6 py-4">
+                    <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ invoice.invoice_number | default('Invoice') }}</a>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                    {% if invoice.account and invoice.account.subscriber %}
+                        {% if invoice.account.subscriber.person %}
+                            {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
+                        {% elif invoice.account.subscriber.organization %}
+                            {{ invoice.account.subscriber.organization.name }}
+                        {% else %}
+                            Account
+                        {% endif %}
+                    {% else %}
+                        Account
+                    {% endif %}
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    {% if status_val == 'paid' %}
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Paid</span>
+                    {% elif status_val in ['pending', 'sent'] %}
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">Pending</span>
+                    {% elif status_val == 'overdue' %}
+                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">Overdue</span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-800 dark:bg-slate-700 dark:text-slate-300">{{ status_val | title }}</span>
+                    {% endif %}
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-primary-600" title="View">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        </a>
+                        <a href="/admin/billing/invoices/{{ invoice.id }}/edit" class="text-slate-400 hover:text-amber-600" title="Edit">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                        </a>
+                        <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="text-slate-400 hover:text-slate-600" title="Download PDF">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        </a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr><td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if total_pages and total_pages > 1 %}
+{% set start_item = ((page - 1) * per_page) + 1 if total else 0 %}
+{% set end_item = [page * per_page, total] | min if total else 0 %}
+<div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+    <p class="text-sm text-slate-500 dark:text-slate-400">
+        Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ start_item }}</span>
+        to <span class="font-medium text-slate-700 dark:text-slate-200">{{ end_item }}</span>
+        of <span class="font-medium text-slate-700 dark:text-slate-200">{{ total }}</span> results
+    </p>
+    <div class="flex items-center gap-1">
+        {% if page > 1 %}
+        <a href="/admin/billing/invoices?page={{ page - 1 }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        {% else %}
+        <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </span>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == page %}
+            <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-sm font-medium text-white">{{ p }}</span>
+            {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
+            <a href="/admin/billing/invoices?page={{ p }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ p }}</a>
+            {% elif p == page - 2 or p == page + 2 %}
+            <span class="inline-flex h-9 w-9 items-center justify-center text-slate-400">...</span>
+            {% endif %}
+        {% endfor %}
+
+        {% if page < total_pages %}
+        <a href="/admin/billing/invoices?page={{ page + 1 }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% else %}
+        <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

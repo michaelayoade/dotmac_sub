@@ -1,0 +1,317 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ form_title }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage role details and access level</p>
+        </div>
+        <a href="/admin/system/roles" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+            Back to Roles
+        </a>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Role Name</label>
+                <input type="text" name="name" required
+                       value="{{ role.name if role else '' }}"
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Description</label>
+                <textarea name="description" rows="4"
+                          class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ role.description if role and role.description else '' }}</textarea>
+            </div>
+            {% if permissions is defined %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Permissions</label>
+                <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div class="flex-1">
+                        <label class="sr-only" for="permission_search">Search permissions</label>
+                        <input id="permission_search" type="text" placeholder="Search permissions (e.g., billing, invoice, read)"
+                               class="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" id="permissions_select_all"
+                                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                            Select Visible
+                        </button>
+                        <button type="button" id="permissions_select_none"
+                                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                            Clear All
+                        </button>
+                    </div>
+                </div>
+                <div class="mt-2 flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
+                    <span id="selected_count">0 selected</span>
+                    <span class="text-slate-300 dark:text-slate-600">|</span>
+                    <span>{{ permissions | length }} total</span>
+                </div>
+                <div class="mt-3 max-h-[32rem] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/40" id="permission_list">
+                    <div class="space-y-1">
+                        {# Build grouped structure: domain -> entity -> permissions #}
+                        {% set ns = namespace(current_domain=None, current_entity=None) %}
+                        {% for permission in permissions | sort(attribute='key') %}
+                        {% set permission_id = permission.id | string %}
+                        {% set parts = permission.key.split(':') %}
+                        {% set domain = parts[0] if parts | length >= 1 else 'other' %}
+                        {% set entity = parts[1] if parts | length >= 3 else None %}
+                        {% set action = parts[2] if parts | length >= 3 else (parts[1] if parts | length == 2 else parts[0]) %}
+
+                        {# Domain header #}
+                        {% if ns.current_domain != domain %}
+                        {% set ns.current_domain = domain %}
+                        {% set ns.current_entity = None %}
+                        <div class="permission-domain mt-3 first:mt-0" data-domain="{{ domain }}">
+                            <div class="flex items-center justify-between rounded-md bg-slate-200 px-2 py-1.5 dark:bg-slate-700">
+                                <div class="flex items-center gap-2">
+                                    <button type="button" class="permission-domain-toggle text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white" data-domain="{{ domain }}" aria-label="Toggle domain">
+                                        <svg class="h-4 w-4 transition-transform" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.125l3.71-3.894a.75.75 0 111.08 1.04l-4.25 4.46a.75.75 0 01-1.08 0l-4.25-4.46a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                    <span class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-200">{{ domain }}</span>
+                                </div>
+                                <button type="button" class="permission-domain-select rounded border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-500 dark:bg-slate-600 dark:text-slate-200 dark:hover:bg-slate-500" data-domain="{{ domain }}">
+                                    Select All
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {# Entity sub-header (for 3-part keys) #}
+                        {% if entity and ns.current_entity != (domain ~ ':' ~ entity) %}
+                        {% set ns.current_entity = domain ~ ':' ~ entity %}
+                        <div class="permission-entity ml-4 mt-2" data-domain="{{ domain }}" data-entity="{{ entity }}">
+                            <div class="flex items-center justify-between rounded bg-slate-100 px-2 py-1 dark:bg-slate-800">
+                                <span class="text-xs font-semibold text-slate-600 dark:text-slate-300">{{ entity | replace('_', ' ') | title }}</span>
+                                <button type="button" class="permission-entity-select text-[10px] text-primary-600 hover:text-primary-700 dark:text-primary-400" data-domain="{{ domain }}" data-entity="{{ entity }}">
+                                    select
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {# Permission item #}
+                        <label class="permission-item ml-{{ 8 if entity else 4 }} flex items-center gap-3 rounded-md border border-transparent px-2 py-1.5 hover:border-slate-200 hover:bg-white dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                               data-key="{{ permission.key }}"
+                               data-description="{{ permission.description or '' }}"
+                               data-domain="{{ domain }}"
+                               data-entity="{{ entity or '' }}">
+                            <input type="checkbox" name="permission_ids" value="{{ permission_id }}"
+                                   {% if selected_permission_ids and permission_id in selected_permission_ids %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span class="flex-1 min-w-0">
+                                <span class="flex items-center gap-2">
+                                    <span class="font-medium text-slate-800 dark:text-slate-100">{{ action }}</span>
+                                    <code class="text-[10px] text-slate-400 dark:text-slate-500">{{ permission.key }}</code>
+                                </span>
+                                {% if permission.description %}
+                                <span class="block text-xs text-slate-500 dark:text-slate-400 truncate">{{ permission.description }}</span>
+                                {% endif %}
+                            </span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Select permissions to attach to this role. Use search to filter by domain, entity, or action.</p>
+            </div>
+            {% endif %}
+            <div class="flex items-center gap-2">
+                <input type="checkbox" name="is_active" id="is_active"
+                       {% if role is none or role.is_active %}checked{% endif %}
+                       class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                <label for="is_active" class="text-sm text-slate-700 dark:text-slate-300">Active</label>
+            </div>
+            <div class="flex flex-col gap-3 sm:flex-row sm:justify-end">
+                <a href="/admin/system/roles"
+                   class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    {{ submit_label }}
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {% if role and role.id %}
+    <div class="flex justify-end">
+        <form method="post" action="/admin/system/roles/{{ role.id }}/delete"
+              onsubmit="return confirm('Delete this role? This will disable it but keep history.');">
+            <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800/60 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-900/20">
+                Delete Role
+            </button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (() => {
+        const searchInput = document.getElementById("permission_search");
+        const list = document.getElementById("permission_list");
+        const selectedCountEl = document.getElementById("selected_count");
+        if (!searchInput || !list) return;
+
+        const items = Array.from(list.querySelectorAll(".permission-item"));
+        const domains = Array.from(list.querySelectorAll(".permission-domain"));
+        const entities = Array.from(list.querySelectorAll(".permission-entity"));
+        const selectAll = document.getElementById("permissions_select_all");
+        const selectNone = document.getElementById("permissions_select_none");
+        const domainToggles = Array.from(list.querySelectorAll(".permission-domain-toggle"));
+        const domainSelects = Array.from(list.querySelectorAll(".permission-domain-select"));
+        const entitySelects = Array.from(list.querySelectorAll(".permission-entity-select"));
+        const collapsedDomains = new Set();
+
+        const collapseAllDomains = () => {
+            domains.forEach(domain => {
+                const key = domain.dataset.domain;
+                if (!key) return;
+                collapsedDomains.add(key);
+                const toggle = domain.querySelector(".permission-domain-toggle svg");
+                toggle?.classList.add("-rotate-90");
+            });
+        };
+
+        const updateSelectedCount = () => {
+            const count = items.filter(item => item.querySelector("input[type='checkbox']")?.checked).length;
+            if (selectedCountEl) selectedCountEl.textContent = `${count} selected`;
+        };
+
+        const updateVisibility = () => {
+            const visibleDomains = new Set();
+            const visibleEntities = new Set();
+
+            items.forEach(item => {
+                const matches = item.dataset.match === "true";
+                const domain = item.dataset.domain;
+                const entity = item.dataset.entity;
+                const domainCollapsed = collapsedDomains.has(domain);
+
+                item.classList.toggle("hidden", !matches || domainCollapsed);
+
+                if (matches) {
+                    visibleDomains.add(domain);
+                    if (entity) visibleEntities.add(`${domain}:${entity}`);
+                }
+            });
+
+            domains.forEach(d => {
+                d.classList.toggle("hidden", !visibleDomains.has(d.dataset.domain));
+            });
+
+            entities.forEach(e => {
+                const key = `${e.dataset.domain}:${e.dataset.entity}`;
+                const domainCollapsed = collapsedDomains.has(e.dataset.domain);
+                e.classList.toggle("hidden", !visibleEntities.has(key) || domainCollapsed);
+            });
+        };
+
+        const filterItems = () => {
+            const query = searchInput.value.trim().toLowerCase();
+            items.forEach(item => {
+                const key = (item.dataset.key || "").toLowerCase();
+                const description = (item.dataset.description || "").toLowerCase();
+                const matches = !query || key.includes(query) || description.includes(query);
+                item.dataset.match = matches ? "true" : "false";
+            });
+            updateVisibility();
+        };
+
+        // Select visible
+        selectAll?.addEventListener("click", () => {
+            items.filter(item => !item.classList.contains("hidden")).forEach(item => {
+                const cb = item.querySelector("input[type='checkbox']");
+                if (cb) cb.checked = true;
+            });
+            updateSelectedCount();
+        });
+
+        // Clear all
+        selectNone?.addEventListener("click", () => {
+            items.forEach(item => {
+                const cb = item.querySelector("input[type='checkbox']");
+                if (cb) cb.checked = false;
+            });
+            updateSelectedCount();
+        });
+
+        // Domain toggle (collapse/expand)
+        domainToggles.forEach(toggle => {
+            toggle.addEventListener("click", (e) => {
+                e.preventDefault();
+                const domain = toggle.dataset.domain;
+                if (!domain) return;
+
+                if (collapsedDomains.has(domain)) {
+                    collapsedDomains.delete(domain);
+                    toggle.querySelector("svg")?.classList.remove("-rotate-90");
+                } else {
+                    collapsedDomains.add(domain);
+                    toggle.querySelector("svg")?.classList.add("-rotate-90");
+                }
+                updateVisibility();
+            });
+        });
+
+        // Domain select all
+        domainSelects.forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const domain = btn.dataset.domain;
+                if (!domain) return;
+
+                items.filter(item => item.dataset.domain === domain && item.dataset.match === "true")
+                    .forEach(item => {
+                        const cb = item.querySelector("input[type='checkbox']");
+                        if (cb) cb.checked = true;
+                    });
+                updateSelectedCount();
+            });
+        });
+
+        // Entity select all
+        entitySelects.forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.preventDefault();
+                const domain = btn.dataset.domain;
+                const entity = btn.dataset.entity;
+                if (!domain || !entity) return;
+
+                items.filter(item => item.dataset.domain === domain && item.dataset.entity === entity && item.dataset.match === "true")
+                    .forEach(item => {
+                        const cb = item.querySelector("input[type='checkbox']");
+                        if (cb) cb.checked = true;
+                    });
+                updateSelectedCount();
+            });
+        });
+
+        // Track checkbox changes
+        list.addEventListener("change", (e) => {
+            if (e.target.type === "checkbox") updateSelectedCount();
+        });
+
+        searchInput.addEventListener("input", filterItems);
+        collapseAllDomains();
+        filterItems();
+        updateSelectedCount();
+    })();
+</script>
+{% endblock %}

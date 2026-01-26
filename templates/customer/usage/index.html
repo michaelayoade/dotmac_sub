@@ -1,0 +1,239 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Usage - My Account{% endblock %}
+
+{% block head %}
+<!-- Chart.js for bandwidth charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/bandwidth-chart.js"></script>
+{% endblock %}
+
+{% block content %}
+{% set totals = namespace(amount=0) %}
+{% for record in usage_records %}
+    {% set totals.amount = totals.amount + (record.amount or record.usage_amount or 0) %}
+{% endfor %}
+
+<div class="space-y-6 stagger-children">
+    <!-- Page Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Usage</h1>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Monitor data usage and historical activity</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/portal/usage?period=current" class="rounded-xl border px-4 py-2 text-sm font-semibold transition-all duration-200
+                {% if period == 'current' or not period %}border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-900/30 dark:text-brand-300
+                {% else %}border-stone-300 bg-white text-stone-700 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300{% endif %}">
+                Current
+            </a>
+            <a href="/portal/usage?period=last" class="rounded-xl border px-4 py-2 text-sm font-semibold transition-all duration-200
+                {% if period == 'last' %}border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-900/30 dark:text-brand-300
+                {% else %}border-stone-300 bg-white text-stone-700 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300{% endif %}">
+                Last Period
+            </a>
+        </div>
+    </div>
+
+    <!-- Real-Time Bandwidth Chart -->
+    <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80"
+         x-data="BandwidthChart.bandwidthChart({ useMyEndpoints: true })"
+         x-init="init()"
+         x-on:destroy.window="destroy()">
+        <div class="flex items-center justify-between border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
+                <svg class="h-5 w-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Real-Time Bandwidth
+            </h2>
+            <div class="flex items-center gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-700">
+                <template x-for="range in timeRanges" :key="range.value">
+                    <button @click="setTimeRange(range.value)"
+                            :class="timeRange === range.value ? 'bg-white text-stone-900 shadow-sm dark:bg-stone-600 dark:text-white' : 'text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200'"
+                            class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+                            x-text="range.label">
+                    </button>
+                </template>
+            </div>
+        </div>
+        <div class="p-6">
+            <!-- Loading state -->
+            <div x-show="loading" class="flex items-center justify-center h-48">
+                <svg class="animate-spin h-8 w-8 text-brand-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+
+            <!-- Error state -->
+            <div x-show="error && !loading" class="flex flex-col items-center justify-center h-48 text-center">
+                <svg class="h-12 w-12 text-stone-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                <p class="text-sm text-stone-500 dark:text-stone-400">No bandwidth data available</p>
+            </div>
+
+            <!-- Chart -->
+            <div x-show="!loading && !error">
+                <div class="h-48 mb-4">
+                    <canvas x-ref="canvas"></canvas>
+                </div>
+
+                <!-- Current stats -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-stone-200/60 dark:border-stone-700/60">
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Download</p>
+                        <p class="mt-1 text-xl font-bold text-brand-600 dark:text-brand-400" x-text="currentRxFormatted"></p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Upload</p>
+                        <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400" x-text="currentTxFormatted"></p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Download</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakRxFormatted"></p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Upload</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakTxFormatted"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid gap-4 sm:grid-cols-3">
+        <!-- Total Usage -->
+        <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-100 text-brand-600 dark:bg-brand-900/30 dark:text-brand-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Total Usage</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(totals.amount) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Period -->
+        <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80">
+            <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Period</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ period | default('Current') | title }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Records Count -->
+        <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80">
+            <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Records</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ usage_records | length }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Usage Records Table -->
+    <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+        <div class="border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
+                <svg class="h-5 w-5 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                Usage Records
+            </h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-stone-200/60 dark:divide-stone-700/60">
+                <thead>
+                    <tr class="bg-stone-50/80 dark:bg-stone-800/50">
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Date</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Type</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Usage</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Notes</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
+                    {% if usage_records %}
+                    {% for record in usage_records %}
+                    <tr class="transition-colors duration-200 hover:bg-brand-50/50 dark:hover:bg-brand-900/10">
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-2">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                <span class="text-sm text-stone-600 dark:text-stone-300">{{ record.recorded_at.strftime('%b %d, %Y %H:%M') if record.recorded_at else 'N/A' }}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="inline-flex items-center rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-400">
+                                {{ record.usage_type | default('Data') }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="text-sm font-bold text-stone-900 dark:text-white">{{ "{:.2f}".format(record.amount or record.usage_amount or 0) }}</span>
+                            <span class="text-sm text-stone-500 dark:text-stone-400">{{ record.unit | default('GB') }}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="text-sm text-stone-500 dark:text-stone-400">{{ record.description | default('—') }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="px-6 py-16">
+                            <div class="flex flex-col items-center justify-center text-center">
+                                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-100 to-brand-50 dark:from-brand-900/30 dark:to-brand-800/20">
+                                    <svg class="h-8 w-8 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                                </div>
+                                <h3 class="text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">No usage data</h3>
+                                <p class="mt-1 max-w-sm text-sm text-stone-500 dark:text-stone-400">Usage records will show as data is collected.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+        {% if total_pages and total_pages > 1 %}
+        {% set period_param = '&period=' ~ period if period else '' %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-stone-200/60 px-6 py-4 dark:border-stone-700/60 sm:flex-row">
+            <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Page <span class="text-stone-900 dark:text-white">{{ page }}</span> of <span class="text-stone-900 dark:text-white">{{ total_pages }}</span></p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/portal/usage?page={{ page - 1 }}&per_page={{ per_page }}{{ period_param }}" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="/portal/usage?page={{ page + 1 }}&per_page={{ per_page }}{{ period_param }}" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+                    Next
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

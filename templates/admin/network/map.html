@@ -1,0 +1,1327 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Network Map - Admin{% endblock %}
+
+{% block head %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #network-map {
+        height: calc(100vh - 200px);
+        min-height: 600px;
+        border-radius: 0.75rem;
+    }
+    .leaflet-popup-content-wrapper {
+        border-radius: 0.5rem;
+    }
+    .dark .leaflet-popup-content-wrapper {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .dark .leaflet-popup-tip {
+        background: #1e293b;
+    }
+    .map-popup-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .map-popup-type {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.7;
+        margin-bottom: 0.25rem;
+    }
+    .map-popup-detail {
+        font-size: 0.875rem;
+        margin: 0.25rem 0;
+    }
+    .map-popup-link {
+        display: inline-block;
+        margin-top: 0.5rem;
+        font-size: 0.875rem;
+        color: #0891b2;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+    .legend-color {
+        width: 1.25rem;
+        height: 1.25rem;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .legend-line {
+        width: 1.25rem;
+        height: 3px;
+        border-radius: 2px;
+        flex-shrink: 0;
+    }
+    /* Asset detail sidebar */
+    .asset-detail-panel {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        padding: 16px;
+        min-width: 300px;
+        max-width: 350px;
+        z-index: 1000;
+        max-height: calc(100% - 20px);
+        overflow-y: auto;
+    }
+    .dark .asset-detail-panel {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .asset-detail-panel.hidden {
+        display: none;
+    }
+    .asset-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+    .asset-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .asset-title {
+        font-weight: 600;
+        font-size: 1.1rem;
+    }
+    .asset-type {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        opacity: 0.7;
+    }
+    .asset-detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .dark .asset-detail-row {
+        border-bottom-color: #334155;
+    }
+    .asset-detail-row:last-child {
+        border-bottom: none;
+    }
+    .asset-detail-label {
+        color: #64748b;
+        font-size: 0.875rem;
+    }
+    .dark .asset-detail-label {
+        color: #94a3b8;
+    }
+    .asset-detail-value {
+        font-weight: 500;
+        font-size: 0.875rem;
+    }
+    /* Cluster styles */
+    .marker-cluster {
+        background-clip: padding-box;
+        border-radius: 50%;
+    }
+    .marker-cluster div {
+        width: 30px;
+        height: 30px;
+        margin-left: 5px;
+        margin-top: 5px;
+        text-align: center;
+        border-radius: 50%;
+        font: 12px "Inter", sans-serif;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+    }
+    .marker-cluster-customer {
+        background: rgba(34, 197, 94, 0.4);
+    }
+    .marker-cluster-customer div {
+        background: #22c55e;
+    }
+    /* Search box */
+    .map-search {
+        position: absolute;
+        top: 10px;
+        left: 60px;
+        z-index: 1000;
+    }
+    .map-search-container {
+        position: relative;
+    }
+    .map-search input {
+        width: 320px;
+        padding: 10px 36px 10px 12px;
+        border: none;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        font-size: 14px;
+    }
+    .dark .map-search input {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .map-search-clear {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        color: #94a3b8;
+        display: none;
+    }
+    .map-search-clear:hover {
+        color: #64748b;
+    }
+    .map-search-clear.visible {
+        display: block;
+    }
+    .search-results {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 4px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        max-height: 400px;
+        overflow-y: auto;
+        display: none;
+    }
+    .search-results.visible {
+        display: block;
+    }
+    .dark .search-results {
+        background: #1e293b;
+    }
+    .search-result-item {
+        padding: 10px 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .dark .search-result-item {
+        border-bottom-color: #334155;
+    }
+    .search-result-item:last-child {
+        border-bottom: none;
+    }
+    .search-result-item:hover,
+    .search-result-item.selected {
+        background: #f1f5f9;
+    }
+    .dark .search-result-item:hover,
+    .dark .search-result-item.selected {
+        background: #334155;
+    }
+    .search-result-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .search-result-content {
+        flex: 1;
+        min-width: 0;
+    }
+    .search-result-name {
+        font-weight: 500;
+        font-size: 14px;
+        color: #1e293b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dark .search-result-name {
+        color: #f1f5f9;
+    }
+    .search-result-meta {
+        font-size: 12px;
+        color: #64748b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dark .search-result-meta {
+        color: #94a3b8;
+    }
+    .search-result-type {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #94a3b8;
+        flex-shrink: 0;
+    }
+    .search-no-results {
+        padding: 16px 12px;
+        text-align: center;
+        color: #64748b;
+        font-size: 14px;
+    }
+    .dark .search-no-results {
+        color: #94a3b8;
+    }
+    .search-result-count {
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #64748b;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .dark .search-result-count {
+        color: #94a3b8;
+        background: #0f172a;
+        border-bottom-color: #334155;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network" class="hover:text-primary-600">Network</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Network Map</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Network Map</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Comprehensive view of network infrastructure and customers</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button id="btn-refresh" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh
+            </button>
+            <button id="btn-fit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                Fit All
+            </button>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        <!-- Map -->
+        <div class="lg:col-span-4">
+            <div class="relative rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+                <div id="network-map"></div>
+                <!-- Search box -->
+                <div class="map-search">
+                    <div class="map-search-container">
+                        <input type="text" id="map-search-input" placeholder="Search by name, code, or address..." class="dark:bg-slate-800 dark:text-white" autocomplete="off">
+                        <button id="map-search-clear" class="map-search-clear" type="button">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                        <div id="search-results" class="search-results"></div>
+                    </div>
+                </div>
+                <!-- Asset detail panel -->
+                <div id="asset-detail-panel" class="asset-detail-panel hidden">
+                    <button id="close-panel" class="absolute top-2 right-2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700">
+                        <svg class="h-5 w-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                    <div id="asset-detail-content"></div>
+                </div>
+                <!-- Elevation panel -->
+                <div id="elevation-panel" class="asset-detail-panel hidden" style="top:auto;bottom:10px;min-width:220px;">
+                    <button id="close-elevation-panel" class="absolute top-2 right-2 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700">
+                        <svg class="h-5 w-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                    <div class="flex items-center gap-2 mb-2">
+                        <svg class="h-5 w-5 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+                        <span class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Elevation Lookup</span>
+                    </div>
+                    <div class="text-3xl font-bold text-slate-900 dark:text-white" id="elevation-value">-</div>
+                    <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        <div id="elevation-coords">-</div>
+                        <div class="mt-1"><span class="text-slate-400">Tile:</span> <span id="elevation-tile">-</span></div>
+                        <div><span class="text-slate-400">Source:</span> <span id="elevation-source">SRTM 30m</span></div>
+                    </div>
+                    <div class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                        <a id="start-survey-link" href="#" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                            Start Site Survey
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Stats -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Network Stats</h2>
+                </div>
+                <div class="p-4 space-y-3 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">POP Sites</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.pop_sites }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">FDH Cabinets</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.fdh_cabinets }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Splice Closures</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.splice_closures }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Access Points</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.access_points }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Fiber Segments</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.fiber_segments }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Survey Points</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.survey_points }}</span>
+                    </div>
+                    <hr class="border-slate-200 dark:border-slate-700">
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Customers</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.customers }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-green-600 dark:text-green-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span>Online</span>
+                        <span class="font-medium text-green-600 dark:text-green-400">{{ stats.customers_online }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>Offline</span>
+                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.customers_offline }}</span>
+                    </div>
+                    {% if customer_map_count is defined and customer_count is defined and customer_map_count < customer_count %}
+                    <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        Showing {{ customer_map_count }} of {{ customer_count }} customers on the map.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Legend</h2>
+                </div>
+                <div class="p-4 space-y-2">
+                    <div class="legend-item">
+                        <div class="legend-color bg-purple-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">POP Site</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-orange-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">FDH Cabinet</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-teal-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Splice Closure</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-violet-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Access Point</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-fuchsia-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Survey Point</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-green-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Customer (Online)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-red-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Customer (Offline)</span>
+                    </div>
+                    <hr class="border-slate-200 dark:border-slate-700 my-2">
+                    <div class="legend-item">
+                        <div class="legend-line bg-red-500"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Feeder Cable</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line bg-blue-500"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Distribution Cable</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line bg-green-500" style="height:2px"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Drop Cable</span>
+                    </div>
+                    <hr class="border-slate-200 dark:border-slate-700 my-2">
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:0;border-top:2px dashed #64748b"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">8-core Fiber</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:0;border-top:2px dotted #64748b"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">12-core Fiber</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line" style="height:4px;background:#64748b"></div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">48-core Fiber</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Layer Controls -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Layers</h2>
+                </div>
+                <div class="p-4 space-y-3">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-pop" checked class="h-4 w-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">POP Sites</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-fdh" checked class="h-4 w-4 rounded border-slate-300 text-orange-600 focus:ring-orange-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">FDH Cabinets</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-closures" checked class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Splice Closures</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-access-points" checked class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Access Points</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-surveys" checked class="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Survey Points</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-customers" checked class="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Customers</span>
+                    </label>
+                    <hr class="border-slate-200 dark:border-slate-700">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-feeder" checked class="h-4 w-4 rounded border-slate-300 text-red-600 focus:ring-red-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Feeder Cables</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-distribution" checked class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Distribution Cables</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-drop" checked class="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Drop Cables</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Wireless Planning -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Wireless Planning</h2>
+                </div>
+                <div class="p-4 space-y-2 text-sm text-slate-500 dark:text-slate-400">
+                    <p>Select a POP site or customer to start a site survey, or right-click the map for a custom point.</p>
+                    <p>Add a mast from a POP site detail panel.</p>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Actions</h2>
+                </div>
+                <div class="p-4 space-y-2">
+                    <a href="/admin/network/site-survey" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                        Wireless Site Surveys (select on map)
+                    </a>
+                    <a href="/admin/network/fiber-map" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                        Edit Fiber Map
+                    </a>
+                    <a href="/admin/network/pop-sites" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                        Manage POP Sites
+                    </a>
+                    <a href="/admin/subscribers" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                        Manage Subscribers
+                    </a>
+                </div>
+            </div>
+            <!-- Elevation Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Elevation Lookup</h2>
+                </div>
+                <div class="p-4 text-sm text-slate-500 dark:text-slate-400">
+                    <p class="mb-2"><strong>Right-click</strong> or <strong>Shift+click</strong> on the map to look up terrain elevation at any point.</p>
+                    <p class="text-xs">Uses SRTM 30m elevation data.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    // Map data from server
+    const mapData = {{ map_data | tojson | safe }};
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Initialize map
+    const map = L.map('network-map').setView([0, 0], 2);
+
+    // Add tile layer
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19
+    }).addTo(map);
+
+    // Layer groups
+    const layers = {
+        pop: L.layerGroup().addTo(map),
+        fdh: L.layerGroup().addTo(map),
+        closures: L.layerGroup().addTo(map),
+        accessPoints: L.layerGroup().addTo(map),
+        surveys: L.layerGroup().addTo(map),
+        customers: L.layerGroup().addTo(map),
+        feeder: L.layerGroup().addTo(map),
+        distribution: L.layerGroup().addTo(map),
+        drop: L.layerGroup().addTo(map)
+    };
+
+    // Custom icons
+    const icons = {
+        pop_site: L.divIcon({
+            html: '<div style="background:#8b5cf6;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"><svg style="width:16px;height:16px;color:white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg></div>',
+            className: '',
+            iconSize: [28, 28],
+            iconAnchor: [14, 14],
+            popupAnchor: [0, -14]
+        }),
+        fdh_cabinet: L.divIcon({
+            html: '<div style="background:#f97316;width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            className: '',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+            popupAnchor: [0, -12]
+        }),
+        splice_closure: L.divIcon({
+            html: '<div style="background:#14b8a6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        access_point: L.divIcon({
+            html: '<div style="background:#8b5cf6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        survey_point: L.divIcon({
+            html: '<div style="background:#d946ef;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        customer_online: L.divIcon({
+            html: '<div style="background:#22c55e;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+            popupAnchor: [0, -9]
+        }),
+        customer_offline: L.divIcon({
+            html: '<div style="background:#ef4444;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9],
+            popupAnchor: [0, -9]
+        })
+    };
+
+    // Segment styles
+    const segmentStyles = {
+        feeder: { color: '#ef4444', weight: 4, opacity: 0.9 },
+        distribution: { color: '#3b82f6', weight: 3, opacity: 0.8 },
+        drop: { color: '#22c55e', weight: 2, opacity: 0.7 }
+    };
+
+    const coreStyles = {
+        8: { dashArray: '6,6', weightDelta: -1 },
+        12: { dashArray: '3,6', weightDelta: 0 },
+        48: { dashArray: null, weightDelta: 1 }
+    };
+
+    function buildSegmentStyle(segmentType, fiberCount) {
+        const base = segmentStyles[segmentType] || segmentStyles.distribution;
+        const core = coreStyles[Number(fiberCount)];
+        if (!core) return { ...base };
+        return {
+            ...base,
+            weight: Math.max(1, base.weight + core.weightDelta),
+            dashArray: core.dashArray || undefined
+        };
+    }
+
+    // Store all features for search
+    const allFeatures = [];
+    const bounds = [];
+
+    // Show asset detail panel
+    function copyToClipboard(text) {
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+            return;
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+    }
+
+    function showAssetDetail(feature) {
+        const p = feature.properties;
+        const panel = document.getElementById('asset-detail-panel');
+        const content = document.getElementById('asset-detail-content');
+
+        let iconBg = '#64748b';
+        let iconSvg = '';
+        let typeLabel = p.type.replace(/_/g, ' ');
+        let detailUrl = null;
+        let editUrl = null;
+
+        switch (p.type) {
+            case 'pop_site':
+                iconBg = '#8b5cf6';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>';
+                typeLabel = 'POP Site';
+                detailUrl = `/admin/network/pop-sites/${p.id}`;
+                editUrl = `/admin/network/pop-sites/${p.id}/edit`;
+                break;
+            case 'fdh_cabinet':
+                iconBg = '#f97316';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>';
+                typeLabel = 'FDH Cabinet';
+                detailUrl = `/admin/network/fdh-cabinets/${p.id}`;
+                editUrl = `/admin/network/fdh-cabinets/${p.id}/edit`;
+                break;
+            case 'splice_closure':
+                iconBg = '#14b8a6';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/></svg>';
+                typeLabel = 'Splice Closure';
+                detailUrl = `/admin/network/splice-closures/${p.id}`;
+                editUrl = `/admin/network/splice-closures/${p.id}/edit`;
+                break;
+            case 'access_point':
+                iconBg = '#8b5cf6';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
+                typeLabel = 'Access Point';
+                break;
+            case 'customer':
+                iconBg = p.is_online ? '#22c55e' : '#ef4444';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
+                if (p.source_type === 'service_building') {
+                    typeLabel = 'Customer (Service Building)';
+                } else if (p.source_type === 'wireless_mast') {
+                    typeLabel = 'Customer (Wireless Mast)';
+                } else {
+                    typeLabel = p.is_online ? 'Customer (Online)' : 'Customer (Offline)';
+                }
+                if (p.subscriber_id) {
+                    detailUrl = `/admin/subscribers/${p.subscriber_id}`;
+                }
+                break;
+            case 'survey_point':
+                iconBg = '#d946ef';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg>';
+                typeLabel = 'Survey Point';
+                detailUrl = p.survey_id ? `/admin/network/site-survey/${p.survey_id}` : null;
+                editUrl = p.survey_id ? `/admin/network/site-survey/${p.survey_id}/edit` : null;
+                break;
+            case 'fiber_segment':
+                const segColors = { feeder: '#ef4444', distribution: '#3b82f6', drop: '#22c55e' };
+                iconBg = segColors[p.segment_type] || '#3b82f6';
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>';
+                typeLabel = `${(p.segment_type || 'distribution').replace(/_/g, ' ')} Cable`.replace(/\b\w/g, l => l.toUpperCase());
+                break;
+        }
+
+        const safeTypeLabel = escapeHtml(typeLabel);
+        let html = `
+            <div class="asset-header">
+                <div class="asset-icon" style="background:${iconBg}">${iconSvg}</div>
+                <div>
+                    <div class="asset-type">${safeTypeLabel}</div>
+                    <div class="asset-title">${escapeHtml(p.name || 'Unnamed')}</div>
+                </div>
+            </div>
+            <div class="space-y-1">
+        `;
+
+        if (p.code) html += `<div class="asset-detail-row"><span class="asset-detail-label">Code</span><span class="asset-detail-value">${escapeHtml(p.code)}</span></div>`;
+        if (p.address) html += `<div class="asset-detail-row"><span class="asset-detail-label">Address</span><span class="asset-detail-value">${escapeHtml(p.address)}</span></div>`;
+        if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
+        if (p.status) html += `<div class="asset-detail-row"><span class="asset-detail-label">Status</span><span class="asset-detail-value">${escapeHtml(p.status)}</span></div>`;
+        if (p.splitter_count !== undefined) html += `<div class="asset-detail-row"><span class="asset-detail-label">Splitters</span><span class="asset-detail-value">${p.splitter_count}</span></div>`;
+        if (p.device_count !== undefined) html += `<div class="asset-detail-row"><span class="asset-detail-label">Devices</span><span class="asset-detail-value">${p.device_count}</span></div>`;
+
+        if (p.height_m !== undefined && p.height_m !== null) html += `<div class="asset-detail-row"><span class="asset-detail-label">Height</span><span class="asset-detail-value">${Number(p.height_m).toFixed(1)} m</span></div>`;
+        if (p.structure_type) html += `<div class="asset-detail-row"><span class="asset-detail-label">Structure</span><span class="asset-detail-value">${escapeHtml(p.structure_type)}</span></div>`;
+        if (p.owner) html += `<div class="asset-detail-row"><span class="asset-detail-label">Owner</span><span class="asset-detail-value">${escapeHtml(p.owner)}</span></div>`;
+        if (p.source_type) html += `<div class="asset-detail-row"><span class="asset-detail-label">Source</span><span class="asset-detail-value">${escapeHtml(p.source_type.replace(/_/g, ' '))}</span></div>`;
+        if (p.survey_name) html += `<div class="asset-detail-row"><span class="asset-detail-label">Survey</span><span class="asset-detail-value">${escapeHtml(p.survey_name)}</span></div>`;
+        if (p.ground_elevation_m !== undefined && p.ground_elevation_m !== null) html += `<div class="asset-detail-row"><span class="asset-detail-label">Ground Elev.</span><span class="asset-detail-value">${Number(p.ground_elevation_m).toFixed(1)} m</span></div>`;
+        if (p.total_height_m !== undefined && p.total_height_m !== null) html += `<div class="asset-detail-row"><span class="asset-detail-label">Total Height</span><span class="asset-detail-value">${Number(p.total_height_m).toFixed(1)} m</span></div>`;
+        if (p.cable_type) html += `<div class="asset-detail-row"><span class="asset-detail-label">Cable Type</span><span class="asset-detail-value">${escapeHtml(p.cable_type).replace(/_/g, ' ')}</span></div>`;
+        if (p.fiber_count) html += `<div class="asset-detail-row"><span class="asset-detail-label">Fiber Count</span><span class="asset-detail-value">${p.fiber_count} cores</span></div>`;
+        if (p.length_m) html += `<div class="asset-detail-row"><span class="asset-detail-label">Length</span><span class="asset-detail-value">${p.length_m >= 1000 ? (p.length_m/1000).toFixed(2) + ' km' : p.length_m.toFixed(0) + ' m'}</span></div>`;
+
+        // Coordinates
+        let coordText = null;
+        if (feature.geometry && feature.geometry.coordinates) {
+            const coords = feature.geometry.coordinates;
+            coordText = `${coords[1].toFixed(5)}, ${coords[0].toFixed(5)}`;
+            html += `<div class="asset-detail-row"><span class="asset-detail-label">Coordinates</span><span class="asset-detail-value" style="font-family:monospace;font-size:11px">${coordText}</span></div>`;
+        }
+
+        html += '</div>';
+
+        const actions = [];
+        if (p.type === 'pop_site' || p.type === 'customer') {
+            const coords = feature.geometry?.coordinates;
+            if (coords && coords.length === 2) {
+                const lat = coords[1].toFixed(6);
+                const lon = coords[0].toFixed(6);
+                let surveyUrl = `/admin/network/site-survey/new?lat=${lat}&lon=${lon}`;
+                if (p.type === 'customer' && p.subscriber_id) {
+                    surveyUrl += `&subscriber_id=${encodeURIComponent(p.subscriber_id)}`;
+                }
+                actions.push(`<a href="${surveyUrl}" class="mt-3 block text-center text-sm font-medium text-primary-600 hover:text-primary-700">Start Site Survey</a>`);
+            }
+        }
+        if (actions.length) {
+            html += actions.join('');
+        }
+
+        if (detailUrl || editUrl || coordText) {
+            html += '<div class="mt-4 flex flex-wrap items-center gap-2">';
+            if (detailUrl) {
+                html += `<a href="${detailUrl}" class="inline-flex items-center justify-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300">View</a>`;
+            }
+            if (editUrl) {
+                html += `<a href="${editUrl}" class="inline-flex items-center justify-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300">Edit</a>`;
+            }
+            if (coordText) {
+                html += `<button type="button" data-copy-coords="${coordText}" class="inline-flex items-center justify-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300">Copy coords</button>`;
+            }
+            html += '</div>';
+        }
+
+        content.innerHTML = html;
+        panel.classList.remove('hidden');
+
+        const copyBtn = content.querySelector('[data-copy-coords]');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => copyToClipboard(copyBtn.getAttribute('data-copy-coords')));
+        }
+
+    }
+
+    // Process features
+    if (mapData.features) {
+        mapData.features.forEach(feature => {
+            const p = feature.properties;
+            const geom = feature.geometry;
+
+            if (geom.type === 'Point') {
+                const coords = [geom.coordinates[1], geom.coordinates[0]];
+                bounds.push(coords);
+
+                let icon;
+                if (p.type === 'customer') {
+                    icon = p.is_online ? icons.customer_online : icons.customer_offline;
+                } else {
+                    icon = icons[p.type] || icons.customer_online;
+                }
+                const marker = L.marker(coords, { icon: icon });
+
+                marker.on('click', () => showAssetDetail(feature));
+                marker.featureData = feature;
+
+                // Build searchable text from multiple fields
+                const searchText = [
+                    p.name || '',
+                    p.code || '',
+                    p.address || '',
+                    p.city || '',
+                    p.clli || '',
+                    p.street || ''
+                ].filter(Boolean).join(' ').toLowerCase();
+
+                allFeatures.push({
+                    feature,
+                    marker,
+                    polyline: null,
+                    name: p.name || '',
+                    code: p.code || '',
+                    address: p.address || p.street || '',
+                    city: p.city || '',
+                    type: p.type,
+                    searchText
+                });
+
+                switch (p.type) {
+                    case 'pop_site': layers.pop.addLayer(marker); break;
+                    case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
+                    case 'splice_closure': layers.closures.addLayer(marker); break;
+                    case 'access_point': layers.accessPoints.addLayer(marker); break;
+                    case 'survey_point': layers.surveys.addLayer(marker); break;
+                    case 'customer': layers.customers.addLayer(marker); break;
+                }
+            } else if (geom.type === 'LineString') {
+                const coords = geom.coordinates.map(c => [c[1], c[0]]);
+                bounds.push(...coords);
+
+                const segType = p.segment_type || 'distribution';
+                const style = buildSegmentStyle(segType, p.fiber_count);
+
+                const polyline = L.polyline(coords, style);
+                polyline.on('click', () => showAssetDetail(feature));
+
+                // Add fiber segments to searchable list
+                const searchText = [p.name || '', p.segment_type || ''].filter(Boolean).join(' ').toLowerCase();
+                allFeatures.push({
+                    feature,
+                    marker: null,
+                    polyline,
+                    name: p.name || '',
+                    code: '',
+                    address: '',
+                    city: '',
+                    type: 'fiber_segment',
+                    searchText
+                });
+
+                switch (segType) {
+                    case 'feeder': layers.feeder.addLayer(polyline); break;
+                    case 'drop': layers.drop.addLayer(polyline); break;
+                    default: layers.distribution.addLayer(polyline); break;
+                }
+            }
+        });
+    }
+
+    // Fit bounds
+    function fitAllBounds() {
+        if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [50, 50] });
+        }
+    }
+    fitAllBounds();
+
+    // Layer toggles
+    const layerToggles = {
+        'layer-pop': 'pop',
+        'layer-fdh': 'fdh',
+        'layer-closures': 'closures',
+        'layer-access-points': 'accessPoints',
+        'layer-surveys': 'surveys',
+        'layer-customers': 'customers',
+        'layer-feeder': 'feeder',
+        'layer-distribution': 'distribution',
+        'layer-drop': 'drop'
+    };
+
+    Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
+        const checkbox = document.getElementById(checkboxId);
+        if (checkbox) {
+            checkbox.addEventListener('change', function() {
+                if (this.checked) map.addLayer(layers[layerName]);
+                else map.removeLayer(layers[layerName]);
+            });
+        }
+    });
+
+    // Close panel
+    document.getElementById('close-panel').addEventListener('click', () => {
+        document.getElementById('asset-detail-panel').classList.add('hidden');
+    });
+
+    // Refresh
+    document.getElementById('btn-refresh').addEventListener('click', () => window.location.reload());
+
+    // Fit all
+    document.getElementById('btn-fit').addEventListener('click', fitAllBounds);
+
+    // Enhanced Search with dropdown
+    const searchInput = document.getElementById('map-search-input');
+    const searchResults = document.getElementById('search-results');
+    const searchClear = document.getElementById('map-search-clear');
+    let selectedIndex = -1;
+    let currentMatches = [];
+
+    // Type labels and colors
+    const typeConfig = {
+        pop_site: { label: 'POP Site', color: '#8b5cf6' },
+        fdh_cabinet: { label: 'FDH Cabinet', color: '#f97316' },
+        splice_closure: { label: 'Splice Closure', color: '#14b8a6' },
+        access_point: { label: 'Access Point', color: '#8b5cf6' },
+        survey_point: { label: 'Survey', color: '#d946ef' },
+        customer: { label: 'Customer', color: '#22c55e' },
+        fiber_segment: { label: 'Fiber', color: '#3b82f6' },
+        coordinate: { label: 'Coordinates', color: '#0f766e' }
+    };
+
+    let coordMarker = null;
+
+    function escapeHtml(str) {
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function parseLatLng(input) {
+        const match = String(input).trim().match(/^(-?\d+(?:\.\d+)?)\s*(?:,|;|\s+)\s*(-?\d+(?:\.\d+)?)$/);
+        if (!match) return null;
+        const lat = Number(match[1]);
+        const lng = Number(match[2]);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+        return { lat, lng };
+    }
+
+    function clearCoordMarker() {
+        if (coordMarker) {
+            map.removeLayer(coordMarker);
+            coordMarker = null;
+        }
+    }
+
+    function goToCoordinates(lat, lng) {
+        clearCoordMarker();
+        const latlng = L.latLng(lat, lng);
+        coordMarker = L.marker(latlng).addTo(map);
+        coordMarker.bindPopup(`Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}`).openPopup();
+        map.setView(latlng, 17);
+    }
+
+    function showSearchResults(matches, query) {
+        currentMatches = matches;
+        selectedIndex = -1;
+
+        if (matches.length === 0) {
+            searchResults.innerHTML = '<div class="search-no-results">No results found for "' + escapeHtml(query) + '"</div>';
+            searchResults.classList.add('visible');
+            return;
+        }
+
+        const maxResults = 15;
+        const displayMatches = matches.slice(0, maxResults);
+        const countHtml = matches.length > maxResults
+            ? `<div class="search-result-count">Showing ${maxResults} of ${matches.length} results</div>`
+            : `<div class="search-result-count">${matches.length} result${matches.length > 1 ? 's' : ''}</div>`;
+
+        let html = countHtml;
+        displayMatches.forEach((match, idx) => {
+            const config = typeConfig[match.type] || { label: match.type, color: '#64748b' };
+            const meta = [match.code, match.address, match.city].filter(Boolean).join(' · ');
+
+            html += `
+                <div class="search-result-item" data-index="${idx}">
+                    <div class="search-result-icon" style="background:${config.color}">
+                        <svg class="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <circle cx="10" cy="10" r="6"/>
+                        </svg>
+                    </div>
+                    <div class="search-result-content">
+                        <div class="search-result-name">${escapeHtml(match.name || 'Unnamed')}</div>
+                        ${meta ? `<div class="search-result-meta">${escapeHtml(meta)}</div>` : ''}
+                    </div>
+                    <span class="search-result-type">${config.label}</span>
+                </div>
+            `;
+        });
+
+        searchResults.innerHTML = html;
+        searchResults.classList.add('visible');
+
+        // Add click handlers
+        searchResults.querySelectorAll('.search-result-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const idx = parseInt(item.dataset.index);
+                selectResult(idx);
+            });
+        });
+    }
+
+    function selectResult(idx) {
+        if (idx < 0 || idx >= currentMatches.length) return;
+
+        const match = currentMatches[idx];
+        if (match.coords) {
+            goToCoordinates(match.coords.lat, match.coords.lng);
+        } else if (match.marker) {
+            clearCoordMarker();
+            const latlng = match.marker.getLatLng();
+            map.setView(latlng, 17);
+            showAssetDetail(match.feature);
+        } else if (match.polyline) {
+            clearCoordMarker();
+            map.fitBounds(match.polyline.getBounds(), { padding: [50, 50] });
+            showAssetDetail(match.feature);
+        }
+
+        hideSearchResults();
+        searchInput.value = match.name || '';
+        updateClearButton();
+    }
+
+    function hideSearchResults() {
+        searchResults.classList.remove('visible');
+        selectedIndex = -1;
+    }
+
+    function updateSelectedItem() {
+        const items = searchResults.querySelectorAll('.search-result-item');
+        items.forEach((item, idx) => {
+            item.classList.toggle('selected', idx === selectedIndex);
+        });
+        // Scroll selected into view
+        if (selectedIndex >= 0 && items[selectedIndex]) {
+            items[selectedIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function updateClearButton() {
+        searchClear.classList.toggle('visible', searchInput.value.length > 0);
+    }
+
+    // Search input handler with debounce
+    let searchTimeout;
+    searchInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        updateClearButton();
+        const rawValue = this.value.trim();
+        const query = rawValue.toLowerCase();
+        const coords = parseLatLng(rawValue);
+
+        if (coords) {
+            const coordMatch = {
+                type: 'coordinate',
+                name: `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`,
+                coords
+            };
+            showSearchResults([coordMatch], query);
+            return;
+        }
+
+        if (query.length < 2) {
+            hideSearchResults();
+            return;
+        }
+
+        searchTimeout = setTimeout(() => {
+            const matches = allFeatures.filter(f => f.searchText.includes(query));
+            showSearchResults(matches, query);
+        }, 150);
+    });
+
+    // Keyboard navigation
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            const coords = parseLatLng(this.value);
+            if (coords && !searchResults.classList.contains('visible')) {
+                e.preventDefault();
+                goToCoordinates(coords.lat, coords.lng);
+                hideSearchResults();
+                searchInput.value = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+                updateClearButton();
+                return;
+            }
+        }
+
+        if (!searchResults.classList.contains('visible')) return;
+
+        const maxIdx = Math.min(currentMatches.length - 1, 14);
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedIndex = Math.min(selectedIndex + 1, maxIdx);
+            updateSelectedItem();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedIndex = Math.max(selectedIndex - 1, 0);
+            updateSelectedItem();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selectedIndex >= 0) {
+                selectResult(selectedIndex);
+            } else if (currentMatches.length > 0) {
+                selectResult(0);
+            }
+        } else if (e.key === 'Escape') {
+            hideSearchResults();
+            searchInput.blur();
+        }
+    });
+
+    // Clear button
+    searchClear.addEventListener('click', function() {
+        searchInput.value = '';
+        clearCoordMarker();
+        hideSearchResults();
+        updateClearButton();
+        searchInput.focus();
+    });
+
+    // Close results when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.map-search-container')) {
+            hideSearchResults();
+        }
+    });
+
+    // Focus search with Ctrl+K or Cmd+K
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+        }
+    });
+
+    // ESC to close panel
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            document.getElementById('asset-detail-panel').classList.add('hidden');
+            document.getElementById('elevation-panel').classList.add('hidden');
+        }
+    });
+
+    // Close elevation panel
+    document.getElementById('close-elevation-panel').addEventListener('click', () => {
+        document.getElementById('elevation-panel').classList.add('hidden');
+    });
+
+    // Elevation lookup on right-click
+    map.on('contextmenu', async function(e) {
+        const { lat, lng } = e.latlng;
+        const panel = document.getElementById('elevation-panel');
+        const valueEl = document.getElementById('elevation-value');
+        const coordsEl = document.getElementById('elevation-coords');
+        const tileEl = document.getElementById('elevation-tile');
+        const linkEl = document.getElementById('start-survey-link');
+
+        valueEl.textContent = 'Loading...';
+        coordsEl.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        panel.classList.remove('hidden');
+
+        try {
+            const response = await fetch(`/api/gis/elevation?latitude=${lat}&longitude=${lng}`);
+            const data = await response.json();
+            if (data.available && data.elevation_m !== null) {
+                valueEl.textContent = data.elevation_m + ' m';
+            } else if (data.available && data.void) {
+                valueEl.textContent = 'Void (water/missing)';
+            } else {
+                valueEl.textContent = 'No data available';
+            }
+            tileEl.textContent = data.tile || '-';
+            linkEl.href = `/admin/network/site-survey/new?lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}`;
+        } catch (err) {
+            valueEl.textContent = 'Error';
+            console.error('Elevation lookup error:', err);
+        }
+    });
+
+    // Also show elevation on shift+click
+    map.on('click', async function(e) {
+        if (!e.originalEvent.shiftKey) return;
+        const { lat, lng } = e.latlng;
+        const panel = document.getElementById('elevation-panel');
+        const valueEl = document.getElementById('elevation-value');
+        const coordsEl = document.getElementById('elevation-coords');
+        const tileEl = document.getElementById('elevation-tile');
+        const linkEl = document.getElementById('start-survey-link');
+
+        valueEl.textContent = 'Loading...';
+        coordsEl.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        panel.classList.remove('hidden');
+
+        try {
+            const response = await fetch(`/api/gis/elevation?latitude=${lat}&longitude=${lng}`);
+            const data = await response.json();
+            if (data.available && data.elevation_m !== null) {
+                valueEl.textContent = data.elevation_m + ' m';
+            } else if (data.available && data.void) {
+                valueEl.textContent = 'Void (water/missing)';
+            } else {
+                valueEl.textContent = 'No data available';
+            }
+            tileEl.textContent = data.tile || '-';
+            linkEl.href = `/admin/network/site-survey/new?lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}`;
+        } catch (err) {
+            valueEl.textContent = 'Error';
+            console.error('Elevation lookup error:', err);
+        }
+    });
+})();
+</script>
+{% endblock %}

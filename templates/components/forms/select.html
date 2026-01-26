@@ -1,0 +1,58 @@
+{#
+   Select Component
+   Usage: {% include "components/forms/select.html" %}
+
+   Parameters:
+   - name: Field name (required)
+   - label: Field label
+   - options: List of {value, label} dicts or simple list
+   - value: Selected value
+   - placeholder: Placeholder option text
+   - required: Boolean
+   - disabled: Boolean
+   - error: Error message
+   - help_text: Help text
+#}
+<div class="mb-4 {{ class }}">
+    {% if label %}
+    <label for="{{ name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+        {{ label }}
+        {% if required %}<span class="text-red-500 ml-0.5">*</span>{% endif %}
+    </label>
+    {% endif %}
+
+    <div class="relative">
+        <select name="{{ name }}"
+                id="{{ name }}"
+                {% if required %}required{% endif %}
+                {% if disabled %}disabled{% endif %}
+                class="block w-full appearance-none rounded-lg border px-3 py-2.5 pr-10 text-sm shadow-sm transition-colors
+                       {{ 'border-red-500 focus:border-red-500 focus:ring-red-500/20' if error else 'border-slate-300 dark:border-slate-600 focus:border-primary-500 focus:ring-primary-500/20' }}
+                       bg-white dark:bg-slate-800
+                       text-slate-900 dark:text-slate-100
+                       focus:outline-none focus:ring-2
+                       disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed dark:disabled:bg-slate-700">
+            {% if placeholder %}
+            <option value="" disabled {{ 'selected' if not value else '' }}>{{ placeholder }}</option>
+            {% endif %}
+            {% for option in options %}
+                {% if option is mapping %}
+                <option value="{{ option.value }}" {{ 'selected' if option.value == value else '' }}>{{ option.label }}</option>
+                {% else %}
+                <option value="{{ option }}" {{ 'selected' if option == value else '' }}>{{ option }}</option>
+                {% endif %}
+            {% endfor %}
+        </select>
+        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+            <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </div>
+    </div>
+
+    {% if error %}
+    <p class="mt-1.5 text-sm text-red-500">{{ error }}</p>
+    {% elif help_text %}
+    <p class="mt-1.5 text-sm text-slate-500 dark:text-slate-400">{{ help_text }}</p>
+    {% endif %}
+</div>

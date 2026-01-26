@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="min-h-screen flex flex-col">
+    <!-- Reseller Navigation -->
+    <header x-data="{ mobileOpen: false }" class="sticky top-0 z-40 border-b border-stone-200/60 bg-white/80 backdrop-blur-xl supports-[backdrop-filter]:bg-white/60 dark:border-stone-700/60 dark:bg-stone-900/80">
+        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <!-- Logo -->
+                <a href="/reseller/dashboard" class="group flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-md shadow-indigo-500/20 transition-all duration-300 group-hover:shadow-lg group-hover:shadow-indigo-500/30 group-hover:scale-105">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <span class="text-lg font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Reseller Portal</span>
+                </a>
+
+                <!-- Desktop Navigation -->
+                <nav class="hidden lg:flex items-center gap-1 rounded-xl bg-stone-100/80 p-1 dark:bg-stone-800/80">
+                    <a href="/reseller/dashboard"
+                       class="px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 {{ 'bg-white text-indigo-600 shadow-sm dark:bg-stone-700 dark:text-indigo-400' if active_page == 'dashboard' else 'text-stone-600 hover:text-stone-900 hover:bg-white/50 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-700/50' }}">
+                        <span class="flex items-center gap-2">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                            Dashboard
+                        </span>
+                    </a>
+                    <a href="/reseller/accounts"
+                       class="px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 {{ 'bg-white text-indigo-600 shadow-sm dark:bg-stone-700 dark:text-indigo-400' if active_page == 'accounts' else 'text-stone-600 hover:text-stone-900 hover:bg-white/50 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-700/50' }}">
+                        <span class="flex items-center gap-2">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                            Accounts
+                        </span>
+                    </a>
+                    <a href="/reseller/fiber-map"
+                       class="px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 {{ 'bg-white text-indigo-600 shadow-sm dark:bg-stone-700 dark:text-indigo-400' if active_page == 'fiber-map' else 'text-stone-600 hover:text-stone-900 hover:bg-white/50 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-700/50' }}">
+                        <span class="flex items-center gap-2">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                            Fiber Map
+                        </span>
+                    </a>
+                </nav>
+
+                <!-- Right side -->
+                <div class="flex items-center gap-2">
+                    <button x-on:click="$store.darkMode.toggle()"
+                            aria-label="Toggle dark mode"
+                            :aria-pressed="$store.darkMode.on.toString()"
+                            class="flex h-10 w-10 items-center justify-center rounded-xl text-stone-500 transition-all duration-200 hover:bg-stone-100 hover:text-stone-700 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-200">
+                        <svg x-show="!$store.darkMode.on" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                        <svg x-show="$store.darkMode.on" x-cloak class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                    </button>
+
+                    <div x-data="{ open: false }" class="relative">
+                        <button x-on:click="open = !open"
+                                aria-label="Open user menu"
+                                :aria-expanded="open.toString()"
+                                aria-controls="reseller-user-menu"
+                                class="flex items-center gap-2 rounded-xl p-1.5 transition-all duration-200 hover:bg-stone-100 dark:hover:bg-stone-800">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-sm">
+                                {{ current_user.initials | default('RS') }}
+                            </div>
+                            <span class="hidden sm:block text-sm font-semibold text-stone-700 dark:text-stone-200">{{ current_user.name | default('Reseller') }}</span>
+                            <svg class="h-4 w-4 text-stone-400 transition-transform duration-200" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+
+                        <div x-show="open"
+                             x-on:click.outside="open = false"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 scale-95"
+                             x-transition:enter-end="opacity-100 scale-100"
+                             x-transition:leave="transition ease-in duration-150"
+                             x-transition:leave-start="opacity-100 scale-100"
+                             x-transition:leave-end="opacity-0 scale-95"
+                             x-cloak
+                             id="reseller-user-menu"
+                             role="menu"
+                             class="absolute right-0 mt-2 w-64 origin-top-right rounded-2xl border border-stone-200/60 bg-white/95 py-2 shadow-xl backdrop-blur-xl dark:border-stone-700/60 dark:bg-stone-800/95">
+                            <div class="px-4 py-3 border-b border-stone-200/60 dark:border-stone-700/60">
+                                <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ current_user.name | default('Reseller') }}</p>
+                                <p class="text-xs text-stone-500 dark:text-stone-400">{{ current_user.email | default('reseller@example.com') }}</p>
+                            </div>
+                            <div class="py-1">
+                                <a href="/reseller/auth/logout" role="menuitem" class="flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-red-600 transition-colors duration-200 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                    </svg>
+                                    Sign out
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button x-on:click="mobileOpen = !mobileOpen"
+                            aria-label="Toggle navigation"
+                            :aria-expanded="mobileOpen.toString()"
+                            aria-controls="reseller-mobile-menu"
+                            class="flex lg:hidden h-10 w-10 items-center justify-center rounded-xl text-stone-500 transition-all duration-200 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800">
+                        <svg x-show="!mobileOpen" class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                        </svg>
+                        <svg x-show="mobileOpen" x-cloak class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile menu -->
+        <div x-show="mobileOpen"
+             x-collapse
+             x-cloak
+             id="reseller-mobile-menu"
+             class="lg:hidden border-t border-stone-200/60 bg-white/95 backdrop-blur-xl dark:border-stone-700/60 dark:bg-stone-900/95">
+            <nav class="px-4 py-4 space-y-1 stagger-children">
+                <a href="/reseller/dashboard" class="flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 {{ 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300' if active_page == 'dashboard' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    Dashboard
+                </a>
+                <a href="/reseller/accounts" class="flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 {{ 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300' if active_page == 'accounts' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                    Accounts
+                </a>
+                <a href="/reseller/fiber-map" class="flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 {{ 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300' if active_page == 'fiber-map' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }}">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                    Fiber Map
+                </a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 relative">
+        <!-- Background gradient -->
+        <div class="absolute inset-0 bg-gradient-to-br from-stone-50 via-white to-indigo-50/30 dark:from-stone-900 dark:via-stone-900 dark:to-indigo-950/20"></div>
+        <div class="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+            <div class="stagger-children">
+                {% block page_header %}{% endblock %}
+                {% block content %}{% endblock %}
+            </div>
+        </div>
+    </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', path='js/session-refresh.js') }}"></script>
+<script>
+    initSessionRefresh({
+        refreshUrl: "/reseller/auth/refresh",
+        loginUrl: "/reseller/auth/login"
+    });
+</script>
+{% endblock %}

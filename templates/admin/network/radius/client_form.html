@@ -1,0 +1,90 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if client else 'New' }} NAS Client - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/radius" class="hover:text-primary-600">RADIUS</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit NAS Client' if client else 'New NAS Client' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit NAS Client' if client else 'Add NAS Client' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update NAS client configuration' if client else 'Register a network device as a RADIUS client' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Client Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="server_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Server <span class="text-red-500">*</span></label>
+                        <select name="server_id" id="server_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select a server...</option>
+                            {% for server in servers %}
+                            <option value="{{ server.id }}" {% if client and client.server_id == server.id %}selected{% endif %}>{{ server.name }} ({{ server.host }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="client_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Client IP Address <span class="text-red-500">*</span></label>
+                        <input type="text" name="client_ip" id="client_ip" required maxlength="64"
+                            value="{{ client.client_ip if client else '' }}"
+                            placeholder="192.168.1.1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The IP address of the NAS device (OLT, BNG, router)</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="shared_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Shared Secret <span class="text-red-500">*</span></label>
+                        <input type="password" name="shared_secret" id="shared_secret" {% if not client %}required{% endif %} maxlength="255"
+                            placeholder="{% if client %}Leave blank to keep existing{% else %}Enter shared secret{% endif %}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Must match the secret configured on the NAS device</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                        <textarea name="description" id="description" rows="3"
+                            placeholder="e.g., Main OLT in Building A"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ client.description if client else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not client or client.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable to allow authentication requests from this client</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/radius" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if client else 'Create Client' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

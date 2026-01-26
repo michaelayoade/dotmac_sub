@@ -1,0 +1,75 @@
+<div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+        <thead class="bg-slate-50 dark:bg-slate-800/50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Time</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actor</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Entity</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Details</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+            {% if events %}
+            {% for event in events %}
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ event.occurred_at_display | default('N/A') }}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ event.actor_name | default(event.actor_id | default('System')) }}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                    <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.action_label | default(event.action | default('Unknown')) }}</div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                    {% if event.action_detail %}
+                    <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.action_detail }}</div>
+                    {% else %}
+                    <div class="text-xs text-slate-500 dark:text-slate-400">{{ event.entity_label | default(event.entity_type | default('N/A')) }}</div>
+                    {% endif %}
+                    {% if event.entity_id %}
+                    <div class="text-xs text-slate-500 dark:text-slate-400">ID {{ event.entity_id }}</div>
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    {% if event.is_success is defined and event.is_success is not none %}
+                        {% if event.is_success %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Success</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">Failed</span>
+                        {% endif %}
+                    {% else %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ event.status_code | default('N/A') }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr>
+                <td colspan="5" class="px-6 py-12">
+                    {% set title = "No audit events" %}
+                            {% set message = "System activity will appear here as it occurs." %}
+                            {% include "components/data/empty_state.html" %}
+                </td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if total_pages and total_pages > 1 %}
+<div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+    <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
+    <div class="flex items-center gap-2">
+        {% if page > 1 %}
+        <button hx-get="/admin/system/audit?page={{ page - 1 }}&per_page={{ per_page }}"
+                hx-target="#audit-table"
+                hx-include="#audit-filters [name]"
+                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</button>
+        {% endif %}
+        {% if page < total_pages %}
+        <button hx-get="/admin/system/audit?page={{ page + 1 }}&per_page={{ per_page }}"
+                hx-target="#audit-table"
+                hx-include="#audit-filters [name]"
+                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</button>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

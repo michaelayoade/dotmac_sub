@@ -1,0 +1,141 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Notification History - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/system" class="hover:text-primary-600">System</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Notification History</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Delivery History</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">View notification delivery results</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/notifications/templates"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+                Templates
+            </a>
+            <a href="/admin/notifications/queue"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                Queue
+            </a>
+        </div>
+    </div>
+
+    <!-- Status Filters -->
+    <div class="flex flex-wrap items-center gap-2">
+        <a href="/admin/notifications/history"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if not status else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            All
+        </a>
+        {% for st in statuses %}
+        <a href="/admin/notifications/history?status={{ st }}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if status == st else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            {{ st | capitalize }}
+        </a>
+        {% endfor %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Recipient</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Channel</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Occurred At</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">External ID</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% if deliveries %}
+                    {% for delivery in deliveries %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ delivery.recipient or 'N/A' }}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set channel_colors = {
+                                'email': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+                                'sms': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                                'push': 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+                                'whatsapp': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300',
+                                'webhook': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ channel_colors.get(delivery.channel.value, 'bg-slate-100 text-slate-600') }}">
+                                {{ delivery.channel.value | capitalize }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set status_class = {
+                                'pending': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+                                'delivered': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                                'failed': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+                                'bounced': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_class.get(delivery.status.value, 'bg-slate-100 text-slate-600') }}">
+                                {{ delivery.status.value | capitalize }}
+                            </span>
+                            {% if delivery.error_message %}
+                            <p class="text-xs text-red-500 dark:text-red-400 mt-1 truncate max-w-xs">{{ delivery.error_message }}</p>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ delivery.occurred_at.strftime('%b %d, %Y %H:%M') if delivery.occurred_at else 'N/A' }}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if delivery.external_id %}
+                            <code class="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ delivery.external_id[:20] }}{% if delivery.external_id|length > 20 %}...{% endif %}</code>
+                            {% else %}
+                            <span class="text-sm text-slate-400 dark:text-slate-500">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            <div class="flex flex-col items-center gap-2">
+                                <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                                </svg>
+                                <p>No delivery history found</p>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if total_pages > 1 %}
+        <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
+            <div class="text-sm text-slate-500 dark:text-slate-400">
+                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} deliveries
+            </div>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Next
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

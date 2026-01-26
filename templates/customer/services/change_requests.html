@@ -1,0 +1,126 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Plan Change Requests - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Plan Change Requests</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Track the status of your plan change requests</p>
+        </div>
+    </div>
+
+    {% if request.query_params.get('submitted') %}
+    <div class="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-900 dark:bg-green-900/20">
+        <p class="text-sm text-green-700 dark:text-green-400">Your plan change request has been submitted and is pending review.</p>
+    </div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form class="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div class="flex-1">
+                <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Filter by Status</label>
+                <select name="status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" onchange="this.form.submit()">
+                    <option value="">All Status</option>
+                    <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
+                    <option value="approved" {% if status == 'approved' %}selected{% endif %}>Approved</option>
+                    <option value="rejected" {% if status == 'rejected' %}selected{% endif %}>Rejected</option>
+                    <option value="applied" {% if status == 'applied' %}selected{% endif %}>Applied</option>
+                    <option value="canceled" {% if status == 'canceled' %}selected{% endif %}>Canceled</option>
+                </select>
+            </div>
+            <div>
+                <button type="submit" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Apply
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Request</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">From</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">To</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Effective</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% if change_requests %}
+                    {% for req in change_requests %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">
+                                #{{ req.id | string | truncate(8, True, '') }}
+                            </span>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ req.created_at.strftime('%b %d, %Y') }}</p>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ req.current_offer.name if req.current_offer else 'N/A' }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white font-medium">
+                            {{ req.requested_offer.name if req.requested_offer else 'N/A' }}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set status_class = {
+                                'pending': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
+                                'approved': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+                                'rejected': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+                                'applied': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                                'canceled': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_class.get(req.status.value, 'bg-slate-100 text-slate-600') }}">
+                                {{ req.status.value | capitalize }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ req.effective_date.strftime('%b %d, %Y') if req.effective_date else 'N/A' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            <div class="flex flex-col items-center gap-2">
+                                <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                                <p>No change requests found</p>
+                                <a href="/portal/services" class="text-primary-600 hover:text-primary-700">View your services</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if total_pages > 1 %}
+        <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
+            <div class="text-sm text-slate-500 dark:text-slate-400">
+                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} requests
+            </div>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Next
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if pool else 'New' }} IP Pool - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/ip-management" class="hover:text-primary-600">IP Management</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Pool' if pool else 'New Pool' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit IP Pool' if pool else 'Create IP Pool' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update IP pool configuration' if pool else 'Define a new IP allocation pool' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Pool Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Pool Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="120"
+                            value="{{ pool.name if pool else '' }}"
+                            placeholder="Customer IPv4 Pool"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="ip_version" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Version <span class="text-red-500">*</span></label>
+                        <select name="ip_version" id="ip_version" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="ipv4" {% if not pool or pool.ip_version.value == 'ipv4' %}selected{% endif %}>IPv4</option>
+                            <option value="ipv6" {% if pool and pool.ip_version.value == 'ipv6' %}selected{% endif %}>IPv6</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="cidr" class="block text-sm font-medium text-slate-700 dark:text-slate-300">CIDR Block <span class="text-red-500">*</span></label>
+                        <input type="text" name="cidr" id="cidr" required maxlength="64"
+                            value="{{ pool.cidr if pool else '' }}"
+                            placeholder="10.0.0.0/24"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
+                        <input type="text" name="gateway" id="gateway" maxlength="64"
+                            value="{{ pool.gateway if pool else '' }}"
+                            placeholder="10.0.0.1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="dns_primary" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Primary DNS</label>
+                        <input type="text" name="dns_primary" id="dns_primary" maxlength="64"
+                            value="{{ pool.dns_primary if pool else '' }}"
+                            placeholder="8.8.8.8"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="dns_secondary" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Secondary DNS</label>
+                        <input type="text" name="dns_secondary" id="dns_secondary" maxlength="64"
+                            value="{{ pool.dns_secondary if pool else '' }}"
+                            placeholder="8.8.4.4"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not pool or pool.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            placeholder="Additional notes..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ pool.notes if pool else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/ip-management" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if pool else 'Create Pool' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

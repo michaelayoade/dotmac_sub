@@ -1,0 +1,154 @@
+{% from "components/ui/macros.html" import status_badge, type_badge, avatar, row_action, empty_state, pagination, icon_view, icon_edit, icon_delete %}
+
+<div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="overflow-x-auto">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                    <th scope="col" class="w-12 px-3 py-3.5">
+                        <input type="checkbox"
+                               data-select-all
+                               class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:checked:bg-amber-500 cursor-pointer">
+                    </th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                        <button class="group inline-flex items-center gap-1.5 transition-colors hover:text-slate-700 dark:hover:text-slate-200" hx-get="/admin/subscribers?sort=name" hx-target="#subscribers-table">
+                            Subscriber
+                            <svg class="h-3.5 w-3.5 text-slate-400 transition-colors group-hover:text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+                            </svg>
+                        </button>
+                    </th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Created</th>
+                    <th scope="col" class="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% if subscribers %}
+                {% for subscriber in subscribers %}
+                {% set sub_type = subscriber.subscriber_type.value if subscriber.subscriber_type is not string and subscriber.subscriber_type else (subscriber.subscriber_type | default('unknown')) %}
+                {% set name = (subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name) if subscriber.person else (subscriber.organization.name if subscriber.organization else 'Subscriber') %}
+                {% set email = subscriber.person.email if subscriber.person else (subscriber.organization.domain if subscriber.organization else '') %}
+
+                <tr class="group transition-colors hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
+                    <td class="w-12 px-3 py-4">
+                        <input type="checkbox"
+                               data-subscriber-select
+                               data-subscriber-id="{{ subscriber.id }}"
+                               data-subscriber-type="{{ sub_type }}"
+                               class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:checked:bg-amber-500 cursor-pointer">
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4">
+                        <div class="flex items-center gap-4">
+                            {{ avatar(name, sub_type) }}
+                            <div class="min-w-0">
+                                <a href="/admin/subscribers/{{ subscriber.id }}" class="group/link flex items-center gap-1.5">
+                                    <span class="text-sm font-semibold text-slate-900 group-hover/link:text-amber-600 dark:text-white dark:group-hover/link:text-amber-400 transition-colors">
+                                        {{ name }}
+                                    </span>
+                                    <svg class="h-3.5 w-3.5 text-slate-400 opacity-0 transition-all group-hover/link:opacity-100 group-hover/link:translate-x-0.5 group-hover/link:text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                                </a>
+                                {% if email %}
+                                <p class="mt-0.5 truncate text-sm text-slate-500 dark:text-slate-400">{{ email }}</p>
+                                {% elif subscriber.person %}
+                                <p class="mt-0.5 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                                    Email missing
+                                </p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4">
+                        {{ type_badge(sub_type) }}
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4">
+                        {{ status_badge("Active" if subscriber.is_active else "Inactive", "active" if subscriber.is_active else "inactive") }}
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4">
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">
+                            {{ subscriber.created_at.strftime('%b %d, %Y') if subscriber.created_at else 'N/A' }}
+                        </div>
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4 text-right">
+                        <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            {{ row_action("/admin/subscribers/" ~ subscriber.id, icon_view(), "View details", "amber") }}
+                            {{ row_action("/admin/subscribers/" ~ subscriber.id ~ "/edit", icon_edit(), "Edit subscriber", "slate") }}
+                            {% if subscriber.is_active %}
+                            <button hx-post="/admin/subscribers/{{ subscriber.id }}/deactivate"
+                                    hx-confirm="Deactivate this subscriber?"
+                                    class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/30 dark:hover:text-orange-400"
+                                    title="Deactivate">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                                </svg>
+                            </button>
+                            {% else %}
+                            <button hx-delete="/admin/subscribers/{{ subscriber.id }}"
+                                    hx-confirm="Delete this deactivated subscriber? This action cannot be undone."
+                                    hx-target="closest tr"
+                                    hx-swap="outerHTML swap:1s"
+                                    class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                                    title="Delete">
+                                {{ icon_delete() }}
+                            </button>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                {{ empty_state(
+                    title="No subscribers found",
+                    message="Get started by adding a new subscriber.",
+                    icon='<svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+                    color="amber",
+                    color2="orange",
+                    action_label="Add Subscriber",
+                    action_href="/admin/subscribers/new",
+                    colspan=6
+                ) }}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    {{ pagination(page|default(1), total_pages|default(1), total|default(0), per_page|default(20), "/admin/subscribers", "#subscribers-table", "amber") }}
+</div>
+
+<script>
+(function() {
+    // Select-all checkbox functionality
+    const selectAll = document.querySelector('[data-select-all]');
+    const checkboxes = document.querySelectorAll('[data-subscriber-select]');
+
+    if (selectAll) {
+        selectAll.addEventListener('change', function() {
+            checkboxes.forEach(cb => {
+                cb.checked = this.checked;
+            });
+            document.dispatchEvent(new CustomEvent('subscribers-select-all', {
+                detail: { checked: this.checked, ids: Array.from(checkboxes).map(cb => cb.dataset.subscriberId) }
+            }));
+        });
+    }
+
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', function() {
+            // Update select-all state
+            const allChecked = Array.from(checkboxes).every(c => c.checked);
+            const anyChecked = Array.from(checkboxes).some(c => c.checked);
+            if (selectAll) {
+                selectAll.checked = allChecked;
+                selectAll.indeterminate = anyChecked && !allChecked;
+            }
+
+            // Dispatch selection change event
+            const selectedIds = Array.from(checkboxes).filter(c => c.checked).map(c => c.dataset.subscriberId);
+            document.dispatchEvent(new CustomEvent('subscribers-selection-change', {
+                detail: { selectedIds }
+            }));
+        });
+    });
+})();
+</script>

@@ -1,0 +1,93 @@
+{#
+   Toast Container Component
+   Add this to the end of base.html before </body>
+
+   This provides a global toast notification system that can be triggered via:
+   1. JavaScript: window.dispatchEvent(new CustomEvent('toast', { detail: { message: 'Hello!', type: 'success' }}))
+   2. HTMX: HX-Trigger header with showToast event
+   3. Alpine: $dispatch('toast', { message: 'Hello!', type: 'success' })
+#}
+<div x-data="{
+        toasts: [],
+        addToast(data) {
+            const id = Date.now();
+            this.toasts.push({
+                id,
+                message: data.message || 'Notification',
+                type: data.type || 'info',
+                title: data.title || null,
+                duration: data.duration !== undefined ? data.duration : 4000
+            });
+            if (data.duration !== 0) {
+                setTimeout(() => this.removeToast(id), data.duration || 4000);
+            }
+        },
+        removeToast(id) {
+            this.toasts = this.toasts.filter(t => t.id !== id);
+        }
+     }"
+     x-on:toast.window="addToast($event.detail)"
+     x-on:htmx:showToast.window="addToast($event.detail)"
+     class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"
+     aria-live="polite"
+     aria-atomic="true">
+
+    <template x-for="toast in toasts" :key="toast.id">
+        <div x-data="{ show: true }"
+             x-init="setTimeout(() => { if (toast.duration !== 0) show = false }, toast.duration - 300)"
+             x-show="show"
+             x-transition:enter="transform ease-out duration-300"
+             x-transition:enter-start="translate-x-full opacity-0"
+             x-transition:enter-end="translate-x-0 opacity-100"
+             x-transition:leave="transform ease-in duration-200"
+             x-transition:leave-start="translate-x-0 opacity-100"
+             x-transition:leave-end="translate-x-full opacity-0"
+             class="pointer-events-auto w-80 max-w-sm rounded-lg shadow-lg"
+             :class="{
+                 'bg-green-600 dark:bg-green-500': toast.type === 'success',
+                 'bg-red-600 dark:bg-red-500': toast.type === 'error',
+                 'bg-yellow-500 dark:bg-yellow-400': toast.type === 'warning',
+                 'bg-blue-600 dark:bg-blue-500': toast.type === 'info'
+             }">
+            <div class="flex items-start gap-3 p-4">
+                <!-- Icon -->
+                <div class="flex-shrink-0">
+                    <template x-if="toast.type === 'success'">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                    </template>
+                    <template x-if="toast.type === 'error'">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </template>
+                    <template x-if="toast.type === 'warning'">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                    </template>
+                    <template x-if="toast.type === 'info'">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </template>
+                </div>
+
+                <!-- Content -->
+                <div class="flex-1 text-white">
+                    <p x-show="toast.title" class="text-sm font-semibold" x-text="toast.title"></p>
+                    <p class="text-sm" :class="{ 'mt-0.5 opacity-90': toast.title }" x-text="toast.message"></p>
+                </div>
+
+                <!-- Close Button -->
+                <button x-on:click="removeToast(toast.id)"
+                        class="flex-shrink-0 text-white/80 hover:text-white">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </template>
+</div>

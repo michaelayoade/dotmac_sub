@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+
+{% block body %}
+{% set current_user = current_user if current_user is defined else (customer.current_user if customer and customer.current_user is defined else None) %}
+<div class="min-h-screen flex flex-col font-body">
+    {% if customer and customer.username and customer.username.startswith('impersonate:') %}
+    <div class="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+        <div class="mx-auto max-w-7xl px-4 py-2.5 sm:px-6 lg:px-8 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+                <p class="text-sm font-medium">Viewing as customer</p>
+            </div>
+            <a href="/portal/auth/stop-impersonation?next={{ customer.return_to | default('/admin/customers') }}" class="inline-flex items-center gap-2 rounded-lg bg-white/20 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm hover:bg-white/30 transition-colors">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                Exit View
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Premium Navigation Header -->
+    <header x-data="{ mobileOpen: false }" class="sticky top-0 z-40 glass border-b border-stone-200/50 dark:border-stone-700/50">
+        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center justify-between">
+                <!-- Logo with brand gradient -->
+                <a href="/portal" class="flex items-center gap-3 group">
+                    <div class="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--color-brand-500)] to-[var(--color-brand-600)] shadow-lg shadow-[var(--color-brand-500)]/20 transition-transform group-hover:scale-105">
+                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <span class="text-xl font-display font-bold text-stone-900 dark:text-white">Dotmac</span>
+                </a>
+
+                <!-- Desktop Navigation - Grouped and styled -->
+                <nav class="hidden lg:flex items-center gap-1">
+                    <a href="/portal/dashboard"
+                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'dashboard' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                        Dashboard
+                    </a>
+                    <a href="/portal/services"
+                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'services' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                        Services
+                    </a>
+
+                    <!-- Divider -->
+                    <div class="h-5 w-px bg-stone-200 dark:bg-stone-700 mx-1"></div>
+
+                    <a href="/portal/billing"
+                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'billing' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                        Billing
+                    </a>
+                    <a href="/portal/support"
+                       class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'support' else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                        Support
+                    </a>
+
+                    <!-- More dropdown for less-used items -->
+                    <div x-data="{ open: false }" class="relative">
+                        <button x-on:click="open = !open"
+                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['projects', 'installations', 'service-orders', 'work-orders'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                            More
+                            <svg class="h-4 w-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <div x-show="open"
+                             x-on:click.outside="open = false"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 -translate-y-1"
+                             x-transition:enter-end="opacity-100 translate-y-0"
+                             x-transition:leave="transition ease-in duration-150"
+                             x-transition:leave-start="opacity-100 translate-y-0"
+                             x-transition:leave-end="opacity-0 -translate-y-1"
+                             x-cloak
+                             class="absolute right-0 mt-2 w-48 rounded-xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                            <a href="/portal/projects" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'projects' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                                </svg>
+                                Projects
+                            </a>
+                            <a href="/portal/installations" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'installations' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                </svg>
+                                Installations
+                            </a>
+                            <a href="/portal/service-orders" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'service-orders' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                </svg>
+                                Service Orders
+                            </a>
+                            <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'work-orders' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                </svg>
+                                Field Service
+                            </a>
+                        </div>
+                    </div>
+                </nav>
+
+                <!-- Right side actions -->
+                <div class="flex items-center gap-2">
+                    <!-- Dark mode toggle with smooth animation -->
+                    <button x-on:click="$store.darkMode.toggle()"
+                            aria-label="Toggle dark mode"
+                            :aria-pressed="$store.darkMode.on.toString()"
+                            class="relative flex h-10 w-10 items-center justify-center rounded-xl text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800 transition-colors">
+                        <svg x-show="!$store.darkMode.on" class="h-5 w-5 transition-transform hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                        <svg x-show="$store.darkMode.on" x-cloak class="h-5 w-5 transition-transform hover:rotate-45" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                    </button>
+
+                    <!-- User dropdown with avatar -->
+                    <div x-data="{ open: false }" class="relative">
+                        <button x-on:click="open = !open"
+                                aria-label="Open user menu"
+                                :aria-expanded="open.toString()"
+                                aria-controls="customer-user-menu"
+                                class="flex items-center gap-2.5 rounded-xl p-1.5 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--color-brand-400)] to-[var(--color-brand-600)] text-sm font-semibold text-white shadow-sm">
+                                {{ current_user.initials | default('CU') }}
+                            </div>
+                            <span class="hidden sm:block text-sm font-medium text-stone-700 dark:text-stone-200">{{ current_user.name | default('Customer') }}</span>
+                            <svg class="h-4 w-4 text-stone-400 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+
+                        <div x-show="open"
+                             x-on:click.outside="open = false"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 scale-95"
+                             x-transition:enter-end="opacity-100 scale-100"
+                             x-transition:leave="transition ease-in duration-150"
+                             x-transition:leave-start="opacity-100 scale-100"
+                             x-transition:leave-end="opacity-0 scale-95"
+                             x-cloak
+                             id="customer-user-menu"
+                             role="menu"
+                             class="absolute right-0 mt-2 w-64 origin-top-right rounded-2xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                            <!-- User info header -->
+                            <div class="px-4 py-3 border-b border-stone-100 dark:border-stone-700">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--color-brand-400)] to-[var(--color-brand-600)] text-sm font-semibold text-white">
+                                        {{ current_user.initials | default('CU') }}
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm font-semibold text-stone-900 dark:text-white truncate">{{ current_user.name | default('Customer') }}</p>
+                                        <p class="text-xs text-stone-500 dark:text-stone-400 truncate">{{ current_user.email | default('customer@example.com') }}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="py-1">
+                                <a href="/portal/profile" role="menuitem" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 transition-colors">
+                                    <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                                    </svg>
+                                    My Profile
+                                </a>
+                                <a href="/portal/profile#security" role="menuitem" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 transition-colors">
+                                    <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                                    </svg>
+                                    Security
+                                </a>
+                            </div>
+
+                            <div class="border-t border-stone-100 dark:border-stone-700 pt-1">
+                                <a href="/portal/auth/logout" role="menuitem" class="flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                    </svg>
+                                    Sign out
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Mobile menu button -->
+                    <button x-on:click="mobileOpen = !mobileOpen"
+                            aria-label="Toggle navigation"
+                            :aria-expanded="mobileOpen.toString()"
+                            aria-controls="customer-mobile-menu"
+                            class="flex lg:hidden h-10 w-10 items-center justify-center rounded-xl text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800 transition-colors">
+                        <svg x-show="!mobileOpen" class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                        </svg>
+                        <svg x-show="mobileOpen" x-cloak class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile menu with smooth animation -->
+        <div x-show="mobileOpen"
+             x-collapse
+             x-cloak
+             id="customer-mobile-menu"
+             class="lg:hidden border-t border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-900/95 backdrop-blur-lg">
+            <nav class="px-4 py-4 space-y-1 stagger-children">
+                <a href="/portal/dashboard" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'dashboard' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    Dashboard
+                </a>
+                <a href="/portal/services" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'services' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+                    Services
+                </a>
+                <a href="/portal/billing" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'billing' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                    Billing
+                </a>
+                <a href="/portal/support" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'support' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                    Support
+                </a>
+
+                <div class="border-t border-stone-200 dark:border-stone-700 my-2 pt-2">
+                    <p class="px-4 py-2 text-xs font-semibold text-stone-400 uppercase tracking-wider">More</p>
+                    <a href="/portal/projects" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'projects' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                        Projects
+                    </a>
+                    <a href="/portal/installations" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'installations' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        Installations
+                    </a>
+                    <a href="/portal/service-orders" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'service-orders' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        Service Orders
+                    </a>
+                    <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'work-orders' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        Field Service
+                    </a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content with mesh gradient background -->
+    <main class="flex-1 mesh-gradient relative">
+        <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+            {% block page_header %}{% endblock %}
+            <div class="animate-fade-in-up">
+                {% block content %}{% endblock %}
+            </div>
+        </div>
+    </main>
+
+    <!-- Premium Footer -->
+    <footer class="border-t border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
+        <div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div class="flex items-center gap-6">
+                    <a href="/portal/support" class="text-sm text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors">Help & Support</a>
+                    <a href="/legal/privacy" class="text-sm text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors">Privacy Policy</a>
+                    <a href="/legal/terms" class="text-sm text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 transition-colors">Terms of Service</a>
+                </div>
+                <p class="text-sm text-stone-400 dark:text-stone-500">&copy; 2025 Dotmac. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', path='js/session-refresh.js') }}"></script>
+<script>
+    initSessionRefresh({
+        refreshUrl: "/portal/auth/refresh",
+        loginUrl: "/portal/auth/login"
+    });
+</script>
+{% endblock %}

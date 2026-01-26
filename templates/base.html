@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="htmx-config" content='{"defaultSwapStyle":"innerHTML","globalViewTransitions":true}' />
+    <title>{% block title %}{{ title | default("Dotmac SM") }}{% endblock %}</title>
+
+    <!-- Apply dark mode immediately to prevent flash -->
+    <script>
+        (function() {
+            const darkMode = localStorage.getItem('darkMode');
+            if (darkMode === 'true' || (darkMode === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
+
+    <!-- Premium Typography - DM Sans for headings, Inter for body -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Compiled CSS (includes Tailwind + fonts + custom styles) -->
+    <link rel="stylesheet" href="/static/css/main.css" />
+
+    <!-- Design System CSS Variables & Animations -->
+    <style>
+        :root {
+            /* Typography */
+            --font-display: 'Outfit', 'DM Sans', system-ui, sans-serif;
+            --font-body: 'DM Sans', system-ui, sans-serif;
+
+            /* Brand Colors - Warm, distinctive palette */
+            --color-brand-50: #fef7ee;
+            --color-brand-100: #fdedd3;
+            --color-brand-200: #f9d7a5;
+            --color-brand-300: #f5bc6d;
+            --color-brand-400: #f09732;
+            --color-brand-500: #ec7a0c;
+            --color-brand-600: #dd6007;
+            --color-brand-700: #b74709;
+            --color-brand-800: #92390f;
+            --color-brand-900: #773010;
+
+            /* Accent - Electric teal for CTAs */
+            --color-accent-50: #effefb;
+            --color-accent-100: #c8fff4;
+            --color-accent-200: #91feea;
+            --color-accent-300: #53f5dc;
+            --color-accent-400: #1fe2c8;
+            --color-accent-500: #06c6ae;
+            --color-accent-600: #02a08f;
+            --color-accent-700: #067f74;
+            --color-accent-800: #0a655e;
+            --color-accent-900: #0d534e;
+
+            /* Status Colors - More distinctive */
+            --color-success: #10b981;
+            --color-success-light: #d1fae5;
+            --color-warning: #f59e0b;
+            --color-warning-light: #fef3c7;
+            --color-error: #ef4444;
+            --color-error-light: #fee2e2;
+            --color-info: #3b82f6;
+            --color-info-light: #dbeafe;
+
+            /* Surfaces - Warmer neutrals */
+            --surface-primary: #ffffff;
+            --surface-secondary: #fafaf9;
+            --surface-tertiary: #f5f5f4;
+            --text-primary: #1c1917;
+            --text-secondary: #57534e;
+            --text-tertiary: #a8a29e;
+            --border-default: #e7e5e4;
+            --border-subtle: #f5f5f4;
+        }
+
+        .dark {
+            --surface-primary: #1c1917;
+            --surface-secondary: #292524;
+            --surface-tertiary: #44403c;
+            --text-primary: #fafaf9;
+            --text-secondary: #d6d3d1;
+            --text-tertiary: #78716c;
+            --border-default: #44403c;
+            --border-subtle: #292524;
+        }
+
+
+        /* Premium Typography Classes */
+        .font-display {
+            font-family: var(--font-display);
+            letter-spacing: -0.02em;
+        }
+
+        .font-body {
+            font-family: var(--font-body);
+        }
+
+        /* Gradient text */
+        .text-gradient {
+            background: linear-gradient(135deg, var(--color-brand-500) 0%, var(--color-accent-500) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* Glass morphism */
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .dark .glass {
+            background: rgba(28, 25, 23, 0.7);
+        }
+
+        /* Premium shadows */
+        .shadow-premium {
+            box-shadow:
+                0 1px 2px rgba(0,0,0,0.04),
+                0 4px 8px rgba(0,0,0,0.04),
+                0 16px 32px rgba(0,0,0,0.04);
+        }
+
+        .shadow-premium-lg {
+            box-shadow:
+                0 2px 4px rgba(0,0,0,0.04),
+                0 8px 16px rgba(0,0,0,0.06),
+                0 24px 48px rgba(0,0,0,0.08);
+        }
+
+        /* Status dot pulse */
+        .status-pulse {
+            position: relative;
+        }
+
+        .status-pulse::before {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.3;
+            animation: pulse-soft 2s ease-in-out infinite;
+        }
+
+        /* Noise texture overlay */
+        .noise-overlay::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            opacity: 0.03;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            pointer-events: none;
+        }
+
+        /* Mesh gradient background */
+        .mesh-gradient {
+            background:
+                radial-gradient(at 40% 20%, var(--color-brand-100) 0px, transparent 50%),
+                radial-gradient(at 80% 0%, var(--color-accent-100) 0px, transparent 50%),
+                radial-gradient(at 0% 50%, var(--color-brand-50) 0px, transparent 50%),
+                var(--surface-secondary);
+        }
+
+        .dark .mesh-gradient {
+            background:
+                radial-gradient(at 40% 20%, rgba(183, 71, 9, 0.15) 0px, transparent 50%),
+                radial-gradient(at 80% 0%, rgba(6, 198, 174, 0.1) 0px, transparent 50%),
+                radial-gradient(at 0% 50%, rgba(221, 96, 7, 0.1) 0px, transparent 50%),
+                var(--surface-secondary);
+        }
+    </style>
+
+    <!-- CSRF Token Meta Tag -->
+    <meta name="csrf-token" content="{{ csrf_token|default('') }}">
+
+    <!-- HTMX (local) -->
+    <script src="/static/js/vendor/htmx.min.js"></script>
+    <script src="/static/js/vendor/htmx-loading-states.min.js"></script>
+
+    <!-- HTMX CSRF Configuration -->
+    <script>
+        // Read CSRF token from cookie or meta tag
+        function getCsrfToken() {
+            // Try meta tag first
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta && meta.content) return meta.content;
+            // Fall back to cookie
+            const match = document.cookie.match(/csrf_token=([^;]+)/);
+            return match ? match[1] : '';
+        }
+
+        // Configure HTMX to include CSRF token in all requests
+        document.addEventListener('htmx:configRequest', function(evt) {
+            const token = getCsrfToken();
+            if (token) {
+                evt.detail.headers['X-CSRF-Token'] = token;
+            }
+        });
+    </script>
+
+    <!-- Chart.js (local) - Only included when needed -->
+    {% block charts_js %}{% endblock %}
+
+    {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 antialiased"
+      hx-ext="loading-states">
+
+    {% block body %}
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    {% endblock %}
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"
+         x-data="toastStore()"
+         x-on:show-toast.window="addToast($event.detail)"
+         role="status"
+         aria-live="polite"
+         aria-atomic="true"
+         class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        <template x-for="toast in toasts" :key="toast.id">
+            <div x-show="toast.visible"
+                 x-transition:enter="transform ease-out duration-300"
+                 x-transition:enter-start="translate-y-2 opacity-0"
+                 x-transition:enter-end="translate-y-0 opacity-100"
+                 x-transition:leave="transform ease-in duration-200"
+                 x-transition:leave-start="translate-y-0 opacity-100"
+                 x-transition:leave-end="translate-y-2 opacity-0"
+                 :class="{
+                     'bg-green-600': toast.type === 'success',
+                     'bg-red-600': toast.type === 'error',
+                     'bg-yellow-500': toast.type === 'warning',
+                     'bg-blue-600': toast.type === 'info'
+                 }"
+                 class="px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium pointer-events-auto flex items-center gap-2 max-w-sm">
+                <span x-text="toast.message"></span>
+                <button x-on:click="removeToast(toast.id)" aria-label="Dismiss notification" class="ml-2 hover:opacity-75">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+        </template>
+    </div>
+
+    <!-- Global Alpine.js Components -->
+    <script>
+        // Toast notification store
+        function toastStore() {
+            return {
+                toasts: [],
+                addToast(detail) {
+                    const id = Date.now();
+                    this.toasts.push({
+                        id,
+                        message: detail.message,
+                        type: detail.type || 'info',
+                        visible: true
+                    });
+                    setTimeout(() => this.removeToast(id), detail.duration || 4000);
+                },
+                removeToast(id) {
+                    const toast = this.toasts.find(t => t.id === id);
+                    if (toast) {
+                        toast.visible = false;
+                        setTimeout(() => {
+                            this.toasts = this.toasts.filter(t => t.id !== id);
+                        }, 300);
+                    }
+                }
+            }
+        }
+
+        // HTMX event listeners for toasts
+        function dispatchToastFromTrigger(evt) {
+            const xhr = evt.detail.xhr;
+            const trigger =
+                xhr.getResponseHeader('HX-Trigger') ||
+                xhr.getResponseHeader('HX-Trigger-After-Swap') ||
+                xhr.getResponseHeader('HX-Trigger-After-Settle');
+            if (!trigger) {
+                return;
+            }
+            try {
+                const data = JSON.parse(trigger);
+                if (data.showToast) {
+                    window.dispatchEvent(new CustomEvent('show-toast', { detail: data.showToast }));
+                }
+            } catch (e) {}
+        }
+
+        function forwardHtmxToast(evt) {
+            if (!evt.detail) {
+                return;
+            }
+            window.dispatchEvent(new CustomEvent('show-toast', { detail: evt.detail }));
+        }
+
+        document.addEventListener('htmx:afterRequest', dispatchToastFromTrigger);
+        document.addEventListener('htmx:responseError', dispatchToastFromTrigger);
+        document.addEventListener('htmx:showToast', forwardHtmxToast);
+
+        // Global search component
+        function globalSearch() {
+            return {
+                query: '',
+                results: { categories: [] },
+                loading: false,
+                open: false,
+                selectedIndex: -1,
+                abortController: null,
+
+                async search() {
+                    if (this.query.length < 2) {
+                        this.results = { categories: [] };
+                        this.open = false;
+                        return;
+                    }
+
+                    // Cancel previous request
+                    if (this.abortController) {
+                        this.abortController.abort();
+                    }
+                    this.abortController = new AbortController();
+
+                    this.loading = true;
+                    this.open = true;
+
+                    try {
+                        const response = await fetch(`/api/v1/search/global?q=${encodeURIComponent(this.query)}&limit=3`, {
+                            signal: this.abortController.signal
+                        });
+                        if (response.ok) {
+                            this.results = await response.json();
+                            this.selectedIndex = -1;
+                        }
+                    } catch (e) {
+                        if (e.name !== 'AbortError') {
+                            console.error('Search error:', e);
+                        }
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                close() {
+                    this.open = false;
+                    this.selectedIndex = -1;
+                },
+
+                getTotalItems() {
+                    return (this.results.categories || []).reduce((sum, cat) => sum + cat.items.length, 0);
+                },
+
+                flatIndex(catIndex, itemIndex) {
+                    let idx = 0;
+                    for (let i = 0; i < catIndex; i++) {
+                        idx += this.results.categories[i].items.length;
+                    }
+                    return idx + itemIndex;
+                },
+
+                isSelected(catIndex, itemIndex) {
+                    return this.flatIndex(catIndex, itemIndex) === this.selectedIndex;
+                },
+
+                getItemByFlatIndex(idx) {
+                    let count = 0;
+                    for (const cat of (this.results.categories || [])) {
+                        for (const item of cat.items) {
+                            if (count === idx) return item;
+                            count++;
+                        }
+                    }
+                    return null;
+                },
+
+                navigateDown() {
+                    const total = this.getTotalItems();
+                    if (total === 0) return;
+                    this.selectedIndex = (this.selectedIndex + 1) % total;
+                },
+
+                navigateUp() {
+                    const total = this.getTotalItems();
+                    if (total === 0) return;
+                    this.selectedIndex = this.selectedIndex <= 0 ? total - 1 : this.selectedIndex - 1;
+                },
+
+                selectCurrent() {
+                    const item = this.getItemByFlatIndex(this.selectedIndex);
+                    if (item && item.url) {
+                        window.location.href = item.url;
+                    }
+                }
+            };
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+
+    <!-- Global Confirmation Modal -->
+    {% include "components/modals/confirm_modal.html" %}
+
+    <!-- ARIA Live Region for Screen Reader Announcements -->
+    <div id="aria-live-region"
+         aria-live="polite"
+         aria-atomic="true"
+         class="sr-only">
+    </div>
+
+    <!-- Load UI Enhancement Scripts -->
+    <script src="/static/js/form-validation.js" defer></script>
+    <script src="/static/js/unsaved-changes.js" defer></script>
+    <script src="/static/js/repeatable-fields.js" defer></script>
+
+    <!-- Alpine.js (loaded at end of body for reliable initialization) -->
+    <script>
+        // Setup Alpine store before Alpine initializes
+        document.addEventListener('alpine:init', () => {
+            Alpine.store('darkMode', {
+                on: document.documentElement.classList.contains('dark'),
+                toggle() {
+                    this.on = !this.on;
+                    localStorage.setItem('darkMode', this.on);
+                    document.documentElement.classList.toggle('dark', this.on);
+                }
+            });
+        });
+    </script>
+    <script src="/static/js/vendor/alpine-focus.min.js"></script>
+    <script src="/static/js/vendor/alpine-collapse.min.js"></script>
+    <script src="/static/js/vendor/alpine.min.js"></script>
+    <script src="/static/js/typeahead.js"></script>
+</body>
+</html>

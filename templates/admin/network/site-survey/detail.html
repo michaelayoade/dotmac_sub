@@ -1,0 +1,545 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ survey.name }} - Site Survey - Admin{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #survey-map {
+        height: 520px;
+        border-radius: 0.75rem;
+    }
+    .leaflet-popup-content-wrapper {
+        border-radius: 0.5rem;
+    }
+    .dark .leaflet-popup-content-wrapper {
+        background: #1e293b;
+        color: #f1f5f9;
+    }
+    .dark .leaflet-popup-tip {
+        background: #1e293b;
+    }
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 9999px;
+        padding: 0.15rem 0.6rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network" class="hover:text-primary-600">Network</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/network/site-survey" class="hover:text-primary-600">Site Surveys</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ survey.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ survey.name }}</h1>
+            {% if survey.description %}
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ survey.description }}</p>
+            {% endif %}
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/network/site-survey/{{ survey.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                Edit
+            </a>
+            <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/delete" onsubmit="return confirm('Delete this survey?');">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:bg-slate-800 dark:text-red-400">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    Delete
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <div class="lg:col-span-3 space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+                <div id="survey-map"></div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Survey Points</h2>
+                </div>
+                <div class="overflow-x-auto">
+                    {% if points %}
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Coordinates</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Height</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for point in points %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-6 py-4">
+                                    <div class="font-medium text-slate-900 dark:text-white">{{ point.name }}</div>
+                                    {% if point.ground_elevation_m is not none %}
+                                    <div class="text-xs text-slate-500 dark:text-slate-400">Elevation {{ "%.1f"|format(point.ground_elevation_m) }} m</div>
+                                    {% endif %}
+                                    {% if point.elevation_source %}
+                                        {% if point.ground_elevation_m is none %}
+                                        <span class="badge mt-2 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Void</span>
+                                        {% else %}
+                                        <span class="badge mt-2 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">OK</span>
+                                        {% endif %}
+                                    {% else %}
+                                    <span class="badge mt-2 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">Missing</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                                    {{ point.point_type.value | replace('_', ' ') | title }}
+                                </td>
+                                <td class="px-6 py-4 text-xs font-mono text-slate-500 dark:text-slate-400">
+                                    {{ "%.6f"|format(point.latitude) }}, {{ "%.6f"|format(point.longitude) }}
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                                    {{ "%.1f"|format(point.antenna_height_m) }} m
+                                </td>
+                                <td class="px-6 py-4 text-right">
+                                    <div class="flex flex-col items-end gap-2">
+                                        <button type="button" class="text-xs text-primary-600 hover:text-primary-700 js-refresh-elevation" data-point-id="{{ point.id }}">Refresh elevation</button>
+                                        <form method="POST" action="/admin/network/site-survey/points/{{ point.id }}/delete" onsubmit="return confirm('Delete this point?');">
+                                            <button type="submit" class="text-red-600 hover:text-red-700 text-sm">Delete</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="p-6 text-sm text-slate-500 dark:text-slate-400">No points yet. Add one to begin the survey.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Line of Sight Analysis</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/analyze-los" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">From</label>
+                            <select name="from_point_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                {% for point in points %}
+                                <option value="{{ point.id }}">{{ point.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">To</label>
+                            <select name="to_point_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                {% for point in points %}
+                                <option value="{{ point.id }}">{{ point.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="flex items-end">
+                            <button type="submit" class="w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Analyze LOS</button>
+                        </div>
+                    </form>
+
+                    {% if los_paths %}
+                    <div class="space-y-3">
+                        {% for path in los_paths %}
+                        {% set from_point = points | selectattr('id', 'equalto', path.from_point_id) | first %}
+                        {% set to_point = points | selectattr('id', 'equalto', path.to_point_id) | first %}
+                        <div class="rounded-lg border border-slate-200 p-4 text-sm dark:border-slate-700">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="font-medium text-slate-900 dark:text-white">
+                                    {{ from_point.name if from_point else 'Unknown' }} → {{ to_point.name if to_point else 'Unknown' }}
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    {% if path.has_clear_los is not none %}
+                                        {% if path.has_clear_los %}
+                                        <span class="badge bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">Clear</span>
+                                        {% else %}
+                                        <span class="badge bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">Blocked</span>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="badge bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">Unknown</span>
+                                    {% endif %}
+                                    <form method="POST" action="/admin/network/site-survey/los/{{ path.id }}/delete" onsubmit="return confirm('Delete this LOS path?');">
+                                        <button type="submit" class="text-red-600 hover:text-red-700 text-xs">Delete</button>
+                                    </form>
+                                </div>
+                            </div>
+                            <div class="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                <div>Distance: {% if path.distance_m %}{{ "%.1f"|format(path.distance_m) }} m{% else %}-{% endif %}</div>
+                                <div>Bearing: {% if path.bearing_deg %}{{ "%.1f"|format(path.bearing_deg) }}°{% else %}-{% endif %}</div>
+                                <div>FSPL: {% if path.free_space_loss_db %}{{ "%.1f"|format(path.free_space_loss_db) }} dB{% else %}-{% endif %}</div>
+                                <div>RSSI: {% if path.estimated_rssi_dbm %}{{ "%.1f"|format(path.estimated_rssi_dbm) }} dBm{% else %}-{% endif %}</div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-sm text-slate-500 dark:text-slate-400">No LOS paths calculated yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Actions</h2>
+                </div>
+                <div class="p-6 space-y-3">
+                    <a href="/admin/network/site-survey" class="inline-flex w-full items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        Back to Surveys
+                    </a>
+                    <a href="/admin/network/site-survey/new" class="inline-flex w-full items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                        New Survey
+                    </a>
+                    <button type="button" class="inline-flex w-full items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300" onclick="document.querySelector('#point-latitude')?.focus()">
+                        Add Point
+                    </button>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Survey Info</h2>
+                </div>
+                <div class="p-6 space-y-4 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Status</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ survey.status.value | replace('_', ' ') | title }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Frequency</span>
+                        <span class="font-medium text-slate-900 dark:text-white">
+                            {% if survey.frequency_mhz %}{{ survey.frequency_mhz }} MHz{% else %}-{% endif %}
+                        </span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Default Height</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ "%.1f"|format(survey.default_antenna_height_m) }} m</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Default TX</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ "%.1f"|format(survey.default_tx_power_dbm) }} dBm</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Points</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ points | length }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">LOS Paths</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ los_paths | length }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Add Point</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Click the map to fill coordinates.</p>
+                </div>
+                <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/points" class="p-6 space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name *</label>
+                        <input type="text" name="name" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Point name">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Type</label>
+                        <select name="point_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for pt in point_types %}
+                            <option value="{{ pt }}">{{ pt | replace('_', ' ') | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude *</label>
+                            <input type="number" step="0.000001" name="latitude" id="point-latitude" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="0.000000">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Longitude *</label>
+                            <input type="number" step="0.000001" name="longitude" id="point-longitude" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="0.000000">
+                        </div>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                        <div class="flex items-center justify-between">
+                            <span class="font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Elevation</span>
+                            <div class="flex items-center gap-2">
+                                <span id="elevation-status" class="text-slate-500 dark:text-slate-400">Waiting for coordinates</span>
+                                <span id="elevation-badge" class="badge bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">Missing</span>
+                            </div>
+                        </div>
+                        <div class="mt-1 flex flex-wrap gap-3">
+                            <span id="elevation-value">Ground: --</span>
+                            <span id="elevation-source">Source: --</span>
+                            <span id="elevation-tile">Tile: --</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Antenna Height (m)</label>
+                        <input type="number" step="0.1" name="antenna_height_m" value="{{ "%.1f"|format(survey.default_antenna_height_m) }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <button type="submit" class="w-full rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Add Point</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const mapData = {{ map_data | tojson | safe }};
+    const map = L.map('survey-map').setView([0, 0], 2);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19
+    }).addTo(map);
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    const pointIcons = {
+        tower: '#0ea5e9',
+        access_point: '#f97316',
+        cpe: '#22c55e',
+        repeater: '#a855f7',
+        custom: '#64748b'
+    };
+
+    const bounds = [];
+
+    if (mapData.features) {
+        mapData.features.forEach(feature => {
+            const geom = feature.geometry;
+            const props = feature.properties || {};
+
+            if (geom.type === 'Point') {
+                const coords = [geom.coordinates[1], geom.coordinates[0]];
+                bounds.push(coords);
+                const color = pointIcons[props.point_type] || pointIcons.custom;
+                const icon = L.divIcon({
+                    html: `<div style="background:${color};width:18px;height:18px;border-radius:6px;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"></div>`,
+                    className: '',
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9]
+                });
+                const popup = `
+                    <div class="text-sm">
+                        <div class="font-semibold">${escapeHtml(props.name || 'Point')}</div>
+                        <div class="text-xs uppercase tracking-wide text-slate-500">${escapeHtml(props.point_type || 'custom').replace(/_/g, ' ')}</div>
+                        ${props.total_height_m ? `<div class="text-xs mt-1">Total height: ${Number(props.total_height_m).toFixed(1)} m</div>` : ''}
+                        ${props.ground_elevation_m ? `<div class="text-xs">Ground elevation: ${Number(props.ground_elevation_m).toFixed(1)} m</div>` : ''}
+                    </div>
+                `;
+                L.marker(coords, { icon: icon }).bindPopup(popup).addTo(map);
+            } else if (geom.type === 'LineString') {
+                const coords = geom.coordinates.map(c => [c[1], c[0]]);
+                bounds.push(...coords);
+                let color = '#94a3b8';
+                if (props.has_clear_los === true) color = '#22c55e';
+                if (props.has_clear_los === false) color = '#ef4444';
+                const line = L.polyline(coords, { color: color, weight: 3, opacity: 0.85 }).addTo(map);
+                const popup = `
+                    <div class="text-sm">
+                        <div class="font-semibold">LOS Path</div>
+                        <div class="text-xs text-slate-500">${escapeHtml(props.from_point_name || '')} → ${escapeHtml(props.to_point_name || '')}</div>
+                        ${props.distance_m ? `<div class="text-xs mt-1">Distance: ${Number(props.distance_m).toFixed(1)} m</div>` : ''}
+                    </div>
+                `;
+                line.bindPopup(popup);
+            }
+        });
+    }
+
+    if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [40, 40] });
+    } else {
+        map.setView([0, 0], 2);
+    }
+
+    map.on('click', function(e) {
+        const latInput = document.getElementById('point-latitude');
+        const lngInput = document.getElementById('point-longitude');
+        if (!latInput || !lngInput) return;
+        latInput.value = e.latlng.lat.toFixed(6);
+        lngInput.value = e.latlng.lng.toFixed(6);
+        scheduleElevationLookup();
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const latParam = Number(params.get('lat'));
+    const lonParam = Number(params.get('lon'));
+    if (Number.isFinite(latParam) && Number.isFinite(lonParam)) {
+        const latInput = document.getElementById('point-latitude');
+        const lngInput = document.getElementById('point-longitude');
+        const nameInput = document.querySelector('form[action$="/points"] input[name="name"]');
+        if (latInput && lngInput) {
+            if (!latInput.value) latInput.value = latParam.toFixed(6);
+            if (!lngInput.value) lngInput.value = lonParam.toFixed(6);
+        }
+        if (nameInput && !nameInput.value) {
+            nameInput.value = 'Start Point';
+        }
+        scheduleElevationLookup();
+    }
+
+    const elevationStatus = document.getElementById('elevation-status');
+    const elevationBadge = document.getElementById('elevation-badge');
+    const elevationValue = document.getElementById('elevation-value');
+    const elevationSource = document.getElementById('elevation-source');
+    const elevationTile = document.getElementById('elevation-tile');
+    const latInput = document.getElementById('point-latitude');
+    const lngInput = document.getElementById('point-longitude');
+    let elevationTimer = null;
+
+    function setElevationState(state) {
+        if (!elevationStatus) return;
+        elevationStatus.textContent = state;
+    }
+
+    function setElevationBadge(state) {
+        if (!elevationBadge) return;
+        elevationBadge.className = 'badge';
+        if (state === 'ok') {
+            elevationBadge.textContent = 'OK';
+            elevationBadge.classList.add('bg-emerald-100', 'text-emerald-700', 'dark:bg-emerald-900/40', 'dark:text-emerald-300');
+        } else if (state === 'void') {
+            elevationBadge.textContent = 'Void';
+            elevationBadge.classList.add('bg-amber-100', 'text-amber-700', 'dark:bg-amber-900/40', 'dark:text-amber-300');
+        } else if (state === 'missing') {
+            elevationBadge.textContent = 'Missing';
+            elevationBadge.classList.add('bg-slate-100', 'text-slate-600', 'dark:bg-slate-700', 'dark:text-slate-300');
+        } else if (state === 'loading') {
+            elevationBadge.textContent = 'Loading';
+            elevationBadge.classList.add('bg-blue-100', 'text-blue-700', 'dark:bg-blue-900/40', 'dark:text-blue-300');
+        } else {
+            elevationBadge.textContent = 'Error';
+            elevationBadge.classList.add('bg-rose-100', 'text-rose-700', 'dark:bg-rose-900/40', 'dark:text-rose-300');
+        }
+    }
+
+    function updateElevationDisplay(data) {
+        if (!elevationValue || !elevationSource || !elevationTile) return;
+        if (data && data.available) {
+            const elevationText = data.elevation_m === null ? 'Ground: void' : `Ground: ${Number(data.elevation_m).toFixed(1)} m`;
+            elevationValue.textContent = elevationText;
+            elevationSource.textContent = `Source: ${data.source || '--'}`;
+            elevationTile.textContent = `Tile: ${data.tile || '--'}`;
+            if (data.elevation_m === null) {
+                setElevationBadge('void');
+            } else {
+                setElevationBadge('ok');
+            }
+        } else {
+            elevationValue.textContent = 'Ground: --';
+            elevationSource.textContent = 'Source: --';
+            elevationTile.textContent = 'Tile: --';
+            setElevationBadge('missing');
+        }
+    }
+
+    function requestElevation(lat, lon) {
+        const url = `/admin/network/site-survey/{{ survey.id }}/elevation?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
+        setElevationState('Loading...');
+        setElevationBadge('loading');
+        fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(response => response.json())
+            .then(data => {
+                updateElevationDisplay(data);
+                if (data && data.available) {
+                    setElevationState(data.elevation_m === null ? 'No data (void)' : 'Ready');
+                } else {
+                    setElevationState('No tile available');
+                }
+            })
+            .catch(() => {
+                updateElevationDisplay(null);
+                setElevationState('Lookup failed');
+                setElevationBadge('error');
+            });
+    }
+
+    function scheduleElevationLookup() {
+        if (!latInput || !lngInput) return;
+        const lat = Number(latInput.value);
+        const lon = Number(lngInput.value);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            setElevationState('Waiting for coordinates');
+            updateElevationDisplay(null);
+            return;
+        }
+        if (elevationTimer) {
+            clearTimeout(elevationTimer);
+        }
+        elevationTimer = setTimeout(() => requestElevation(lat, lon), 400);
+    }
+
+    if (latInput && lngInput) {
+        latInput.addEventListener('input', scheduleElevationLookup);
+        lngInput.addEventListener('input', scheduleElevationLookup);
+    }
+
+    document.querySelectorAll('.js-refresh-elevation').forEach(button => {
+        button.addEventListener('click', () => {
+            const pointId = button.getAttribute('data-point-id');
+            if (!pointId) return;
+            button.disabled = true;
+            button.textContent = 'Refreshing...';
+            fetch(`/api/wireless-survey/points/${pointId}/refresh-elevation`, { method: 'POST' })
+                .then(() => window.location.reload())
+                .catch(() => window.location.reload());
+        });
+    });
+})();
+</script>
+{% endblock %}

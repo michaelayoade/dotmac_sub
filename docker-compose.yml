@@ -1,0 +1,213 @@
+services:
+  app:
+    build: .
+    container_name: dotmac_sm_app
+    restart: unless-stopped
+    ports:
+    - 8001:8001
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sm
+      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
+      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      WIREGUARD_USE_NSENTER: '1'
+      VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
+    env_file:
+    - .env
+    depends_on:
+    - db
+    - redis
+    cap_add:
+    - NET_ADMIN
+    privileged: true
+    pid: host
+    sysctls:
+      net.ipv4.ip_forward: '1'
+    volumes:
+    - /etc/wireguard:/etc/wireguard
+    - ./app:/app/app
+    - ./templates:/app/templates
+    - ./static:/app/static
+    - ./alembic:/app/alembic
+    command:
+    - /bin/sh
+    - -c
+    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+  celery-worker:
+    build: .
+    container_name: dotmac_sm_celery_worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sm
+      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
+      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+    env_file:
+    - .env
+    depends_on:
+    - db
+    - redis
+    volumes:
+    - ./app:/app/app
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+  celery-beat:
+    build: .
+    container_name: dotmac_sm_celery_beat
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sm
+      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
+      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+    env_file:
+    - .env
+    depends_on:
+    - db
+    - redis
+    volumes:
+    - ./app:/app/app
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - beat
+    - --loglevel=info
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: dotmac_sm_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Bes3SpEVyg61QebbXSpUse7_4vbOVOa_
+      POSTGRES_DB: dotmac_sm
+    ports:
+    - 5434:5432
+    volumes:
+    - dotmac_sm_db_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7
+    container_name: dotmac_sm_redis
+    restart: unless-stopped
+    command: redis-server --requirepass nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq
+    ports:
+    - 6379:6379
+  nominatim:
+    image: mediagis/nominatim:4.4
+    container_name: dotmac_sm_nominatim
+    restart: unless-stopped
+    environment:
+      NOMINATIM_PBF_URL: https://download.geofabrik.de/africa/nigeria-latest.osm.pbf
+      NOMINATIM_IMPORT_STYLE: extratags
+      NOMINATIM_IMPORT: '1'
+    ports:
+    - 8080:8080
+    volumes:
+    - nominatim_data:/var/lib/postgresql/14/main
+    - nominatim_flatnode:/var/lib/nominatim/flatnode
+  freeradius:
+    image: freeradius/freeradius-server:3.2.3
+    container_name: dotmac_sm_freeradius
+    restart: unless-stopped
+    ports:
+    - 1812:1812/udp
+    - 1813:1813/udp
+    volumes:
+    - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql
+    - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default
+    - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
+    - ./config/freeradius/dictionary:/etc/raddb/dictionary
+    depends_on:
+    - radius-db
+    environment:
+    - RADIUS_DB_HOST=radius-db
+    - RADIUS_DB_NAME=radius
+    - RADIUS_DB_USER=radius
+    - RADIUS_DB_PASS=l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-
+  radius-db:
+    image: postgres:16
+    container_name: dotmac_sm_radius_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: radius
+      POSTGRES_PASSWORD: l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-
+      POSTGRES_DB: radius
+    ports:
+    - 5437:5432
+    volumes:
+    - radius_db_data:/var/lib/postgresql/data
+    - ./config/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+  genieacs:
+    image: genieacs/genieacs:1.2.9
+    container_name: dotmac_sm_genieacs
+    restart: unless-stopped
+    ports:
+    - 7547:7547
+    - 7557:7557
+    - 7567:7567
+    - 3000:3000
+    depends_on:
+    - genieacs-mongodb
+    environment:
+    - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm@genieacs-mongodb/genieacs?authSource=admin
+  genieacs-mongodb:
+    image: mongo:4.4
+    container_name: dotmac_sm_genieacs_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: genieacs
+      MONGO_INITDB_ROOT_PASSWORD: Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm
+    volumes:
+    - genieacs_mongodb_data:/data/db
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.96.0
+    container_name: dotmac_sm_victoriametrics
+    restart: unless-stopped
+    ports:
+    - 8428:8428
+    volumes:
+    - victoriametrics_data:/victoria-metrics-data
+    command:
+    - -retentionPeriod=365d
+    - -search.maxUniqueTimeseries=1000000
+  bandwidth-poller:
+    build: .
+    container_name: dotmac_sm_bandwidth_poller
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sm
+      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      BANDWIDTH_POLLING_ENABLED: 'true'
+      BANDWIDTH_POLL_INTERVAL_MS: '1000'
+      BANDWIDTH_HOT_RETENTION_HOURS: '24'
+      BANDWIDTH_REDIS_STREAM: bandwidth:samples
+    env_file:
+    - .env
+    depends_on:
+    - db
+    - redis
+    - victoriametrics
+    volumes:
+    - ./app:/app/app
+    command:
+    - python
+    - -m
+    - app.poller
+volumes:
+  dotmac_sm_db_data: null
+  nominatim_data: null
+  nominatim_flatnode: null
+  radius_db_data: null
+  genieacs_mongodb_data: null
+  victoriametrics_data: null
+networks:
+  default:
+    name: dotmac_sm_default
+    ipam:
+      config:
+      - subnet: 172.20.255.0/24

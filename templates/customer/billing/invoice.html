@@ -1,0 +1,197 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Invoice - My Account{% endblock %}
+
+{% block content %}
+{% set status = invoice.status | default('pending') %}
+{% set status_val = status.value if status is not string else status %}
+<div class="space-y-6 stagger-children">
+    <!-- Header with Breadcrumb -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-3">
+                <a href="/portal/billing" class="transition-colors duration-200 hover:text-brand-600 dark:hover:text-brand-400">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="font-medium text-stone-900 dark:text-white">{{ invoice.invoice_number | default('INV-' ~ (invoice.id | string | truncate(8, True, '') | upper)) }}</span>
+            </nav>
+            <div class="flex items-center gap-3">
+                <h1 class="text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Invoice {{ invoice.invoice_number | default('') }}</h1>
+                {% if status_val == 'paid' %}
+                <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                    <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    Paid
+                </span>
+                {% elif status_val == 'overdue' %}
+                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                    <span class="relative flex h-2 w-2">
+                        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
+                        <span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
+                    </span>
+                    Overdue
+                </span>
+                {% else %}
+                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/></svg>
+                    {{ status_val | title }}
+                </span>
+                {% endif %}
+            </div>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                {%- if invoice.issued_at -%}
+                    Issued {{ invoice.issued_at.strftime('%B %d, %Y') }}
+                {%- elif invoice.created_at -%}
+                    Created {{ invoice.created_at.strftime('%B %d, %Y') }}
+                {%- endif -%}
+            </p>
+        </div>
+        <a href="/portal/billing/invoices/{{ invoice.id }}/pdf" class="group inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 hover:-translate-y-0.5 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+            <svg class="h-4 w-4 transition-transform duration-200 group-hover:translate-y-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Download PDF
+        </a>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Summary Card -->
+            <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+                <div class="border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
+                    <h2 class="text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Summary</h2>
+                </div>
+                <div class="grid gap-6 p-6 sm:grid-cols-2">
+                    <div class="rounded-xl bg-stone-50/80 p-4 dark:bg-stone-700/30">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Billing Period</p>
+                        <p class="mt-2 text-sm font-semibold text-stone-900 dark:text-white">{{ invoice.period | default('Current period') }}</p>
+                    </div>
+                    <div class="rounded-xl bg-stone-50/80 p-4 dark:bg-stone-700/30">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Dates</p>
+                        <div class="mt-2 space-y-1 text-sm">
+                            <p class="flex items-center gap-2 text-stone-600 dark:text-stone-300">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                Issued {{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}
+                            </p>
+                            <p class="flex items-center gap-2 text-stone-600 dark:text-stone-300">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                Due {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-t border-stone-200/60 px-6 py-5 dark:border-stone-700/60 bg-stone-50/50 dark:bg-stone-800/50">
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>Subtotal</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.subtotal_amount or invoice.total_amount or 0) }}</span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>Tax</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.tax_amount or 0) }}</span>
+                        </div>
+                        <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
+                            <div class="flex items-center justify-between">
+                                <span class="text-base font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Total</span>
+                                <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">₦{{ "{:,.2f}".format(invoice.total_amount or 0) }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Line Items -->
+            <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+                <div class="border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
+                    <h2 class="text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Line Items</h2>
+                </div>
+                {% set line_items = invoice.line_items if invoice.line_items is defined else (invoice.items if invoice.items is defined else []) %}
+                {% if line_items %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-stone-200/60 dark:divide-stone-700/60">
+                        <thead>
+                            <tr class="bg-stone-50/80 dark:bg-stone-800/50">
+                                <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Description</th>
+                                <th class="px-6 py-4 text-center text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Qty</th>
+                                <th class="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
+                            {% for item in line_items %}
+                            <tr class="transition-colors duration-200 hover:bg-stone-50/80 dark:hover:bg-stone-700/30">
+                                <td class="px-6 py-4">
+                                    <span class="text-sm font-medium text-stone-900 dark:text-white">{{ item.description | default('Service charge') }}</span>
+                                </td>
+                                <td class="px-6 py-4 text-center">
+                                    <span class="inline-flex items-center justify-center rounded-lg bg-stone-100 px-3 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-300">{{ item.quantity | default(1) }}</span>
+                                </td>
+                                <td class="px-6 py-4 text-right">
+                                    <span class="text-sm font-bold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(item.total_amount or item.amount or 0) }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="px-6 py-16 text-center">
+                    <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-stone-100 to-stone-50 dark:from-stone-700 dark:to-stone-800">
+                        <svg class="h-7 w-7 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    </div>
+                    <p class="text-sm font-medium text-stone-500 dark:text-stone-400">No line items listed for this invoice.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Amount Due Card -->
+            <div class="overflow-hidden rounded-2xl border shadow-premium
+                {% if status_val == 'overdue' %}border-red-200 bg-gradient-to-br from-red-50 to-white dark:border-red-800/50 dark:from-red-900/20 dark:to-stone-800
+                {% elif status_val == 'paid' %}border-emerald-200 bg-gradient-to-br from-emerald-50 to-white dark:border-emerald-800/50 dark:from-emerald-900/20 dark:to-stone-800
+                {% else %}border-stone-200/60 bg-white/80 dark:border-stone-700/60 dark:bg-stone-800/80{% endif %} p-6">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Amount Due</h3>
+                <p class="mt-3 text-4xl font-bold
+                    {% if status_val == 'overdue' %}text-red-600 dark:text-red-400
+                    {% elif status_val == 'paid' %}text-emerald-600 dark:text-emerald-400
+                    {% else %}text-stone-900 dark:text-white{% endif %}" style="font-family: var(--font-display);">
+                    ₦{{ "{:,.2f}".format(invoice.balance_due or invoice.total_amount or 0) }}
+                </p>
+                <p class="mt-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Due {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}
+                </p>
+                {% if status_val != 'paid' %}
+                <a href="/portal/billing/pay?invoice={{ invoice.id }}" class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-brand-500/20 transition-all duration-300 hover:shadow-lg hover:shadow-brand-500/30 hover:-translate-y-0.5">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                    Pay Invoice
+                </a>
+                {% else %}
+                <div class="mt-5 flex items-center justify-center gap-2 rounded-xl bg-emerald-100/80 px-5 py-3 text-sm font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                    <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                    Payment Complete
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Account Info Card -->
+            <div class="rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Account</h3>
+                <div class="mt-4 flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 text-brand-600 dark:from-brand-900/30 dark:to-brand-800/20 dark:text-brand-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ billing_name or (customer.get('current_user').name if customer and customer.get('current_user') else None) or customer.username or (customer.get('username') if customer else 'Customer') }}</p>
+                        <p class="text-xs text-stone-500 dark:text-stone-400">{{ billing_email or (customer.get('current_user').email if customer and customer.get('current_user') else None) or customer.email or (customer.get('email') if customer else 'No email on file') }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Link -->
+            <a href="/portal/billing" class="group inline-flex w-full items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-5 py-3 text-sm font-semibold text-stone-700 transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+                <svg class="h-4 w-4 transition-transform duration-200 group-hover:-translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                Back to Billing
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,196 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}System Settings - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">System Settings</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure platform defaults and operational preferences</p>
+    </div>
+
+    <div class="space-y-4">
+        {% for group_name, group_domains in grouped_domains.items() %}
+        <div>
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">{{ group_name }}</h3>
+            <div class="flex flex-wrap gap-2">
+                {% for item in group_domains %}
+                <a href="/admin/system/settings?domain={{ item.value }}"
+                   class="rounded-full border px-3 py-1 text-sm font-medium transition {% if item.value == domain %}border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-500/10 dark:text-primary-300{% else %}border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-primary-500 dark:hover:text-primary-300{% endif %}">
+                    {{ item.label }}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if errors %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200">
+        <p class="font-semibold">Could not save settings:</p>
+        <ul class="mt-2 list-disc pl-5 space-y-1">
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% elif saved %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">
+        Settings saved.
+    </div>
+    {% endif %}
+
+    {% if domain == "comms" %}
+    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+        <p class="font-semibold text-slate-900 dark:text-white">CRM Meta URLs</p>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OAuth redirect URI</p>
+        <p class="font-mono text-xs text-slate-600 dark:text-slate-300">{{ crm_meta_oauth_redirect_url }}</p>
+        <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Webhook callback URL</p>
+        <p class="font-mono text-xs text-slate-600 dark:text-slate-300">{{ crm_meta_callback_url }}</p>
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/admin/system/settings" class="space-y-6">
+        <input type="hidden" name="domain" value="{{ domain }}">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ domain | replace('_', ' ') | title }}</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Edit default settings for this domain.</p>
+                </div>
+                <span class="text-xs font-medium uppercase tracking-wide text-slate-400">Settings</span>
+            </div>
+            {% if sections %}
+            <div class="mt-6 space-y-6">
+                {% for section in sections %}
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ section.title }}</h3>
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        {% for setting in section.settings %}
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                                {{ setting.label }}
+                                {% if setting.required %}
+                                <span class="text-red-500">*</span>
+                                {% endif %}
+                            </label>
+                            {% if setting.value_type == 'boolean' %}
+                                <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                                    <input type="checkbox" name="{{ setting.key }}" value="true"
+                                           {% if setting.value %}checked{% endif %}
+                                           class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                                    Enabled
+                                </label>
+                            {% elif setting.allowed %}
+                                <select name="{{ setting.key }}"
+                                        {% if setting.required %}required{% endif %}
+                                        class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    {% for option in setting.allowed %}
+                                    <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                                    {% endfor %}
+                                </select>
+                            {% elif setting.value_type == 'integer' %}
+                                <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
+                                       {% if setting.min_value is not none %}min="{{ setting.min_value }}"{% endif %}
+                                       {% if setting.max_value is not none %}max="{{ setting.max_value }}"{% endif %}
+                                       {% if setting.required %}required{% endif %}
+                                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% else %}
+                                <input type="{% if setting.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
+                                       value="{% if setting.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                                       placeholder="{% if setting.is_secret %}••••••{% endif %}"
+                                       {% if setting.required and not (setting.is_secret and setting.value) %}required{% endif %}
+                                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                {% if setting.is_secret and setting.value %}
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                {% for setting in settings %}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                        {{ setting.label }}
+                        {% if setting.required %}
+                        <span class="text-red-500">*</span>
+                        {% endif %}
+                    </label>
+                    {% if setting.value_type == 'boolean' %}
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="{{ setting.key }}" value="true"
+                                   {% if setting.value %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Enabled
+                        </label>
+                    {% elif setting.allowed %}
+                        <select name="{{ setting.key }}"
+                                {% if setting.required %}required{% endif %}
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for option in setting.allowed %}
+                            <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                            {% endfor %}
+                        </select>
+                    {% elif setting.value_type == 'integer' %}
+                        <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
+                               {% if setting.min_value is not none %}min="{{ setting.min_value }}"{% endif %}
+                               {% if setting.max_value is not none %}max="{{ setting.max_value }}"{% endif %}
+                               {% if setting.required %}required{% endif %}
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% else %}
+                        <input type="{% if setting.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
+                               value="{% if setting.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                               placeholder="{% if setting.is_secret %}••••••{% endif %}"
+                               {% if setting.required and not (setting.is_secret and setting.value) %}required{% endif %}
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% if setting.is_secret and setting.value %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
+                        {% endif %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/system/settings?domain={{ domain }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Changes</button>
+        </div>
+    </form>
+
+    {% if domain == "billing" %}
+    <div class="space-y-4">
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Payment Configuration</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage channels, settlement accounts, and routing.</p>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <a href="/admin/billing/payment-channels" class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h18M3 17h18"/></svg>
+                </span>
+                Payment Channels
+            </a>
+            <a href="/admin/billing/collection-accounts" class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </span>
+                Collection Accounts
+            </a>
+            <a href="/admin/billing/payment-channel-accounts" class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
+                <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </span>
+                Channel Routing
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

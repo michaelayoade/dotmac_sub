@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ document.title if document else fallback_title }} - Dotmac</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            200: '#bfdbfe',
+                            300: '#93c5fd',
+                            400: '#60a5fa',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                            800: '#1e40af',
+                            900: '#1e3a8a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .prose h1 { font-size: 2rem; font-weight: 700; margin-bottom: 1rem; }
+        .prose h2 { font-size: 1.5rem; font-weight: 600; margin-top: 2rem; margin-bottom: 0.75rem; }
+        .prose h3 { font-size: 1.25rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        .prose p { margin-bottom: 1rem; line-height: 1.75; }
+        .prose ul, .prose ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+        .prose li { margin-bottom: 0.5rem; }
+        .prose a { color: #2563eb; text-decoration: underline; }
+        .prose a:hover { color: #1d4ed8; }
+    </style>
+</head>
+<body class="h-full bg-slate-50 dark:bg-slate-900">
+    <div x-data="{ darkMode: localStorage.getItem('darkMode') === 'true' }" x-init="$watch('darkMode', val => { localStorage.setItem('darkMode', val); document.documentElement.classList.toggle('dark', val) }); document.documentElement.classList.toggle('dark', darkMode)">
+        <!-- Header -->
+        <header class="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-slate-700 dark:bg-slate-900/95">
+            <div class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+                <div class="flex h-16 items-center justify-between">
+                    <a href="/" class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600">
+                            <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            </svg>
+                        </div>
+                        <span class="text-lg font-semibold text-slate-900 dark:text-white">Dotmac</span>
+                    </a>
+                    <nav class="flex items-center gap-4">
+                        <a href="/portal" class="text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">Customer Portal</a>
+                    </nav>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
+            {% if document %}
+            <article>
+                <header class="mb-8 border-b border-slate-200 pb-8 dark:border-slate-700">
+                    <p class="text-sm font-medium text-primary-600 dark:text-primary-400 mb-2">{{ document_type }}</p>
+                    <h1 class="text-3xl font-bold text-slate-900 dark:text-white">{{ document.title }}</h1>
+                    <div class="mt-4 flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
+                        <span>Version {{ document.version }}</span>
+                        {% if document.effective_date %}
+                        <span>&bull;</span>
+                        <span>Effective {{ document.effective_date.strftime('%B %d, %Y') }}</span>
+                        {% endif %}
+                        {% if document.published_at %}
+                        <span>&bull;</span>
+                        <span>Last updated {{ document.published_at.strftime('%B %d, %Y') }}</span>
+                        {% endif %}
+                    </div>
+                    {% if document.summary %}
+                    <p class="mt-4 text-lg text-slate-600 dark:text-slate-300">{{ document.summary }}</p>
+                    {% endif %}
+                </header>
+
+                {% if document.file_path %}
+                <div class="mb-8 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/30">
+                                <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                            </div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">Download Document</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ document.file_name }} ({{ ((document.file_size or 0) / 1024) | round(1) }} KB)</p>
+                            </div>
+                        </div>
+                        <a href="/legal/{{ document.id }}/download" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                            Download
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if document.content %}
+                <div class="prose prose-slate max-w-none dark:prose-invert">
+                    {{ document.content | safe }}
+                </div>
+                {% endif %}
+            </article>
+            {% else %}
+            <div class="text-center py-12">
+                <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <h2 class="mt-4 text-xl font-semibold text-slate-900 dark:text-white">{{ fallback_title }}</h2>
+                <p class="mt-2 text-slate-500 dark:text-slate-400">{{ fallback_content }}</p>
+                <a href="/" class="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Return Home
+                </a>
+            </div>
+            {% endif %}
+        </main>
+
+        <!-- Footer -->
+        <footer class="border-t border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div class="flex items-center gap-6">
+                        <a href="/legal/terms" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Terms of Service</a>
+                        <a href="/legal/privacy" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Privacy Policy</a>
+                        <a href="/legal/acceptable-use" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Acceptable Use</a>
+                    </div>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">&copy; 2025 Dotmac. All rights reserved.</p>
+                </div>
+            </div>
+        </footer>
+    </div>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</body>
+</html>

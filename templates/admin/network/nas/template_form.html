@@ -1,0 +1,215 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import submit_button %}
+
+{% block title %}{% if template %}Edit{% else %}New{% endif %} Provisioning Template - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex items-center gap-4">
+        <a href="{% if template %}/admin/network/nas/templates/{{ template.id }}{% else %}/admin/network/nas/templates{% endif %}" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{% if template %}Edit{% else %}New{% endif %} Provisioning Template</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {% if template %}Update template configuration{% else %}Create a command template for subscriber provisioning{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <!-- Errors -->
+    {% if errors %}
+    <div class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-900/20">
+        <div class="flex items-start gap-3">
+            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <div>
+                <h3 class="font-medium text-red-800 dark:text-red-300">There were errors with your submission</h3>
+                <ul class="mt-2 list-disc pl-5 text-sm text-red-700 dark:text-red-400">
+                    {% for error in errors %}
+                    <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" class="space-y-6" x-data="{ submitting: false }" @submit="submitting = true">
+        {% include "components/forms/csrf_input.html" %}
+
+        <!-- Basic Information -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Template Information</h2>
+            </div>
+            <div class="p-6">
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Template Name *</label>
+                        <input type="text" name="name" value="{{ template.name if template else (form_data.name if form_data else '') }}" required
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., MikroTik PPPoE Create User">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor *</label>
+                        <select name="vendor" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select Vendor</option>
+                            {% for v in vendors %}
+                            <option value="{{ v.value }}" {% if (template and template.vendor.value == v.value) or (form_data and form_data.vendor == v.value) %}selected{% endif %}>{{ v.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Action *</label>
+                        <select name="action" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select Action</option>
+                            {% for a in provisioning_actions %}
+                            <option value="{{ a.value }}" {% if (template and template.action.value == a.value) or (form_data and form_data.action == a.value) %}selected{% endif %}>{{ a.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Connection Type</label>
+                        <select name="connection_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">All Types</option>
+                            {% for ct in connection_types %}
+                            <option value="{{ ct.value }}" {% if template and template.connection_type and template.connection_type.value == ct.value %}selected{% endif %}>{{ ct.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 mt-6">
+                            <input type="checkbox" name="is_active" value="true"
+                                   {% if not template or template.is_active %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+                        <textarea name="description" rows="2"
+                                  class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                  placeholder="Optional description of what this template does">{{ template.description if template else (form_data.description if form_data else '') }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Template Content -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Template Content</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    Use <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">{{placeholder}}</code> syntax for variables
+                </p>
+            </div>
+            <div class="p-6">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Command Template *</label>
+                    <textarea name="template_content" rows="10" required
+                              class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                              placeholder="/ppp secret add name={{username}} password={{password}} service=pppoe profile={{profile}}">{{ template.template_content if template else (form_data.template_content if form_data else '') }}</textarea>
+                </div>
+
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Common Placeholders</h4>
+                    <div class="flex flex-wrap gap-2">
+                        {% for ph in ['username', 'password', 'speed_down', 'speed_up', 'ip_address', 'mac_address', 'profile', 'vlan_id'] %}
+                        <button type="button" onclick="insertPlaceholder('{{ph}}')"
+                                class="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-mono text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                            {{{{ph}}}}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Placeholders (JSON array)</label>
+                    <input type="text" name="placeholders" id="placeholders_input"
+                           value="{{ template.placeholders | tojson if template and template.placeholders else '' }}"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder='["username", "password", "speed_down"]'>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Auto-extracted from template. Edit if needed.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Example Templates -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Example Templates</h2>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">MikroTik PPPoE - Create User</h4>
+                    <pre class="rounded-lg bg-slate-900 p-3 text-xs text-green-400 overflow-x-auto">/ppp secret add name={{username}} password={{password}} service=pppoe profile={{profile}} comment="{{comment}}"</pre>
+                </div>
+                <div>
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">MikroTik PPPoE - Delete User</h4>
+                    <pre class="rounded-lg bg-slate-900 p-3 text-xs text-green-400 overflow-x-auto">/ppp secret remove [find name={{username}}]</pre>
+                </div>
+                <div>
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">MikroTik - Change Speed Profile</h4>
+                    <pre class="rounded-lg bg-slate-900 p-3 text-xs text-green-400 overflow-x-auto">/ppp secret set [find name={{username}}] profile={{profile}}</pre>
+                </div>
+                <div>
+                    <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">MikroTik - Disconnect User Session</h4>
+                    <pre class="rounded-lg bg-slate-900 p-3 text-xs text-green-400 overflow-x-auto">/ppp active remove [find name={{username}}]</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Form Actions -->
+        <div class="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-6 py-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <a href="{% if template %}/admin/network/nas/templates/{{ template.id }}{% else %}/admin/network/nas/templates{% endif %}"
+               class="text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                Cancel
+            </a>
+            <button type="submit"
+                    :disabled="submitting"
+                    :class="{ 'opacity-50 cursor-wait': submitting }"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:hover:bg-primary-600">
+                <span x-show="!submitting" class="inline-flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    {% if template %}Update Template{% else %}Create Template{% endif %}
+                </span>
+                <span x-show="submitting" x-cloak class="inline-flex items-center gap-2">
+                    <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                </span>
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+function insertPlaceholder(name) {
+    const textarea = document.querySelector('textarea[name="template_content"]');
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    const placeholder = '{{' + name + '}}';
+    textarea.value = text.substring(0, start) + placeholder + text.substring(end);
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = start + placeholder.length;
+    updatePlaceholders();
+}
+
+function updatePlaceholders() {
+    const content = document.querySelector('textarea[name="template_content"]').value;
+    const matches = content.match(/\{\{([^}]+)\}\}/g);
+    if (matches) {
+        const placeholders = [...new Set(matches.map(m => m.replace(/[{}]/g, '')))];
+        document.getElementById('placeholders_input').value = JSON.stringify(placeholders);
+    }
+}
+
+document.querySelector('textarea[name="template_content"]').addEventListener('input', updatePlaceholders);
+</script>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ job.name }} - Integration Jobs{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/integrations/jobs" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ job.name }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Integration Job</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <button class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Run Now
+            </button>
+        </div>
+    </div>
+
+    <!-- Details Card -->
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Configuration</h2>
+        <dl class="grid gap-4 sm:grid-cols-3">
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Target</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.target.name if job.target else '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Type</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.job_type.value | title if job.job_type else 'Sync' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Schedule</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                    {% if job.schedule_type and job.schedule_type.value == 'interval' %}
+                    Every {{ job.interval_minutes }} minutes
+                    {% else %}
+                    Manual
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                <dd class="mt-1">
+                    {% if job.is_active %}
+                    {{ status_badge("Active", "active", size="sm") }}
+                    {% else %}
+                    {{ status_badge("Inactive", "inactive", size="sm") }}
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Run</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.last_run_at.strftime('%b %d, %Y %H:%M') if job.last_run_at else 'Never' }}</dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- Run History -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Run History</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Started</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Duration</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Error</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for run in runs %}
+                    {% set status_val = run.status.value if run.status else 'running' %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d %H:%M:%S') if run.started_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {% if run.finished_at and run.started_at %}
+                            {{ ((run.finished_at - run.started_at).total_seconds()) | int }}s
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if status_val == 'success' %}
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Success</span>
+                            {% elif status_val == 'failed' %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Failed</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Running</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-red-600 dark:text-red-400 truncate max-w-xs">{{ run.error or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No runs yet</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

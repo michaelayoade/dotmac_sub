@@ -1,0 +1,328 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if profile else 'New' }} RADIUS Profile - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/radius" class="hover:text-primary-600">RADIUS</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Profile' if profile else 'New Profile' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit RADIUS Profile' if profile else 'Add RADIUS Profile' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update profile attributes' if profile else 'Define authentication profile with speed and QoS settings' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Profile Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Profile Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="120"
+                            value="{{ profile.name if profile else '' }}"
+                            placeholder="e.g., 100Mbps-Residential"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="vendor" class="block text-sm font-medium text-slate-700 dark:text-slate-300">NAS Vendor</label>
+                        <select name="vendor" id="vendor"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in vendors %}
+                            <option value="{{ item }}" {% if profile and profile.vendor == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                        <textarea name="description" id="description" rows="3"
+                            placeholder="Profile description and usage notes"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ profile.description if profile else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not profile or profile.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable to use this profile for new subscriptions</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RADIUS Attributes -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS Attributes</h2>
+                    <button type="button" id="add-attribute"
+                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        + Add Attribute
+                    </button>
+                </div>
+            </div>
+            <div class="p-6 space-y-4">
+                <p class="text-sm text-slate-500 dark:text-slate-400">Add vendor-specific attributes (e.g., Mikrotik-Rate-Limit, Tunnel-Private-Group-ID).</p>
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                    <p class="font-medium text-slate-700 dark:text-slate-200">Quick Add</p>
+                    <div class="mt-3">
+                        <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Preset</label>
+                        <select id="preset-selector"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="mikrotik-rate">Mikrotik: Rate Limit</option>
+                            <option value="mikrotik-vlan">Mikrotik: VLAN (Tunnel-Private-Group-ID)</option>
+                            <option value="cisco-avpair">Cisco: AVPair</option>
+                        </select>
+                    </div>
+                    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12 items-end" id="preset-mikrotik-rate">
+                        <div class="sm:col-span-3">
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Down (Mbps)</label>
+                            <input type="number" id="rate-down" min="0" placeholder="100"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-3">
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Up (Mbps)</label>
+                            <input type="number" id="rate-up" min="0" placeholder="20"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-3">
+                            <button type="button" id="add-rate-limit"
+                                    class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                                Add Mikrotik-Rate-Limit
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12 items-end" id="preset-mikrotik-vlan" style="display: none;">
+                        <div class="sm:col-span-4">
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">VLAN ID</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="vlan-id" min="1" max="4094" placeholder="100"
+                                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <button type="button" id="add-vlan"
+                                        class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-12 items-end" id="preset-cisco-avpair" style="display: none;">
+                        <div class="sm:col-span-8">
+                            <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Cisco AVPair</label>
+                            <input type="text" id="cisco-avpair" placeholder="subscriber:policy=gold"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-3">
+                            <button type="button" id="add-cisco-avpair"
+                                    class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                                Add Cisco-AVPair
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div id="attributes-list" class="space-y-3">
+                    {% if attributes %}
+                    {% for item in attributes %}
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-12 items-center">
+                        <div class="sm:col-span-5">
+                            <input type="text" name="attribute_name" value="{{ item.attribute }}"
+                                placeholder="Attribute"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <input type="text" name="attribute_operator" value="{{ item.operator or '' }}"
+                                placeholder="="
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-4">
+                            <input type="text" name="attribute_value" value="{{ item.value }}"
+                                placeholder="Value"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-1">
+                            <button type="button" class="remove-attribute text-sm text-red-600 hover:text-red-700">Remove</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-12 items-center">
+                        <div class="sm:col-span-5">
+                            <input type="text" name="attribute_name" placeholder="Attribute"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <input type="text" name="attribute_operator" placeholder="="
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-4">
+                            <input type="text" name="attribute_value" placeholder="Value"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="sm:col-span-1">
+                            <button type="button" class="remove-attribute text-sm text-red-600 hover:text-red-700">Remove</button>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/radius" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if profile else 'Create Profile' }}
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    const attributesList = document.getElementById('attributes-list');
+    const addAttributeButton = document.getElementById('add-attribute');
+
+    function bindRemoveHandlers() {
+        attributesList.querySelectorAll('.remove-attribute').forEach((button) => {
+            button.onclick = () => {
+                const row = button.closest('.grid');
+                if (row) {
+                    row.remove();
+                }
+            };
+        });
+    }
+
+    function addAttributeRow() {
+        const row = document.createElement('div');
+        row.className = 'grid grid-cols-1 gap-3 sm:grid-cols-12 items-center';
+        row.innerHTML = `
+            <div class="sm:col-span-5">
+                <input type="text" name="attribute_name" placeholder="Attribute"
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <input type="text" name="attribute_operator" placeholder="="
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-4">
+                <input type="text" name="attribute_value" placeholder="Value"
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-1">
+                <button type="button" class="remove-attribute text-sm text-red-600 hover:text-red-700">Remove</button>
+            </div>
+        `;
+        attributesList.appendChild(row);
+        bindRemoveHandlers();
+    }
+
+    function addAttributeRowWithValues(name, operator, value) {
+        if (!name || !value) {
+            return;
+        }
+        const row = document.createElement('div');
+        row.className = 'grid grid-cols-1 gap-3 sm:grid-cols-12 items-center';
+        row.innerHTML = `
+            <div class="sm:col-span-5">
+                <input type="text" name="attribute_name" value="${name}"
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <input type="text" name="attribute_operator" value="${operator || ''}"
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-4">
+                <input type="text" name="attribute_value" value="${value}"
+                    class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-1">
+                <button type="button" class="remove-attribute text-sm text-red-600 hover:text-red-700">Remove</button>
+            </div>
+        `;
+        attributesList.appendChild(row);
+        bindRemoveHandlers();
+    }
+
+    addAttributeButton.addEventListener('click', addAttributeRow);
+    bindRemoveHandlers();
+
+    const presetSelector = document.getElementById('preset-selector');
+    const presetRate = document.getElementById('preset-mikrotik-rate');
+    const presetVlan = document.getElementById('preset-mikrotik-vlan');
+    const presetCisco = document.getElementById('preset-cisco-avpair');
+    const addRateLimitButton = document.getElementById('add-rate-limit');
+    const addVlanButton = document.getElementById('add-vlan');
+    const addCiscoButton = document.getElementById('add-cisco-avpair');
+    const vendorSelect = document.getElementById('vendor');
+
+    function showPreset(value) {
+        presetRate.style.display = value === 'mikrotik-rate' ? 'grid' : 'none';
+        presetVlan.style.display = value === 'mikrotik-vlan' ? 'grid' : 'none';
+        presetCisco.style.display = value === 'cisco-avpair' ? 'grid' : 'none';
+    }
+
+    function applyVendorPreset() {
+        if (!vendorSelect) {
+            return;
+        }
+        if (vendorSelect.value === 'cisco') {
+            presetSelector.value = 'cisco-avpair';
+        } else {
+            presetSelector.value = 'mikrotik-rate';
+        }
+        showPreset(presetSelector.value);
+    }
+
+    presetSelector.addEventListener('change', () => showPreset(presetSelector.value));
+    if (vendorSelect) {
+        vendorSelect.addEventListener('change', applyVendorPreset);
+    }
+    applyVendorPreset();
+
+    addRateLimitButton.addEventListener('click', () => {
+        const down = document.getElementById('rate-down').value;
+        const up = document.getElementById('rate-up').value;
+        if (!down || !up) {
+            return;
+        }
+        const downK = Math.round(parseFloat(down) * 1000);
+        const upK = Math.round(parseFloat(up) * 1000);
+        addAttributeRowWithValues('Mikrotik-Rate-Limit', '=', `${downK}k/${upK}k`);
+    });
+
+    addVlanButton.addEventListener('click', () => {
+        const vlan = document.getElementById('vlan-id').value;
+        if (!vlan) {
+            return;
+        }
+        addAttributeRowWithValues('Tunnel-Private-Group-ID', '=', vlan);
+    });
+
+    addCiscoButton.addEventListener('click', () => {
+        const avpair = document.getElementById('cisco-avpair').value;
+        if (!avpair) {
+            return;
+        }
+        addAttributeRowWithValues('Cisco-AVPair', '=', avpair);
+    });
+</script>
+{% endblock %}

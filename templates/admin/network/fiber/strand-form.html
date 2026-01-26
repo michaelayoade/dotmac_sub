@@ -1,0 +1,115 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if strand else 'New' }} Fiber Strand - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/fiber-strands" class="hover:text-primary-600">Fiber Strands</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Strand' if strand else 'New Strand' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Fiber Strand' if strand else 'Add Fiber Strand' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update strand configuration' if strand else 'Register a new fiber strand in a cable' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Strand Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="cable_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Cable Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="cable_name" id="cable_name" required maxlength="160"
+                            value="{{ strand.cable_name if strand else '' }}"
+                            placeholder="CABLE-MAIN-001"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="strand_number" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Strand Number <span class="text-red-500">*</span></label>
+                        <input type="number" name="strand_number" id="strand_number" required min="1" max="999"
+                            value="{{ strand.strand_number if strand else '' }}"
+                            placeholder="1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="label" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Label</label>
+                        <input type="text" name="label" id="label" maxlength="160"
+                            value="{{ strand.label if strand else '' }}"
+                            placeholder="Blue-1, Tube 1 Fiber 1, etc."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Color code or tube/fiber identification</p>
+                    </div>
+
+                    <div>
+                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                        <select name="status" id="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="available" {% if strand and strand.status.value == 'available' %}selected{% elif not strand %}selected{% endif %}>Available</option>
+                            <option value="in_use" {% if strand and strand.status.value == 'in_use' %}selected{% endif %}>In Use</option>
+                            <option value="reserved" {% if strand and strand.status.value == 'reserved' %}selected{% endif %}>Reserved</option>
+                            <option value="damaged" {% if strand and strand.status.value == 'damaged' %}selected{% endif %}>Damaged</option>
+                            <option value="retired" {% if strand and strand.status.value == 'retired' %}selected{% endif %}>Retired</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="upstream_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upstream Type</label>
+                        <select name="upstream_type" id="upstream_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            <option value="olt_port" {% if strand and strand.upstream_type and strand.upstream_type.value == 'olt_port' %}selected{% endif %}>OLT Port</option>
+                            <option value="splitter_port" {% if strand and strand.upstream_type and strand.upstream_type.value == 'splitter_port' %}selected{% endif %}>Splitter Port</option>
+                            <option value="fdh" {% if strand and strand.upstream_type and strand.upstream_type.value == 'fdh' %}selected{% endif %}>FDH</option>
+                            <option value="splice_closure" {% if strand and strand.upstream_type and strand.upstream_type.value == 'splice_closure' %}selected{% endif %}>Splice Closure</option>
+                            <option value="other" {% if strand and strand.upstream_type and strand.upstream_type.value == 'other' %}selected{% endif %}>Other</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="downstream_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Downstream Type</label>
+                        <select name="downstream_type" id="downstream_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            <option value="ont" {% if strand and strand.downstream_type and strand.downstream_type.value == 'ont' %}selected{% endif %}>ONT</option>
+                            <option value="splitter_port" {% if strand and strand.downstream_type and strand.downstream_type.value == 'splitter_port' %}selected{% endif %}>Splitter Port</option>
+                            <option value="fdh" {% if strand and strand.downstream_type and strand.downstream_type.value == 'fdh' %}selected{% endif %}>FDH</option>
+                            <option value="splice_closure" {% if strand and strand.downstream_type and strand.downstream_type.value == 'splice_closure' %}selected{% endif %}>Splice Closure</option>
+                            <option value="other" {% if strand and strand.downstream_type and strand.downstream_type.value == 'other' %}selected{% endif %}>Other</option>
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ strand.notes if strand else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/fiber-strands" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if strand else 'Create Strand' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

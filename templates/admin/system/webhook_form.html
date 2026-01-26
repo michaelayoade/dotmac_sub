@@ -1,0 +1,157 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if endpoint else 'New' }} Webhook Endpoint - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/system/webhooks" class="hover:text-primary-600">Webhooks</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Endpoint' if endpoint else 'New Endpoint' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Webhook Endpoint' if endpoint else 'Add Webhook Endpoint' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update endpoint configuration' if endpoint else 'Configure a new webhook endpoint' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Endpoint Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Endpoint Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ endpoint.name if endpoint else '' }}"
+                            placeholder="Production Webhook"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="url" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Webhook URL <span class="text-red-500">*</span></label>
+                        <input type="url" name="url" id="url" required maxlength="500"
+                            value="{{ endpoint.url if endpoint else '' }}"
+                            placeholder="https://your-server.com/webhooks"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The URL where webhook payloads will be sent</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Signing Secret</label>
+                        <input type="password" name="secret" id="secret" maxlength="255"
+                            value="{{ endpoint.secret if endpoint else '' }}"
+                            placeholder="Leave blank to auto-generate"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used to sign webhook payloads for verification</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not endpoint or endpoint.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable to receive webhook events</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Event Subscriptions -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Event Subscriptions</h2>
+            </div>
+            <div class="p-6">
+                <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Select the events you want to receive at this endpoint:</p>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="subscriber.created" {% if endpoint and 'subscriber.created' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">subscriber.created</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">New subscriber registered</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="subscription.created" {% if endpoint and 'subscription.created' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">subscription.created</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">New subscription activated</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="invoice.created" {% if endpoint and 'invoice.created' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">invoice.created</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Invoice generated</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="invoice.paid" {% if endpoint and 'invoice.paid' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">invoice.paid</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Invoice payment received</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="payment.received" {% if endpoint and 'payment.received' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">payment.received</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Payment processed</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="provisioning.completed" {% if endpoint and 'provisioning.completed' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">provisioning.completed</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Service provisioned</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="network.alert" {% if endpoint and 'network.alert' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">network.alert</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Network event triggered</p>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
+                        <input type="checkbox" name="events" value="usage.recorded" {% if endpoint and 'usage.recorded' in subscribed_events %}checked{% endif %}
+                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">usage.recorded</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Usage data recorded</p>
+                        </div>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/system/webhooks" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if endpoint else 'Create Endpoint' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{#
+   Card Component
+   Usage: {% include "components/data/card.html" %}
+
+   Parameters:
+   - title: Card title
+   - subtitle: Card subtitle
+   - padding: Boolean (default: true)
+   - class: Additional CSS classes
+#}
+<div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 {{ class }}">
+    {% if title or subtitle %}
+    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+        {% if title %}
+        <h3 class="text-base font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+        {% endif %}
+        {% if subtitle %}
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="{% if padding is not false %}p-6{% endif %}">
+        {% block card_content %}{% endblock %}
+    </div>
+
+    {% block card_footer %}{% endblock %}
+</div>

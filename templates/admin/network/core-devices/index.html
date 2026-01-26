@@ -1,0 +1,147 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Core Network Devices - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Core Network Devices</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Routers, switches, and network infrastructure{% if role_filter %} - {{ role_filter | title }}{% endif %}</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <form method="GET" action="/admin/network/core-devices">
+                {% if role_filter %}
+                <input type="hidden" name="role" value="{{ role_filter }}">
+                {% endif %}
+                <label for="status" class="sr-only">Status</label>
+                <select id="status" name="status"
+                    onchange="this.form.submit()"
+                    class="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
+                    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+                    <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
+                </select>
+            </form>
+            <a href="/admin/network/core-devices/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Device
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Total</p>
+            <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Core</p>
+            <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400">{{ stats.core }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Distribution</p>
+            <p class="mt-1 text-xl font-bold text-blue-600 dark:text-blue-400">{{ stats.distribution }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Access</p>
+            <p class="mt-1 text-xl font-bold text-green-600 dark:text-green-400">{{ stats.access }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Aggregation</p>
+            <p class="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400">{{ stats.aggregation }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Edge</p>
+            <p class="mt-1 text-xl font-bold text-cyan-600 dark:text-cyan-400">{{ stats.edge }}</p>
+        </div>
+    </div>
+
+    <!-- Devices Table -->
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Device</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Role</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor / Model</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Management IP</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for device in devices %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                                    <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                                </div>
+                                <div>
+                                    <a href="/admin/network/core-devices/{{ device.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
+                                    {% if device.hostname %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% set role_colors = {'core': 'purple', 'distribution': 'blue', 'access': 'green', 'aggregation': 'amber', 'edge': 'cyan', 'cpe': 'slate'} %}
+                            {% set role_val = device.role.value if device.role else 'edge' %}
+                            {% set color = role_colors.get(role_val, 'slate') %}
+                            <span class="inline-flex items-center rounded-full bg-{{ color }}-100 px-2.5 py-0.5 text-xs font-medium text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ role_val | title }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <p class="text-sm text-slate-900 dark:text-white">{{ device.vendor or '-' }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ device.model or '-' }}</p>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="font-mono text-sm text-slate-900 dark:text-white">{{ device.mgmt_ip or '-' }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% set status_val = device.status.value if device.status else 'offline' %}
+                            {% if status_val == 'online' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                                Online
+                            </span>
+                            {% elif status_val == 'degraded' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                                Degraded
+                            </span>
+                            {% elif status_val == 'maintenance' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                                Maintenance
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                                Offline
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+                            <a href="/admin/network/core-devices/{{ device.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">View</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center">
+                            <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                            <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No network devices</h3>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by adding a network device.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

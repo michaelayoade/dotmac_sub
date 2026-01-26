@@ -1,0 +1,126 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Assign ONT - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/onts" class="hover:text-primary-600">ONTs</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/network/onts/{{ ont.id }}" class="hover:text-primary-600">{{ ont.serial_number }}</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Assign</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Assign ONT</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Link this ONT to a subscriber account and PON port.</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Assignment Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="pon_port_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PON Port <span class="text-red-500">*</span></label>
+                        <select name="pon_port_id" id="pon_port_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" {% if not form or not form.pon_port_id %}selected{% endif %}>Select a PON port</option>
+                            {% for port in pon_ports %}
+                            <option value="{{ port.id }}" {% if form and form.pon_port_id == port.id|string %}selected{% endif %}>
+                                {{ port.name }}{% if port.olt %} - {{ port.olt.name }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if not pon_ports %}
+                        <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No active PON ports found. Create a PON port first.</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="account_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Account <span class="text-red-500">*</span></label>
+                        <select name="account_id" id="account_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" {% if not form or not form.account_id %}selected{% endif %}>Select an account</option>
+                            {% for account in accounts %}
+                                {% if account.subscriber and account.subscriber.person %}
+                                    {% set account_label = account.subscriber.person.first_name ~ ' ' ~ account.subscriber.person.last_name %}
+                                {% elif account.subscriber and account.subscriber.organization %}
+                                    {% set account_label = account.subscriber.organization.name %}
+                                {% else %}
+                                    {% set account_label = account.id %}
+                                {% endif %}
+                            <option value="{{ account.id }}" {% if form and form.account_id == account.id|string %}selected{% endif %}>
+                                {{ account_label }}{% if account.account_number %} ({{ account.account_number }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% if not accounts %}
+                        <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No subscriber accounts found.</p>
+                        {% endif %}
+                    </div>
+
+                    <div>
+                        <label for="subscription_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription</label>
+                        <select name="subscription_id" id="subscription_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" {% if not form or not form.subscription_id %}selected{% endif %}>Select a subscription</option>
+                            {% for subscription in subscriptions %}
+                                {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
+                                    {% set sub_label = subscription.account.subscriber.person.first_name ~ ' ' ~ subscription.account.subscriber.person.last_name %}
+                                {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.organization %}
+                                    {% set sub_label = subscription.account.subscriber.organization.name %}
+                                {% else %}
+                                    {% set sub_label = subscription.id %}
+                                {% endif %}
+                            <option value="{{ subscription.id }}" {% if form and form.subscription_id == subscription.id|string %}selected{% endif %}>
+                                {{ sub_label }}{% if subscription.offer %} - {{ subscription.offer.name }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="service_address_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Address</label>
+                        <select name="service_address_id" id="service_address_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" {% if not form or not form.service_address_id %}selected{% endif %}>Select an address</option>
+                            {% for address in addresses %}
+                            <option value="{{ address.id }}" {% if form and form.service_address_id == address.id|string %}selected{% endif %}>
+                                {{ address.address_line1 }}{% if address.city %}, {{ address.city }}{% endif %}{% if address.region %}, {{ address.region }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.notes if form else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/onts/{{ ont.id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Assign ONT
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

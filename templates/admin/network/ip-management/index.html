@@ -1,0 +1,821 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}IP Management - Admin{% endblock %}
+
+{% block content %}
+<!-- Ambient Background -->
+<div class="pointer-events-none fixed inset-0 overflow-hidden">
+    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-indigo-400/5 to-violet-500/5 blur-3xl"></div>
+    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-purple-400/5 to-fuchsia-500/5 blur-3xl"></div>
+</div>
+
+<div class="relative space-y-6" x-data="{ activeTab: '{{ tab | default('overview') }}' }">
+    <!-- Page Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fade-in-up">
+        <div class="flex items-center gap-4">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">IP Address Management</h1>
+                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Manage IP pools, blocks, addresses, and assignments</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/network/ip-management/blocks/new"
+               class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-violet-500 dark:hover:bg-violet-900/20 dark:hover:text-violet-400">
+                <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+                </svg>
+                Add Block
+            </a>
+            <a href="/admin/network/ip-management/pools/new"
+               class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition-all hover:shadow-xl hover:shadow-indigo-500/30 hover:-translate-y-0.5">
+                <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                Add Pool
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats Overview -->
+    <div class="grid gap-4 sm:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-indigo-500/10 to-violet-500/10 blur-2xl transition-all group-hover:scale-150"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">IP Pools</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_pools }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-cyan-500/10 to-blue-500/10 blur-2xl transition-all group-hover:scale-150"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">IP Blocks</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_blocks }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 shadow-lg shadow-cyan-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-teal-500/10 to-emerald-500/10 blur-2xl transition-all group-hover:scale-150"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Assignments</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_assignments }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 shadow-lg shadow-teal-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-blue-500/10 to-purple-500/10 blur-2xl transition-all group-hover:scale-150"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Addresses</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_addresses | default(0) }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg shadow-blue-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="animate-fade-in-up border-b border-slate-200 dark:border-slate-700" style="animation-delay: 75ms;">
+        <nav class="flex gap-1" aria-label="Tabs">
+            <button @click="activeTab = 'overview'"
+                    :class="activeTab === 'overview' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                Pools & Blocks
+            </button>
+            <button @click="activeTab = 'addresses'"
+                    :class="activeTab === 'addresses' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                Addresses
+            </button>
+            <button @click="activeTab = 'assignments'"
+                    :class="activeTab === 'assignments' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                Assignments
+            </button>
+            <button @click="activeTab = 'calculator'"
+                    :class="activeTab === 'calculator' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-1.5">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                    </svg>
+                    Calculator
+                </span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- Tab: Pools & Blocks -->
+    <div x-show="activeTab === 'overview'" x-cloak class="space-y-6">
+        <!-- IP Pools -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" data-table-id="ip-pools">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-100 to-violet-100 dark:from-indigo-900/40 dark:to-violet-900/30">
+                        <svg class="h-5 w-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                        </svg>
+                    </div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">IP Pools</h2>
+                </div>
+                <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">{{ pools | length }} pools</span>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+                <div class="flex-1 min-w-[200px]">
+                    <label class="sr-only" for="ip-pools-filter">Search pools</label>
+                    <input id="ip-pools-filter" type="text" data-search-input placeholder="Search pools..."
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span data-selected-count>0 selected</span>
+                    <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                    <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Pool Name</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Version</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Description</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for pool in pools %}
+                        <tr class="group transition-all hover:bg-gradient-to-r hover:from-indigo-50/50 hover:to-violet-50/30 dark:hover:from-indigo-900/10 dark:hover:to-violet-900/5"
+                            data-row-text="{{ pool.name }} {{ pool.notes or '' }} IPv{{ pool.ip_version or '4' }}"
+                            data-row-copy="{{ pool.name }}">
+                            <td class="px-6 py-4">
+                                <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            </td>
+                            <td class="px-6 py-4">
+                                <a href="/admin/network/ip-management/pools/{{ pool.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
+                                    {{ pool.name }}
+                                </a>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if pool.ip_version == '6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                    {% else %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                    IPv{{ pool.ip_version or '4' }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="text-sm text-slate-500 dark:text-slate-400">{{ pool.notes or '-' }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if pool.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <a href="/admin/network/ip-management/pools/{{ pool.id }}/edit" class="text-sm text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400">Edit</a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- IP Blocks -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" data-table-id="ip-blocks">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-100 to-blue-100 dark:from-cyan-900/40 dark:to-blue-900/30">
+                        <svg class="h-5 w-5 text-cyan-600 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+                        </svg>
+                    </div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">IP Blocks / Subnets</h2>
+                </div>
+                <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400">{{ blocks | length }} blocks</span>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+                <div class="flex-1 min-w-[200px]">
+                    <label class="sr-only" for="ip-blocks-filter">Search blocks</label>
+                    <input id="ip-blocks-filter" type="text" data-search-input placeholder="Search blocks..."
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-cyan-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span data-selected-count>0 selected</span>
+                    <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                    <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                                <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">CIDR</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Pool</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Description</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for block in blocks %}
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                            data-row-text="{{ block.cidr }} {{ block.pool.name if block.pool else '' }} {{ block.notes or '' }}"
+                            data-row-copy="{{ block.cidr }}">
+                            <td class="px-6 py-4">
+                                <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ block.cidr }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if block.pool %}
+                                <a href="/admin/network/ip-management/pools/{{ block.pool.id }}" class="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ block.pool.name }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="px-6 py-4"><span class="text-sm text-slate-500 dark:text-slate-400">{{ block.notes or '-' }}</span></td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if block.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP blocks configured</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Addresses -->
+    <div x-show="activeTab === 'addresses'" x-cloak class="space-y-4" x-data="{ ipVersion: 'ipv4' }">
+        <!-- Version Toggle -->
+        <div class="flex items-center gap-4">
+            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-700 dark:bg-slate-800">
+                <button @click="ipVersion = 'ipv4'"
+                        :class="ipVersion === 'ipv4' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400'"
+                        class="rounded-md px-4 py-2 text-sm font-medium transition-colors">
+                    IPv4
+                </button>
+                <button @click="ipVersion = 'ipv6'"
+                        :class="ipVersion === 'ipv6' ? 'bg-purple-500 text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400'"
+                        class="rounded-md px-4 py-2 text-sm font-medium transition-colors">
+                    IPv6
+                </button>
+            </div>
+            {% if pools %}
+            <select data-pool-filter class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+                <option value="">All Pools</option>
+                {% for pool in pools %}
+                <option value="{{ pool.id }}">{{ pool.name }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+            <input type="text" data-address-search placeholder="Search addresses..."
+                   class="ml-auto w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+        </div>
+
+        <!-- IPv4 Addresses -->
+        <div x-show="ipVersion === 'ipv4'" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" data-table-id="ip-addresses-ipv4">
+            <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IPv4 Addresses</h2>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span data-selected-count>0 selected</span>
+                    <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                    <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Address</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Pool</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Assignment</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for addr in ipv4_addresses %}
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                            data-row-copy="{{ addr.address }}"
+                            data-pool-id="{{ addr.pool.id if addr.pool else '' }}">
+                            <td class="px-6 py-4">
+                                <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            </td>
+                            <td class="px-6 py-4"><span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ addr.address }}</span></td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ addr.pool.name if addr.pool else '-' }}</td>
+                            <td class="px-6 py-4">
+                                {% if addr.is_reserved %}
+                                <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
+                                {% elif addr.assignment %}
+                                <span class="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Assigned</span>
+                                {% else %}
+                                <span class="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Available</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                                {% if addr.assignment and addr.assignment.account %}
+                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ addr.assignment.account.account_number or 'View' }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500">No IPv4 addresses</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- IPv6 Addresses -->
+        <div x-show="ipVersion === 'ipv6'" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" data-table-id="ip-addresses-ipv6">
+            <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IPv6 Addresses</h2>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span data-selected-count>0 selected</span>
+                    <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                    <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500">
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Address</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Pool</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Assignment</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for addr in ipv6_addresses %}
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                            data-row-copy="{{ addr.address }}"
+                            data-pool-id="{{ addr.pool.id if addr.pool else '' }}">
+                            <td class="px-6 py-4">
+                                <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500">
+                            </td>
+                            <td class="px-6 py-4"><span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ addr.address }}</span></td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ addr.pool.name if addr.pool else '-' }}</td>
+                            <td class="px-6 py-4">
+                                {% if addr.is_reserved %}
+                                <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
+                                {% elif addr.assignment %}
+                                <span class="inline-flex rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">Assigned</span>
+                                {% else %}
+                                <span class="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Available</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                                {% if addr.assignment and addr.assignment.account %}
+                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-purple-600 hover:text-purple-700 dark:text-purple-400">{{ addr.assignment.account.account_number or 'View' }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500">No IPv6 addresses</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Assignments -->
+    <div x-show="activeTab === 'assignments'" x-cloak>
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" data-table-id="ip-assignments">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">All IP Assignments</h2>
+                <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">{{ assignments | length }} total</span>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+                <div class="flex-1 min-w-[200px]">
+                    <label class="sr-only" for="ip-assignments-filter">Search assignments</label>
+                    <input id="ip-assignments-filter" type="text" data-search-input placeholder="Search assignments..."
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span data-selected-count>0 selected</span>
+                    <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                    <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">IP Address</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Version</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Account</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Subscription</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Assigned</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for assignment in assignments %}
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                            data-row-text="{{ assignment.account.name if assignment.account else '' }} {{ assignment.subscription.reference if assignment.subscription and assignment.subscription.reference else '' }} {{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}"
+                            data-row-copy="{{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}">
+                            <td class="px-6 py-4">
+                                <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="font-mono text-sm font-semibold text-slate-900 dark:text-white">
+                                    {{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '-') }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if assignment.ip_version and assignment.ip_version.value == 'IPv6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                    {% else %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                    {{ assignment.ip_version.value if assignment.ip_version else 'IPv4' }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4">
+                                {% if assignment.account %}
+                                <a href="/admin/billing/accounts/{{ assignment.account_id }}" class="text-sm text-teal-600 hover:text-teal-700 dark:text-teal-400">{{ assignment.account.name }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                                {% if assignment.subscription %}
+                                <a href="/admin/catalog/subscriptions/{{ assignment.subscription_id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ assignment.subscription.reference or 'View' }}</a>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                                {{ assignment.created_at.strftime('%b %d, %Y') if assignment.created_at else '-' }}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500">No IP assignments</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Calculator -->
+    <div x-show="activeTab === 'calculator'" x-cloak x-data="ipCalculator()">
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IP Subnet Calculator</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Calculate network ranges, broadcast addresses, and available hosts</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <!-- IP Version Toggle -->
+                <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800">
+                    <button @click="ipVersion = 4"
+                            :class="ipVersion === 4 ? 'bg-white shadow text-blue-600 dark:bg-slate-700 dark:text-blue-400' : 'text-slate-600 dark:text-slate-400'"
+                            class="rounded-md px-4 py-2 text-sm font-medium transition-all">
+                        IPv4
+                    </button>
+                    <button @click="ipVersion = 6"
+                            :class="ipVersion === 6 ? 'bg-white shadow text-purple-600 dark:bg-slate-700 dark:text-purple-400' : 'text-slate-600 dark:text-slate-400'"
+                            class="rounded-md px-4 py-2 text-sm font-medium transition-all">
+                        IPv6
+                    </button>
+                </div>
+
+                <!-- Input -->
+                <div class="flex gap-4">
+                    <div class="flex-1">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">CIDR Notation</label>
+                        <input type="text" x-model="cidr" @input="calculate()"
+                               :placeholder="ipVersion === 4 ? '192.168.1.0/24' : '2001:db8::/32'"
+                               class="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 font-mono text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="flex items-end">
+                        <button @click="calculate()" class="rounded-lg bg-indigo-600 px-6 py-3 text-sm font-medium text-white hover:bg-indigo-700 transition-colors">
+                            Calculate
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Quick Presets -->
+                <div class="flex flex-wrap gap-2">
+                    <span class="text-sm text-slate-500 dark:text-slate-400 mr-2">Quick:</span>
+                    <template x-if="ipVersion === 4">
+                        <template x-for="preset in ['/8', '/16', '/24', '/25', '/26', '/27', '/28', '/29', '/30', '/32']">
+                            <button @click="cidr = '10.0.0.0' + preset; calculate()"
+                                    class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                    x-text="preset"></button>
+                        </template>
+                    </template>
+                    <template x-if="ipVersion === 6">
+                        <template x-for="preset in ['/32', '/48', '/56', '/64', '/112', '/128']">
+                            <button @click="cidr = '2001:db8::' + preset; calculate()"
+                                    class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-purple-300 hover:text-purple-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                    x-text="preset"></button>
+                        </template>
+                    </template>
+                </div>
+
+                <!-- Results -->
+                <div x-show="result" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Network Address</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.network || '-'"></p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Broadcast Address</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.broadcast || '-'"></p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Netmask</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.netmask || '-'"></p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">First Usable</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.first || '-'"></p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Usable</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.last || '-'"></p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Total Hosts</p>
+                        <p class="mt-1 font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="result?.hosts || '-'"></p>
+                    </div>
+                </div>
+
+                <div x-show="error" class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400" x-text="error"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="relative mt-6 rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+    </div>
+    <div class="divide-y divide-slate-200/60 dark:divide-slate-700/60">
+        {% if activities %}
+        {% for activity in activities %}
+        <div class="px-6 py-4">
+            <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+            {% if activity.description %}
+            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+            {% endif %}
+            {% if activity.occurred_at %}
+            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function setupTableTools(tableEl) {
+    const searchInput = tableEl.querySelector('[data-search-input]');
+    const selectAll = tableEl.querySelector('[data-select-all]');
+    const rowChecks = Array.from(tableEl.querySelectorAll('[data-row-check]'));
+    const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+    const selectedCount = tableEl.querySelector('[data-selected-count]');
+    const copyBtn = tableEl.querySelector('[data-copy-selected]');
+    const clearBtn = tableEl.querySelector('[data-clear-selected]');
+
+    const updateSelectedCount = () => {
+        if (!selectedCount) return;
+        const count = rowChecks.filter((check) => check.checked).length;
+        selectedCount.textContent = `${count} selected`;
+    };
+
+    const filterRows = () => {
+        if (!searchInput) return;
+        const query = searchInput.value.trim().toLowerCase();
+        rows.forEach((row) => {
+            const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+            row.style.display = !query || text.includes(query) ? '' : 'none';
+        });
+    };
+
+    if (searchInput) {
+        searchInput.addEventListener('input', filterRows);
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            rows.forEach((row) => {
+                if (row.style.display === 'none') return;
+                const checkbox = row.querySelector('[data-row-check]');
+                if (checkbox) {
+                    checkbox.checked = selectAll.checked;
+                }
+            });
+            updateSelectedCount();
+        });
+    }
+
+    rowChecks.forEach((check) => {
+        check.addEventListener('change', updateSelectedCount);
+    });
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+            const values = rows
+                .filter((row) => row.querySelector('[data-row-check]')?.checked)
+                .map((row) => row.getAttribute('data-row-copy'))
+                .filter(Boolean);
+            if (!values.length) return;
+            const text = values.join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                textarea.remove();
+            }
+        });
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            rowChecks.forEach((check) => { check.checked = false; });
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
+        });
+    }
+
+    updateSelectedCount();
+}
+
+function setupAddressFilters() {
+    const searchInput = document.querySelector('[data-address-search]');
+    const poolFilter = document.querySelector('[data-pool-filter]');
+    const tables = Array.from(document.querySelectorAll('[data-table-id^="ip-addresses-"]'));
+
+    const filterRows = () => {
+        const query = (searchInput?.value || '').trim().toLowerCase();
+        const poolId = poolFilter?.value || '';
+        tables.forEach((tableEl) => {
+            const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+            rows.forEach((row) => {
+                const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+                const rowPool = row.getAttribute('data-pool-id') || '';
+                const matchesText = !query || text.includes(query);
+                const matchesPool = !poolId || rowPool === poolId;
+                row.style.display = matchesText && matchesPool ? '' : 'none';
+            });
+        });
+    };
+
+    if (searchInput) searchInput.addEventListener('input', filterRows);
+    if (poolFilter) poolFilter.addEventListener('change', filterRows);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-table-id]').forEach(setupTableTools);
+    setupAddressFilters();
+});
+
+function ipCalculator() {
+    return {
+        ipVersion: 4,
+        cidr: '',
+        result: null,
+        error: null,
+
+        calculate() {
+            this.error = null;
+            this.result = null;
+
+            if (!this.cidr) return;
+
+            try {
+                const [ip, prefix] = this.cidr.split('/');
+                const prefixLen = parseInt(prefix);
+
+                if (this.ipVersion === 4) {
+                    this.calculateIPv4(ip, prefixLen);
+                } else {
+                    this.calculateIPv6(ip, prefixLen);
+                }
+            } catch (e) {
+                this.error = 'Invalid CIDR notation';
+            }
+        },
+
+        calculateIPv4(ip, prefix) {
+            const octets = ip.split('.').map(Number);
+            if (octets.length !== 4 || octets.some(o => isNaN(o) || o < 0 || o > 255)) {
+                this.error = 'Invalid IPv4 address';
+                return;
+            }
+            if (isNaN(prefix) || prefix < 0 || prefix > 32) {
+                this.error = 'Invalid prefix length (0-32)';
+                return;
+            }
+
+            const ipNum = (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+            const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+            const network = (ipNum & mask) >>> 0;
+            const broadcast = (network | ~mask) >>> 0;
+
+            const toIP = n => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+            const toMask = p => toIP(p === 0 ? 0 : (~0 << (32 - p)) >>> 0);
+
+            const hosts = prefix >= 31 ? Math.pow(2, 32 - prefix) : Math.pow(2, 32 - prefix) - 2;
+
+            this.result = {
+                network: toIP(network),
+                broadcast: toIP(broadcast),
+                netmask: toMask(prefix),
+                first: prefix >= 31 ? toIP(network) : toIP(network + 1),
+                last: prefix >= 31 ? toIP(broadcast) : toIP(broadcast - 1),
+                hosts: hosts.toLocaleString()
+            };
+        },
+
+        calculateIPv6(ip, prefix) {
+            if (isNaN(prefix) || prefix < 0 || prefix > 128) {
+                this.error = 'Invalid prefix length (0-128)';
+                return;
+            }
+
+            const hosts = prefix === 128 ? 1 : Math.pow(2, 128 - prefix);
+            const hostsStr = hosts > 1e15 ? '~' + hosts.toExponential(2) : hosts.toLocaleString();
+
+            this.result = {
+                network: ip + '/' + prefix,
+                broadcast: 'N/A (IPv6)',
+                netmask: '/' + prefix,
+                first: ip,
+                last: 'Varies',
+                hosts: hostsStr
+            };
+        }
+    };
+}
+</script>
+
+<style>
+[x-cloak] { display: none !important; }
+</style>
+{% endblock %}

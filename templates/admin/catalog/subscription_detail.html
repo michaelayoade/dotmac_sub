@@ -1,0 +1,253 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Subscription {{ subscription.id | string | truncate(8, True, '') | upper }} - Admin{% endblock %}
+
+{% block content %}
+{% set offer_label = subscription.offer.name if subscription.offer else 'Subscription' %}
+{% set status_val = subscription.status.value if subscription.status else 'pending' %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/catalog" class="hover:text-primary-600">Catalog</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/catalog/subscriptions" class="hover:text-primary-600">Subscriptions</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ offer_label }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ offer_label }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription details and activity.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/catalog/subscriptions" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Back to Subscriptions
+            </a>
+            <a href="/admin/catalog/subscriptions/{{ subscription.id }}/edit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M4 17l4.586-4.586a2 2 0 012.828 0L15 16l5-5a2 2 0 012.828 0L24 13.172V20a2 2 0 01-2 2H6a2 2 0 01-2-2v-3z"/></svg>
+                Edit Subscription
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="lg:col-span-2 space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscription</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ subscription.id }}</p>
+                    </div>
+                    <div class="text-right">
+                        {% if status_val == 'active' %}
+                        {{ status_badge("Active", "active") }}
+                        {% elif status_val == 'suspended' %}
+                        <span class="inline-flex items-center rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">Suspended</span>
+                        {% elif status_val == 'canceled' %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">Canceled</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ status_val | title }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Plan</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ offer_label }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Contract Term</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.contract_term.value | replace('_', ' ') | title if subscription.contract_term else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Billing Mode</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.billing_mode.value | title if subscription.billing_mode else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Start</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.start_at.strftime('%b %d, %Y %H:%M') if subscription.start_at else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Next Billing</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.next_billing_at.strftime('%b %d, %Y %H:%M') if subscription.next_billing_at else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">End</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.end_at.strftime('%b %d, %Y %H:%M') if subscription.end_at else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Canceled At</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.canceled_at.strftime('%b %d, %Y %H:%M') if subscription.canceled_at else '—' }}</p>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Cancel Reason</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.cancel_reason or '—' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning</h3>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Login</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.login or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Router ID</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.router_id or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv4</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv4_address or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv6</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv6_address or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">MAC Address</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.mac_address or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External Service ID</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.splynx_service_id or '—' }}</p>
+                    </div>
+                </div>
+                {% if subscription.service_description %}
+                <div class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                    {{ subscription.service_description }}
+                </div>
+                {% endif %}
+            </div>
+
+            {% if activities %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h3>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="space-y-6">
+            <!-- Quick Actions -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Quick Actions</h3>
+                <div class="mt-4 space-y-2">
+                    {% if subscription.account_id %}
+                    <a href="/admin/billing/invoices/new?account={{ subscription.account_id }}"
+                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        Create Invoice
+                    </a>
+                    <a href="/admin/billing/payments/new?account={{ subscription.account_id }}"
+                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                        Record Payment
+                    </a>
+                    {% endif %}
+                    {% if subscription.account and subscription.account.subscriber %}
+                    <a href="/admin/operations/service-orders/new?subscriber={{ subscription.account.subscriber.id }}"
+                       class="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                        Create Service Order
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Related Links -->
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Related</h3>
+                <div class="mt-4 space-y-3 text-sm">
+                    <div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Account</p>
+                        {% if subscription.account_id %}
+                        <a href="/admin/billing/accounts/{{ subscription.account_id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            {% if subscription.account and subscription.account.account_number %}
+                                {{ subscription.account.account_number }}
+                            {% else %}
+                                {{ subscription.account_id | string | truncate(8, True, '') }}
+                            {% endif %}
+                        </a>
+                        {% else %}
+                        <p class="text-sm text-slate-700 dark:text-slate-300">—</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Subscriber</p>
+                        {% if subscription.account and subscription.account.subscriber %}
+                        <a href="/admin/subscribers/{{ subscription.account.subscriber.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            {% if subscription.account.subscriber.person %}
+                                {{ subscription.account.subscriber.person.first_name }} {{ subscription.account.subscriber.person.last_name }}
+                            {% elif subscription.account.subscriber.organization %}
+                                {{ subscription.account.subscriber.organization.name }}
+                            {% else %}
+                                Subscriber
+                            {% endif %}
+                        </a>
+                        {% else %}
+                        <p class="text-sm text-slate-700 dark:text-slate-300">—</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Offer</p>
+                        {% if subscription.offer_id %}
+                        <a href="/admin/catalog/offers/{{ subscription.offer_id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ offer_label }}</a>
+                        {% else %}
+                        <p class="text-sm text-slate-700 dark:text-slate-300">—</p>
+                        {% endif %}
+                    </div>
+                    {% if subscription.account_id %}
+                    <div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Invoices</p>
+                        <a href="/admin/billing/invoices?account={{ subscription.account_id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            View Account Invoices
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pricing</h3>
+                <div class="mt-4 space-y-2 text-sm text-slate-700 dark:text-slate-300">
+                    <div class="flex items-center justify-between">
+                        <span>Quantity</span>
+                        <span class="font-medium">{{ subscription.quantity or '—' }} {{ subscription.unit or '' }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Unit Price</span>
+                        <span class="font-medium">{{ subscription.unit_price or '—' }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span>Discount</span>
+                        <span class="font-medium">
+                            {% if subscription.discount %}
+                                {{ subscription.discount_value or '—' }} {{ subscription.discount_type | default('') }}
+                            {% else %}
+                                — 
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

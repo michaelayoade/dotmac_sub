@@ -1,0 +1,123 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Usage Charges{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Usage Charges</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review and post usage charges to invoices</p>
+        </div>
+        <a href="/admin/catalog/usage" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex flex-wrap items-center gap-4">
+        <form method="get" class="flex flex-wrap items-center gap-4 flex-1">
+            <select name="status" onchange="this.form.submit()"
+                    class="rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All Statuses</option>
+                {% for s in charge_statuses %}
+                <option value="{{ s }}" {{ 'selected' if status == s else '' }}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Filter</button>
+        </form>
+    </div>
+
+    <!-- Bulk Actions -->
+    <form method="post" action="/admin/catalog/usage/charges/bulk-post" x-data="{ selectedCharges: [] }">
+                {% include "components/forms/csrf_input.html" %}
+        <div class="flex items-center justify-between mb-4">
+            <div class="text-sm text-slate-500 dark:text-slate-400">
+                <span x-text="selectedCharges.length"></span> selected
+            </div>
+            <button type="submit" x-show="selectedCharges.length > 0"
+                    class="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Post Selected
+            </button>
+        </div>
+
+        <!-- Table -->
+        <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-700/50">
+                    <tr>
+                        <th scope="col" class="py-3.5 pl-6 pr-3 w-10">
+                            <input type="checkbox" @change="selectedCharges = $event.target.checked ? [...document.querySelectorAll('input[name=charge_ids]')].map(i => i.value) : []"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                        </th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Period</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscription</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Usage</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Billable</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                        <th scope="col" class="px-3 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th scope="col" class="relative py-3.5 pl-3 pr-6"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for charge in charges %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
+                        <td class="whitespace-nowrap py-4 pl-6 pr-3">
+                            {% if charge.status.value == 'staged' %}
+                            <input type="checkbox" name="charge_ids" value="{{ charge.id }}" x-model="selectedCharges"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ charge.period_start.strftime('%Y-%m-%d') if charge.period_start else '' }} - {{ charge.period_end.strftime('%Y-%m-%d') if charge.period_end else '' }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono">{{ charge.subscription_id|string|truncate(8, True, '') if charge.subscription_id else '-' }}</td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ "%.2f"|format(charge.total_gb or 0) }} / {{ "%.2f"|format(charge.included_gb or 0) }} GB
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">{{ "%.2f"|format(charge.billable_gb or 0) }} GB</td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ charge.currency }} {{ "%.2f"|format(charge.amount or 0) }}</td>
+                        <td class="whitespace-nowrap px-3 py-4 text-sm">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
+                                {% if charge.status.value == 'posted' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
+                                {% elif charge.status.value == 'staged' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400
+                                {% elif charge.status.value == 'needs_review' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                                {% elif charge.status.value == 'skipped' %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400
+                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                {{ charge.status.value }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap py-4 pl-3 pr-6 text-right text-sm">
+                            {% if charge.status.value == 'staged' %}
+                            <form method="post" action="/admin/catalog/usage/charges/{{ charge.id }}/post" class="inline">
+                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="rounded px-2 py-1 text-xs font-medium text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20">Post</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No usage charges found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+
+    {% if total_pages > 1 %}
+    <div class="flex items-center justify-between border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800 sm:px-6 rounded-lg">
+        <div class="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+            <p class="text-sm text-slate-700 dark:text-slate-300">Showing {{ (page - 1) * per_page + 1 }} to {{ [page * per_page, total]|min }} of {{ total }}</p>
+            <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm">
+                {% if page > 1 %}<a href="?page={{ page - 1 }}&status={{ status or '' }}" class="relative inline-flex items-center rounded-l-md px-2 py-2 text-slate-400 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 dark:ring-slate-600 dark:hover:bg-slate-700"><svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg></a>{% endif %}
+                <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-inset ring-slate-300 dark:text-white dark:ring-slate-600">{{ page }}</span>
+                {% if page < total_pages %}<a href="?page={{ page + 1 }}&status={{ status or '' }}" class="relative inline-flex items-center rounded-r-md px-2 py-2 text-slate-400 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 dark:ring-slate-600 dark:hover:bg-slate-700"><svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></a>{% endif %}
+            </nav>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,143 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Add Connector - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center gap-4">
+        <a href="/admin/integrations/connectors" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Add Connector</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a new connector configuration</p>
+        </div>
+    </div>
+
+    <form method="POST" action="/admin/integrations/connectors" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Connector Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ form.name if form is defined else '' }}"
+                            placeholder="Stripe Billing Connector"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="connector_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Connector Type</label>
+                        <select name="connector_type" id="connector_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for connector_type in connector_types %}
+                            <option value="{{ connector_type }}"
+                                {% if form is defined and form.connector_type == connector_type %}selected{% elif form is not defined and connector_type == 'custom' %}selected{% endif %}>
+                                {{ connector_type | replace('_', ' ') | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="auth_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Type</label>
+                        <select name="auth_type" id="auth_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for auth_type in auth_types %}
+                            <option value="{{ auth_type }}"
+                                {% if form is defined and form.auth_type == auth_type %}selected{% elif form is not defined and auth_type == 'none' %}selected{% endif %}>
+                                {{ auth_type | replace('_', ' ') | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="base_url" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Base URL</label>
+                        <input type="url" name="base_url" id="base_url" maxlength="500"
+                            value="{{ form.base_url if form is defined else '' }}"
+                            placeholder="https://api.vendor.com"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="timeout_sec" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Timeout (seconds)</label>
+                        <input type="number" name="timeout_sec" id="timeout_sec" min="1" step="1"
+                            value="{{ form.timeout_sec if form is defined else '' }}"
+                            placeholder="30"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="auth_config" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Config (JSON)</label>
+                        <textarea name="auth_config" id="auth_config" rows="3"
+                            placeholder='{"api_key":"sk_live_..."}'
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.auth_config if form is defined else '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use a JSON object for auth configuration.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="headers" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Headers (JSON)</label>
+                        <textarea name="headers" id="headers" rows="3"
+                            placeholder='{"X-Custom-Header":"value"}'
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.headers if form is defined else '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional headers merged into requests.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="retry_policy" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Retry Policy (JSON)</label>
+                        <textarea name="retry_policy" id="retry_policy" rows="3"
+                            placeholder='{"max_attempts":3,"backoff_sec":10}'
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.retry_policy if form is defined else '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional retry policy settings.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="metadata" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Metadata (JSON)</label>
+                        <textarea name="metadata" id="metadata" rows="3"
+                            placeholder='{"environment":"production"}'
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.metadata if form is defined else '' }}</textarea>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional metadata for internal use.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            placeholder="Notes about this connector..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.notes if form is defined else '' }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true"
+                                {% if form is defined and form.is_active %}checked{% elif form is not defined %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Enable this connector for use by targets.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/integrations/connectors" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Create Connector
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

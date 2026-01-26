@@ -1,0 +1,395 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Pricing Calculator{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="pricingCalculator()">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Pricing Calculator</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Test and validate offer pricing before creating subscriptions</p>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Configuration Panel -->
+        <div class="space-y-6">
+            <!-- Offer Selection -->
+            <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-medium text-slate-900 dark:text-white">Select Offer</h2>
+                </div>
+                <div class="p-6">
+                    <select x-model="selectedOfferId" @change="onOfferChange()"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">-- Select an offer --</option>
+                        {% for offer in offers %}
+                        <option value="{{ offer.id }}">{{ offer.name }}{% if offer.code %} ({{ offer.code }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+
+                    <div x-show="selectedOffer" x-cloak class="mt-4 space-y-3">
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-slate-500 dark:text-slate-400">Service Type</span>
+                            <span class="font-medium text-slate-900 dark:text-white" x-text="selectedOffer?.service_type || '-'"></span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-slate-500 dark:text-slate-400">Billing Cycle</span>
+                            <span class="font-medium text-slate-900 dark:text-white" x-text="selectedOffer?.billing_cycle || '-'"></span>
+                        </div>
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="text-slate-500 dark:text-slate-400">VAT Included</span>
+                            <span class="font-medium text-slate-900 dark:text-white" x-text="selectedOffer?.with_vat ? 'Yes (' + selectedOffer.vat_percent + '%)' : 'No'"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add-ons Selection -->
+            <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-medium text-slate-900 dark:text-white">Add-ons</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-show="selectedOfferId && availableAddOns.length === 0">
+                        No add-ons linked to this offer. <a href="/admin/catalog/settings/add-ons" class="text-primary-600 hover:underline">Manage add-ons</a>
+                    </p>
+                </div>
+                <div class="p-6">
+                    <div x-show="!selectedOfferId" class="text-center py-4 text-sm text-slate-500 dark:text-slate-400">
+                        Select an offer to see available add-ons.
+                    </div>
+                    <div x-show="selectedOfferId && availableAddOns.length > 0" class="space-y-3">
+                        <template x-for="addon in availableAddOns" :key="addon.id">
+                            <label class="flex items-start gap-3 p-3 rounded-lg border border-slate-200 hover:border-primary-300 cursor-pointer transition-colors dark:border-slate-600 dark:hover:border-primary-500">
+                                <input type="checkbox" x-model="selectedAddOnIds" :value="addon.id"
+                                       class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                                <div class="flex-1">
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white" x-text="addon.name"></p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400" x-text="addon.addon_type"></p>
+                                </div>
+                                <div class="text-right">
+                                    <template x-for="price in addon.prices" :key="price.price_type + price.billing_cycle">
+                                        <div>
+                                            <p class="text-sm font-medium text-slate-900 dark:text-white" x-text="price.currency + ' ' + price.amount.toFixed(2)"></p>
+                                            <p class="text-xs text-slate-500 dark:text-slate-400" x-text="price.price_type + (price.billing_cycle ? ' / ' + price.billing_cycle : '')"></p>
+                                        </div>
+                                    </template>
+                                </div>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Usage Estimate -->
+            <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-medium text-slate-900 dark:text-white">Usage Estimate</h2>
+                </div>
+                <div class="p-6">
+                    <div x-show="usageAllowance" x-cloak class="mb-4 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+                        <div class="flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <span>Plan includes <strong x-text="usageAllowance?.included_gb || 0"></strong> GB</span>
+                        </div>
+                        <p class="mt-1 text-xs text-blue-600 dark:text-blue-400" x-show="usageAllowance?.overage_rate > 0">
+                            Overage: <span x-text="usageAllowance?.overage_rate || 0"></span>/GB
+                            <span x-show="usageAllowance?.overage_cap_gb > 0">(capped at <span x-text="usageAllowance?.overage_cap_gb"></span> GB)</span>
+                        </p>
+                    </div>
+
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Estimated Monthly Usage (GB)</label>
+                    <input type="number" x-model.number="estimatedUsageGb" min="0" step="1"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="Enter estimated usage in GB">
+
+                    <div x-show="overageGb > 0" x-cloak class="mt-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20">
+                        <p class="text-sm text-amber-700 dark:text-amber-300">
+                            <strong x-text="overageGb.toFixed(2)"></strong> GB over allowance
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="space-y-6">
+            <!-- Price Breakdown -->
+            <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-medium text-slate-900 dark:text-white">Price Breakdown</h2>
+                </div>
+                <div class="p-6">
+                    <div x-show="!selectedOffer" class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">
+                        Select an offer to see pricing.
+                    </div>
+
+                    <div x-show="selectedOffer" x-cloak class="space-y-4">
+                        <!-- Base Price -->
+                        <div class="pb-4 border-b border-slate-200 dark:border-slate-700">
+                            <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Base Service</p>
+                            <template x-for="price in selectedOffer?.prices || []" :key="price.price_type + price.billing_cycle">
+                                <div class="flex items-center justify-between py-1">
+                                    <span class="text-sm text-slate-600 dark:text-slate-300" x-text="price.price_type + (price.billing_cycle ? ' (' + price.billing_cycle + ')' : '')"></span>
+                                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="price.currency + ' ' + price.amount.toFixed(2)"></span>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Selected Add-ons -->
+                        <div x-show="selectedAddOns.length > 0" class="pb-4 border-b border-slate-200 dark:border-slate-700">
+                            <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Add-ons</p>
+                            <template x-for="addon in selectedAddOns" :key="addon.id">
+                                <div class="flex items-center justify-between py-1">
+                                    <span class="text-sm text-slate-600 dark:text-slate-300" x-text="addon.name"></span>
+                                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="formatAddOnPrice(addon)"></span>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Overage Charges -->
+                        <div x-show="overageCharge > 0" class="pb-4 border-b border-slate-200 dark:border-slate-700">
+                            <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Usage Overage</p>
+                            <div class="flex items-center justify-between py-1">
+                                <span class="text-sm text-slate-600 dark:text-slate-300" x-text="overageGb.toFixed(2) + ' GB @ ' + (usageAllowance?.overage_rate || 0) + '/GB'"></span>
+                                <span class="text-sm font-medium text-amber-600 dark:text-amber-400" x-text="'NGN ' + overageCharge.toFixed(2)"></span>
+                            </div>
+                        </div>
+
+                        <!-- VAT -->
+                        <div x-show="selectedOffer?.with_vat && vatAmount > 0" class="pb-4 border-b border-slate-200 dark:border-slate-700">
+                            <div class="flex items-center justify-between py-1">
+                                <span class="text-sm text-slate-600 dark:text-slate-300" x-text="'VAT (' + (selectedOffer?.vat_percent || 0) + '%)'"></span>
+                                <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="'NGN ' + vatAmount.toFixed(2)"></span>
+                            </div>
+                        </div>
+
+                        <!-- Totals -->
+                        <div class="pt-2">
+                            <div class="flex items-center justify-between py-2">
+                                <span class="text-base font-medium text-slate-900 dark:text-white">Monthly Total</span>
+                                <span class="text-xl font-semibold text-primary-600 dark:text-primary-400" x-text="'NGN ' + monthlyTotal.toFixed(2)"></span>
+                            </div>
+                            <div class="flex items-center justify-between py-1 text-sm text-slate-500 dark:text-slate-400">
+                                <span>One-time Charges</span>
+                                <span x-text="'NGN ' + oneTimeTotal.toFixed(2)"></span>
+                            </div>
+                            <div class="flex items-center justify-between py-1 text-sm text-slate-500 dark:text-slate-400">
+                                <span>First Bill Estimate</span>
+                                <span x-text="'NGN ' + (monthlyTotal + oneTimeTotal).toFixed(2)"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Validation Checks -->
+            <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="text-lg font-medium text-slate-900 dark:text-white">Validation Checks</h2>
+                </div>
+                <div class="p-6">
+                    <div x-show="!selectedOffer" class="text-center py-4 text-sm text-slate-500 dark:text-slate-400">
+                        Select an offer to run validation.
+                    </div>
+
+                    <div x-show="selectedOffer" x-cloak class="space-y-3">
+                        <template x-for="check in validationChecks" :key="check.name">
+                            <div class="flex items-start gap-3 p-3 rounded-lg"
+                                 :class="check.status === 'pass' ? 'bg-green-50 dark:bg-green-900/20' : (check.status === 'warn' ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-red-50 dark:bg-red-900/20')">
+                                <template x-if="check.status === 'pass'">
+                                    <svg class="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                </template>
+                                <template x-if="check.status === 'warn'">
+                                    <svg class="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                </template>
+                                <template x-if="check.status === 'fail'">
+                                    <svg class="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </template>
+                                <div>
+                                    <p class="text-sm font-medium"
+                                       :class="check.status === 'pass' ? 'text-green-800 dark:text-green-200' : (check.status === 'warn' ? 'text-amber-800 dark:text-amber-200' : 'text-red-800 dark:text-red-200')"
+                                       x-text="check.name"></p>
+                                    <p class="text-xs mt-0.5"
+                                       :class="check.status === 'pass' ? 'text-green-700 dark:text-green-300' : (check.status === 'warn' ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300')"
+                                       x-text="check.message"></p>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function pricingCalculator() {
+    const offers = {{ offers | tojson }};
+    const addOns = {{ add_ons | tojson }};
+    const usageAllowances = {{ usage_allowances | tojson }};
+    const offerAddonMap = {{ offer_addon_map | tojson }};
+
+    return {
+        selectedOfferId: '',
+        selectedAddOnIds: [],
+        estimatedUsageGb: 0,
+
+        get selectedOffer() {
+            return offers.find(o => o.id === this.selectedOfferId) || null;
+        },
+
+        get availableAddOns() {
+            if (!this.selectedOfferId) return [];
+            const linkedAddonIds = offerAddonMap[this.selectedOfferId] || [];
+            // If no add-ons are linked, show all add-ons (for backwards compatibility)
+            if (linkedAddonIds.length === 0) return addOns;
+            return addOns.filter(a => linkedAddonIds.includes(a.id));
+        },
+
+        get selectedAddOns() {
+            return addOns.filter(a => this.selectedAddOnIds.includes(a.id));
+        },
+
+        get usageAllowance() {
+            if (!this.selectedOffer?.usage_allowance_id) return null;
+            return usageAllowances.find(ua => ua.id === this.selectedOffer.usage_allowance_id) || null;
+        },
+
+        get overageGb() {
+            if (!this.usageAllowance) return 0;
+            const included = this.usageAllowance.included_gb || 0;
+            const overage = Math.max(0, this.estimatedUsageGb - included);
+            const cap = this.usageAllowance.overage_cap_gb || 0;
+            return cap > 0 ? Math.min(overage, cap) : overage;
+        },
+
+        get overageCharge() {
+            if (!this.usageAllowance) return 0;
+            return this.overageGb * (this.usageAllowance.overage_rate || 0);
+        },
+
+        get baseRecurringTotal() {
+            if (!this.selectedOffer) return 0;
+            return this.selectedOffer.prices
+                .filter(p => p.price_type === 'recurring')
+                .reduce((sum, p) => sum + p.amount, 0);
+        },
+
+        get addOnsRecurringTotal() {
+            return this.selectedAddOns.reduce((sum, addon) => {
+                const recurring = addon.prices
+                    .filter(p => p.price_type === 'recurring')
+                    .reduce((s, p) => s + p.amount, 0);
+                return sum + recurring;
+            }, 0);
+        },
+
+        get oneTimeTotal() {
+            let total = 0;
+            if (this.selectedOffer) {
+                total += this.selectedOffer.prices
+                    .filter(p => p.price_type === 'one_time')
+                    .reduce((sum, p) => sum + p.amount, 0);
+            }
+            total += this.selectedAddOns.reduce((sum, addon) => {
+                return sum + addon.prices
+                    .filter(p => p.price_type === 'one_time')
+                    .reduce((s, p) => s + p.amount, 0);
+            }, 0);
+            return total;
+        },
+
+        get subtotal() {
+            return this.baseRecurringTotal + this.addOnsRecurringTotal + this.overageCharge;
+        },
+
+        get vatAmount() {
+            if (!this.selectedOffer?.with_vat) return 0;
+            return this.subtotal * (this.selectedOffer.vat_percent / 100);
+        },
+
+        get monthlyTotal() {
+            return this.subtotal + this.vatAmount;
+        },
+
+        get validationChecks() {
+            const checks = [];
+
+            if (!this.selectedOffer) return checks;
+
+            // Check: Has pricing
+            const hasPricing = this.selectedOffer.prices.length > 0;
+            checks.push({
+                name: 'Pricing Configured',
+                status: hasPricing ? 'pass' : 'fail',
+                message: hasPricing ? 'Offer has pricing defined' : 'No prices configured for this offer'
+            });
+
+            // Check: Has recurring price
+            const hasRecurring = this.selectedOffer.prices.some(p => p.price_type === 'recurring');
+            checks.push({
+                name: 'Recurring Price',
+                status: hasRecurring ? 'pass' : 'warn',
+                message: hasRecurring ? 'Has recurring price defined' : 'No recurring price - may be one-time only'
+            });
+
+            // Check: Usage allowance
+            if (this.selectedOffer.usage_allowance_id) {
+                const hasAllowance = !!this.usageAllowance;
+                checks.push({
+                    name: 'Usage Allowance',
+                    status: hasAllowance ? 'pass' : 'fail',
+                    message: hasAllowance ? `${this.usageAllowance.included_gb} GB included` : 'Usage allowance not found'
+                });
+            }
+
+            // Check: Overage warning
+            if (this.overageGb > 0) {
+                checks.push({
+                    name: 'Usage Overage',
+                    status: 'warn',
+                    message: `Estimated ${this.overageGb.toFixed(2)} GB over allowance`
+                });
+            }
+
+            // Check: VAT configuration
+            if (this.selectedOffer.with_vat) {
+                const hasVatPercent = this.selectedOffer.vat_percent > 0;
+                checks.push({
+                    name: 'VAT Configuration',
+                    status: hasVatPercent ? 'pass' : 'warn',
+                    message: hasVatPercent ? `VAT at ${this.selectedOffer.vat_percent}%` : 'VAT enabled but rate is 0%'
+                });
+            }
+
+            // Check: Reasonable pricing
+            if (this.monthlyTotal > 0) {
+                checks.push({
+                    name: 'Price Validation',
+                    status: this.monthlyTotal > 100 ? 'pass' : 'warn',
+                    message: this.monthlyTotal > 100 ? 'Pricing appears valid' : 'Monthly total seems low - verify pricing'
+                });
+            }
+
+            return checks;
+        },
+
+        onOfferChange() {
+            this.estimatedUsageGb = 0;
+            this.selectedAddOnIds = [];  // Clear add-on selections when offer changes
+        },
+
+        formatAddOnPrice(addon) {
+            const recurring = addon.prices.find(p => p.price_type === 'recurring');
+            if (recurring) {
+                return `${recurring.currency} ${recurring.amount.toFixed(2)}`;
+            }
+            const oneTime = addon.prices.find(p => p.price_type === 'one_time');
+            if (oneTime) {
+                return `${oneTime.currency} ${oneTime.amount.toFixed(2)} (one-time)`;
+            }
+            return '-';
+        }
+    };
+}
+</script>
+{% endblock %}

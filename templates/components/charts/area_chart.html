@@ -1,0 +1,33 @@
+{#
+   Area Chart Component
+   Usage: {% include "components/charts/area_chart.html" %}
+
+   Parameters:
+   - chart_id: Unique ID for the chart (required)
+   - chart_data: JSON data for the chart with labels and datasets
+   - height: Chart height (default: 300)
+   - show_legend: Show legend (default: true)
+#}
+<div class="chart-container{% if height == 'sm' %}-sm{% elif height == 'lg' %}-lg{% endif %}"
+     style="{% if height and height not in ['sm', 'lg'] %}min-height: {{ height }}px{% endif %}">
+    <canvas id="{{ chart_id }}"></canvas>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (!ctx) return;
+
+    const chartData = {{ chart_data | tojson | safe }};
+    const options = {
+        plugins: {
+            legend: {
+                display: {{ 'true' if show_legend is not defined or show_legend else 'false' }}
+            }
+        }
+    };
+
+    const chart = DotmacCharts.createAreaChart(ctx, chartData, options);
+    DotmacCharts.registerChart('{{ chart_id }}', chart);
+});
+</script>

@@ -1,0 +1,186 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Credit Notes - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Credit Notes</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Credit Notes</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Manage credit notes and refunds</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/billing/credits/new"
+               class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Issue Credit
+            </a>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="get" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div class="w-full sm:w-72">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
+                <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
+                    <input type="text" data-typeahead-input
+                           placeholder="Search customers..."
+                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                    <input type="hidden" name="customer_ref" data-typeahead-hidden value="{{ customer_ref or '' }}">
+                    <div data-typeahead-results></div>
+                </div>
+                {% if status %}
+                <input type="hidden" name="status" value="{{ status }}">
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-2">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Apply
+                </button>
+                {% if customer_ref %}
+                <a href="/admin/billing/credits{% if status %}?status={{ status }}{% endif %}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                    Clear customer
+                </a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <!-- Status Filters -->
+    <div class="flex flex-wrap items-center gap-2">
+        <a href="/admin/billing/credits{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if not status else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            All
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ (status_counts.draft + status_counts.issued + status_counts.partially_applied + status_counts.applied) if status_counts else 0 }}</span>
+        </a>
+        <a href="/admin/billing/credits?status=draft{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300' if status == 'draft' else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            Draft
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ status_counts.draft if status_counts else 0 }}</span>
+        </a>
+        <a href="/admin/billing/credits?status=issued{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' if status == 'issued' else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            Issued
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ status_counts.issued if status_counts else 0 }}</span>
+        </a>
+        <a href="/admin/billing/credits?status=partially_applied{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' if status == 'partially_applied' else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            Partial
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ status_counts.partially_applied if status_counts else 0 }}</span>
+        </a>
+        <a href="/admin/billing/credits?status=applied{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' if status == 'applied' else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+            Applied
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ status_counts.applied if status_counts else 0 }}</span>
+        </a>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Credit #</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Applied</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% if credits %}
+                    {% for credit in credits %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">
+                                {{ credit.credit_number or (credit.id | string)[:8] ~ '...' }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if credit.account %}
+                            <a href="/admin/subscribers/{{ credit.account.subscriber_id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                {% if credit.account.subscriber and credit.account.subscriber.person %}
+                                    {{ credit.account.subscriber.person.display_name or credit.account.subscriber.person.first_name }}
+                                {% else %}
+                                    {{ credit.account.account_number or 'Account' }}
+                                {% endif %}
+                            </a>
+                            {% else %}
+                            <span class="text-sm text-slate-400">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set status_class = {
+                                'draft': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300',
+                                'issued': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+                                'partially_applied': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
+                                'applied': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
+                                'void': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_class.get(credit.status.value, 'bg-slate-100 text-slate-600') }}">
+                                {{ credit.status.value | replace('_', ' ') | title }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ credit.currency }} {{ '{:,.2f}'.format(credit.total) }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-right">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">{{ credit.currency }} {{ '{:,.2f}'.format(credit.applied_total) }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ credit.created_at.strftime('%b %d, %Y') if credit.created_at else 'N/A' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            <div class="flex flex-col items-center gap-2">
+                                <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/>
+                                </svg>
+                                <p>No credit notes found</p>
+                    {% if status %}
+                    <a href="/admin/billing/credits{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}" class="text-primary-600 hover:text-primary-700">Clear filters</a>
+                    {% else %}
+                    <a href="/admin/billing/credits/new" class="text-primary-600 hover:text-primary-700">Issue a credit note</a>
+                    {% endif %}
+                </div>
+            </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if total_pages > 1 %}
+        <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
+            <div class="text-sm text-slate-500 dark:text-slate-400">
+                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} credit notes
+            </div>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Next
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

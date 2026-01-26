@@ -1,0 +1,150 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if survey else 'New' }} Site Survey - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network" class="hover:text-primary-600">Network</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/network/site-survey" class="hover:text-primary-600">Site Surveys</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit' if survey else 'New' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit' if survey else 'New' }} Site Survey</h1>
+        </div>
+    </div>
+
+    <form method="POST" class="max-w-2xl">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Survey Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if initial_lat is not none and initial_lon is not none %}
+                <div class="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-800 dark:border-cyan-900/40 dark:bg-cyan-900/20 dark:text-cyan-200">
+                    Starting from map location: {{ "%.6f"|format(initial_lat) }}, {{ "%.6f"|format(initial_lon) }}
+                </div>
+                <input type="hidden" name="initial_lat" value="{{ initial_lat }}">
+                <input type="hidden" name="initial_lon" value="{{ initial_lon }}">
+                {% endif %}
+                {% if subscriber_id %}
+                <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
+                    Survey for customer: {{ customer_label or 'Selected customer' }}
+                </div>
+                <input type="hidden" name="subscriber_id" value="{{ subscriber_id }}">
+                {% endif %}
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name *</label>
+                    <input type="text" name="name" id="name" required
+                           value="{{ survey.name if survey else (suggested_name or '') }}"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g., Tower A to Customer Site B">
+                </div>
+
+                <div>
+                    <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+                    <textarea name="description" id="description" rows="3"
+                              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                              placeholder="Optional survey description...">{{ survey.description if survey else '' }}</textarea>
+                </div>
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="frequency_mhz" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Frequency (MHz)</label>
+                        <input type="number" name="frequency_mhz" id="frequency_mhz" step="0.1" min="100" max="100000"
+                               value="{{ survey.frequency_mhz if survey and survey.frequency_mhz else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="e.g., 5800">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for Fresnel zone and path loss calculations</p>
+                        <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-frequency="2412">2.4 GHz</button>
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-frequency="5800">5.8 GHz</button>
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-frequency="5955">6 GHz</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="default_antenna_height_m" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Default Antenna Height (m)</label>
+                        <input type="number" name="default_antenna_height_m" id="default_antenna_height_m" step="0.1" min="0" max="500"
+                               value="{{ survey.default_antenna_height_m if survey else 10 }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="10">
+                    </div>
+
+                    <div>
+                        <label for="default_tx_power_dbm" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Default TX Power (dBm)</label>
+                        <input type="number" name="default_tx_power_dbm" id="default_tx_power_dbm" step="0.1" min="-30" max="60"
+                               value="{{ survey.default_tx_power_dbm if survey else 20 }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="20">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span class="font-semibold text-slate-600 dark:text-slate-300">Quick defaults:</span>
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-height="10" data-power="20">10m / 20 dBm</button>
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-height="20" data-power="27">20m / 27 dBm</button>
+                            <button type="button" class="rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:border-primary-300 hover:text-primary-600 dark:border-slate-600 dark:text-slate-300" data-height="30" data-power="30">30m / 30 dBm</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="project_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Project</label>
+                        <select name="project_id" id="project_id"
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- No Project --</option>
+                            {% for project in projects %}
+                            <option value="{{ project.id }}" {% if survey and survey.project_id == project.id %}selected{% endif %}>
+                                {{ project.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                {% if survey %}
+                <div>
+                    <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
+                    <select name="status" id="status"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="draft" {% if survey.status.value == 'draft' %}selected{% endif %}>Draft</option>
+                        <option value="in_progress" {% if survey.status.value == 'in_progress' %}selected{% endif %}>In Progress</option>
+                        <option value="completed" {% if survey.status.value == 'completed' %}selected{% endif %}>Completed</option>
+                        <option value="archived" {% if survey.status.value == 'archived' %}selected{% endif %}>Archived</option>
+                    </select>
+                </div>
+                {% endif %}
+            </div>
+            <div class="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+                <a href="/admin/network/site-survey{% if survey %}/{{ survey.id }}{% endif %}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Cancel
+                </a>
+                <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    {{ 'Update' if survey else 'Create' }} Survey
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+document.querySelectorAll('[data-frequency]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const input = document.getElementById('frequency_mhz');
+        if (input) input.value = button.getAttribute('data-frequency');
+    });
+});
+
+document.querySelectorAll('[data-height][data-power]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const heightInput = document.getElementById('default_antenna_height_m');
+        const powerInput = document.getElementById('default_tx_power_dbm');
+        if (heightInput) heightInput.value = button.getAttribute('data-height');
+        if (powerInput) powerInput.value = button.getAttribute('data-power');
+    });
+});
+</script>
+{% endblock %}

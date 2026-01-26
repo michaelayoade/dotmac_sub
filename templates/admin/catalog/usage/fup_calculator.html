@@ -1,0 +1,429 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}FUP Calculator - Catalog{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% set calc_icon %}
+    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+    </svg>
+    {% endset %}
+
+    {% call page_header(
+        title="FUP Calculator",
+        subtitle="Test fair usage policy calculations and throttling thresholds",
+        icon=calc_icon,
+        color="emerald",
+        color2="teal"
+    ) %}
+        <a href="/admin/catalog/usage" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            Back to Usage
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        {# Input Panel #}
+        <div class="space-y-6">
+            {# FUP Profile Selection #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
+                    Usage Allowance Profile
+                </h3>
+                <div class="space-y-4">
+                    <div>
+                        <label for="profile_select" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Select Profile</label>
+                        <select id="profile_select" onchange="loadProfile(this.value)"
+                                class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Manual Input --</option>
+                            {% for profile in usage_allowances %}
+                            <option value="{{ profile.id }}" data-included="{{ profile.included_gb or 0 }}" data-overage="{{ profile.overage_rate or 0 }}" data-cap="{{ profile.overage_cap_gb or 0 }}" data-throttle="{{ profile.throttle_rate_mbps or 0 }}">
+                                {{ profile.name }} ({{ profile.included_gb or 'Unlimited' }} GB)
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="included_gb" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Included Data (GB)</label>
+                            <input type="number" id="included_gb" value="100" min="0" step="1"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">0 = Unlimited</p>
+                        </div>
+                        <div>
+                            <label for="overage_rate" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Overage Rate (per GB)</label>
+                            <input type="number" id="overage_rate" value="50" min="0" step="0.01"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                        </div>
+                        <div>
+                            <label for="overage_cap" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Overage Cap (GB)</label>
+                            <input type="number" id="overage_cap" value="50" min="0" step="1"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">0 = No cap</p>
+                        </div>
+                        <div>
+                            <label for="throttle_speed" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Throttle Speed (Mbps)</label>
+                            <input type="number" id="throttle_speed" value="2" min="0" step="0.1"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">0 = No throttling</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Speed Profile #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 50ms;">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    Speed Profile
+                </h3>
+                <div class="space-y-4">
+                    <div>
+                        <label for="radius_profile_select" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Select RADIUS Profile</label>
+                        <select id="radius_profile_select" onchange="loadRadiusProfile(this.value)"
+                                class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Manual Input --</option>
+                            {% for profile in radius_profiles %}
+                            <option value="{{ profile.id }}" data-download="{{ profile.download_speed or 0 }}" data-upload="{{ profile.upload_speed or 0 }}">
+                                {{ profile.name }} ({{ ((profile.download_speed or 0) / 1000) | round(1) }} / {{ ((profile.upload_speed or 0) / 1000) | round(1) }} Mbps)
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="normal_download" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed (Mbps)</label>
+                            <input type="number" id="normal_download" value="50" min="0" step="1"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                        </div>
+                        <div>
+                            <label for="normal_upload" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed (Mbps)</label>
+                            <input type="number" id="normal_upload" value="25" min="0" step="1"
+                                   class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="calculate()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Current Usage #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                    </svg>
+                    Current Usage
+                </h3>
+                <div class="space-y-4">
+                    <div>
+                        <label for="current_usage" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Used Data (GB)</label>
+                        <input type="range" id="current_usage_slider" min="0" max="200" value="75"
+                               class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer dark:bg-slate-700 accent-emerald-500"
+                               oninput="document.getElementById('current_usage').value = this.value; calculate()">
+                        <div class="flex items-center gap-2 mt-2">
+                            <input type="number" id="current_usage" value="75" min="0" step="0.1"
+                                   class="block w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   oninput="document.getElementById('current_usage_slider').value = this.value; calculate()">
+                            <span class="text-sm text-slate-500 dark:text-slate-400">GB used this period</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="days_in_period" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Period</label>
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <div>
+                                <input type="number" id="days_elapsed" value="20" min="1" max="31"
+                                       class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                       oninput="calculate()">
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Days elapsed</p>
+                            </div>
+                            <div>
+                                <input type="number" id="days_total" value="30" min="1" max="31"
+                                       class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                       oninput="calculate()">
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Total days in period</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Results Panel #}
+        <div class="space-y-6">
+            {# Usage Status #}
+            <div id="status_card" class="animate-fade-in-up rounded-2xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-6 shadow-sm dark:border-emerald-800 dark:from-emerald-900/20 dark:to-teal-900/20" style="animation-delay: 150ms;">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Usage Status</h3>
+                    <span id="status_badge" class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
+                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                        Normal
+                    </span>
+                </div>
+
+                {# Usage Progress Bar #}
+                <div class="mb-4">
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-slate-600 dark:text-slate-400">Usage</span>
+                        <span id="usage_percent_text" class="font-medium text-slate-900 dark:text-white">75%</span>
+                    </div>
+                    <div class="h-4 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                        <div id="usage_bar" class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all duration-500" style="width: 75%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs mt-1 text-slate-500 dark:text-slate-400">
+                        <span>0 GB</span>
+                        <span id="included_label">100 GB</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="rounded-xl bg-white/60 p-3 dark:bg-slate-800/60">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
+                        <p id="used_display" class="text-lg font-bold text-slate-900 dark:text-white">75 GB</p>
+                    </div>
+                    <div class="rounded-xl bg-white/60 p-3 dark:bg-slate-800/60">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Remaining</p>
+                        <p id="remaining_display" class="text-lg font-bold text-emerald-600 dark:text-emerald-400">25 GB</p>
+                    </div>
+                </div>
+            </div>
+
+            {# Effective Speed #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    Effective Speed
+                </h3>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="text-center p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20">
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mb-1">Download</p>
+                        <p id="effective_download" class="text-2xl font-bold text-blue-600 dark:text-blue-400">50 Mbps</p>
+                        <p id="download_note" class="text-xs text-slate-500 dark:text-slate-400 mt-1">Normal speed</p>
+                    </div>
+                    <div class="text-center p-4 rounded-xl bg-purple-50 dark:bg-purple-900/20">
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mb-1">Upload</p>
+                        <p id="effective_upload" class="text-2xl font-bold text-purple-600 dark:text-purple-400">25 Mbps</p>
+                        <p id="upload_note" class="text-xs text-slate-500 dark:text-slate-400 mt-1">Normal speed</p>
+                    </div>
+                </div>
+            </div>
+
+            {# Billing Estimate #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 250ms;">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    Billing Estimate
+                </h3>
+                <div class="space-y-3">
+                    <div class="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-700">
+                        <span class="text-slate-600 dark:text-slate-400">Overage Data</span>
+                        <span id="overage_gb" class="font-medium text-slate-900 dark:text-white">0 GB</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-700">
+                        <span class="text-slate-600 dark:text-slate-400">Billable Overage (after cap)</span>
+                        <span id="billable_gb" class="font-medium text-slate-900 dark:text-white">0 GB</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2 border-b border-slate-100 dark:border-slate-700">
+                        <span class="text-slate-600 dark:text-slate-400">Rate per GB</span>
+                        <span id="rate_display" class="font-medium text-slate-900 dark:text-white">{{ currency_symbol }}50.00</span>
+                    </div>
+                    <div class="flex justify-between items-center py-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl px-3 -mx-3">
+                        <span class="font-semibold text-slate-900 dark:text-white">Overage Charges</span>
+                        <span id="overage_charges" class="text-xl font-bold text-amber-600 dark:text-amber-400">{{ currency_symbol }}0.00</span>
+                    </div>
+                </div>
+            </div>
+
+            {# Projection #}
+            <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 300ms;">
+                <h3 class="mb-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                    <svg class="h-5 w-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+                    </svg>
+                    End of Period Projection
+                </h3>
+                <div class="space-y-3">
+                    <div class="flex justify-between items-center py-2">
+                        <span class="text-slate-600 dark:text-slate-400">Daily Average</span>
+                        <span id="daily_avg" class="font-medium text-slate-900 dark:text-white">3.75 GB/day</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2">
+                        <span class="text-slate-600 dark:text-slate-400">Projected Total</span>
+                        <span id="projected_total" class="font-medium text-slate-900 dark:text-white">112.5 GB</span>
+                    </div>
+                    <div class="flex justify-between items-center py-2">
+                        <span class="text-slate-600 dark:text-slate-400">Projected Overage</span>
+                        <span id="projected_overage" class="font-medium text-slate-900 dark:text-white">12.5 GB</span>
+                    </div>
+                    <div id="throttle_warning" class="hidden p-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl">
+                        <div class="flex items-center gap-2 text-orange-700 dark:text-orange-300">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                            </svg>
+                            <span id="throttle_warning_text" class="text-sm font-medium">Throttling expected in ~5 days</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const currencySymbol = '{{ currency_symbol }}';
+
+function loadProfile(profileId) {
+    if (!profileId) return;
+    const option = document.querySelector(`#profile_select option[value="${profileId}"]`);
+    if (option) {
+        document.getElementById('included_gb').value = option.dataset.included || 0;
+        document.getElementById('overage_rate').value = option.dataset.overage || 0;
+        document.getElementById('overage_cap').value = option.dataset.cap || 0;
+        document.getElementById('throttle_speed').value = option.dataset.throttle || 0;
+
+        // Update slider max based on included
+        const included = parseFloat(option.dataset.included);
+        const sliderMax = included > 0 ? included * 2 : 200;
+        document.getElementById('current_usage_slider').max = sliderMax;
+
+        calculate();
+    }
+}
+
+function loadRadiusProfile(profileId) {
+    if (!profileId) return;
+    const option = document.querySelector(`#radius_profile_select option[value="${profileId}"]`);
+    if (option) {
+        document.getElementById('normal_download').value = (parseFloat(option.dataset.download) || 0) / 1000;
+        document.getElementById('normal_upload').value = (parseFloat(option.dataset.upload) || 0) / 1000;
+        calculate();
+    }
+}
+
+function calculate() {
+    // Get inputs
+    const includedGb = parseFloat(document.getElementById('included_gb').value) || 0;
+    const overageRate = parseFloat(document.getElementById('overage_rate').value) || 0;
+    const overageCap = parseFloat(document.getElementById('overage_cap').value) || 0;
+    const throttleSpeed = parseFloat(document.getElementById('throttle_speed').value) || 0;
+    const normalDownload = parseFloat(document.getElementById('normal_download').value) || 0;
+    const normalUpload = parseFloat(document.getElementById('normal_upload').value) || 0;
+    const currentUsage = parseFloat(document.getElementById('current_usage').value) || 0;
+    const daysElapsed = parseFloat(document.getElementById('days_elapsed').value) || 1;
+    const daysTotal = parseFloat(document.getElementById('days_total').value) || 30;
+
+    // Calculate usage percentage
+    const hasCap = includedGb > 0;
+    const usagePercent = hasCap ? Math.min((currentUsage / includedGb) * 100, 100) : 0;
+    const isOverLimit = hasCap && currentUsage >= includedGb;
+    const isThrottled = isOverLimit && throttleSpeed > 0;
+
+    // Calculate overage
+    const overageGb = hasCap ? Math.max(0, currentUsage - includedGb) : 0;
+    const billableGb = hasCap ? (overageCap > 0 ? Math.min(overageGb, overageCap) : overageGb) : 0;
+    const overageCharges = billableGb * overageRate;
+
+    // Calculate effective speed
+    const effectiveDownload = isThrottled ? throttleSpeed : normalDownload;
+    const effectiveUpload = isThrottled ? throttleSpeed : normalUpload;
+
+    // Calculate projections
+    const dailyAvg = daysElapsed > 0 ? currentUsage / daysElapsed : 0;
+    const projectedTotal = dailyAvg * daysTotal;
+    const projectedOverage = hasCap ? Math.max(0, projectedTotal - includedGb) : 0;
+
+    // Calculate days until throttle
+    let daysUntilThrottle = null;
+    if (!isThrottled && hasCap && dailyAvg > 0) {
+        const remainingGb = includedGb - currentUsage;
+        daysUntilThrottle = remainingGb / dailyAvg;
+    }
+
+    // Update UI - Status
+    const statusCard = document.getElementById('status_card');
+    const statusBadge = document.getElementById('status_badge');
+    const usageBar = document.getElementById('usage_bar');
+
+    if (isThrottled) {
+        statusCard.className = 'animate-fade-in-up rounded-2xl border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-red-50 p-6 shadow-sm dark:border-orange-800 dark:from-orange-900/20 dark:to-red-900/20';
+        statusBadge.className = 'inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700 dark:bg-orange-900/50 dark:text-orange-300';
+        statusBadge.innerHTML = '<span class="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse"></span> Throttled';
+        usageBar.className = 'h-full rounded-full bg-gradient-to-r from-orange-400 to-red-500 transition-all duration-500';
+    } else if (usagePercent >= 80) {
+        statusCard.className = 'animate-fade-in-up rounded-2xl border-2 border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50 p-6 shadow-sm dark:border-amber-800 dark:from-amber-900/20 dark:to-yellow-900/20';
+        statusBadge.className = 'inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300';
+        statusBadge.innerHTML = '<span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span> Warning';
+        usageBar.className = 'h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-500';
+    } else {
+        statusCard.className = 'animate-fade-in-up rounded-2xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-6 shadow-sm dark:border-emerald-800 dark:from-emerald-900/20 dark:to-teal-900/20';
+        statusBadge.className = 'inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300';
+        statusBadge.innerHTML = '<span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Normal';
+        usageBar.className = 'h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all duration-500';
+    }
+
+    // Update progress bar
+    usageBar.style.width = `${Math.min(usagePercent, 100)}%`;
+    document.getElementById('usage_percent_text').textContent = `${usagePercent.toFixed(1)}%`;
+    document.getElementById('included_label').textContent = hasCap ? `${includedGb} GB` : 'Unlimited';
+
+    // Update displays
+    document.getElementById('used_display').textContent = `${currentUsage.toFixed(1)} GB`;
+    const remaining = hasCap ? Math.max(0, includedGb - currentUsage) : 0;
+    document.getElementById('remaining_display').textContent = hasCap ? `${remaining.toFixed(1)} GB` : 'Unlimited';
+
+    // Update speeds
+    document.getElementById('effective_download').textContent = `${effectiveDownload} Mbps`;
+    document.getElementById('effective_upload').textContent = `${effectiveUpload} Mbps`;
+    document.getElementById('download_note').textContent = isThrottled ? 'Throttled' : 'Normal speed';
+    document.getElementById('upload_note').textContent = isThrottled ? 'Throttled' : 'Normal speed';
+
+    // Update billing
+    document.getElementById('overage_gb').textContent = `${overageGb.toFixed(2)} GB`;
+    document.getElementById('billable_gb').textContent = `${billableGb.toFixed(2)} GB`;
+    document.getElementById('rate_display').textContent = `${currencySymbol}${overageRate.toFixed(2)}`;
+    document.getElementById('overage_charges').textContent = `${currencySymbol}${overageCharges.toFixed(2)}`;
+
+    // Update projections
+    document.getElementById('daily_avg').textContent = `${dailyAvg.toFixed(2)} GB/day`;
+    document.getElementById('projected_total').textContent = `${projectedTotal.toFixed(1)} GB`;
+    document.getElementById('projected_overage').textContent = `${projectedOverage.toFixed(1)} GB`;
+
+    // Throttle warning
+    const throttleWarning = document.getElementById('throttle_warning');
+    if (daysUntilThrottle !== null && daysUntilThrottle < (daysTotal - daysElapsed) && throttleSpeed > 0) {
+        throttleWarning.classList.remove('hidden');
+        document.getElementById('throttle_warning_text').textContent =
+            daysUntilThrottle < 1
+                ? 'Throttling expected today!'
+                : `Throttling expected in ~${Math.ceil(daysUntilThrottle)} days`;
+    } else if (isThrottled) {
+        throttleWarning.classList.remove('hidden');
+        document.getElementById('throttle_warning_text').textContent = 'Currently throttled - speed reduced to ' + throttleSpeed + ' Mbps';
+    } else {
+        throttleWarning.classList.add('hidden');
+    }
+}
+
+// Initial calculation
+document.addEventListener('DOMContentLoaded', calculate);
+</script>
+{% endblock %}

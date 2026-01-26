@@ -1,0 +1,485 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge, vendor_badge %}
+
+{% block title %}{{ device.name }} - NAS Device - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/network/nas" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <div class="flex items-center gap-3">
+                    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ device.name }}</h1>
+                    {{ status_badge(device.status.value|title, device.status.value, pulse=(device.status.value == 'active'), size="sm") }}
+                </div>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    <span class="font-mono">{{ device.ip_address }}</span>
+                    {% if device.model %} &middot; {{ device.model }}{% endif %}
+                </p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <form method="post" action="/admin/network/nas/devices/{{ device.id }}/ping" class="inline">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Ping
+                </button>
+            </form>
+            <a href="/admin/network/nas/devices/{{ device.id }}/backups" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/></svg>
+                Backups
+            </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}/edit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <!-- Main Info -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Device Details -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ vendor_badge(device.vendor.value, size="sm") }}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Model</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.model or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">IP Address</dt>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ device.ip_address }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Firmware Version</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.firmware_version or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ device.serial_number or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">MAC Address</dt>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ device.mac_address or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Location</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.location or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Seen</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device.last_seen_at %}
+                                {{ device.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                {% else %}
+                                <span class="text-slate-400">Never</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                    </dl>
+                    {% if device.description %}
+                    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Description</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.description }}</dd>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Connection Types -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Connection Types</h2>
+                </div>
+                <div class="p-6">
+                    {% if device.supported_connection_types %}
+                    <div class="flex flex-wrap gap-2">
+                        {% for ct in device.supported_connection_types %}
+                        <span class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm
+                            {% if device.default_connection_type and device.default_connection_type.value == ct.value %}
+                            border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-800 dark:bg-primary-900/30 dark:text-primary-400
+                            {% else %}
+                            border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300
+                            {% endif %}">
+                            {{ ct.value | upper }}
+                            {% if device.default_connection_type and device.default_connection_type.value == ct.value %}
+                            <span class="text-xs">(default)</span>
+                            {% endif %}
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No connection types configured</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Recent Config Backups -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Recent Configuration Backups</h2>
+                        <div class="flex items-center gap-2">
+                            <form method="post" action="/admin/network/nas/devices/{{ device.id }}/backups/trigger" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="triggered_by" value="web">
+                                <button type="submit" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                    Trigger Backup
+                                </button>
+                            </form>
+                            <span class="text-slate-300 dark:text-slate-600">|</span>
+                            <a href="/admin/network/nas/devices/{{ device.id }}/backups" class="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                                View All
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-6">
+                    {% if backups %}
+                    <div class="space-y-3">
+                        {% for backup in backups %}
+                        <a href="/admin/network/nas/backups/{{ backup.id }}" class="flex items-center justify-between rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                                    <svg class="h-4 w-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                </div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                        {{ backup.created_at.strftime('%Y-%m-%d %H:%M') }}
+                                    </p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                                        {{ backup.backup_method.value | upper if backup.backup_method else 'Manual' }} &middot; {{ backup.triggered_by or 'System' }}
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                {% if backup.has_changes %}
+                                <span class="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                    Changes
+                                </span>
+                                {% endif %}
+                                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                            </div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center py-6">
+                        <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No backups yet</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Recent Provisioning Logs -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Recent Provisioning Activity</h2>
+                        <a href="/admin/network/nas/logs?device_id={{ device.id }}" class="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                            View All
+                        </a>
+                    </div>
+                </div>
+                <div class="p-6">
+                    {% if logs %}
+                    <div class="space-y-3">
+                        {% for log in logs %}
+                        <a href="/admin/network/nas/logs/{{ log.id }}" class="flex items-center justify-between rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-8 w-8 items-center justify-center rounded-lg
+                                    {% if log.status == 'success' %}bg-green-100 dark:bg-green-900/30
+                                    {% elif log.status == 'failed' %}bg-red-100 dark:bg-red-900/30
+                                    {% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
+                                    {% if log.status == 'success' %}
+                                    <svg class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    {% elif log.status == 'failed' %}
+                                    <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    {% else %}
+                                    <svg class="h-4 w-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    {% endif %}
+                                </div>
+                                <div>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                        {{ log.action.value.replace('_', ' ') | title }}
+                                    </p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                                        {{ log.created_at.strftime('%Y-%m-%d %H:%M') }} &middot; {{ log.triggered_by or 'System' }}
+                                    </p>
+                                </div>
+                            </div>
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-center py-6">
+                        <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No provisioning activity yet</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Capacity & Health -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Capacity & Health</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Health Status</h3>
+                        <div class="flex items-center gap-2">
+                            {% if device.health_status == 'healthy' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                                Healthy
+                            </span>
+                            {% elif device.health_status == 'degraded' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                                Degraded
+                            </span>
+                            {% elif device.health_status == 'unhealthy' %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">
+                                <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                                Unhealthy
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                                Unknown
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if device.last_health_check_at %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Last check: {{ device.last_health_check_at.strftime('%Y-%m-%d %H:%M') }}
+                        </p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Subscriber Capacity</h3>
+                        {% if device.max_concurrent_subscribers %}
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600 dark:text-slate-300">{{ device.current_subscriber_count or 0 }} / {{ device.max_concurrent_subscribers }}</span>
+                                {% set utilization = ((device.current_subscriber_count or 0) / device.max_concurrent_subscribers * 100) | round(0) | int %}
+                                <span class="{% if utilization > 90 %}text-red-600 dark:text-red-400{% elif utilization > 75 %}text-amber-600 dark:text-amber-400{% else %}text-slate-600 dark:text-slate-300{% endif %}">
+                                    {{ utilization }}%
+                                </span>
+                            </div>
+                            <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                                <div class="h-full rounded-full {% if utilization > 90 %}bg-red-500{% elif utilization > 75 %}bg-amber-500{% else %}bg-green-500{% endif %}" style="width: {{ utilization }}%"></div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="text-sm text-slate-600 dark:text-slate-300">
+                            {{ device.current_subscriber_count or 0 }} subscribers
+                        </div>
+                        <p class="mt-1 text-xs text-slate-400">No capacity limit set</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Management Access -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Management Access</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <!-- SSH -->
+                    <div>
+                        <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">SSH</h3>
+                        {% if device.ssh_username %}
+                        <div class="space-y-1 text-sm">
+                            <p class="text-slate-600 dark:text-slate-300">
+                                <span class="text-slate-400">User:</span> {{ device.ssh_username }}
+                            </p>
+                            <p class="text-slate-600 dark:text-slate-300">
+                                <span class="text-slate-400">Port:</span> {{ device.ssh_port }}
+                            </p>
+                            {% if device.ssh_key %}
+                            <p class="text-green-600 dark:text-green-400 text-xs">Key configured</p>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-slate-400">Not configured</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- API -->
+                    <div>
+                        <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">API</h3>
+                        {% if device.api_url %}
+                        <div class="space-y-1 text-sm">
+                            <p class="font-mono text-xs text-slate-600 dark:text-slate-300 break-all">{{ device.api_url }}</p>
+                            {% if device.api_username %}
+                            <p class="text-slate-600 dark:text-slate-300">
+                                <span class="text-slate-400">User:</span> {{ device.api_username }}
+                            </p>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-slate-400">Not configured</p>
+                        {% endif %}
+                    </div>
+
+                    <!-- SNMP -->
+                    <div>
+                        <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">SNMP</h3>
+                        {% if device.snmp_community %}
+                        <div class="space-y-1 text-sm">
+                            <p class="text-slate-600 dark:text-slate-300">
+                                <span class="text-slate-400">Version:</span> {{ device.snmp_version or '2c' }}
+                            </p>
+                            <p class="text-slate-600 dark:text-slate-300">
+                                <span class="text-slate-400">Port:</span> {{ device.snmp_port }}
+                            </p>
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-slate-400">Not configured</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- RADIUS Configuration -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS</h2>
+                </div>
+                <div class="p-6">
+                    {% if device.radius_secret %}
+                    <div class="space-y-2 text-sm">
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Secret:</span>
+                            <span class="font-mono">********</span>
+                        </p>
+                        {% if device.nas_identifier %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">NAS-ID:</span> {{ device.nas_identifier }}
+                        </p>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-400">Not configured</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Backup Configuration -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Backup</h2>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-center gap-2 mb-3">
+                        {% if device.backup_enabled %}
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                            <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                            Enabled
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                            Disabled
+                        </span>
+                        {% endif %}
+                    </div>
+                    {% if device.backup_method %}
+                    <div class="space-y-2 text-sm">
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Method:</span> {{ device.backup_method.value | upper }}
+                        </p>
+                        {% if device.backup_schedule %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Schedule:</span>
+                            <span class="font-mono">{{ device.backup_schedule }}</span>
+                        </p>
+                        {% endif %}
+                        {% if device.last_backup_at %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Last:</span> {{ device.last_backup_at.strftime('%Y-%m-%d %H:%M') }}
+                        </p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Notes -->
+            {% if device.notes %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Notes</h2>
+                </div>
+                <div class="p-6">
+                    <p class="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{{ device.notes }}</p>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Danger Zone -->
+            <div class="rounded-xl border border-red-200 bg-red-50 shadow-sm dark:border-red-900/50 dark:bg-red-900/10">
+                <div class="border-b border-red-200 px-6 py-4 dark:border-red-900/50">
+                    <h2 class="font-semibold text-red-800 dark:text-red-300">Danger Zone</h2>
+                </div>
+                <div class="p-6">
+                    <p class="text-sm text-red-700 dark:text-red-400 mb-4">
+                        Deleting this device will also remove all configuration backups and provisioning logs.
+                    </p>
+                    <form method="post" action="/admin/network/nas/devices/{{ device.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this device? This action cannot be undone.');">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            Delete Device
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,257 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Subscriptions - Services - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="subscriptionBulkActions()">
+    <!-- Bulk Action Bar -->
+    <div x-show="selectedIds.length > 0" x-cloak
+         class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+        <div class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white px-6 py-3 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+            <span class="text-sm font-medium text-slate-600 dark:text-slate-300">
+                <span x-text="selectedIds.length" class="font-bold text-primary-600"></span> selected
+            </span>
+            <div class="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
+            <button type="button" @click="bulkActivate()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Activate
+            </button>
+            <button type="button" @click="bulkSuspend()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Suspend
+            </button>
+            <button type="button" @click="bulkCancel()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                Cancel
+            </button>
+            <button type="button" @click="clearSelection()"
+                    class="ml-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                Clear
+            </button>
+        </div>
+    </div>
+
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Subscriptions</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Assign offers to subscriber accounts</p>
+        </div>
+        <a href="/admin/catalog/subscriptions/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Create Subscription
+        </a>
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+        <a href="/admin/catalog/subscriptions" class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium {% if not status %}bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-400{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+            All
+        </a>
+        <a href="/admin/catalog/subscriptions?status=pending" class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium {% if status == 'pending' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+            Pending
+        </a>
+        <a href="/admin/catalog/subscriptions?status=active" class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium {% if status == 'active' %}bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+            Active
+        </a>
+        <a href="/admin/catalog/subscriptions?status=suspended" class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium {% if status == 'suspended' %}bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+            Suspended
+        </a>
+        <a href="/admin/catalog/subscriptions?status=canceled" class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium {% if status == 'canceled' %}bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-300{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+            Canceled
+        </a>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="w-12 px-4 py-3">
+                            <input type="checkbox"
+                                   @change="toggleAll($event.target.checked)"
+                                   :checked="selectedIds.length === subscriptionIds.length && subscriptionIds.length > 0"
+                                   :indeterminate.prop="selectedIds.length > 0 && selectedIds.length < subscriptionIds.length"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Offer</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Start</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Next Billing</th>
+                        <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% if subscriptions %}
+                    {% for subscription in subscriptions %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                        :class="{ 'bg-primary-50/50 dark:bg-primary-900/10': selectedIds.includes('{{ subscription.id }}') }">
+                        <td class="whitespace-nowrap px-4 py-4">
+                            <input type="checkbox"
+                                   value="{{ subscription.id }}"
+                                   @change="toggleSelection('{{ subscription.id }}')"
+                                   :checked="selectedIds.includes('{{ subscription.id }}')"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">
+                            {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
+                                {{ subscription.account.subscriber.person.first_name }} {{ subscription.account.subscriber.person.last_name }}
+                            {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.organization %}
+                                {{ subscription.account.subscriber.organization.name }}
+                            {% elif subscription.account and subscription.account.account_number %}
+                                {{ subscription.account.account_number }}
+                            {% else %}
+                                {{ subscription.account_id|string|truncate(8, True, '') }}
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                            {{ subscription.offer.name if subscription.offer else subscription.offer_id|string|truncate(8, True, '') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% set sub_status = subscription.status.value if subscription.status else 'pending' %}
+                            {% if sub_status == 'active' %}
+                            {{ status_badge("Active", "active", size="sm") }}
+                            {% elif sub_status == 'suspended' %}
+                            <span class="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">Suspended</span>
+                            {% elif sub_status == 'canceled' %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Canceled</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">{{ sub_status | title }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                            {{ subscription.start_at.strftime('%b %d, %Y') if subscription.start_at else '—' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                            {{ subscription.next_billing_at.strftime('%b %d, %Y') if subscription.next_billing_at else '—' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm text-slate-500 dark:text-slate-400">
+                            <div class="flex items-center justify-end gap-3">
+                                <a href="/admin/catalog/subscriptions/{{ subscription.id }}"
+                                   class="text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                    View
+                                </a>
+                                <a href="/admin/catalog/subscriptions/{{ subscription.id }}/edit"
+                                   class="text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400">
+                                    Edit
+                                </a>
+                                <span class="text-xs text-slate-400">
+                                    {{ subscription.id|string|truncate(8, True, '') }}
+                                </span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-12">
+                            {% set title = "No subscriptions yet" %}
+                            {% set message = "Create a subscription to attach an offer to an account." %}
+                            {% include "components/data/empty_state.html" %}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if total_pages and total_pages > 1 %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/admin/catalog/subscriptions?{% if status %}status={{ status }}&{% endif %}page={{ page - 1 }}&per_page={{ per_page }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="/admin/catalog/subscriptions?{% if status %}status={{ status }}&{% endif %}page={{ page + 1 }}&per_page={{ per_page }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function subscriptionBulkActions() {
+    return {
+        selectedIds: [],
+        subscriptionIds: [{% for subscription in subscriptions %}'{{ subscription.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+
+        toggleSelection(id) {
+            const index = this.selectedIds.indexOf(id);
+            if (index === -1) {
+                this.selectedIds.push(id);
+            } else {
+                this.selectedIds.splice(index, 1);
+            }
+        },
+
+        toggleAll(checked) {
+            if (checked) {
+                this.selectedIds = [...this.subscriptionIds];
+            } else {
+                this.selectedIds = [];
+            }
+        },
+
+        clearSelection() {
+            this.selectedIds = [];
+        },
+
+        async bulkAction(action) {
+            if (this.selectedIds.length === 0) return;
+
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
+                             document.querySelector('[name="_csrf_token"]')?.value || '';
+
+            try {
+                const response = await fetch(`/admin/catalog/subscriptions/bulk/${action}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    body: `subscription_ids=${this.selectedIds.join(',')}`
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: result.message || `Successfully updated subscriptions`, type: 'success' }
+                    }));
+                    window.location.reload();
+                } else {
+                    const error = await response.json();
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: error.message || `Failed to ${action} subscriptions`, type: 'error' }
+                    }));
+                }
+            } catch (error) {
+                console.error('Bulk action error:', error);
+            }
+        },
+
+        bulkActivate() {
+            if (confirm(`Activate ${this.selectedIds.length} selected subscriptions?`)) {
+                this.bulkAction('activate');
+            }
+        },
+
+        bulkSuspend() {
+            if (confirm(`Suspend ${this.selectedIds.length} selected subscriptions?`)) {
+                this.bulkAction('suspend');
+            }
+        },
+
+        bulkCancel() {
+            if (confirm(`Cancel ${this.selectedIds.length} selected subscriptions? This cannot be undone.`)) {
+                this.bulkAction('cancel');
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,112 @@
+{# Step 4: Organization Contacts #}
+<div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="mb-6 flex items-center justify-between">
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Contact Persons</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add key contact persons for this organization (optional)</p>
+        </div>
+        <button type="button" @click="addContact()"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 hover:bg-primary-100 transition dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add Contact
+        </button>
+    </div>
+
+    <!-- Contacts List -->
+    <div class="space-y-4">
+        <template x-for="(contact, index) in contacts" :key="contact.id">
+            <div class="relative rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-800/50"
+                 x-transition:enter="transition ease-out duration-200"
+                 x-transition:enter-start="opacity-0 transform -translate-y-2"
+                 x-transition:enter-end="opacity-100 transform translate-y-0">
+                <!-- Contact number badge -->
+                <div class="absolute -top-2 -left-2 flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold shadow-sm"
+                     :class="contact.isPrimary ? 'bg-emerald-500 text-white' : 'bg-indigo-500 text-white'"
+                     x-text="index + 1"></div>
+
+                <!-- Primary badge -->
+                <div x-show="contact.isPrimary"
+                     class="absolute -top-2 right-4 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                    Primary
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">First Name</label>
+                        <input type="text" x-model="contact.firstName"
+                               placeholder="Jane"
+                               class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Last Name</label>
+                        <input type="text" x-model="contact.lastName"
+                               placeholder="Doe"
+                               class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Job Title</label>
+                        <input type="text" x-model="contact.title"
+                               placeholder="IT Manager"
+                               class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Role</label>
+                        <select x-model="contact.role"
+                                class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                            <option value="primary">Primary Contact</option>
+                            <option value="billing">Billing Contact</option>
+                            <option value="technical">Technical Contact</option>
+                            <option value="support">Support Contact</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Email</label>
+                        <input type="email" x-model="contact.email"
+                               placeholder="jane@company.com"
+                               class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Phone</label>
+                        <input type="tel" x-model="contact.phone"
+                               placeholder="+234 800 000 0000"
+                               class="block w-full rounded-lg border-0 bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                    </div>
+                </div>
+
+                <!-- Actions row -->
+                <div class="mt-4 flex items-center justify-between border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox"
+                               :checked="contact.isPrimary"
+                               @change="setPrimaryContact(index)"
+                               class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+                        <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Primary contact for this organization</span>
+                    </label>
+                    <button type="button" @click="removeContact(index)"
+                            :disabled="contacts.length <= 1"
+                            class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                        Remove
+                    </button>
+                </div>
+            </div>
+        </template>
+
+        <!-- Empty state -->
+        <div x-show="contacts.length === 0" class="text-center py-8">
+            <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+            </svg>
+            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No contacts added yet</p>
+            <button type="button" @click="addContact()"
+                    class="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                Add your first contact
+            </button>
+        </div>
+    </div>
+</div>

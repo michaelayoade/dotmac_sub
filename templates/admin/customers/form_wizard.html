@@ -1,0 +1,367 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Create Customer - Wizard{% endblock %}
+
+{% block head %}
+<script src="/static/js/form-validation.js" defer></script>
+<script src="/static/js/repeatable-fields.js" defer></script>
+{% endblock %}
+
+{% block content %}
+<div x-data="customerWizard()" class="max-w-4xl mx-auto space-y-6">
+    <!-- Header -->
+    <header class="text-center">
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Create New Customer</h1>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Follow the steps to add a new customer to the system</p>
+    </header>
+
+    <!-- Progress Indicator -->
+    <div class="relative">
+        <div class="overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700 h-2">
+            <div class="h-full bg-gradient-to-r from-primary-500 to-primary-600 transition-all duration-500 ease-out"
+                 :style="`width: ${(currentStep / totalSteps) * 100}%`"></div>
+        </div>
+
+        <!-- Step indicators -->
+        <div class="mt-4 flex justify-between">
+            <template x-for="(step, index) in steps" :key="index">
+                <div class="flex flex-col items-center"
+                     :class="{ 'opacity-50': index > currentStep - 1 }">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all"
+                         :class="{
+                             'bg-primary-500 text-white shadow-lg shadow-primary-500/30': index < currentStep,
+                             'bg-primary-500 text-white ring-4 ring-primary-100 dark:ring-primary-900/50': index === currentStep - 1,
+                             'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400': index >= currentStep
+                         }">
+                        <svg x-show="index < currentStep - 1" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        <span x-show="index >= currentStep - 1" x-text="index + 1"></span>
+                    </div>
+                    <span class="mt-2 text-xs font-medium text-slate-600 dark:text-slate-300 hidden sm:block" x-text="step.label"></span>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Form Container -->
+    <form @submit.prevent="handleSubmit()" x-data="{ submitting: false }">
+        {% include "components/forms/csrf_input.html" %}
+
+        <!-- Step 1: Type Selection -->
+        <div x-show="currentStep === 1" x-cloak class="space-y-6">
+            {% include "admin/customers/_wizard_step_type.html" %}
+        </div>
+
+        <!-- Step 2: Basic Information -->
+        <div x-show="currentStep === 2" x-cloak class="space-y-6">
+            {% include "admin/customers/_wizard_step_basic.html" %}
+        </div>
+
+        <!-- Step 3: Address -->
+        <div x-show="currentStep === 3" x-cloak class="space-y-6">
+            {% include "admin/customers/_wizard_step_address.html" %}
+        </div>
+
+        <!-- Step 4: Contacts (Organizations only) -->
+        <div x-show="currentStep === 4 && customerType === 'organization'" x-cloak class="space-y-6">
+            {% include "admin/customers/_wizard_step_contacts.html" %}
+        </div>
+
+        <!-- Step 5: Review -->
+        <div x-show="currentStep === totalSteps" x-cloak class="space-y-6">
+            {% include "admin/customers/_wizard_step_review.html" %}
+        </div>
+
+        <!-- Navigation Buttons -->
+        <div class="mt-8 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-6 py-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center gap-3">
+                <a href="/admin/customers"
+                   class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    Cancel
+                </a>
+                <button type="button"
+                        x-show="currentStep > 1"
+                        @click="previousStep()"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    Previous
+                </button>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <!-- Next Button -->
+                <button type="button"
+                        x-show="currentStep < totalSteps"
+                        @click="nextStep()"
+                        :disabled="!canProceed"
+                        class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-500/25 transition-all hover:shadow-xl hover:shadow-primary-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-lg">
+                    Next
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </button>
+
+                <!-- Submit Button -->
+                <button type="submit"
+                        x-show="currentStep === totalSteps"
+                        :disabled="submitting || !canProceed"
+                        :class="{ 'opacity-50 cursor-wait': submitting }"
+                        class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:hover:translate-y-0 disabled:hover:shadow-lg">
+                    <span x-show="!submitting" class="flex items-center gap-2">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Create Customer
+                    </span>
+                    <span x-show="submitting" class="flex items-center gap-2">
+                        <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Creating...
+                    </span>
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function customerWizard() {
+    return {
+        // Customer type
+        customerType: 'person',
+
+        // Step navigation
+        currentStep: 1,
+        steps: [
+            { label: 'Type', validate: () => this.customerType !== '' },
+            { label: 'Details', validate: () => this.validateBasicInfo() },
+            { label: 'Address', validate: () => true },  // Optional
+            { label: 'Contacts', validate: () => true },  // Only for organizations, optional
+            { label: 'Review', validate: () => true }
+        ],
+
+        // Form data - Person
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        displayName: '',
+        dateOfBirth: '',
+        gender: 'unknown',
+        showOptionalPerson: false,
+
+        // Form data - Organization
+        orgName: '',
+        legalName: '',
+        taxId: '',
+        domain: '',
+        website: '',
+        showOptionalOrg: false,
+
+        // Form data - Address (shared)
+        addressLine1: '',
+        addressLine2: '',
+        city: '',
+        region: '',
+        postalCode: '',
+        countryCode: '{{ default_country|default("NG") }}',
+
+        // Form data - Contacts (for organizations)
+        contacts: [],
+
+        // Status
+        status: 'active',
+        isActive: true,
+        notes: '',
+
+        // Quick options (review step)
+        createAccount: true,
+        continueToSubscription: false,
+        sendWelcomeEmail: false,
+
+        get totalSteps() {
+            // Skip contacts step for individuals
+            return this.customerType === 'organization' ? 5 : 4;
+        },
+
+        get canProceed() {
+            const stepIndex = this.currentStep - 1;
+            if (stepIndex < this.steps.length) {
+                return this.steps[stepIndex].validate.call(this);
+            }
+            return true;
+        },
+
+        validateBasicInfo() {
+            if (this.customerType === 'person') {
+                return this.firstName.trim() !== '' &&
+                       this.lastName.trim() !== '' &&
+                       this.email.trim() !== '' &&
+                       this.isValidEmail(this.email);
+            } else {
+                return this.orgName.trim() !== '';
+            }
+        },
+
+        isValidEmail(email) {
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        },
+
+        nextStep() {
+            if (this.canProceed && this.currentStep < this.totalSteps) {
+                // Skip contacts step for individuals
+                if (this.currentStep === 3 && this.customerType === 'person') {
+                    this.currentStep = this.totalSteps;  // Go to review
+                } else {
+                    this.currentStep++;
+                }
+            }
+        },
+
+        previousStep() {
+            if (this.currentStep > 1) {
+                // Handle skipped contacts step for individuals
+                if (this.currentStep === this.totalSteps && this.customerType === 'person') {
+                    this.currentStep = 3;  // Go back to address
+                } else {
+                    this.currentStep--;
+                }
+            }
+        },
+
+        skipAddress() {
+            if (this.customerType === 'organization') {
+                this.currentStep = 4;
+            } else {
+                this.currentStep = this.totalSteps;
+            }
+        },
+
+        goToStep(step) {
+            if (step >= 1 && step <= this.totalSteps) {
+                this.currentStep = step;
+            }
+        },
+
+        addContact() {
+            this.contacts.push({
+                id: Date.now(),
+                firstName: '',
+                lastName: '',
+                title: '',
+                role: 'primary',
+                email: '',
+                phone: '',
+                isPrimary: this.contacts.length === 0
+            });
+        },
+
+        removeContact(index) {
+            const wasPrimary = this.contacts[index].isPrimary;
+            this.contacts.splice(index, 1);
+            if (wasPrimary && this.contacts.length > 0) {
+                this.contacts[0].isPrimary = true;
+            }
+        },
+
+        setPrimaryContact(index) {
+            this.contacts.forEach((c, i) => {
+                c.isPrimary = (i === index);
+            });
+        },
+
+        getFormData() {
+            const data = {
+                customer_type: this.customerType,
+                status: this.status,
+                is_active: this.isActive,
+                notes: this.notes,
+                address_line1: this.addressLine1,
+                address_line2: this.addressLine2,
+                city: this.city,
+                region: this.region,
+                postal_code: this.postalCode,
+                country_code: this.countryCode,
+                // Quick options
+                create_account: this.createAccount,
+                continue_to_subscription: this.continueToSubscription,
+                send_welcome_email: this.sendWelcomeEmail
+            };
+
+            if (this.customerType === 'person') {
+                data.first_name = this.firstName;
+                data.last_name = this.lastName;
+                data.email = this.email;
+                data.phone = this.phone;
+                data.display_name = this.displayName;
+                data.date_of_birth = this.dateOfBirth;
+                data.gender = this.gender;
+            } else {
+                data.name = this.orgName;
+                data.legal_name = this.legalName;
+                data.tax_id = this.taxId;
+                data.domain = this.domain;
+                data.website = this.website;
+                data.contacts = this.contacts.map(c => ({
+                    first_name: c.firstName,
+                    last_name: c.lastName,
+                    title: c.title,
+                    role: c.role,
+                    email: c.email,
+                    phone: c.phone,
+                    is_primary: c.isPrimary
+                }));
+            }
+
+            return data;
+        },
+
+        async handleSubmit() {
+            if (this.submitting) return;
+            this.submitting = true;
+
+            const data = this.getFormData();
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
+                             document.querySelector('[name="_csrf_token"]')?.value || '';
+
+            try {
+                const response = await fetch('/admin/customers/wizard', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: 'Customer created successfully!', type: 'success' }
+                    }));
+                    // Redirect to customer detail or list
+                    window.location.href = result.redirect || '/admin/customers';
+                } else {
+                    const error = await response.json();
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: error.message || 'Failed to create customer', type: 'error' }
+                    }));
+                    this.submitting = false;
+                }
+            } catch (error) {
+                console.error('Error creating customer:', error);
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: 'Network error. Please try again.', type: 'error' }
+                }));
+                this.submitting = false;
+            }
+        },
+
+        init() {
+            // Initialize with one contact for organizations
+            if (this.contacts.length === 0) {
+                this.addContact();
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,78 @@
+# -*- text -*-
+# FreeRADIUS SQL module configuration
+# PostgreSQL backend for user authentication and accounting
+
+sql {
+	dialect = "postgresql"
+	driver = "rlm_sql_postgresql"
+
+	# Connection parameters from environment variables
+	server = "$ENV{RADIUS_DB_HOST}"
+	port = 5432
+	login = "$ENV{RADIUS_DB_USER}"
+	password = "$ENV{RADIUS_DB_PASS}"
+	radius_db = "$ENV{RADIUS_DB_NAME}"
+
+	# SQL username from RADIUS User-Name attribute
+	sql_user_name = "%{User-Name}"
+
+	# Table configuration
+	acct_table1 = "radacct"
+	acct_table2 = "radacct"
+	postauth_table = "radpostauth"
+	authcheck_table = "radcheck"
+	groupcheck_table = "radgroupcheck"
+	authreply_table = "radreply"
+	groupreply_table = "radgroupreply"
+	usergroup_table = "radusergroup"
+
+	# Delete stale session records
+	delete_stale_sessions = yes
+
+	# Read NAS clients from database
+	read_clients = yes
+	client_table = "nas"
+
+	# Pool configuration
+	pool {
+		start = 5
+		min = 3
+		max = 10
+		spare = 3
+		uses = 0
+		lifetime = 0
+		idle_timeout = 60
+	}
+
+	# Group membership query
+	group_membership_query = "\
+		SELECT groupname \
+		FROM ${usergroup_table} \
+		WHERE username = '%{SQL-User-Name}' \
+		ORDER BY priority"
+
+	# Authorization queries
+	authorize_check_query = "\
+		SELECT id, username, attribute, value, op \
+		FROM ${authcheck_table} \
+		WHERE username = '%{SQL-User-Name}' \
+		ORDER BY id"
+
+	authorize_reply_query = "\
+		SELECT id, username, attribute, value, op \
+		FROM ${authreply_table} \
+		WHERE username = '%{SQL-User-Name}' \
+		ORDER BY id"
+
+	authorize_group_check_query = "\
+		SELECT id, groupname, attribute, value, op \
+		FROM ${groupcheck_table} \
+		WHERE groupname = '%{SQL-Group}' \
+		ORDER BY id"
+
+	authorize_group_reply_query = "\
+		SELECT id, groupname, attribute, value, op \
+		FROM ${groupreply_table} \
+		WHERE groupname = '%{SQL-Group}' \
+		ORDER BY id"
+}

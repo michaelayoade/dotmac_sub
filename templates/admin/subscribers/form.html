@@ -1,0 +1,79 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if subscriber else 'New' }} Subscriber - Admin{% endblock %}
+
+{% block content %}
+{% set selected_ref = form.customer_ref if form is defined else (prefill_ref if prefill_ref is defined and prefill_ref else (('person:' ~ subscriber.person_id) if subscriber and subscriber.person_id else ('organization:' ~ subscriber.organization_id) if subscriber and subscriber.organization_id else '')) %}
+{% set selected_label = form.customer_search if form is defined else (prefill_label if prefill_label is defined and prefill_label else ((subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name) if subscriber and subscriber.person else (subscriber.organization.name if subscriber and subscriber.organization else ''))) %}
+<div class="mx-auto max-w-2xl space-y-6" x-data="{ customerRef: '{{ selected_ref }}' }">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/subscribers" class="hover:text-primary-600">Subscribers</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ 'Edit' if subscriber else 'New' }}</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Subscriber' if subscriber else 'New Subscriber' }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg bg-red-50 border border-red-200 p-4 dark:bg-red-900/30 dark:border-red-800">
+        <div class="flex">
+            <svg class="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="ml-3 text-sm text-red-700 dark:text-red-200">{{ error }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="POST" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="p-6 space-y-6">
+            <div>
+                <label for="customer_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customer <span class="text-red-500">*</span></label>
+                <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
+                    <input type="text" name="customer_search" data-typeahead-input
+                        value="{{ selected_label }}"
+                        placeholder="Search customers..."
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input type="hidden" name="customer_ref" id="customer_ref" data-typeahead-hidden required x-model="customerRef" value="{{ selected_ref }}">
+                    <div data-typeahead-results></div>
+                </div>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Select an existing person or organization.</p>
+            </div>
+
+            <div>
+                <label for="subscriber_number" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Subscriber Number</label>
+                <input type="text" name="subscriber_number" id="subscriber_number"
+                    value="{{ form.subscriber_number if form is defined else (subscriber.subscriber_number if subscriber else '') }}"
+                    placeholder="Auto-generated if blank"
+                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                <textarea name="notes" id="notes" rows="3"
+                    class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.notes if form is defined else (subscriber.notes if subscriber else '') }}</textarea>
+            </div>
+
+            {% if not subscriber %}
+            <div class="border-t border-slate-200 pt-6 dark:border-slate-700">
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+                    Customer portal access is managed by RADIUS during service provisioning.
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="flex items-center gap-3">
+                <input type="checkbox" name="is_active" id="is_active" value="true"
+                    {% if form is defined and form.is_active %}checked{% elif form is not defined and (subscriber is none or subscriber.is_active) %}checked{% endif %}
+                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                <label for="is_active" class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</label>
+            </div>
+        </div>
+
+        <div class="border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-800/50 flex items-center justify-end gap-3">
+            <a href="/admin/subscribers" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">{{ 'Update' if subscriber else 'Create' }} Subscriber</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,286 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ pop_site.name }} - POP Site - Admin{% endblock %}
+
+{% block head %}
+{% if pop_site.latitude and pop_site.longitude %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #location-map { height: 200px; border-radius: 0.5rem; }
+    .dark .leaflet-popup-content-wrapper { background: #1e293b; color: #f1f5f9; }
+    .dark .leaflet-popup-tip { background: #1e293b; }
+</style>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/pop-sites" class="hover:text-primary-600">POP Sites</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ pop_site.name }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ pop_site.name }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ pop_site.code or 'No site code' }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+            {% if pop_site.is_active %}
+                {{ status_badge("Active", "active") }}
+            {% else %}
+                {{ status_badge("Inactive", "inactive") }}
+            {% endif %}
+            <a href="/admin/network/pop-sites/{{ pop_site.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Site Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Site Information</h2>
+                </div>
+                <div class="p-6">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Site Code</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pop_site.code or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Devices</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ devices | length }}</dd>
+                        </div>
+                        {% if pop_site.address_line1 %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Address</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ pop_site.address_line1 }}{% if pop_site.address_line2 %}<br>{{ pop_site.address_line2 }}{% endif %}<br>
+                                {{ pop_site.city or '' }}{% if pop_site.region %}, {{ pop_site.region }}{% endif %} {{ pop_site.postal_code or '' }}
+                                {% if pop_site.country_code %}<br>{{ pop_site.country_code }}{% endif %}
+                            </dd>
+                        </div>
+                        {% endif %}
+                        {% if pop_site.latitude and pop_site.longitude %}
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Coordinates</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pop_site.latitude }}, {{ pop_site.longitude }}</dd>
+                        </div>
+                        {% endif %}
+                        {% if pop_site.notes %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ pop_site.notes }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+
+            <!-- Wireless Masts -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Wireless Masts</h2>
+                        <a href="/admin/network/pop-sites/{{ pop_site.id }}/edit" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Mast</a>
+                    </div>
+                </div>
+                {% if masts %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Height</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Structure</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Owner</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for mast in masts %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ mast.name }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ mast.status or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                                    {% if mast.height_m is not none %}{{ "%.1f"|format(mast.height_m) }} m{% else %}-{% endif %}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ mast.structure_type or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ mast.owner or '-' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-6">
+                    <div class="text-center py-8">
+                        <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v18m7-9H5"/></svg>
+                        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No masts</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add a mast from the POP site edit form.</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Devices at this site -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Devices</h2>
+                        <a href="/admin/network/core-devices/new?pop_site_id={{ pop_site.id }}" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">+ Add Device</a>
+                    </div>
+                </div>
+                {% if devices %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Role</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">IP</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for device in devices %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <a href="/admin/network/core-devices/{{ device.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700">{{ device.name }}</a>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ device.role.value | title }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-500 dark:text-slate-400">{{ device.mgmt_ip or '-' }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {% if device.status.value == 'online' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% elif device.status.value == 'offline' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif device.status.value == 'degraded' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
+                                        <span class="h-1.5 w-1.5 rounded-full {% if device.status.value == 'online' %}bg-green-500{% elif device.status.value == 'offline' %}bg-red-500{% elif device.status.value == 'degraded' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
+                                        {{ device.status.value | title }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-6">
+                    <div class="text-center py-8">
+                        <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No devices</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No network devices are assigned to this site.</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Quick Info -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Site ID</p>
+                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ pop_site.id | string | truncate(20, True, '...') }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.created_at.strftime('%B %d, %Y') if pop_site.created_at else '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.updated_at.strftime('%B %d, %Y') if pop_site.updated_at else '-' }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Map Preview -->
+            {% if pop_site.latitude and pop_site.longitude %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Location</h2>
+                </div>
+                <div class="p-6">
+                    <div id="location-map" class="rounded-lg"></div>
+                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400 text-center">{{ pop_site.latitude }}, {{ pop_site.longitude }}</p>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if pop_site.latitude and pop_site.longitude %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const lat = {{ pop_site.latitude }};
+    const lng = {{ pop_site.longitude }};
+    const popName = {{ pop_site.name | tojson | safe }};
+    const popCode = {{ (pop_site.code or "") | tojson | safe }};
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    const map = L.map('location-map').setView([lat, lng], 15);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19
+    }).addTo(map);
+
+    const icon = L.divIcon({
+        html: '<div style="background:#a855f7;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3)"><svg style="width:18px;height:18px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+        className: '',
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+    });
+
+    L.marker([lat, lng], { icon: icon })
+        .addTo(map)
+        .bindPopup(`<strong>${escapeHtml(popName)}</strong><br>${escapeHtml(popCode)}`);
+})();
+</script>
+{% endif %}
+{% endblock %}

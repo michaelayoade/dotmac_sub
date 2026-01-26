@@ -1,0 +1,423 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+
+{% block title %}Fiber Plant - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("orange", "amber") }}
+
+<div class="relative space-y-6" x-data="{ activeTab: '{{ tab | default('cabinets') }}' }">
+    {# Page Header #}
+    {% set fiber_icon %}
+    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+    </svg>
+    {% endset %}
+
+    {% call page_header(
+        title="Fiber Plant",
+        subtitle="Manage outside plant fiber infrastructure",
+        icon=fiber_icon,
+        color="orange",
+        color2="amber"
+    ) %}
+        <div class="flex items-center gap-2">
+            <a href="/admin/network/fiber-map" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                Map
+            </a>
+            <a href="/admin/network/fiber-reports" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Reports
+            </a>
+        </div>
+    {% endcall %}
+
+    {# Tab Navigation #}
+    <nav class="flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">
+        <button @click="activeTab = 'cabinets'"
+                :class="activeTab === 'cabinets' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            FDH Cabinets
+            <span class="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-600 dark:bg-orange-500/20 dark:text-orange-400">{{ stats.cabinets }}</span>
+        </button>
+        <button @click="activeTab = 'splitters'"
+                :class="activeTab === 'splitters' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+            Splitters
+            <span class="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-600 dark:bg-purple-500/20 dark:text-purple-400">{{ stats.splitters }}</span>
+        </button>
+        <button @click="activeTab = 'strands'"
+                :class="activeTab === 'strands' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Fiber Strands
+            <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:bg-blue-500/20 dark:text-blue-400">{{ stats.strands }}</span>
+        </button>
+        <button @click="activeTab = 'closures'"
+                :class="activeTab === 'closures' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z"/></svg>
+            Splice Closures
+            <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-600 dark:bg-green-500/20 dark:text-green-400">{{ stats.closures }}</span>
+        </button>
+        <button @click="activeTab = 'changes'"
+                :class="activeTab === 'changes' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
+                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            Change Requests
+            {% if stats.pending_changes > 0 %}
+            <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:bg-amber-500/20 dark:text-amber-400">{{ stats.pending_changes }}</span>
+            {% endif %}
+        </button>
+    </nav>
+
+    {# ==================== FDH CABINETS TAB ==================== #}
+    <div x-show="activeTab === 'cabinets'" x-cloak class="space-y-6">
+        <div class="flex justify-end">
+            <a href="/admin/network/fdh-cabinets/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add FDH Cabinet
+            </a>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Cabinet</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Code</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Notes</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for cabinet in cabinets %}
+                        <tr class="group transition-all hover:bg-orange-50/50 dark:hover:bg-orange-900/10">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-md shadow-orange-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                                    </div>
+                                    <a href="/admin/network/fdh-cabinets/{{ cabinet.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-orange-600 dark:text-white dark:hover:text-orange-400">{{ cabinet.name }}</a>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="font-mono text-sm text-slate-900 dark:text-white">{{ cabinet.code or '-' }}</span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <p class="text-sm text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ cabinet.notes or '-' }}</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {{ status_badge("Active" if cabinet.is_active else "Inactive", "active" if cabinet.is_active else "inactive") }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/fdh-cabinets/" ~ cabinet.id, icon_view(), "View details", "orange") }}
+                                    {{ row_action("/admin/network/fdh-cabinets/" ~ cabinet.id ~ "/edit", icon_edit(), "Edit", "slate") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No FDH cabinets",
+                            message="Get started by adding an FDH cabinet.",
+                            icon='<svg class="h-8 w-8 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>',
+                            color="orange",
+                            color2="amber",
+                            action_label="Add FDH Cabinet",
+                            action_href="/admin/network/fdh-cabinets/new",
+                            colspan=5
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== SPLITTERS TAB ==================== #}
+    <div x-show="activeTab === 'splitters'" x-cloak class="space-y-6">
+        <div class="flex justify-end">
+            <a href="/admin/network/splitters/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-purple-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Splitter
+            </a>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Splitter</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">FDH Cabinet</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Ratio</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for splitter in splitters %}
+                        <tr class="group transition-all hover:bg-purple-50/50 dark:hover:bg-purple-900/10">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-violet-600 shadow-md shadow-purple-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                                    </div>
+                                    <a href="/admin/network/splitters/{{ splitter.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-purple-600 dark:text-white dark:hover:text-purple-400">{{ splitter.name }}</a>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if splitter.fdh %}
+                                <a href="/admin/network/fdh-cabinets/{{ splitter.fdh_id }}" class="text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ splitter.fdh.name }}</a>
+                                {% else %}
+                                <span class="text-sm text-slate-400">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center rounded-lg bg-purple-100 px-2.5 py-1 text-sm font-semibold text-purple-700 dark:bg-purple-500/20 dark:text-purple-400">1:{{ splitter.ratio or '?' }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {{ status_badge("Active" if splitter.is_active else "Inactive", "active" if splitter.is_active else "inactive") }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/splitters/" ~ splitter.id, icon_view(), "View details", "purple") }}
+                                    {{ row_action("/admin/network/splitters/" ~ splitter.id ~ "/edit", icon_edit(), "Edit", "slate") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No splitters",
+                            message="Get started by adding a splitter.",
+                            icon='<svg class="h-8 w-8 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>',
+                            color="purple",
+                            color2="violet",
+                            action_label="Add Splitter",
+                            action_href="/admin/network/splitters/new",
+                            colspan=5
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== FIBER STRANDS TAB ==================== #}
+    <div x-show="activeTab === 'strands'" x-cloak class="space-y-6">
+        <div class="grid gap-4 sm:grid-cols-3 animate-fade-in-up">
+            {{ stats_card("Total Strands", stats.strands, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="blue", color2="indigo") }}
+            {{ stats_card("Available", stats.strands_available, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="green") }}
+            {{ stats_card("In Use", stats.strands_in_use, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="amber", color2="orange") }}
+        </div>
+
+        <div class="flex justify-end">
+            <a href="/admin/network/fiber-strands/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Fiber Strand
+            </a>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Cable / Strand</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Label</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for strand in strands %}
+                        <tr class="group transition-all hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    </div>
+                                    <div>
+                                        <span class="font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ strand.cable_name }}</span>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">Strand #{{ strand.strand_number }}</p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="text-sm text-slate-900 dark:text-white">{{ strand.label or '-' }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% set status_val = strand.status.value if strand.status else 'unknown' %}
+                                {% if status_val == 'available' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Available</span>
+                                {% elif status_val == 'in_use' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">In Use</span>
+                                {% elif status_val == 'reserved' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
+                                {% else %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ status_val | title }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/fiber-strands/" ~ strand.id ~ "/edit", icon_edit(), "Edit", "blue") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No fiber strands",
+                            message="Get started by adding a fiber strand.",
+                            icon='<svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+                            color="blue",
+                            color2="indigo",
+                            action_label="Add Fiber Strand",
+                            action_href="/admin/network/fiber-strands/new",
+                            colspan=4
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== SPLICE CLOSURES TAB ==================== #}
+    <div x-show="activeTab === 'closures'" x-cloak class="space-y-6">
+        <div class="flex justify-end">
+            <a href="/admin/network/splice-closures/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Splice Closure
+            </a>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Closure</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Location</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for closure in closures %}
+                        <tr class="group transition-all hover:bg-green-50/50 dark:hover:bg-green-900/10">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 shadow-md shadow-green-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z"/></svg>
+                                    </div>
+                                    <a href="/admin/network/splice-closures/{{ closure.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-green-600 dark:text-white dark:hover:text-green-400">{{ closure.name }}</a>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if closure.latitude and closure.longitude %}
+                                <span class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ "%.5f"|format(closure.latitude) }}, {{ "%.5f"|format(closure.longitude) }}</span>
+                                {% else %}
+                                <span class="text-sm text-slate-400">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {{ status_badge("Active" if closure.is_active else "Inactive", "active" if closure.is_active else "inactive") }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/splice-closures/" ~ closure.id, icon_view(), "View details", "green") }}
+                                    {{ row_action("/admin/network/splice-closures/" ~ closure.id ~ "/edit", icon_edit(), "Edit", "slate") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No splice closures",
+                            message="Get started by adding a splice closure.",
+                            icon='<svg class="h-8 w-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6z"/></svg>',
+                            color="green",
+                            color2="emerald",
+                            action_label="Add Splice Closure",
+                            action_href="/admin/network/splice-closures/new",
+                            colspan=4
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== CHANGE REQUESTS TAB ==================== #}
+    <div x-show="activeTab === 'changes'" x-cloak class="space-y-6">
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/40 dark:to-orange-900/30">
+                            <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                        </div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Pending Change Requests</h2>
+                    </div>
+                    <a href="/admin/network/fiber-change-requests" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View all</a>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Request</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Submitted</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for req in change_requests %}
+                        <tr class="group transition-all hover:bg-amber-50/50 dark:hover:bg-amber-900/10">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-md shadow-amber-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                                    </div>
+                                    <a href="/admin/network/fiber-change-requests/{{ req.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ req.id[:8] }}...</a>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ req.asset_type | title if req.asset_type else 'Unknown' }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="text-sm text-slate-500 dark:text-slate-400">{{ req.created_at.strftime('%b %d, %Y') if req.created_at else '-' }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/fiber-change-requests/" ~ req.id, icon_view(), "Review", "amber") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No pending change requests",
+                            message="All fiber change requests have been processed.",
+                            icon='<svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                            color="amber",
+                            color2="orange",
+                            colspan=4
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

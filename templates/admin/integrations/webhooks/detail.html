@@ -1,0 +1,110 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ endpoint.name }} - Webhooks{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/integrations/webhooks" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ endpoint.name }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Webhook Endpoint</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Details Card -->
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Configuration</h2>
+        <dl class="grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">URL</dt>
+                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white break-all">{{ endpoint.url }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                <dd class="mt-1">
+                    {% if endpoint.is_active %}
+                    {{ status_badge("Active", "active", size="sm") }}
+                    {% else %}
+                    {{ status_badge("Inactive", "inactive", size="sm") }}
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secret</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ '****' + endpoint.secret[-4:] if endpoint.secret else 'None' }}</dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- Subscriptions -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Event Subscriptions</h2>
+        </div>
+        <div class="p-6">
+            {% if subscriptions %}
+            <div class="flex flex-wrap gap-2">
+                {% for sub in subscriptions %}
+                <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                    {{ sub.event_type.value if sub.event_type else 'custom' }}
+                </span>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No event subscriptions</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Deliveries -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recent Deliveries</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Event</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Attempts</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Response</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for delivery in deliveries %}
+                    {% set status_val = delivery.status.value if delivery.status else 'pending' %}
+                    <tr>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ delivery.event_type.value if delivery.event_type else '-' }}</td>
+                        <td class="px-6 py-4">
+                            {% if status_val == 'delivered' %}
+                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Delivered</span>
+                            {% elif status_val == 'failed' %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Failed</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Pending</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ delivery.attempt_count }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ delivery.response_status or '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ delivery.created_at.strftime('%b %d %H:%M') if delivery.created_at else '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No deliveries yet</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

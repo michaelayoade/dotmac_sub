@@ -1,0 +1,18 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ page_title }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ heading }}</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ description }}</p>
+    </div>
+
+    <div class="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        {% set title = empty_title %}
+        {% set message = empty_message %}
+        {% include "components/data/empty_state.html" %}
+    </div>
+</div>
+{% endblock %}

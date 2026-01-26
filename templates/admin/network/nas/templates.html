@@ -1,0 +1,135 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge, vendor_badge %}
+
+{% block title %}Provisioning Templates - NAS - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/network/nas" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Provisioning Templates</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Command templates for subscriber provisioning</p>
+            </div>
+        </div>
+        <a href="/admin/network/nas/templates/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add Template
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="get" class="flex flex-wrap items-end gap-4">
+            <div class="w-40">
+                <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor</label>
+                <select name="vendor" onchange="this.form.submit()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Vendors</option>
+                    {% for v in vendors %}
+                    <option value="{{ v.value }}" {% if filters.vendor == v.value %}selected{% endif %}>{{ v.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="w-48">
+                <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Action</label>
+                <select name="action" onchange="this.form.submit()" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Actions</option>
+                    {% for a in provisioning_actions %}
+                    <option value="{{ a.value }}" {% if filters.action == a.value %}selected{% endif %}>{{ a.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex gap-2">
+                <button type="submit" class="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    Filter
+                </button>
+                {% if filters.vendor or filters.action %}
+                <a href="/admin/network/nas/templates" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700">
+                    Clear
+                </a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <!-- Templates Grid -->
+    {% if templates %}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {% for template in templates %}
+        <a href="/admin/network/nas/templates/{{ template.id }}" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-300 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-700">
+            <div class="flex items-start justify-between mb-3">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                    <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                </div>
+                {% if template.is_active %}
+                {{ status_badge("Active", "active", size="sm") }}
+                {% else %}
+                {{ status_badge("Inactive", "inactive", size="sm") }}
+                {% endif %}
+            </div>
+            <h3 class="font-medium text-slate-900 dark:text-white">{{ template.name }}</h3>
+            {% if template.description %}
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400 line-clamp-2">{{ template.description }}</p>
+            {% endif %}
+            <div class="mt-3 flex flex-wrap gap-2">
+                {{ vendor_badge(template.vendor.value, size="sm") }}
+                <span class="inline-flex items-center rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                    {{ template.action.value.replace('_', ' ') | title }}
+                </span>
+                {% if template.connection_type %}
+                <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                    {{ template.connection_type.value | upper }}
+                </span>
+                {% endif %}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if pagination.total_pages > 1 %}
+    <div class="flex items-center justify-between">
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+            Showing {{ (pagination.page - 1) * 25 + 1 }} to {{ [pagination.page * 25, pagination.total] | min }} of {{ pagination.total }} templates
+        </p>
+        <div class="flex items-center gap-2">
+            {% if pagination.has_prev %}
+            <a href="?page={{ pagination.page - 1 }}{% if filters.vendor %}&vendor={{ filters.vendor }}{% endif %}{% if filters.action %}&action={{ filters.action }}{% endif %}"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                Previous
+            </a>
+            {% endif %}
+            <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+            {% if pagination.has_next %}
+            <a href="?page={{ pagination.page + 1 }}{% if filters.vendor %}&vendor={{ filters.vendor }}{% endif %}{% if filters.action %}&action={{ filters.action }}{% endif %}"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                Next
+            </a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <!-- Empty State -->
+    <div class="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+        </svg>
+        <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">No Provisioning Templates</h3>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            Create templates to automate subscriber provisioning commands.
+        </p>
+        <div class="mt-6">
+            <a href="/admin/network/nas/templates/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Create First Template
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

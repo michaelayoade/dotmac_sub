@@ -1,0 +1,39 @@
+{% if account_locked %}
+<div>
+    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Billing Account <span class="text-red-500">*</span></label>
+    <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-700/60 dark:text-slate-200">
+        <div>
+            <div class="font-medium">{{ account_label or 'Account' }}</div>
+            {% if account_number %}
+            <div class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ account_number }}</div>
+            {% endif %}
+        </div>
+        <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-600 dark:text-slate-200">Locked</span>
+    </div>
+    <input type="hidden" name="account_id" value="{{ selected_account_id }}"
+           {% if account_x_model %}x-model="{{ account_x_model }}"{% endif %}>
+</div>
+{% else %}
+<div>
+    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customer <span class="text-red-500">*</span></label>
+    <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
+        <input type="text" data-typeahead-input
+               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+               placeholder="Search customers..." required>
+        <input type="hidden" name="customer_ref" data-typeahead-hidden required>
+        <div data-typeahead-results></div>
+    </div>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose the customer; we’ll pick the billing account.</p>
+    {% if account_x_model %}
+    <input type="hidden" name="account_x_model" value="{{ account_x_model }}">
+    {% endif %}
+</div>
+
+<div hx-get="/admin/billing/customer-accounts"
+     hx-trigger="load, change from:input[name='customer_ref']"
+     hx-include="closest form"
+     hx-target="#customer-account-select"
+     hx-swap="outerHTML">
+    {% include "admin/billing/_customer_account_select.html" with context %}
+</div>
+{% endif %}

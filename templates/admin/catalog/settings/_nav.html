@@ -1,0 +1,35 @@
+<!-- Settings Horizontal Tab Navigation -->
+<div class="border-b border-slate-200 dark:border-slate-700">
+    <nav class="-mb-px flex space-x-8">
+        <a href="/admin/catalog/settings"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if not settings_tab else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            Overview
+        </a>
+        <a href="/admin/catalog/settings/region-zones"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if settings_tab == 'region-zones' else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            Region Zones
+        </a>
+        <a href="/admin/catalog/settings/usage-allowances"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if settings_tab == 'usage-allowances' else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            Usage Allowances
+        </a>
+        <a href="/admin/catalog/settings/sla-profiles"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if settings_tab == 'sla-profiles' else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            SLA Profiles
+        </a>
+        <a href="/admin/catalog/settings/policy-sets"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if settings_tab == 'policy-sets' else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            Policy Sets
+        </a>
+        <a href="/admin/catalog/settings/add-ons"
+           class="py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                  {{ 'border-primary-500 text-primary-600 dark:text-primary-400' if settings_tab == 'add-ons' else 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            Add-Ons
+        </a>
+    </nav>
+</div>

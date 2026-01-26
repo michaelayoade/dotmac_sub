@@ -1,0 +1,9 @@
+# -*- text -*-
+# FreeRADIUS main dictionary file
+# Include standard dictionaries and vendor-specific attributes
+
+# Include the standard FreeRADIUS dictionary
+$INCLUDE	/usr/share/freeradius/dictionary
+
+# Include Mikrotik vendor-specific attributes
+$INCLUDE	/etc/raddb/dictionary.mikrotik

@@ -1,0 +1,158 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Change Plan - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/portal/services" class="hover:text-primary-600">Services</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Change Plan</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Change Your Plan</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Select a new plan for your subscription</p>
+        </div>
+        <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            View change requests
+        </a>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-900/20">
+        <p class="text-sm text-red-700 dark:text-red-400">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Current Plan -->
+    {% if current_offer %}
+    <div class="rounded-xl border border-primary-200 bg-primary-50 p-6 shadow-sm dark:border-primary-900 dark:bg-primary-900/20">
+        <div class="flex items-center justify-between">
+            <div>
+                <h3 class="text-sm font-medium text-primary-600 dark:text-primary-400">Current Plan</h3>
+                <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ current_offer.name }}</p>
+                {% if current_offer.description %}
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ current_offer.description }}</p>
+                {% endif %}
+            </div>
+            <div class="text-right">
+                <p class="text-2xl font-bold text-primary-600 dark:text-primary-400">{{ current_offer.currency or 'NGN' }} {{ '{:,.2f}'.format(current_offer.price or 0) }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">/month</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6">
+        <!-- Available Plans -->
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Available Plans</h2>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {% set selectable_offers = namespace(count=0) %}
+                {% for offer in available_offers %}
+                {% if not current_offer or str(offer.id) != str(current_offer.id) %}
+                {% set selectable_offers.count = selectable_offers.count + 1 %}
+                <label class="relative cursor-pointer">
+                    <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required>
+                    <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600 dark:peer-checked:border-primary-400">
+                        <div class="flex items-start justify-between">
+                            <div>
+                                <h3 class="font-semibold text-slate-900 dark:text-white">{{ offer.name }}</h3>
+                                {% if offer.description %}
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ offer.description }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="flex-shrink-0 ml-4">
+                                <div class="h-5 w-5 rounded-full border-2 border-slate-300 peer-checked:border-primary-500 peer-checked:bg-primary-500 dark:border-slate-600 flex items-center justify-center">
+                                    <svg class="h-3 w-3 text-white opacity-0 peer-checked:opacity-100" fill="currentColor" viewBox="0 0 12 12">
+                                        <path d="M3.707 5.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4a1 1 0 00-1.414-1.414L5 6.586 3.707 5.293z"/>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                            <p class="text-2xl font-bold text-slate-900 dark:text-white">
+                                {{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(offer.price or 0) }}
+                                <span class="text-sm font-normal text-slate-500 dark:text-slate-400">/month</span>
+                            </p>
+                            {% if current_offer %}
+                            {% set diff = (offer.price or 0) - (current_offer.price or 0) %}
+                            {% if diff > 0 %}
+                            <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">+{{ '{:,.2f}'.format(diff) }}/month</p>
+                            {% elif diff < 0 %}
+                            <p class="mt-1 text-sm text-green-600 dark:text-green-400">{{ '{:,.2f}'.format(diff) }}/month</p>
+                            {% endif %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </label>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% if selectable_offers.count == 0 %}
+            <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                No other plans are currently available for this subscription. Please contact support if you need help.
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Effective Date -->
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">When should the change take effect?</h3>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="effective_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Effective Date</label>
+                    <input type="date" id="effective_date" name="effective_date" required
+                           value="{{ next_billing_date.strftime('%Y-%m-%d') if next_billing_date else '' }}"
+                           data-next-billing="{{ next_billing_date.strftime('%Y-%m-%d') if next_billing_date else '' }}"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default is the next billing cycle. You can pick a later date.</p>
+                    {% if next_billing_date %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Next cycle starts {{ next_billing_date.strftime('%b %d, %Y') }}.</p>
+                    {% endif %}
+                </div>
+                <div>
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (optional)</label>
+                    <textarea id="notes" name="notes" rows="3"
+                              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                              placeholder="Any additional notes or requests..."></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- Submit -->
+        <div class="flex items-center justify-between pt-4">
+            <a href="/portal/services" class="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">
+                Cancel
+            </a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 {% if selectable_offers.count == 0 %}opacity-60 cursor-not-allowed{% endif %}" {% if selectable_offers.count == 0 %}disabled{% endif %}>
+                Submit Change Request
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    // Set default effective date to next billing date (or tomorrow) and clamp min to today
+    const dateInput = document.getElementById('effective_date');
+    if (dateInput && !dateInput.value) {
+        const nextBilling = dateInput.dataset.nextBilling;
+        const today = new Date();
+        const tomorrow = new Date();
+        tomorrow.setDate(today.getDate() + 1);
+        const todayStr = today.toISOString().split('T')[0];
+        dateInput.min = todayStr;
+        dateInput.value = nextBilling || tomorrow.toISOString().split('T')[0];
+        if (dateInput.value < todayStr) {
+            dateInput.value = todayStr;
+        }
+    } else if (dateInput) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        dateInput.min = todayStr;
+        if (dateInput.value < todayStr) {
+            dateInput.value = todayStr;
+        }
+    }
+</script>
+{% endblock %}

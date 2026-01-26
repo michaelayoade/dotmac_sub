@@ -1,0 +1,494 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if offer and offer.id else 'Add' }} Tariff - Services - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/catalog" class="hover:text-primary-600">Services</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit' if offer and offer.id else 'Add New' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Tariff' if offer and offer.id else 'Create Tariff' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define the tariff customers subscribe to, including provisioning parameters.</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Tariff Basics</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tariff Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ offer.name }}"
+                            placeholder="Premium Fiber 500"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="code" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tariff Code</label>
+                        <input type="text" name="code" id="code" maxlength="60"
+                            value="{{ offer.code }}"
+                            placeholder="FIBER-500"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Service Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="service_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Type <span class="text-red-500">*</span></label>
+                        <select name="service_type" id="service_type" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in service_types %}
+                            <option value="{{ item }}" {% if offer.service_type == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="access_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Access Type <span class="text-red-500">*</span></label>
+                        <select name="access_type" id="access_type" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in access_types %}
+                            <option value="{{ item }}" {% if offer.access_type == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="price_basis" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Price Basis <span class="text-red-500">*</span></label>
+                        <select name="price_basis" id="price_basis" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in price_bases %}
+                            <option value="{{ item }}" {% if offer.price_basis == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="billing_cycle" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Cycle</label>
+                        <select name="billing_cycle" id="billing_cycle"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in billing_cycles %}
+                            <option value="{{ item }}" {% if offer.billing_cycle == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="billing_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Mode</label>
+                        <select name="billing_mode" id="billing_mode"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in billing_modes %}
+                            <option value="{{ item }}" {% if offer.billing_mode == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default for new subscriptions.</p>
+                    </div>
+
+                    <div>
+                        <label for="contract_term" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contract Term</label>
+                        <select name="contract_term" id="contract_term"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in contract_terms %}
+                            <option value="{{ item }}" {% if offer.contract_term == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                        <select name="status" id="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in offer_statuses %}
+                            <option value="{{ item }}" {% if offer.status == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Pricing</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Set the recurring tariff price for billing.</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <input type="hidden" name="price_id" value="{{ offer.price_id }}">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="price_amount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Recurring Amount <span class="text-red-500">*</span></label>
+                        <input type="number" name="price_amount" id="price_amount" step="0.01" min="0" required
+                            value="{{ offer.price_amount }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="price_currency" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Currency</label>
+                        <input type="text" name="price_currency" id="price_currency" maxlength="3"
+                            value="{{ offer.price_currency or 'NGN' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm uppercase shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="price_billing_cycle" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Cycle</label>
+                        <select name="price_billing_cycle" id="price_billing_cycle"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Default</option>
+                            {% for item in billing_cycles %}
+                            <option value="{{ item }}" {% if offer.price_billing_cycle == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="price_unit" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Unit</label>
+                        <select name="price_unit" id="price_unit"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Default</option>
+                            {% for item in price_units %}
+                            <option value="{{ item }}" {% if offer.price_unit == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="price_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                        <input type="text" name="price_description" id="price_description" maxlength="200"
+                            value="{{ offer.price_description }}"
+                            placeholder="Monthly recurring charge"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Service Policy</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Core service rules that affect authorization, usage, and billing.</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="region_zone_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Region Zone</label>
+                        <select name="region_zone_id" id="region_zone_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for zone in region_zones %}
+                            <option value="{{ zone.id }}" {% if offer.region_zone_id|string == zone.id|string %}selected{% endif %}>
+                                {{ zone.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="radius_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Profile <span class="text-red-500">*</span></label>
+                        <select name="radius_profile_id" id="radius_profile_id" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="" disabled {% if not offer.radius_profile_id %}selected{% endif %}>Select a profile</option>
+                            {% for profile in radius_profiles %}
+                            <option value="{{ profile.id }}" {% if offer.radius_profile_id|string == profile.id|string %}selected{% endif %}>
+                                {{ profile.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required. Controls authentication and service attributes (bandwidth/QoS).</p>
+                    </div>
+
+                    <div>
+                        <label for="usage_allowance_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Usage Allowance</label>
+                        <select name="usage_allowance_id" id="usage_allowance_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for allowance in usage_allowances %}
+                            <option value="{{ allowance.id }}" {% if offer.usage_allowance_id|string == allowance.id|string %}selected{% endif %}>
+                                {{ allowance.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="sla_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SLA Profile</label>
+                        <select name="sla_profile_id" id="sla_profile_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for profile in sla_profiles %}
+                            <option value="{{ profile.id }}" {% if offer.sla_profile_id|string == profile.id|string %}selected{% endif %}>
+                                {{ profile.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="policy_set_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Policy Set</label>
+                        <select name="policy_set_id" id="policy_set_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for policy in policy_sets %}
+                            <option value="{{ policy.id }}" {% if offer.policy_set_id|string == policy.id|string %}selected{% endif %}>
+                                {{ policy.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                        <textarea name="description" id="description" rows="4"
+                            placeholder="Optional offer description"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ offer.description }}</textarea>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if offer.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if add_ons and add_ons|length > 0 %}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Linked Add-Ons</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Select add-ons that can be purchased with this tariff.</p>
+            </div>
+            <div class="p-6 space-y-4">
+                {% for addon in add_ons %}
+                {% set addon_id = addon.id|string %}
+                {% set is_linked = addon_id in addon_links_map %}
+                {% set link_data = addon_links_map.get(addon_id, {}) %}
+                <div class="flex items-start gap-4 p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                     x-data="{ expanded: {{ 'true' if is_linked else 'false' }} }">
+                    <div class="flex-1">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" name="addon_link_{{ addon_id }}" value="true"
+                                {% if is_linked %}checked{% endif %}
+                                @change="expanded = $event.target.checked"
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <div>
+                                <span class="font-medium text-slate-900 dark:text-white">{{ addon.name }}</span>
+                                {% if addon.addon_type %}
+                                <span class="ml-2 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                                    {{ addon.addon_type.value|replace("_", " ")|title }}
+                                </span>
+                                {% endif %}
+                                {% if addon.description %}
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ addon.description }}</p>
+                                {% endif %}
+                            </div>
+                        </label>
+                        <div x-show="expanded" x-collapse class="mt-4 ml-7 grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div>
+                                <label class="flex items-center gap-2">
+                                    <input type="checkbox" name="addon_required_{{ addon_id }}" value="true"
+                                        {% if link_data.get('is_required') %}checked{% endif %}
+                                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                    <span class="text-sm text-slate-700 dark:text-slate-300">Required</span>
+                                </label>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Min Qty</label>
+                                <input type="number" name="addon_min_qty_{{ addon_id }}" min="0"
+                                    value="{{ link_data.get('min_quantity', '') or '' }}"
+                                    placeholder="0"
+                                    class="block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Max Qty</label>
+                                <input type="number" name="addon_max_qty_{{ addon_id }}" min="0"
+                                    value="{{ link_data.get('max_quantity', '') or '' }}"
+                                    placeholder="Unlimited"
+                                    class="block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ open: false }">
+            <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Network Provisioning</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Advanced integration fields for NAS/Splynx queues and tax profiles.</p>
+                </div>
+                <button type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                        @click="open = !open" :aria-expanded="open.toString()">
+                    <span x-text="open ? 'Hide advanced' : 'Show advanced'"></span>
+                    <svg class="h-4 w-4" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6 space-y-6" x-show="open" x-collapse>
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="splynx_tariff_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tariff ID</label>
+                        <input type="number" name="splynx_tariff_id" id="splynx_tariff_id"
+                            value="{{ offer.splynx_tariff_id }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="splynx_service_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Name (Queue)</label>
+                        <input type="text" name="splynx_service_name" id="splynx_service_name"
+                            value="{{ offer.splynx_service_name }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="splynx_tax_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tax Profile ID</label>
+                        <input type="number" name="splynx_tax_id" id="splynx_tax_id"
+                            value="{{ offer.splynx_tax_id }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="vat_percent" class="block text-sm font-medium text-slate-700 dark:text-slate-300">VAT Percent</label>
+                        <input type="number" step="0.01" name="vat_percent" id="vat_percent"
+                            value="{{ offer.vat_percent }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="speed_download_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed (Kbps)</label>
+                        <input type="number" name="speed_download_mbps" id="speed_download_mbps"
+                            value="{{ offer.speed_download_mbps }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="speed_upload_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed (Kbps)</label>
+                        <input type="number" name="speed_upload_mbps" id="speed_upload_mbps"
+                            value="{{ offer.speed_upload_mbps }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="guaranteed_speed_limit_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Guaranteed Speed Limit At</label>
+                        <div class="mt-1 flex items-center rounded-lg border border-slate-300 bg-white shadow-sm focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="number" name="guaranteed_speed_limit_at" id="guaranteed_speed_limit_at" min="0"
+                                value="{{ offer.guaranteed_speed_limit_at }}"
+                                class="w-full rounded-lg border-0 bg-transparent px-3 py-2 text-sm focus:outline-none dark:text-white">
+                            <div class="flex items-center gap-1 pr-2">
+                                <button type="button" onclick="document.getElementById('guaranteed_speed_limit_at').stepUp()" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-600" title="Increase">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+                                </button>
+                                <button type="button" onclick="document.getElementById('guaranteed_speed_limit_at').stepDown()" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-600" title="Decrease">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 12H6"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="guaranteed_speed" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Guaranteed Speed</label>
+                        <select name="guaranteed_speed" id="guaranteed_speed"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in guaranteed_speed_types %}
+                            <option value="{{ item }}" {% if offer.guaranteed_speed == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="aggregation" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Aggregation</label>
+                        <input type="number" name="aggregation" id="aggregation"
+                            value="{{ offer.aggregation }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="priority" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Priority</label>
+                        <input type="text" name="priority" id="priority"
+                            value="{{ offer.priority }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="with_vat" value="true" {% if offer.with_vat %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Prices include VAT</span>
+                        </label>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="available_for_services" value="true" {% if offer.available_for_services %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Available for services</span>
+                        </label>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="show_on_customer_portal" value="true" {% if offer.show_on_customer_portal %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Show on customer portal</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/catalog/offers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {{ 'Save Changes' if offer and offer.id else 'Create Tariff' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

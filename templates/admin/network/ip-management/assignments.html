@@ -1,0 +1,261 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, empty_state %}
+
+{% block title %}IP Assignments - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("teal", "emerald") }}
+
+<div class="relative space-y-6">
+    <!-- Page Header -->
+    {% call page_header(
+        title="IP Assignments",
+        subtitle="View and manage IP address assignments to accounts and subscriptions",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>',
+        color="teal",
+        color2="emerald"
+    ) %}
+    {% endcall %}
+
+    <!-- Stats -->
+    <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-teal-500/10 to-emerald-500/10 blur-2xl"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Assignments</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 shadow-lg shadow-teal-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-green-500/10 to-emerald-500/10 blur-2xl"></div>
+            <div class="relative flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Active</p>
+                    <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.active }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 shadow-lg shadow-green-500/25">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-200/60 dark:divide-slate-700/60">
+            {% if activities %}
+            {% for activity in activities %}
+            <div class="px-6 py-4">
+                <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% if activity.description %}
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                {% endif %}
+                {% if activity.occurred_at %}
+                <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Assignments Table -->
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;" data-table-id="ip-assignments-list">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">All Assignments</h2>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/60 px-6 py-3 dark:border-slate-700/60">
+            <div class="flex-1 min-w-[200px]">
+                <label class="sr-only" for="ip-assignments-search">Search assignments</label>
+                <input id="ip-assignments-search" type="text" data-search-input placeholder="Search assignments..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span data-selected-count>0 selected</span>
+                <button type="button" data-copy-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Copy selected</button>
+                <button type="button" data-clear-selected class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</button>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            <input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">IP Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Version</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscription</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Gateway</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% if assignments %}
+                    {% for assignment in assignments %}
+                    <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
+                        data-row-text="{{ assignment.account.account_number if assignment.account else '' }} {{ assignment.subscription.service_id if assignment.subscription and assignment.subscription.service_id else '' }} {{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}"
+                        data-row-copy="{{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}">
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <span class="font-mono text-sm font-medium text-slate-900 dark:text-white">
+                                {% if assignment.ipv4_address %}
+                                    {{ assignment.ipv4_address.address }}
+                                {% elif assignment.ipv6_address %}
+                                    {{ assignment.ipv6_address.address }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                                {% if assignment.prefix_length %}/{{ assignment.prefix_length }}{% endif %}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                                {% if assignment.ip_version.value == 'ipv4' %}
+                                    bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                                {% else %}
+                                    bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                {% endif %}">
+                                {{ assignment.ip_version.value | upper }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if assignment.account %}
+                                <a href="/admin/billing/accounts/{{ assignment.account.id }}" class="text-teal-600 hover:text-teal-700 dark:text-teal-400">
+                                    {{ assignment.account.account_number or 'Account' }}
+                                </a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if assignment.subscription %}
+                                <a href="/admin/catalog/subscriptions/{{ assignment.subscription.id }}" class="text-teal-600 hover:text-teal-700 dark:text-teal-400">
+                                    {{ assignment.subscription.service_id or 'Subscription' }}
+                                </a>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 font-mono text-sm text-slate-600 dark:text-slate-300">
+                            {{ assignment.gateway or '-' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {{ status_badge("Active" if assignment.is_active else "Inactive", "active" if assignment.is_active else "inactive") }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ assignment.created_at.strftime('%b %d, %Y') if assignment.created_at else '-' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="px-6 py-12">
+                            {{ empty_state(
+                                title="No IP assignments",
+                                message="IP addresses will appear here when assigned to accounts or subscriptions.",
+                                icon='<svg class="h-8 w-8 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>',
+                                color="teal",
+                                color2="emerald",
+                                colspan=7
+                            ) }}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function setupTableTools(tableEl) {
+    const searchInput = tableEl.querySelector('[data-search-input]');
+    const selectAll = tableEl.querySelector('[data-select-all]');
+    const rowChecks = Array.from(tableEl.querySelectorAll('[data-row-check]'));
+    const rows = Array.from(tableEl.querySelectorAll('tbody tr[data-row-text]'));
+    const selectedCount = tableEl.querySelector('[data-selected-count]');
+    const copyBtn = tableEl.querySelector('[data-copy-selected]');
+    const clearBtn = tableEl.querySelector('[data-clear-selected]');
+
+    const updateSelectedCount = () => {
+        if (!selectedCount) return;
+        const count = rowChecks.filter((check) => check.checked).length;
+        selectedCount.textContent = `${count} selected`;
+    };
+
+    const filterRows = () => {
+        if (!searchInput) return;
+        const query = searchInput.value.trim().toLowerCase();
+        rows.forEach((row) => {
+            const text = (row.getAttribute('data-row-text') || '').toLowerCase();
+            row.style.display = !query || text.includes(query) ? '' : 'none';
+        });
+    };
+
+    if (searchInput) searchInput.addEventListener('input', filterRows);
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            rows.forEach((row) => {
+                if (row.style.display === 'none') return;
+                const checkbox = row.querySelector('[data-row-check]');
+                if (checkbox) checkbox.checked = selectAll.checked;
+            });
+            updateSelectedCount();
+        });
+    }
+    rowChecks.forEach((check) => check.addEventListener('change', updateSelectedCount));
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', async () => {
+            const values = rows
+                .filter((row) => row.querySelector('[data-row-check]')?.checked)
+                .map((row) => row.getAttribute('data-row-copy'))
+                .filter(Boolean);
+            if (!values.length) return;
+            const text = values.join('\n');
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                textarea.remove();
+            }
+        });
+    }
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            rowChecks.forEach((check) => { check.checked = false; });
+            if (selectAll) selectAll.checked = false;
+            updateSelectedCount();
+        });
+    }
+    updateSelectedCount();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[data-table-id]').forEach(setupTableTools);
+});
+</script>
+{% endblock %}

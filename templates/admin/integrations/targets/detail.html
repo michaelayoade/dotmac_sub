@@ -1,0 +1,67 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}{{ target.name }} - Integration Targets{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/integrations/targets" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ target.name }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Integration Target</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Details Card -->
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Configuration</h2>
+        <dl class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Type</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ target.target_type.value | upper if target.target_type else 'Custom' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Connector</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ target.connector_config.name if target.connector_config else '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                <dd class="mt-1">
+                    {% if target.is_active %}
+                    {{ status_badge("Active", "active", size="sm") }}
+                    {% else %}
+                    {{ status_badge("Inactive", "inactive", size="sm") }}
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Jobs</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ target.jobs | length }}</dd>
+            </div>
+        </dl>
+    </div>
+
+    <!-- Jobs -->
+    {% if target.jobs %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Jobs</h2>
+        </div>
+        <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for job in target.jobs %}
+            <li class="px-6 py-4">
+                <a href="/admin/integrations/jobs/{{ job.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ job.name }}</a>
+                <p class="text-xs text-slate-500 dark:text-slate-400">{{ job.job_type.value | title if job.job_type else 'Sync' }} - {{ job.schedule_type.value | title if job.schedule_type else 'Manual' }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

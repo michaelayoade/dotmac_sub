@@ -1,0 +1,150 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/billing/payments" class="hover:text-primary-600">Payments</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ form_title }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ form_title }}</h1>
+        </div>
+        <a href="/admin/billing/payments" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+            Back to Payments
+        </a>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            {% include "admin/billing/_customer_account_fields.html" with context %}
+            {% if prefill and prefill.invoice_number %}
+            <div class="rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900/40 dark:bg-primary-900/20">
+                <div class="flex items-center gap-2">
+                    <svg class="h-5 w-5 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    <span class="text-sm font-medium text-primary-700 dark:text-primary-300">Recording payment for Invoice {{ prefill.invoice_number }}</span>
+                </div>
+                {% if prefill.amount %}
+                <p class="mt-1 text-xs text-primary-600 dark:text-primary-400">Amount due: {{ prefill.currency|default('NGN') }} {{ '{:,.2f}'.format(prefill.amount) }}</p>
+                {% endif %}
+            </div>
+            {% endif %}
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div hx-get="/admin/billing/payments/invoice-details"
+                     hx-trigger="change from:[name='invoice_id']"
+                     hx-include="closest form"
+                     hx-target="#payment-amount-field"
+                     hx-swap="outerHTML">
+                    {% set amount_value = payment.amount if payment else (prefill.amount if prefill and prefill.amount else '') %}
+                    {% set balance_value = balance_value %}
+                    {% set balance_display = balance_display %}
+                    {% include "admin/billing/_payment_amount_field.html" with context %}
+                </div>
+                <div hx-get="/admin/billing/payments/invoice-currency"
+                     hx-trigger="change from:[name='invoice_id']"
+                     hx-include="closest form"
+                     hx-target="#payment-currency-field"
+                     hx-swap="outerHTML">
+                    {% set currency_value = payment.currency if payment and payment.currency else (prefill.currency if prefill and prefill.currency else 'NGN') %}
+                    {% include "admin/billing/_payment_currency_field.html" with context %}
+                </div>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Status</label>
+                    {% set payment_status = payment.status.value if payment and payment.status else (prefill.status if prefill and prefill.status else '') %}
+                    <select name="status"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="pending" {% if payment_status == 'pending' %}selected{% endif %}>Pending</option>
+                        <option value="succeeded" {% if payment_status == 'succeeded' or not payment_status %}selected{% endif %}>Succeeded</option>
+                        <option value="failed" {% if payment_status == 'failed' %}selected{% endif %}>Failed</option>
+                        <option value="refunded" {% if payment_status == 'refunded' %}selected{% endif %}>Refunded</option>
+                        <option value="canceled" {% if payment_status == 'canceled' %}selected{% endif %}>Canceled</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Invoice</label>
+                    <div hx-get="/admin/billing/payments/invoice-options"
+                         hx-trigger="change from:[name='account_id']"
+                         hx-include="closest form"
+                         hx-target="#invoice-select"
+                         hx-swap="outerHTML">
+                        {% include "admin/billing/_payment_invoice_select.html" with context %}
+                    </div>
+                </div>
+            </div>
+            {% if payment %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Payment Method</label>
+                {% set selected_method = "id:" ~ payment.payment_method_id if payment and payment.payment_method_id else "" %}
+                <select name="payment_method_id"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select payment method...</option>
+                    {% if payment_method_types %}
+                    <optgroup label="Method Types">
+                        {% for method_type in payment_method_types %}
+                            {% set method_value = "type:" ~ method_type %}
+                            <option value="{{ method_value }}">{{ method_type | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                    {% if payment_methods %}
+                    <optgroup label="Saved Methods">
+                        {% for method in payment_methods %}
+                            {% set method_label = method.label or (method.method_type.value | title) %}
+                            {% if method.last4 %}
+                                {% set method_label = method_label ~ " ending in " ~ method.last4 %}
+                            {% endif %}
+                            {% set method_value = "id:" ~ method.id %}
+                            <option value="{{ method_value }}" {% if selected_method == method_value %}selected{% endif %}>
+                                {{ method_label }}
+                            </option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                </select>
+            </div>
+            {% else %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Collection Account</label>
+                <select name="collection_account_id"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select collection account...</option>
+                    {% if collection_accounts %}
+                        {% for account in collection_accounts %}
+                        <option value="{{ account.id }}">{{ account.name }} ({{ account.currency }})</option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+            </div>
+            {% endif %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Memo</label>
+                <input type="text" name="memo" value="{{ payment.memo if payment else '' }}"
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex justify-end gap-3">
+                <a href="/admin/billing/payments"
+                   class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    {{ submit_label }}
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

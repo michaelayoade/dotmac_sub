@@ -1,0 +1,27 @@
+{#
+   Sparkline Chart Component (mini inline chart)
+   Usage: {% include "components/charts/sparkline.html" %}
+
+   Parameters:
+   - chart_id: Unique ID for the chart (required)
+   - data: Array of numeric values
+   - color: Line color (default: primary)
+   - width: Chart width in px (default: 80)
+   - height: Chart height in px (default: 24)
+#}
+<div class="sparkline inline-block" style="width: {{ width | default(80) }}px; height: {{ height | default(24) }}px;">
+    <canvas id="{{ chart_id }}"></canvas>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('{{ chart_id }}');
+    if (!ctx) return;
+
+    const data = {{ data | tojson | safe }};
+    const color = '{{ color | default("#06b6d4") }}';
+
+    const chart = DotmacCharts.createSparkline(ctx, data, color);
+    DotmacCharts.registerChart('{{ chart_id }}', chart);
+});
+</script>

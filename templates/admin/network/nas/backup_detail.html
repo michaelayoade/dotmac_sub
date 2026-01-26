@@ -1,0 +1,104 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Config Backup - {{ device.name }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/network/nas/devices/{{ device.id }}/backups" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Configuration Backup</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ backup.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-4">
+        <!-- Config Content -->
+        <div class="lg:col-span-3">
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Configuration Content</h2>
+                        <span class="text-sm text-slate-500 dark:text-slate-400">{{ backup.config_format or 'text' }}</span>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <pre class="rounded-lg bg-slate-900 p-4 text-sm text-green-400 overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto">{{ backup.config_content }}</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Metadata -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Details</h2>
+                </div>
+                <div class="p-6 space-y-4 text-sm">
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Device</span>
+                        <p class="mt-1">
+                            <a href="/admin/network/nas/devices/{{ device.id }}" class="font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
+                                {{ device.name }}
+                            </a>
+                        </p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Method</span>
+                        <p class="mt-1 text-slate-900 dark:text-white">{{ backup.backup_method.value | upper if backup.backup_method else 'Manual' }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Triggered By</span>
+                        <p class="mt-1 text-slate-900 dark:text-white">{{ backup.triggered_by or 'System' }}</p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Changes</span>
+                        <p class="mt-1">
+                            {% if backup.has_changes %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                                Changes Detected
+                            </span>
+                            {% else %}
+                            <span class="text-slate-400">No changes</span>
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
+                        <span class="text-slate-500 dark:text-slate-400">Hash</span>
+                        <p class="mt-1 font-mono text-xs text-slate-600 dark:text-slate-400 break-all">{{ backup.config_hash }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                </div>
+                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% if activities %}
+                    {% for activity in activities %}
+                    <div class="px-6 py-4">
+                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                        {% if activity.description %}
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
+                        {% endif %}
+                        {% if activity.occurred_at %}
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

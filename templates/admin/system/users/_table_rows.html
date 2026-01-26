@@ -1,0 +1,114 @@
+{% from "components/ui/macros.html" import status_badge %}
+{% for user in users %}
+<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+    <td class="px-6 py-4 whitespace-nowrap">
+        <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">
+                {% if user.avatar %}
+                <img src="{{ user.avatar }}" alt="{{ user.name }}" class="h-10 w-10 rounded-full object-cover">
+                {% else %}
+                <span class="text-sm font-medium">{{ user.name[:2] | upper }}</span>
+                {% endif %}
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ user.name }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">{{ user.email }}</p>
+            </div>
+        </div>
+    </td>
+    <td class="px-6 py-4">
+        <div class="flex flex-wrap gap-1">
+            {% if user.roles %}
+                {% for role in user.roles %}
+                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
+                    {% if role.name|lower == 'admin' %}bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400
+                    {% elif role.name|lower == 'manager' %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400
+                    {% elif not role.is_active %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
+                    {% else %}bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                    {{ role.name }}{% if not role.is_active %} (inactive){% endif %}
+                </span>
+                {% endfor %}
+            {% else %}
+                <span class="text-xs text-slate-400 dark:text-slate-500">No roles</span>
+            {% endif %}
+        </div>
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap">
+        {% if user.is_active %}
+        {{ status_badge("Active", "active", size="sm") }}
+        {% else %}
+        {{ status_badge("Inactive", "inactive", size="sm") }}
+        {% endif %}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap">
+        {% if user.mfa_enabled %}
+        <span class="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+            <span class="text-xs">Enabled</span>
+        </span>
+        {% else %}
+        <span class="text-xs text-slate-400 dark:text-slate-500">Disabled</span>
+        {% endif %}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+        {{ user.last_login.strftime('%b %d, %Y %H:%M') if user.last_login else 'Never' }}
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+        <div x-data="{ open: false }" class="relative">
+            <button x-on:click="open = !open" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
+                </svg>
+            </button>
+            <div x-show="open"
+                 x-on:click.outside="open = false"
+                 x-transition
+                 class="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <a href="/admin/system/users/{{ user.id }}/edit"
+                   class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Edit User
+                </a>
+                <button hx-post="/admin/system/users/{{ user.id }}/reset-password"
+                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Reset Password
+                </button>
+                {% if user.mfa_enabled %}
+                <button hx-post="/admin/system/users/{{ user.id }}/disable-mfa"
+                        hx-confirm="This will disable MFA for this user. Are you sure?"
+                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Disable MFA
+                </button>
+                {% endif %}
+                <hr class="my-1 border-slate-200 dark:border-slate-700">
+                {% if user.is_active %}
+                <button hx-post="/admin/system/users/{{ user.id }}/deactivate"
+                        hx-confirm="Are you sure you want to deactivate this user?"
+                        class="block w-full px-4 py-2 text-left text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
+                    Deactivate
+                </button>
+                {% else %}
+                <button hx-post="/admin/system/users/{{ user.id }}/activate"
+                        class="block w-full px-4 py-2 text-left text-sm text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20">
+                    Activate
+                </button>
+                <button hx-delete="/admin/system/users/{{ user.id }}"
+                        hx-confirm="Delete this deactivated user? This action cannot be undone."
+                        class="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+                    Delete User
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="px-6 py-12">
+        {% set title = "No users found" %}
+        {% set message = "Add your first system user to get started." %}
+        {% include "components/data/empty_state.html" %}
+    </td>
+</tr>
+{% endfor %}

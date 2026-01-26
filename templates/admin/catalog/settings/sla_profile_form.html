@@ -1,0 +1,97 @@
+{% extends "layouts/admin.html" %}
+{% block title %}{{ 'Edit' if profile.id else 'New' }} SLA Profile - Catalog Settings{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center gap-4">
+        <a href="/admin/catalog/settings/sla-profiles" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ 'Edit' if profile.id else 'New' }} SLA Profile</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update SLA profile details' if profile.id else 'Define uptime guarantees and service level commitments' }}</p>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="text-sm font-medium text-red-800 dark:text-red-200">{{ error }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="text-lg font-medium text-slate-900 dark:text-white">Profile Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                    <input type="text" name="name" id="name" required maxlength="120" value="{{ profile.name }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">e.g., "Enterprise SLA", "Premium Support"</p>
+                </div>
+
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="uptime_percent" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Uptime Guarantee (%)</label>
+                        <input type="number" name="uptime_percent" id="uptime_percent" min="0" max="100" step="0.01" value="{{ profile.uptime_percent }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">e.g., 99.9 for "three nines"</p>
+                    </div>
+
+                    <div>
+                        <label for="credit_percent" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Credit (%)</label>
+                        <input type="number" name="credit_percent" id="credit_percent" min="0" step="0.01" value="{{ profile.credit_percent }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Credit percentage when SLA is missed</p>
+                    </div>
+
+                    <div>
+                        <label for="response_time_hours" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Response Time (hours)</label>
+                        <input type="number" name="response_time_hours" id="response_time_hours" min="0" value="{{ profile.response_time_hours }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum time to initial response</p>
+                    </div>
+
+                    <div>
+                        <label for="resolution_time_hours" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Resolution Time (hours)</label>
+                        <input type="number" name="resolution_time_hours" id="resolution_time_hours" min="0" value="{{ profile.resolution_time_hours }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Maximum time to issue resolution</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" id="notes" rows="3"
+                              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ profile.notes }}</textarea>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                    <div class="mt-2 flex items-center gap-4">
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="is_active" value="true" {{ 'checked' if profile.is_active else '' }} class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="is_active" value="false" {{ 'checked' if not profile.is_active else '' }} class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Inactive</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/catalog/settings/sla-profiles" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Cancel</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">{{ 'Save Changes' if profile.id else 'Create Profile' }}</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

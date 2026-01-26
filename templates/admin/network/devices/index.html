@@ -1,0 +1,130 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, filter_bar, search_input, filter_select, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+
+{% block title %}Network Devices - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "blue") }}
+
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% set device_icon %}
+    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+    </svg>
+    {% endset %}
+
+    {% call page_header(
+        title="Network Devices",
+        subtitle="Manage OLT, ONT, and CPE devices across the network",
+        icon=device_icon,
+        color="cyan",
+        color2="blue"
+    ) %}
+        <button type="button"
+                hx-post="/admin/network/devices/discover"
+                hx-target="#discovery-status"
+                class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-md dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4 transition-transform group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            Discover
+        </button>
+        {{ action_button("Add Device", "/admin/network/devices/create", icon_plus(), "primary", "cyan", "blue") }}
+    {% endcall %}
+
+    {# Device Type Tabs #}
+    <div x-data="{ activeType: '{{ type or 'all' }}' }" class="animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="flex flex-wrap gap-2 rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            {% set device_types = [
+                {'value': 'all', 'label': 'All Devices', 'count': stats.total, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>'},
+                {'value': 'olt', 'label': 'OLT', 'count': stats.olt, 'color': 'violet', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'},
+                {'value': 'ont', 'label': 'ONT', 'count': stats.ont, 'color': 'blue', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>'},
+                {'value': 'cpe', 'label': 'CPE', 'count': stats.cpe, 'color': 'emerald', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'}
+            ] %}
+            {% for dt in device_types %}
+            <button x-on:click="activeType = '{{ dt.value }}'"
+                    hx-get="/admin/network/devices?type={{ dt.value }}"
+                    hx-target="#devices-content"
+                    :class="activeType === '{{ dt.value }}' ? 'bg-gradient-to-r from-{{ dt.color }}-500 to-{{ dt.color }}-600 text-white shadow-lg shadow-{{ dt.color }}-500/25' : 'text-slate-600 hover:bg-{{ dt.color }}-50 dark:text-slate-300 dark:hover:bg-{{ dt.color }}-900/20'"
+                    class="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all">
+                {{ dt.icon|safe }}
+                {{ dt.label }}
+                <span :class="activeType === '{{ dt.value }}' ? 'bg-white/20 text-white' : 'bg-{{ dt.color }}-100 text-{{ dt.color }}-700 dark:bg-{{ dt.color }}-900/30 dark:text-{{ dt.color }}-400'" class="rounded-lg px-2 py-0.5 text-xs font-semibold transition-colors">{{ dt.count }}</span>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+
+    {# Status Summary #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 100ms;">
+        {{ stats_card("Online", stats.online, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-white"></span></span>', color="emerald", color2="green") }}
+        {{ stats_card("Offline", stats.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', color="red", color2="rose") }}
+        {{ stats_card("Warning", stats.warning, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("Unprovisioned", stats.unprovisioned, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>', color="slate", color2="slate") }}
+    </div>
+
+    <div id="discovery-status"></div>
+
+    {# Search & Filters #}
+    {% call filter_bar() %}
+    <form id="devices-filter-form" method="GET" action="/admin/network/devices" class="flex flex-col gap-4 lg:flex-row lg:items-end">
+        <div class="flex-1">
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Devices</label>
+            {{ search_input("search", search or '', "Search by serial, MAC, name, or IP...", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "input changed delay:300ms", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+        </div>
+        <div class="w-full lg:w-44">
+            {{ filter_select("status", [
+                {"value": "", "label": "All Status"},
+                {"value": "online", "label": "Online"},
+                {"value": "offline", "label": "Offline"},
+                {"value": "warning", "label": "Warning"},
+                {"value": "unprovisioned", "label": "Unprovisioned"}
+            ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+        </div>
+        <div class="w-full lg:w-44">
+            {{ filter_select("vendor", [
+                {"value": "", "label": "All Vendors"},
+                {"value": "huawei", "label": "Huawei"},
+                {"value": "zte", "label": "ZTE"},
+                {"value": "nokia", "label": "Nokia"},
+                {"value": "calix", "label": "Calix"}
+            ], vendor or '', "Vendor", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
+        </div>
+        {% if search or status or vendor %}
+        {{ action_button("Clear", "/admin/network/devices", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', "secondary", "slate") }}
+        {% endif %}
+    </form>
+    {% endcall %}
+
+    {# Devices Table #}
+    <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">IP Address</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table-body" class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% include "admin/network/devices/_table_rows.html" %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if pagination %}
+        <div class="border-t border-slate-200/60 bg-gradient-to-r from-slate-50/50 to-white px-4 py-3 dark:border-slate-700/60 dark:from-slate-800/50 dark:to-slate-800 sm:px-6">
+            {% include "components/data/table_pagination.html" %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
