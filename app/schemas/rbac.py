@@ -109,44 +109,44 @@ class RolePermissionRead(RolePermissionBase):
     id: UUID
 
 
-class PersonRoleBase(BaseModel):
-    person_id: UUID
+class SubscriberRoleBase(BaseModel):
+    subscriber_id: UUID
     role_id: UUID
 
 
-class PersonRoleCreate(PersonRoleBase):
+class SubscriberRoleCreate(SubscriberRoleBase):
     pass
 
 
-class PersonRoleUpdate(BaseModel):
-    person_id: UUID | None = None
+class SubscriberRoleUpdate(BaseModel):
+    subscriber_id: UUID | None = None
     role_id: UUID | None = None
 
 
-class PersonRoleRead(PersonRoleBase):
+class SubscriberRoleRead(SubscriberRoleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     assigned_at: datetime
 
 
-class PersonPermissionBase(BaseModel):
-    person_id: UUID
+class SubscriberPermissionBase(BaseModel):
+    subscriber_id: UUID
     permission_id: UUID
 
 
-class PersonPermissionCreate(PersonPermissionBase):
+class SubscriberPermissionCreate(SubscriberPermissionBase):
     pass
 
 
-class PersonPermissionUpdate(BaseModel):
-    person_id: UUID | None = None
+class SubscriberPermissionUpdate(BaseModel):
+    subscriber_id: UUID | None = None
     permission_id: UUID | None = None
 
 
-class PersonPermissionRead(PersonPermissionBase):
+class SubscriberPermissionRead(SubscriberPermissionBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     granted_at: datetime
-    granted_by_person_id: UUID | None = None
+    granted_by_subscriber_id: UUID | None = None

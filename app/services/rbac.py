@@ -5,15 +5,15 @@ from typing import List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.person import Person
-from app.models.rbac import Permission, PersonPermission, PersonRole, Role, RolePermission
+from app.models.subscriber import Subscriber
+from app.models.rbac import Permission, SubscriberPermission, SubscriberRole, Role, RolePermission
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionUpdate,
-    PersonPermissionCreate,
-    PersonPermissionUpdate,
-    PersonRoleCreate,
-    PersonRoleUpdate,
+    SubscriberPermissionCreate,
+    SubscriberPermissionUpdate,
+    SubscriberRoleCreate,
+    SubscriberRoleUpdate,
     RoleCreate,
     RolePermissionCreate,
     RolePermissionUpdate,
@@ -213,16 +213,16 @@ class RolePermissions(ListResponseMixin):
         db.commit()
 
 
-class PersonRoles(ListResponseMixin):
+class SubscriberRoles(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: PersonRoleCreate):
-        person = db.get(Person, coerce_uuid(payload.person_id))
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
+    def create(db: Session, payload: SubscriberRoleCreate):
+        subscriber = db.get(Subscriber, coerce_uuid(payload.subscriber_id))
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
         role = db.get(Role, coerce_uuid(payload.role_id))
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-        link = PersonRole(**payload.model_dump())
+        link = SubscriberRole(**payload.model_dump())
         db.add(link)
         db.commit()
         db.refresh(link)
@@ -230,44 +230,44 @@ class PersonRoles(ListResponseMixin):
 
     @staticmethod
     def get(db: Session, link_id: str):
-        link = db.get(PersonRole, coerce_uuid(link_id))
+        link = db.get(SubscriberRole, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person role not found")
+            raise HTTPException(status_code=404, detail="Subscriber role not found")
         return link
 
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         role_id: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
     ):
-        query = db.query(PersonRole)
-        if person_id:
-            query = query.filter(PersonRole.person_id == person_id)
+        query = db.query(SubscriberRole)
+        if subscriber_id:
+            query = query.filter(SubscriberRole.subscriber_id == subscriber_id)
         if role_id:
-            query = query.filter(PersonRole.role_id == role_id)
+            query = query.filter(SubscriberRole.role_id == role_id)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"assigned_at": PersonRole.assigned_at},
+            {"assigned_at": SubscriberRole.assigned_at},
         )
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, link_id: str, payload: PersonRoleUpdate):
-        link = db.get(PersonRole, coerce_uuid(link_id))
+    def update(db: Session, link_id: str, payload: SubscriberRoleUpdate):
+        link = db.get(SubscriberRole, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person role not found")
+            raise HTTPException(status_code=404, detail="Subscriber role not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data:
-            person = db.get(Person, data["person_id"])
-            if not person:
-                raise HTTPException(status_code=404, detail="Person not found")
+        if "subscriber_id" in data:
+            subscriber = db.get(Subscriber, data["subscriber_id"])
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
         if "role_id" in data:
             role = db.get(Role, data["role_id"])
             if not role:
@@ -280,30 +280,30 @@ class PersonRoles(ListResponseMixin):
 
     @staticmethod
     def delete(db: Session, link_id: str):
-        link = db.get(PersonRole, coerce_uuid(link_id))
+        link = db.get(SubscriberRole, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person role not found")
+            raise HTTPException(status_code=404, detail="Subscriber role not found")
         db.delete(link)
         db.commit()
 
 
-class PersonPermissions(ListResponseMixin):
+class SubscriberPermissions(ListResponseMixin):
     """Service for managing direct user-permission assignments."""
 
     @staticmethod
     def create(
-        db: Session, payload: PersonPermissionCreate, granted_by: str | None = None
+        db: Session, payload: SubscriberPermissionCreate, granted_by: str | None = None
     ):
-        person = db.get(Person, coerce_uuid(payload.person_id))
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
+        subscriber = db.get(Subscriber, coerce_uuid(payload.subscriber_id))
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
         permission = db.get(Permission, coerce_uuid(payload.permission_id))
         if not permission:
             raise HTTPException(status_code=404, detail="Permission not found")
-        link = PersonPermission(
-            person_id=payload.person_id,
+        link = SubscriberPermission(
+            subscriber_id=payload.subscriber_id,
             permission_id=payload.permission_id,
-            granted_by_person_id=coerce_uuid(granted_by) if granted_by else None,
+            granted_by_subscriber_id=coerce_uuid(granted_by) if granted_by else None,
         )
         db.add(link)
         db.commit()
@@ -312,55 +312,55 @@ class PersonPermissions(ListResponseMixin):
 
     @staticmethod
     def get(db: Session, link_id: str):
-        link = db.get(PersonPermission, coerce_uuid(link_id))
+        link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person permission not found")
+            raise HTTPException(status_code=404, detail="Subscriber permission not found")
         return link
 
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         permission_id: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
     ):
-        query = db.query(PersonPermission)
-        if person_id:
-            query = query.filter(PersonPermission.person_id == coerce_uuid(person_id))
+        query = db.query(SubscriberPermission)
+        if subscriber_id:
+            query = query.filter(SubscriberPermission.subscriber_id == coerce_uuid(subscriber_id))
         if permission_id:
             query = query.filter(
-                PersonPermission.permission_id == coerce_uuid(permission_id)
+                SubscriberPermission.permission_id == coerce_uuid(permission_id)
             )
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"granted_at": PersonPermission.granted_at},
+            {"granted_at": SubscriberPermission.granted_at},
         )
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def list_for_person(db: Session, person_id: str) -> List[PersonPermission]:
-        """Get all direct permissions for a person."""
+    def list_for_subscriber(db: Session, subscriber_id: str) -> List[SubscriberPermission]:
+        """Get all direct permissions for a subscriber."""
         return (
-            db.query(PersonPermission)
-            .filter(PersonPermission.person_id == coerce_uuid(person_id))
+            db.query(SubscriberPermission)
+            .filter(SubscriberPermission.subscriber_id == coerce_uuid(subscriber_id))
             .all()
         )
 
     @staticmethod
-    def update(db: Session, link_id: str, payload: PersonPermissionUpdate):
-        link = db.get(PersonPermission, coerce_uuid(link_id))
+    def update(db: Session, link_id: str, payload: SubscriberPermissionUpdate):
+        link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person permission not found")
+            raise HTTPException(status_code=404, detail="Subscriber permission not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data:
-            person = db.get(Person, data["person_id"])
-            if not person:
-                raise HTTPException(status_code=404, detail="Person not found")
+        if "subscriber_id" in data:
+            subscriber = db.get(Subscriber, data["subscriber_id"])
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
         if "permission_id" in data:
             permission = db.get(Permission, data["permission_id"])
             if not permission:
@@ -373,41 +373,41 @@ class PersonPermissions(ListResponseMixin):
 
     @staticmethod
     def delete(db: Session, link_id: str):
-        link = db.get(PersonPermission, coerce_uuid(link_id))
+        link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Person permission not found")
+            raise HTTPException(status_code=404, detail="Subscriber permission not found")
         db.delete(link)
         db.commit()
 
     @staticmethod
     def sync_for_person(
         db: Session,
-        person_id: str,
+        subscriber_id: str,
         desired_permission_ids: set[str],
         granted_by: str | None = None,
     ):
-        """Sync direct permissions for a person - add new, remove unselected."""
-        person_uuid = coerce_uuid(person_id)
+        """Sync direct permissions for a subscriber - add new, remove unselected."""
+        subscriber_uuid = coerce_uuid(subscriber_id)
         existing = (
-            db.query(PersonPermission)
-            .filter(PersonPermission.person_id == person_uuid)
+            db.query(SubscriberPermission)
+            .filter(SubscriberPermission.subscriber_id == subscriber_uuid)
             .all()
         )
         existing_map = {str(pp.permission_id): pp for pp in existing}
 
         # Remove permissions not in desired set
-        for perm_id, person_perm in existing_map.items():
+        for perm_id, subscriber_perm in existing_map.items():
             if perm_id not in desired_permission_ids:
-                db.delete(person_perm)
+                db.delete(subscriber_perm)
 
         # Add new permissions
         for perm_id in desired_permission_ids:
             if perm_id not in existing_map:
                 db.add(
-                    PersonPermission(
-                        person_id=person_uuid,
+                    SubscriberPermission(
+                        subscriber_id=subscriber_uuid,
                         permission_id=coerce_uuid(perm_id),
-                        granted_by_person_id=coerce_uuid(granted_by)
+                        granted_by_subscriber_id=coerce_uuid(granted_by)
                         if granted_by
                         else None,
                     )
@@ -419,5 +419,5 @@ class PersonPermissions(ListResponseMixin):
 roles = Roles()
 permissions = Permissions()
 role_permissions = RolePermissions()
-person_roles = PersonRoles()
-person_permissions = PersonPermissions()
+subscriber_roles = SubscriberRoles()
+subscriber_permissions = SubscriberPermissions()

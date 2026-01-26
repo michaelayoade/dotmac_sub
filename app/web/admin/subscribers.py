@@ -11,7 +11,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.db import SessionLocal
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.subscriber import SubscriberAccount
 from app.models.tickets import Ticket, TicketStatus
 from app.services import auth as auth_service
@@ -89,11 +89,11 @@ def _resolve_customer_ref(
     raise ValueError("customer_ref must be selected from the list")
 
 
-def _resolve_person_for_org(db: Session, org_id: UUID) -> UUID | None:
+def _resolve_subscriber_for_org(db: Session, org_id: UUID) -> UUID | None:
     return (
-        db.query(Person.id)
-        .filter(Person.organization_id == org_id)
-        .order_by(Person.created_at.asc())
+        db.query(Subscriber.id)
+        .filter(Subscriber.organization_id == org_id)
+        .order_by(Subscriber.created_at.asc())
         .scalar()
     )
 
@@ -189,21 +189,24 @@ def subscribers_create_redirect():
 def subscriber_new(request: Request, db: Session = Depends(get_db)):
     """New subscriber form."""
     from app.web.admin import get_sidebar_stats, get_current_user
-    from app.services import person as person_service
+    # TODO: person service no longer exists - use subscriber service instead
+    # from app.services import person as person_service
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-    person_id = request.query_params.get("person_id", "").strip()
+    subscriber_id = request.query_params.get("subscriber_id", "").strip()
     organization_id = request.query_params.get("organization_id", "").strip()
     prefill_ref = ""
     prefill_label = ""
-    if person_id:
+    if subscriber_id:
         try:
-            person = person_service.people.get(db=db, person_id=person_id)
-            prefill_ref = f"person:{person.id}"
-            prefill_label = f"{person.first_name} {person.last_name}"
-            if person.email:
-                prefill_label = f"{prefill_label} ({person.email})"
+            # TODO: use subscriber_service.subscribers.get instead
+            # subscriber = person_service.people.get(db=db, subscriber_id=subscriber_id)
+            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+            prefill_ref = f"subscriber:{subscriber.id}"
+            prefill_label = f"{subscriber.first_name} {subscriber.last_name}"
+            if subscriber.email:
+                prefill_label = f"{prefill_label} ({subscriber.email})"
         except Exception:
             prefill_ref = ""
             prefill_label = ""
@@ -222,12 +225,13 @@ def subscriber_new(request: Request, db: Session = Depends(get_db)):
             prefill_label = ""
 
     # Fetch lookup data for dropdowns
-    people = person_service.people.list(
+    # TODO: person service no longer exists - use subscriber service instead
+    # people = person_service.people.list(...)
+    people = subscriber_service.subscribers.list(
         db=db,
-        email=None,
-        status=None,
-        party_status=None,
         organization_id=None,
+        reseller_id=None,
+        status=None,
         is_active=True,
         order_by="last_name",
         order_dir="asc",
@@ -341,18 +345,19 @@ def subscriber_create(
         raise
     except Exception as e:
         from app.web.admin import get_sidebar_stats, get_current_user
-        from app.services import person as person_service
+        # TODO: person service no longer exists - use subscriber service instead
+        # from app.services import person as person_service
 
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
 
         # Fetch lookup data for dropdowns on error
-        people = person_service.people.list(
+        # TODO: person service no longer exists - use subscriber service instead
+        people = subscriber_service.subscribers.list(
             db=db,
-            email=None,
-            status=None,
-            party_status=None,
             organization_id=None,
+            reseller_id=None,
+            status=None,
             is_active=True,
             order_by="last_name",
             order_dir="asc",
@@ -678,7 +683,7 @@ def subscriber_detail(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     timeline = []
     for event in audit_events:
@@ -822,18 +827,19 @@ def subscriber_edit(
         )
 
     from app.web.admin import get_sidebar_stats, get_current_user
-    from app.services import person as person_service
+    # TODO: person service no longer exists - use subscriber service instead
+    # from app.services import person as person_service
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
     # Fetch lookup data for dropdowns
-    people = person_service.people.list(
+    # TODO: person service no longer exists - use subscriber service instead
+    people = subscriber_service.subscribers.list(
         db=db,
-        email=None,
-        status=None,
-        party_status=None,
         organization_id=None,
+        reseller_id=None,
+        status=None,
         is_active=True,
         order_by="last_name",
         order_dir="asc",
@@ -928,7 +934,8 @@ def subscriber_update(
         )
     except Exception as e:
         from app.web.admin import get_sidebar_stats, get_current_user
-        from app.services import person as person_service
+        # TODO: person service no longer exists - use subscriber service instead
+        # from app.services import person as person_service
 
         db.rollback()
         sidebar_stats = get_sidebar_stats(db)
@@ -936,9 +943,11 @@ def subscriber_update(
         subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
 
         # Fetch lookup data for dropdowns on error
-        people = person_service.people.list(
+        # TODO: person service no longer exists - use subscriber service instead
+        people = subscriber_service.subscribers.list(
             db=db,
-            email=None,
+            organization_id=None,
+            reseller_id=None,
             status=None,
             is_active=True,
             order_by="last_name",

@@ -29,7 +29,7 @@ from app.models.crm.enums import (
     MessageStatus,
 )
 from app.models.crm.conversation import Message
-from app.models.person import ChannelType as PersonChannelType, Person, PersonChannel
+from app.models.subscriber import ChannelType as SubscriberChannelType, Subscriber, SubscriberChannel
 from app.models.crm.comments import SocialCommentPlatform
 from app.models.integration import IntegrationTarget, IntegrationTargetType
 from app.models.oauth_token import OAuthToken
@@ -161,7 +161,7 @@ def _extract_identity_metadata(*values: object) -> dict:
     return identity
 
 
-def _find_person_by_email_or_phone(db: Session, metadata: dict | None) -> Person | None:
+def _find_subscriber_by_email_or_phone(db: Session, metadata: dict | None) -> Subscriber | None:
     if not metadata or not isinstance(metadata, dict):
         return None
     email = metadata.get("email")
@@ -171,16 +171,16 @@ def _find_person_by_email_or_phone(db: Session, metadata: dict | None) -> Person
         email_value = None
     if email_value:
         channel = (
-            db.query(PersonChannel)
-            .filter(PersonChannel.channel_type == PersonChannelType.email)
-            .filter(func.lower(PersonChannel.address) == email_value)
+            db.query(SubscriberChannel)
+            .filter(SubscriberChannel.channel_type == SubscriberChannelType.email)
+            .filter(func.lower(SubscriberChannel.address) == email_value)
             .first()
         )
         if channel:
-            return channel.person
-        person = db.query(Person).filter(func.lower(Person.email) == email_value).first()
-        if person:
-            return person
+            return channel.subscriber
+        subscriber = db.query(Subscriber).filter(func.lower(Subscriber.email) == email_value).first()
+        if subscriber:
+            return subscriber
 
     phone = metadata.get("phone")
     if isinstance(phone, str):
@@ -191,39 +191,39 @@ def _find_person_by_email_or_phone(db: Session, metadata: dict | None) -> Person
         raw_phone = None
     if phone_value:
         channel = (
-            db.query(PersonChannel)
+            db.query(SubscriberChannel)
             .filter(
-                PersonChannel.channel_type.in_(
+                SubscriberChannel.channel_type.in_(
                     {
-                        PersonChannelType.phone,
-                        PersonChannelType.sms,
-                        PersonChannelType.whatsapp,
+                        SubscriberChannelType.phone,
+                        SubscriberChannelType.sms,
+                        SubscriberChannelType.whatsapp,
                     }
                 )
             )
             .filter(
                 or_(
-                    PersonChannel.address == phone_value,
-                    PersonChannel.address == raw_phone,
+                    SubscriberChannel.address == phone_value,
+                    SubscriberChannel.address == raw_phone,
                 )
             )
             .first()
         )
         if channel:
-            return channel.person
-        person = db.query(Person).filter(
+            return channel.subscriber
+        subscriber = db.query(Subscriber).filter(
             or_(
-                Person.phone == phone_value,
-                Person.phone == raw_phone,
+                Subscriber.phone == phone_value,
+                Subscriber.phone == raw_phone,
             )
         ).first()
-        if person:
-            return person
+        if subscriber:
+            return subscriber
 
     return None
 
 
-def _resolve_meta_person_and_channel(
+def _resolve_meta_subscriber_and_channel(
     db: Session,
     channel_type: ChannelType,
     sender_id: str,
@@ -236,29 +236,29 @@ def _resolve_meta_person_and_channel(
         channel_type,
         metadata,
     )
-    person = None
-    if account and account.subscriber and account.subscriber.person_id:
-        person = db.get(Person, account.subscriber.person_id)
-    if not person:
-        person = _find_person_by_email_or_phone(db, metadata)
-    if person:
-        channel = inbox_service._ensure_person_channel(db, person, channel_type, sender_id)
-        if contact_name and not person.display_name:
-            person.display_name = contact_name
+    subscriber = None
+    if account and account.subscriber and account.subscriber.subscriber_id:
+        subscriber = db.get(Subscriber, account.subscriber.subscriber_id)
+    if not subscriber:
+        subscriber = _find_subscriber_by_email_or_phone(db, metadata)
+    if subscriber:
+        channel = inbox_service._ensure_subscriber_channel(db, subscriber, channel_type, sender_id)
+        if contact_name and not subscriber.display_name:
+            subscriber.display_name = contact_name
             db.commit()
-            db.refresh(person)
+            db.refresh(subscriber)
         if account:
-            inbox_service._apply_account_to_person(db, person, account)
-        return person, channel
-    person, channel = contact_service.get_or_create_contact_by_channel(
+            inbox_service._apply_account_to_subscriber(db, subscriber, account)
+        return subscriber, channel
+    subscriber, channel = contact_service.get_or_create_contact_by_channel(
         db,
         channel_type,
         sender_id,
         contact_name,
     )
     if account:
-        inbox_service._apply_account_to_person(db, person, account)
-    return person, channel
+        inbox_service._apply_account_to_subscriber(db, subscriber, account)
+    return subscriber, channel
 
 
 def _apply_meta_read_receipt(
@@ -273,17 +273,17 @@ def _apply_meta_read_receipt(
     if timestamp > 1_000_000_000_000:
         timestamp = timestamp / 1000
     read_at = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-    person_channel_type = PersonChannelType(channel_type.value)
+    subscriber_channel_type = SubscriberChannelType(channel_type.value)
     channel = (
-        db.query(PersonChannel)
-        .filter(PersonChannel.channel_type == person_channel_type)
-        .filter(PersonChannel.address == contact_id)
+        db.query(SubscriberChannel)
+        .filter(SubscriberChannel.channel_type == subscriber_channel_type)
+        .filter(SubscriberChannel.address == contact_id)
         .first()
     )
     if not channel:
         return
     db.query(Message).filter(
-        Message.person_channel_id == channel.id,
+        Message.subscriber_channel_id == channel.id,
         Message.channel_type == channel_type,
         Message.direction == MessageDirection.inbound,
         Message.status == MessageStatus.received,
@@ -887,7 +887,7 @@ def receive_facebook_message(
     target, config = _resolve_meta_connector(db, ConnectorType.facebook)
 
     # Create/get contact with Facebook Messenger channel
-    contact, channel = _resolve_meta_person_and_channel(
+    contact, channel = _resolve_meta_subscriber_and_channel(
         db,
         ChannelType.facebook_messenger,
         payload.contact_address,
@@ -935,7 +935,7 @@ def receive_facebook_message(
         conversation = conversation_service.Conversations.create(
             db,
             ConversationCreate(
-                person_id=contact.id,
+                subscriber_id=contact.id,
                 is_active=True,
             ),
         )
@@ -954,7 +954,7 @@ def receive_facebook_message(
         db,
             MessageCreate(
             conversation_id=conversation.id,
-            person_channel_id=channel.id,
+            subscriber_channel_id=channel.id,
             channel_target_id=target.id if target else None,
             channel_type=ChannelType.facebook_messenger,
             direction=MessageDirection.inbound,
@@ -999,7 +999,7 @@ def receive_instagram_message(
     target, config = _resolve_meta_connector(db, ConnectorType.facebook)
 
     # Create/get contact with Instagram DM channel
-    contact, channel = _resolve_meta_person_and_channel(
+    contact, channel = _resolve_meta_subscriber_and_channel(
         db,
         ChannelType.instagram_dm,
         payload.contact_address,
@@ -1047,7 +1047,7 @@ def receive_instagram_message(
         conversation = conversation_service.Conversations.create(
             db,
             ConversationCreate(
-                person_id=contact.id,
+                subscriber_id=contact.id,
                 is_active=True,
             ),
         )
@@ -1066,7 +1066,7 @@ def receive_instagram_message(
         db,
             MessageCreate(
             conversation_id=conversation.id,
-            person_channel_id=channel.id,
+            subscriber_channel_id=channel.id,
             channel_target_id=target.id if target else None,
             channel_type=ChannelType.instagram_dm,
             direction=MessageDirection.inbound,

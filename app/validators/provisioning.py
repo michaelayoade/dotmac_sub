@@ -8,7 +8,7 @@ from app.models.provisioning import (
     ServiceOrder,
     ServiceStateTransition,
 )
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.subscriber import AccountRole, SubscriberAccount
 
 
@@ -37,13 +37,13 @@ def validate_service_order_links(
             )
 
     if requested_by_contact_id:
-        person = db.get(Person, requested_by_contact_id)
-        if not person:
+        subscriber = db.get(Subscriber, requested_by_contact_id)
+        if not subscriber:
             raise HTTPException(status_code=404, detail="Contact not found")
         linked = (
             db.query(AccountRole)
             .filter(AccountRole.account_id == account_id)
-            .filter(AccountRole.person_id == person.id)
+            .filter(AccountRole.subscriber_id == subscriber.id)
             .first()
         )
         if not linked:

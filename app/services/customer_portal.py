@@ -11,9 +11,8 @@ from sqlalchemy import or_
 from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential, CatalogOffer, Subscription
 from app.models.domain_settings import SettingDomain
-from app.models.person import Person
 from app.models.radius import RadiusUser
-from app.models.subscriber import AccountStatus, Subscriber
+from app.models.subscriber import AccountStatus, Subscriber, Organization
 from app.models.tickets import Ticket, TicketPriority, TicketStatus
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
@@ -137,7 +136,7 @@ def get_current_customer(session_token: str | None, db: Session) -> Optional[dic
                 if local_credential:
                     subscriber = (
                         db.query(Subscriber)
-                        .filter(Subscriber.person_id == local_credential.person_id)
+                        .filter(Subscriber.id == local_credential.subscriber_id)
                         .filter(Subscriber.is_active.is_(True))
                         .first()
                     )
@@ -190,13 +189,10 @@ def _build_current_user(db: Session, session: dict) -> dict:
     name = session.get("username") or "Customer"
     email = None
     if subscriber:
-        if subscriber.person_id:
-            person = db.get(Person, subscriber.person_id)
-            if person:
-                name = person.display_name or f"{person.first_name} {person.last_name}".strip() or name
-                email = person.email or email
-        elif subscriber.person and subscriber.person.organization:
-            organization = subscriber.person.organization
+        name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip() or name
+        email = subscriber.email or email
+        if subscriber.organization_id:
+            organization = db.get(Organization, subscriber.organization_id)
             if organization and organization.name:
                 name = organization.name
     if not email and session.get("username"):
@@ -245,12 +241,10 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     user_name = session.get("username") or "Customer"
     user = {"first_name": user_name}
     if subscriber:
-        if subscriber.person_id:
-            person = db.get(Person, subscriber.person_id)
-            if person and person.first_name:
-                user = {"first_name": person.first_name}
-        elif subscriber.person and subscriber.person.organization:
-            organization = subscriber.person.organization
+        if subscriber.first_name:
+            user = {"first_name": subscriber.first_name}
+        elif subscriber.organization_id:
+            organization = db.get(Organization, subscriber.organization_id)
             if organization and organization.name:
                 user = {"first_name": organization.name}
 
@@ -341,8 +335,8 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             priority=None,
             channel=None,
             search=None,
-            created_by_person_id=None,
-            assigned_to_person_id=None,
+            created_by_subscriber_id=None,
+            assigned_to_subscriber_id=None,
             is_active=None,
             order_by="created_at",
             order_dir="desc",
@@ -452,34 +446,31 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
             account = None
 
     if account and account.subscriber:
-        if account.subscriber.person:
-            person = account.subscriber.person
-            billing_name = person.display_name or f"{person.first_name} {person.last_name}".strip()
-            billing_email = person.email
-        elif account.subscriber.person and account.subscriber.person.organization:
-            org = account.subscriber.person.organization
-            billing_name = org.name
+        sub = account.subscriber
+        billing_name = sub.display_name or f"{sub.first_name} {sub.last_name}".strip()
+        billing_email = sub.email
+        if sub.organization_id:
+            organization = db.get(Organization, sub.organization_id)
+            if organization:
+                billing_name = organization.name
             primary_email = None
             if account.account_roles:
                 primary_role = next(
                     (role for role in account.account_roles if role.is_primary),
                     account.account_roles[0],
                 )
-                if primary_role and primary_role.person:
-                    primary_email = primary_role.person.email
+                if primary_role and primary_role.subscriber:
+                    primary_email = primary_role.subscriber.email
             billing_email = primary_email
 
     subscriber_id = customer.get("subscriber_id")
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
 
     if not billing_name and subscriber:
-        if subscriber.person_id:
-            person = subscriber.person
-            if person:
-                billing_name = person.display_name or f"{person.first_name} {person.last_name}".strip()
-                billing_email = billing_email or person.email
-        elif subscriber.person and subscriber.person.organization:
-            organization = subscriber.person.organization
+        billing_name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip()
+        billing_email = billing_email or subscriber.email
+        if subscriber.organization_id:
+            organization = db.get(Organization, subscriber.organization_id)
             if organization:
                 billing_name = organization.name
 
@@ -527,8 +518,8 @@ def get_customer_tickets(
         conditions.append(Ticket.account_id.in_([UUID(acc_id) for acc_id in allowed_account_ids]))
     if subscription_id_str:
         conditions.append(Ticket.subscription_id == UUID(subscription_id_str))
-    if subscriber and subscriber.person_id:
-        conditions.append(Ticket.created_by_person_id == subscriber.person_id)
+    if subscriber:
+        conditions.append(Ticket.created_by_subscriber_id == subscriber.id)
 
     if not conditions:
         return {"tickets": [], "total": 0, "total_pages": 1}

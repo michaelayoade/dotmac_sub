@@ -29,7 +29,7 @@ class LoginResponse(BaseModel):
 
 
 class MfaSetupRequest(BaseModel):
-    person_id: UUID
+    subscriber_id: UUID
     label: str | None = Field(default=None, max_length=120)
 
 

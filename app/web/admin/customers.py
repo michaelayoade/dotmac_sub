@@ -16,14 +16,18 @@ from typing import Optional
 from app.db import SessionLocal
 from app.models.auth import ApiKey, MFAMethod, Session, UserCredential
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
-from app.models.person import PartyStatus, Person
-from app.schemas.person import ChannelTypeEnum, PersonChannelCreate, PersonCreate
+# TODO: Person model replaced by Subscriber - PartyStatus may need to be defined in subscriber model
+# from app.models.person import PartyStatus, Person
+from app.models.subscriber import Subscriber
+# TODO: person schemas no longer exist - need to use subscriber schemas
+# from app.schemas.person import ChannelTypeEnum, PersonChannelCreate, PersonCreate
 from app.schemas.subscriber import AccountRoleCreate
 from app.models.subscriber import AccountRoleType
 from app.models.subscriber import Organization, Subscriber
 from app.models.tickets import Ticket, TicketStatus
 from app.services.auth_dependencies import require_permission
-from app.services.person import People as people_service
+# TODO: person service no longer exists - use subscriber service instead
+# from app.services.person import People as people_service
 from app.services import subscriber as subscriber_service
 from app.services import audit as audit_service
 from app.services.audit_helpers import build_changes_metadata, extract_changes, format_changes, log_audit_event
@@ -117,39 +121,35 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
 
 
-def _ensure_person_for_contact_row(db: Session, row: dict, organization_id: str | None = None) -> Person:
+# TODO: _ensure_subscriber_for_contact_row - person schemas/services removed, use subscriber_service
+def _ensure_subscriber_for_contact_row(db: Session, row: dict, organization_id: str | None = None) -> Subscriber:
     email = row.get("email") or f"contact-{uuid.uuid4().hex}@placeholder.local"
-    person = db.query(Person).filter(func.lower(Person.email) == email.lower()).first()
-    if person:
-        return person
-    payload = PersonCreate(
-        first_name=row.get("first_name") or "Unknown",
-        last_name=row.get("last_name") or "Unknown",
-        email=email,
-        phone=row.get("phone") or None,
-        organization_id=organization_id,
-    )
-    return people_service.create(db=db, payload=payload)
+    subscriber = db.query(Subscriber).filter(func.lower(Subscriber.email) == email.lower()).first()
+    if subscriber:
+        return subscriber
+    # TODO: PersonCreate schema no longer exists - create subscriber directly
+    # payload = PersonCreate(...)
+    # return people_service.create(db=db, payload=payload)
+    raise NotImplementedError("PersonCreate schema removed - use subscriber_service.subscribers.create instead")
 
 
-def _ensure_person_channel(
+# TODO: _ensure_subscriber_channel - person services removed
+def _ensure_subscriber_channel(
     db: Session,
-    person_id: str,
-    channel_type: ChannelTypeEnum,
+    subscriber_id: str,
+    channel_type: str,  # was ChannelTypeEnum
     address: str,
     is_primary: bool,
 ) -> None:
     if not address:
         return
-    people_service.add_channel(
-        db=db,
-        person_id=person_id,
-        payload=PersonChannelCreate(
-            channel_type=channel_type,
-            address=address,
-            is_primary=is_primary,
-        ),
-    )
+    # TODO: people_service.add_channel no longer exists
+    # people_service.add_channel(
+    #     db=db,
+    #     subscriber_id=subscriber_id,
+    #     payload=PersonChannelCreate(...),
+    # )
+    raise NotImplementedError("Person channel service removed")
 
 
 def _create_account_roles_from_rows(
@@ -165,33 +165,34 @@ def _create_account_roles_from_rows(
         "support": AccountRoleType.support,
     }
     for row in contact_rows:
-        person = _ensure_person_for_contact_row(db, row, organization_id=organization_id)
+        subscriber = _ensure_subscriber_for_contact_row(db, row, organization_id=organization_id)
         subscriber_service.account_roles.create(
             db=db,
             payload=AccountRoleCreate(
                 account_id=account_id,
-                person_id=person.id,
+                subscriber_id=subscriber.id,  # Changed from person_id
                 role=role_map.get(row.get("role"), AccountRoleType.primary),
                 is_primary=row.get("is_primary", False),
                 title=row.get("title") or None,
             ),
         )
-        if row.get("email"):
-            _ensure_person_channel(
-                db=db,
-                person_id=str(person.id),
-                channel_type=ChannelTypeEnum.email,
-                address=row["email"],
-                is_primary=True,
-            )
-        if row.get("phone"):
-            _ensure_person_channel(
-                db=db,
-                person_id=str(person.id),
-                channel_type=ChannelTypeEnum.phone,
-                address=row["phone"],
-                is_primary=True,
-            )
+        # TODO: Channel functions commented out - person schemas/services removed
+        # if row.get("email"):
+        #     _ensure_subscriber_channel(
+        #         db=db,
+        #         subscriber_id=str(subscriber.id),
+        #         channel_type="email",
+        #         address=row["email"],
+        #         is_primary=True,
+        #     )
+        # if row.get("phone"):
+        #     _ensure_subscriber_channel(
+        #         db=db,
+        #         subscriber_id=str(subscriber.id),
+        #         channel_type="phone",
+        #         address=row["phone"],
+        #         is_primary=True,
+        #     )
 
 
 def _format_account_role(role):
@@ -238,13 +239,13 @@ def contacts_list(
         status = None
 
     # Build query for people
-    people_query = db.query(Person)
+    people_query = db.query(Subscriber)
 
     # Filter by party_status if specified
     if status:
         try:
             party_status = PartyStatus(status)
-            people_query = people_query.filter(Person.party_status == party_status)
+            people_query = people_query.filter(Subscriber.status == party_status)
         except ValueError:
             pass  # Invalid status, ignore filter
 
@@ -252,17 +253,17 @@ def contacts_list(
     if search:
         search_filter = f"%{search}%"
         people_query = people_query.filter(
-            (Person.first_name.ilike(search_filter)) |
-            (Person.last_name.ilike(search_filter)) |
-            (Person.email.ilike(search_filter)) |
-            (Person.phone.ilike(search_filter))
+            (Subscriber.first_name.ilike(search_filter)) |
+            (Subscriber.last_name.ilike(search_filter)) |
+            (Subscriber.email.ilike(search_filter)) |
+            (Subscriber.phone.ilike(search_filter))
         )
 
     # Get counts for dashboard stats (before pagination)
-    leads_count = db.query(func.count(Person.id)).filter(Person.party_status == PartyStatus.lead).scalar() or 0
-    contacts_count = db.query(func.count(Person.id)).filter(Person.party_status == PartyStatus.contact).scalar() or 0
-    customers_count = db.query(func.count(Person.id)).filter(Person.party_status == PartyStatus.customer).scalar() or 0
-    subscribers_count = db.query(func.count(Person.id)).filter(Person.party_status == PartyStatus.subscriber).scalar() or 0
+    leads_count = db.query(func.count(Subscriber.id)).filter(Subscriber.status == PartyStatus.lead).scalar() or 0
+    contacts_count = db.query(func.count(Subscriber.id)).filter(Subscriber.status == PartyStatus.contact).scalar() or 0
+    customers_count = db.query(func.count(Subscriber.id)).filter(Subscriber.status == PartyStatus.customer).scalar() or 0
+    subscribers_count = db.query(func.count(Subscriber.id)).filter(Subscriber.status == PartyStatus.subscriber).scalar() or 0
     orgs_count = db.query(func.count(Organization.id)).scalar() or 0
 
     contacts = []
@@ -274,7 +275,7 @@ def contacts_list(
     if entity_type != "organization":
         people = (
             people_query
-            .order_by(Person.created_at.desc())
+            .order_by(Subscriber.created_at.desc())
             .limit(list_limit)
             .offset(0)
             .all()
@@ -286,7 +287,7 @@ def contacts_list(
                 "name": f"{p.first_name} {p.last_name}".strip(),
                 "email": p.email,
                 "phone": p.phone,
-                "status": p.party_status.value if p.party_status else "contact",
+                "status": p.status.value if p.status else "active",
                 "organization": p.organization.name if p.organization else None,
                 "is_active": p.is_active,
                 "created_at": p.created_at,
@@ -381,13 +382,14 @@ def contacts_convert_to_subscriber(
 ):
     """Convert a lead/contact/customer person to a subscriber and create an account."""
     from app.schemas.subscriber import SubscriberAccountCreate, SubscriberCreate
-    from app.services.person import InvalidTransitionError
+    # TODO: person service removed
+# from app.services.person import InvalidTransitionError
     from app.models.subscriber import SubscriberAccount, AccountStatus
     from app.services.common import validate_enum
 
-    person = db.get(Person, person_id)
+    person = db.get(Subscriber, person_id)
     if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
+        raise HTTPException(status_code=404, detail="Subscriber not found")
     # Log unsupported subscriber_type without changing behavior.
     if subscriber_type and subscriber_type != "person":
         logger.info(
@@ -480,14 +482,14 @@ def customers_list(
     if customer_type != "organization":
         # Only show people that are linked to a subscriber record.
         people_query = (
-            db.query(Person)
-            .join(Subscriber, Subscriber.person_id == Person.id)
+            db.query(Subscriber)
+            .join(Subscriber, Subscriber.person_id == Subscriber.id)
         )
         if search:
-            people_query = people_query.filter(Person.email.ilike(f"%{search}%"))
+            people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
         people = (
             people_query
-            .order_by(Person.created_at.desc())
+            .order_by(Subscriber.created_at.desc())
             .limit(list_limit)
             .offset(list_offset)
             .all()
@@ -535,12 +537,12 @@ def customers_list(
 
     if customer_type != "organization":
         people_query = (
-            db.query(func.count(Person.id))
-            .select_from(Person)
-            .join(Subscriber, Subscriber.person_id == Person.id)
+            db.query(func.count(Subscriber.id))
+            .select_from(Subscriber)
+            .join(Subscriber, Subscriber.person_id == Subscriber.id)
         )
         if search:
-            people_query = people_query.filter(Person.email.ilike(f"%{search}%"))
+            people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
         people_total = people_query.scalar() or 0
 
     if customer_type != "person":
@@ -642,7 +644,8 @@ def customer_wizard_create(
         customer_type = data.get("customer_type", "person")
 
         if customer_type == "person":
-            from app.schemas.person import PersonCreate
+            # TODO: PersonCreate schema removed - use subscriber schemas
+# from app.schemas.person import PersonCreate
             from app.schemas.subscriber import SubscriberAccountCreate, SubscriberCreate
 
             # Ingestion metadata contract stored in metadata_.ingest:
@@ -668,8 +671,8 @@ def customer_wizard_create(
                 raise ValueError("email is required")
 
             existing = (
-                db.query(Person)
-                .filter(func.lower(Person.email) == email.lower())
+                db.query(Subscriber)
+                .filter(func.lower(Subscriber.email) == email.lower())
                 .first()
             )
             if existing:
@@ -765,7 +768,8 @@ def customer_wizard_create(
                 if not first_name or not last_name:
                     continue
 
-                from app.schemas.person import PersonCreate
+                # TODO: PersonCreate schema removed - use subscriber schemas
+# from app.schemas.person import PersonCreate
                 contact_person = PersonCreate(
                     first_name=first_name,
                     last_name=last_name,
@@ -831,7 +835,7 @@ def customer_new(
 def customer_create(
     request: Request,
     customer_type: str = Form(...),
-    # Person fields
+    # Subscriber fields
     first_name: Optional[str] = Form(None),
     last_name: Optional[str] = Form(None),
     display_name: Optional[str] = Form(None),
@@ -923,14 +927,15 @@ def customer_create(
         if customer_type not in ("person", "organization"):
             raise ValueError("customer_type must be person or organization")
         if customer_type == "person":
-            from app.schemas.person import PersonCreate
+            # TODO: PersonCreate schema removed - use subscriber schemas
+# from app.schemas.person import PersonCreate
             from app.schemas.subscriber import SubscriberAccountCreate, SubscriberCreate
             normalized_email = email.strip() if email else None
             if not normalized_email:
                 raise ValueError("email is required")
             existing = (
-                db.query(Person)
-                .filter(func.lower(Person.email) == normalized_email.lower())
+                db.query(Subscriber)
+                .filter(func.lower(Subscriber.email) == normalized_email.lower())
                 .first()
             )
             if existing:
@@ -988,7 +993,7 @@ def customer_create(
             )
             customer = subscriber_service.organizations.create(db=db, payload=data)
             if contact_rows:
-                # Create a Person from the first contact row to be the subscriber
+                # Create a Subscriber from the first contact row
                 first_contact = contact_rows[0]
                 primary_person = people_service.create(
                     db=db,
@@ -1491,7 +1496,7 @@ def person_detail(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activity_items = []
     for event in audit_events:
@@ -1574,8 +1579,9 @@ def organization_detail(
         org_uuid = UUID(customer_id)
         subscribers = (
             db.query(Subscriber)
-            .join(Person, Subscriber.person_id == Person.id)
-            .filter(Person.organization_id == org_uuid)
+            # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+            .filter(Subscriber.organization_id == org_uuid)
             .order_by(Subscriber.created_at.desc())
             .limit(10)
             .all()
@@ -1792,15 +1798,17 @@ def organization_detail(
     org_uuid = UUID(customer_id)
     active_subscribers = (
         db.query(Subscriber)
-        .join(Person, Subscriber.person_id == Person.id)
-        .filter(Person.organization_id == org_uuid)
+        # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+        .filter(Subscriber.organization_id == org_uuid)
         .filter(Subscriber.is_active.is_(True))
         .count()
     )
     total_subscribers = (
         db.query(Subscriber)
-        .join(Person, Subscriber.person_id == Person.id)
-        .filter(Person.organization_id == org_uuid)
+        # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+        .filter(Subscriber.organization_id == org_uuid)
         .count()
     )
 
@@ -1808,7 +1816,7 @@ def organization_detail(
     conversations = []
     try:
         # Get all person IDs belonging to this organization
-        org_person_ids = [str(p.id) for p in db.query(Person).filter(Person.organization_id == org_uuid).all()]
+        org_person_ids = [str(p.id) for p in db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).all()]
         for person_id in org_person_ids[:5]:  # Limit to avoid too many queries
             person_convos = crm_service.Conversations.list(
                 db=db,
@@ -1832,7 +1840,7 @@ def organization_detail(
     try:
         recipients = []
         # Get contact emails/phones from organization's people
-        org_people = db.query(Person).filter(Person.organization_id == org_uuid).limit(10).all()
+        org_people = db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).limit(10).all()
         for person in org_people:
             if person.email:
                 recipients.append(person.email)
@@ -1874,7 +1882,7 @@ def organization_detail(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activity_items = []
     for event in audit_events:
@@ -2003,8 +2011,9 @@ def _impersonate_customer(
         org_uuid = UUID(customer_id)
         subscribers = (
             db.query(Subscriber)
-            .join(Person, Subscriber.person_id == Person.id)
-            .filter(Person.organization_id == org_uuid)
+            # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+            .filter(Subscriber.organization_id == org_uuid)
             .order_by(Subscriber.created_at.desc())
             .limit(50)
             .all()
@@ -2214,7 +2223,8 @@ def person_update(
 ):
     """Update a person."""
     try:
-        from app.schemas.person import PersonUpdate
+        # TODO: PersonUpdate schema removed - use subscriber schemas
+# from app.schemas.person import PersonUpdate
         before = people_service.get(db=db, person_id=customer_id)
         active = is_active == "true"
         data = PersonUpdate(
@@ -2342,8 +2352,9 @@ def organization_update(
         if org_account_start_date:
             subscriber = (
                 db.query(Subscriber)
-                .join(Person, Subscriber.person_id == Person.id)
-                .filter(Person.organization_id == coerce_uuid(customer_id))
+                # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+                .filter(Subscriber.organization_id == coerce_uuid(customer_id))
                 .first()
             )
             if subscriber:
@@ -2385,7 +2396,8 @@ def person_deactivate(
     db: Session = Depends(get_db),
 ):
     """Deactivate a person before deletion."""
-    from app.schemas.person import PersonUpdate
+    # TODO: PersonUpdate schema removed - use subscriber schemas
+# from app.schemas.person import PersonUpdate
 
     person = people_service.get(db=db, person_id=customer_id)
     people_service.update(
@@ -2431,8 +2443,9 @@ def organization_deactivate(
     org_uuid = UUID(customer_id)
     (
         db.query(Subscriber)
-        .join(Person, Subscriber.person_id == Person.id)
-        .filter(Person.organization_id == org_uuid)
+        # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+        .filter(Subscriber.organization_id == org_uuid)
         .update({"is_active": False}, synchronize_session=False)
     )
     db.commit()
@@ -2520,8 +2533,9 @@ def organization_delete(
         org_uuid = UUID(customer_id)
         if (
             db.query(Subscriber)
-            .join(Person, Subscriber.person_id == Person.id)
-            .filter(Person.organization_id == org_uuid)
+            # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+            .filter(Subscriber.organization_id == org_uuid)
             .count()
         ):
             raise HTTPException(
@@ -2782,7 +2796,8 @@ async def bulk_update_status(
 
             try:
                 if customer_type == "person":
-                    from app.schemas.person import PersonUpdate
+                    # TODO: PersonUpdate schema removed - use subscriber schemas
+# from app.schemas.person import PersonUpdate
                     people_service.update(
                         db=db,
                         person_id=customer_id,
@@ -2806,8 +2821,9 @@ async def bulk_update_status(
                     org_uuid = UUID(customer_id)
                     (
                         db.query(Subscriber)
-                        .join(Person, Subscriber.person_id == Person.id)
-                        .filter(Person.organization_id == org_uuid)
+                        # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+                        .filter(Subscriber.organization_id == org_uuid)
                         .update({"is_active": is_active}, synchronize_session=False)
                     )
 
@@ -2880,8 +2896,9 @@ async def bulk_delete_customers(
                     # Check if organization has subscribers
                     if (
                         db.query(Subscriber)
-                        .join(Person, Subscriber.person_id == Person.id)
-                        .filter(Person.organization_id == org_uuid)
+                        # TODO: Person model removed - Subscriber no longer has person_id FK
+# .join(Person, Subscriber.person_id == Subscriber.id)
+                        .filter(Subscriber.organization_id == org_uuid)
                         .count()
                     ):
                         skipped.append({"id": customer_id, "type": customer_type, "reason": "Has associated subscribers"})
@@ -2926,12 +2943,12 @@ def export_customers(
         # Export all customers (with filters applied)
         if customer_type != "organization":
             people_query = (
-                db.query(Person)
-                .join(Subscriber, Subscriber.person_id == Person.id)
+                db.query(Subscriber)
+                .join(Subscriber, Subscriber.person_id == Subscriber.id)
             )
             if search:
-                people_query = people_query.filter(Person.email.ilike(f"%{search}%"))
-            people = people_query.order_by(Person.created_at.desc()).all()
+                people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
+            people = people_query.order_by(Subscriber.created_at.desc()).all()
             for p in people:
                 customers.append({
                     "id": str(p.id),

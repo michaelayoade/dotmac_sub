@@ -32,7 +32,7 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.auth_dependencies import require_permission
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services import subscriber as subscriber_service
 from app.models.catalog import (
     AccessType,
@@ -172,7 +172,7 @@ def _build_audit_activities(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in events:
@@ -325,7 +325,7 @@ def _subscription_activities(db: Session, subscription_id: str) -> list[dict]:
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in audit_events:

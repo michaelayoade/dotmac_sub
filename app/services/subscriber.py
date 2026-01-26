@@ -18,7 +18,6 @@ from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.services.response import ListResponseMixin
 from app.models.billing import TaxRate
-from app.models.person import Person
 from app.schemas.subscriber import (
     AccountRoleCreate,
     AccountRoleUpdate,
@@ -161,20 +160,6 @@ class Resellers(ListResponseMixin):
 class Subscribers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriberCreate):
-        subscriber_validators.validate_subscriber_person_id(payload.person_id)
-        person = db.get(Person, payload.person_id)
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
-        existing = (
-            db.query(Subscriber)
-            .filter(Subscriber.person_id == payload.person_id)
-            .first()
-        )
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail="Subscriber already exists for this customer.",
-            )
         data = payload.model_dump()
         data.pop("organization_id", None)
         if not data.get("subscriber_number"):
@@ -201,7 +186,6 @@ class Subscribers(ListResponseMixin):
             {
                 "subscriber_id": str(subscriber.id),
                 "subscriber_number": subscriber.subscriber_number,
-                "person_id": str(subscriber.person_id) if subscriber.person_id else None,
             },
             subscriber_id=subscriber.id,
         )
@@ -216,10 +200,10 @@ class Subscribers(ListResponseMixin):
             options=[
                 selectinload(Subscriber.accounts)
                 .selectinload(SubscriberAccount.account_roles)
-                .selectinload(AccountRole.person),
+                .selectinload(AccountRole.subscriber),
                 selectinload(Subscriber.accounts)
                 .selectinload(SubscriberAccount.account_roles)
-                .selectinload(AccountRole.person),
+                .selectinload(AccountRole.subscriber),
                 selectinload(Subscriber.addresses),
             ],
         )
@@ -230,7 +214,6 @@ class Subscribers(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
         organization_id: str | None,
         subscriber_type: str | None,
         order_by: str,
@@ -241,31 +224,20 @@ class Subscribers(ListResponseMixin):
         query = db.query(Subscriber).options(
             selectinload(Subscriber.accounts)
             .selectinload(SubscriberAccount.account_roles)
-            .selectinload(AccountRole.person),
+            .selectinload(AccountRole.subscriber),
             selectinload(Subscriber.accounts)
             .selectinload(SubscriberAccount.account_roles)
-            .selectinload(AccountRole.person),
+            .selectinload(AccountRole.subscriber),
             selectinload(Subscriber.addresses),
         )
-        if person_id:
-            query = query.filter(Subscriber.person_id == coerce_uuid(person_id))
         if organization_id:
-            query = (
-                query.join(Person, Subscriber.person_id == Person.id)
-                .filter(Person.organization_id == coerce_uuid(organization_id))
-            )
+            query = query.filter(Subscriber.organization_id == coerce_uuid(organization_id))
         if subscriber_type:
             normalized = subscriber_type.strip().lower()
             if normalized == "person":
-                query = (
-                    query.join(Person, Subscriber.person_id == Person.id)
-                    .filter(Person.organization_id.is_(None))
-                )
+                query = query.filter(Subscriber.organization_id.is_(None))
             elif normalized == "organization":
-                query = (
-                    query.join(Person, Subscriber.person_id == Person.id)
-                    .filter(Person.organization_id.is_not(None))
-                )
+                query = query.filter(Subscriber.organization_id.is_not(None))
             else:
                 raise HTTPException(status_code=400, detail="Invalid subscriber_type")
         query = apply_ordering(
@@ -286,10 +258,6 @@ class Subscribers(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Subscriber not found")
         data = payload.model_dump(exclude_unset=True)
         data.pop("organization_id", None)
-        if "person_id" in data and data["person_id"]:
-            person = db.get(Person, data["person_id"])
-            if not person:
-                raise HTTPException(status_code=404, detail="Person not found")
         for key, value in data.items():
             setattr(subscriber, key, value)
         db.commit()
@@ -326,18 +294,16 @@ class Subscribers(ListResponseMixin):
             .filter(Subscriber.is_active.is_(True))
             .scalar() or 0
         )
-        # Count individuals (persons without organization)
+        # Count individuals (subscribers without organization)
         persons = (
             db.query(func.count(Subscriber.id))
-            .join(Person, Subscriber.person_id == Person.id)
-            .filter(Person.organization_id.is_(None))
+            .filter(Subscriber.organization_id.is_(None))
             .scalar() or 0
         )
-        # Count organizations (persons with organization)
+        # Count organizations (subscribers with organization)
         organizations = (
             db.query(func.count(Subscriber.id))
-            .join(Person, Subscriber.person_id == Person.id)
-            .filter(Person.organization_id.is_not(None))
+            .filter(Subscriber.organization_id.is_not(None))
             .scalar() or 0
         )
         return {
@@ -394,7 +360,7 @@ class Accounts(ListResponseMixin):
             SubscriberAccount,
             account_id,
             options=[
-                selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.person),
+                selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.subscriber),
             ],
         )
         if not account:
@@ -412,8 +378,7 @@ class Accounts(ListResponseMixin):
         offset: int,
     ):
         query = db.query(SubscriberAccount).options(
-            selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.person),
-            selectinload(SubscriberAccount.subscriber).selectinload(Subscriber.person),
+            selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.subscriber),
         )
         if subscriber_id:
             query = query.filter(SubscriberAccount.subscriber_id == subscriber_id)
@@ -467,9 +432,9 @@ class AccountRoles(ListResponseMixin):
         account = db.get(SubscriberAccount, payload.account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Subscriber account not found")
-        person = db.get(Person, payload.person_id)
-        if not person:
-            raise HTTPException(status_code=404, detail="Person not found")
+        subscriber = db.get(Subscriber, payload.subscriber_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
         if payload.is_primary:
             db.query(AccountRole).filter(
                 AccountRole.account_id == payload.account_id,
@@ -492,17 +457,17 @@ class AccountRoles(ListResponseMixin):
     def list(
         db: Session,
         account_id: str | None,
-        person_id: str | None,
+        subscriber_id: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
     ):
-        query = db.query(AccountRole).options(selectinload(AccountRole.person))
+        query = db.query(AccountRole).options(selectinload(AccountRole.subscriber))
         if account_id:
             query = query.filter(AccountRole.account_id == account_id)
-        if person_id:
-            query = query.filter(AccountRole.person_id == person_id)
+        if subscriber_id:
+            query = query.filter(AccountRole.subscriber_id == subscriber_id)
         query = apply_ordering(
             query,
             order_by,
@@ -521,10 +486,10 @@ class AccountRoles(ListResponseMixin):
             account = db.get(SubscriberAccount, data["account_id"])
             if not account:
                 raise HTTPException(status_code=404, detail="Subscriber account not found")
-        if "person_id" in data and data["person_id"]:
-            person = db.get(Person, data["person_id"])
-            if not person:
-                raise HTTPException(status_code=404, detail="Person not found")
+        if "subscriber_id" in data and data["subscriber_id"]:
+            subscriber = db.get(Subscriber, data["subscriber_id"])
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
         if data.get("is_primary"):
             account_id = data.get("account_id", role.account_id)
             db.query(AccountRole).filter(

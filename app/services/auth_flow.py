@@ -23,9 +23,9 @@ from app.models.auth import (
 )
 from app.services.common import coerce_uuid
 from app.services.response import ListResponseMixin
-from app.models.rbac import Permission, PersonRole, Role, RolePermission
+from app.models.rbac import Permission, SubscriberRole, Role, RolePermission
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services.secrets import resolve_secret
 from app.services import radius_auth as radius_auth_service
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
@@ -200,14 +200,14 @@ def hash_session_token(token: str) -> str:
 
 def _issue_access_token(
     db: Session | None,
-    person_id: str,
+    subscriber_id: str,
     session_id: str,
     roles: list[str] | None = None,
     permissions: list[str] | None = None,
 ) -> str:
     now = _now()
     payload = {
-        "sub": person_id,
+        "sub": subscriber_id,
         "session_id": session_id,
         "typ": "access",
         "iat": int(now.timestamp()),
@@ -220,10 +220,10 @@ def _issue_access_token(
     return jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db))
 
 
-def _issue_mfa_token(db: Session | None, person_id: str) -> str:
+def _issue_mfa_token(db: Session | None, subscriber_id: str) -> str:
     now = _now()
     payload = {
-        "sub": person_id,
+        "sub": subscriber_id,
         "typ": "mfa",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
@@ -244,10 +244,10 @@ def _password_reset_ttl_minutes(db: Session | None) -> int:
     return 60
 
 
-def _issue_password_reset_token(db: Session | None, person_id: str, email: str) -> str:
+def _issue_password_reset_token(db: Session | None, subscriber_id: str, email: str) -> str:
     now = _now()
     payload = {
-        "sub": person_id,
+        "sub": subscriber_id,
         "email": email,
         "typ": "password_reset",
         "iat": int(now.timestamp()),
@@ -274,21 +274,21 @@ def decode_access_token(db: Session | None, token: str) -> dict:
     return _decode_jwt(db, token, "access")
 
 
-def _person_or_404(db: Session, person_id: str) -> Person:
-    person = db.get(Person, coerce_uuid(person_id))
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
-    return person
+def _subscriber_or_404(db: Session, subscriber_id: str) -> Subscriber:
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+    return subscriber
 
 
-def _load_rbac_claims(db: Session, person_id: str):
+def _load_rbac_claims(db: Session, subscriber_id: str):
     if db is None:
         return [], []
-    person_uuid = coerce_uuid(person_id)
+    subscriber_uuid = coerce_uuid(subscriber_id)
     roles = (
         db.query(Role)
-        .join(PersonRole, PersonRole.role_id == Role.id)
-        .filter(PersonRole.person_id == person_uuid)
+        .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+        .filter(SubscriberRole.subscriber_id == subscriber_uuid)
         .filter(Role.is_active.is_(True))
         .all()
     )
@@ -296,8 +296,8 @@ def _load_rbac_claims(db: Session, person_id: str):
         db.query(Permission)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
         .join(Role, RolePermission.role_id == Role.id)
-        .join(PersonRole, PersonRole.role_id == Role.id)
-        .filter(PersonRole.person_id == person_uuid)
+        .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+        .filter(SubscriberRole.subscriber_id == subscriber_uuid)
         .filter(Role.is_active.is_(True))
         .filter(Permission.is_active.is_(True))
         .all()
@@ -307,10 +307,10 @@ def _load_rbac_claims(db: Session, person_id: str):
     return role_names, permission_keys
 
 
-def _primary_totp_method(db: Session, person_id: str) -> MFAMethod | None:
+def _primary_totp_method(db: Session, subscriber_id: str) -> MFAMethod | None:
     return (
         db.query(MFAMethod)
-        .filter(MFAMethod.person_id == coerce_uuid(person_id))
+        .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
         .filter(MFAMethod.method_type == MFAMethodType.totp)
         .filter(MFAMethod.is_active.is_(True))
         .filter(MFAMethod.enabled.is_(True))
@@ -464,21 +464,21 @@ class AuthFlow(ListResponseMixin):
         credential.last_login_at = now
         db.commit()
 
-        if _primary_totp_method(db, str(credential.person_id)):
+        if _primary_totp_method(db, str(credential.subscriber_id)):
             return {
                 "mfa_required": True,
-                "mfa_token": _issue_mfa_token(db, str(credential.person_id)),
+                "mfa_token": _issue_mfa_token(db, str(credential.subscriber_id)),
             }
 
-        return AuthFlow._issue_tokens(db, credential.person_id, request)
+        return AuthFlow._issue_tokens(db, credential.subscriber_id, request)
 
     @staticmethod
-    def mfa_setup(db: Session, person_id: str, label: str | None):
-        person = _person_or_404(db, person_id)
-        username = person.email
+    def mfa_setup(db: Session, subscriber_id: str, label: str | None):
+        subscriber = _subscriber_or_404(db, subscriber_id)
+        username = subscriber.email
         credential = (
             db.query(UserCredential)
-            .filter(UserCredential.person_id == person.id)
+            .filter(UserCredential.subscriber_id == subscriber.id)
             .filter(UserCredential.provider == AuthProvider.local)
             .first()
         )
@@ -488,7 +488,7 @@ class AuthFlow(ListResponseMixin):
         secret = pyotp.random_base32()
         encrypted = _encrypt_secret(db, secret)
         method = MFAMethod(
-            person_id=person.id,
+            subscriber_id=subscriber.id,
             method_type=MFAMethodType.totp,
             label=label,
             secret=encrypted,
@@ -506,11 +506,11 @@ class AuthFlow(ListResponseMixin):
         return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
 
     @staticmethod
-    def mfa_confirm(db: Session, method_id: str, code: str, person_id: str):
+    def mfa_confirm(db: Session, method_id: str, code: str, subscriber_id: str):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")
-        if str(method.person_id) != str(person_id):
+        if str(method.subscriber_id) != str(subscriber_id):
             raise HTTPException(status_code=403, detail="MFA method not allowed")
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
@@ -521,7 +521,7 @@ class AuthFlow(ListResponseMixin):
             raise HTTPException(status_code=401, detail="Invalid MFA code")
 
         db.query(MFAMethod).filter(
-            MFAMethod.person_id == method.person_id,
+            MFAMethod.subscriber_id == method.subscriber_id,
             MFAMethod.id != method.id,
             MFAMethod.is_primary.is_(True),
         ).update({"is_primary": False})
@@ -544,11 +544,11 @@ class AuthFlow(ListResponseMixin):
     @staticmethod
     def mfa_verify(db: Session, mfa_token: str, code: str, request: Request):
         payload = _decode_jwt(db, mfa_token, "mfa")
-        person_id = payload.get("sub")
-        if not person_id:
+        subscriber_id = payload.get("sub")
+        if not subscriber_id:
             raise HTTPException(status_code=401, detail="Invalid MFA token")
 
-        method = _primary_totp_method(db, str(person_id))
+        method = _primary_totp_method(db, str(subscriber_id))
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")
 
@@ -559,7 +559,7 @@ class AuthFlow(ListResponseMixin):
 
         method.last_used_at = _now()
         db.commit()
-        return AuthFlow._issue_tokens(db, person_id, request)
+        return AuthFlow._issue_tokens(db, subscriber_id, request)
 
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
@@ -611,9 +611,9 @@ class AuthFlow(ListResponseMixin):
         session.user_agent = _truncate_user_agent(request.headers.get("user-agent"))
         db.commit()
 
-        roles, permissions = _load_rbac_claims(db, str(session.person_id))
+        roles, permissions = _load_rbac_claims(db, str(session.subscriber_id))
         access_token = _issue_access_token(
-            db, str(session.person_id), str(session.id), roles, permissions
+            db, str(session.subscriber_id), str(session.id), roles, permissions
         )
         return {"access_token": access_token, "refresh_token": new_refresh}
 
@@ -671,13 +671,13 @@ class AuthFlow(ListResponseMixin):
         }
 
     @staticmethod
-    def _issue_tokens(db: Session, person_id: str, request: Request):
-        person_uuid = coerce_uuid(person_id)
+    def _issue_tokens(db: Session, subscriber_id: str, request: Request):
+        subscriber_uuid = coerce_uuid(subscriber_id)
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
         session = AuthSession(
-            person_id=person_uuid,
+            subscriber_id=subscriber_uuid,
             status=SessionStatus.active,
             token_hash=_hash_token(refresh_token),
             ip_address=request.client.host if request.client else None,
@@ -689,8 +689,8 @@ class AuthFlow(ListResponseMixin):
         db.add(session)
         db.commit()
         db.refresh(session)
-        roles, permissions = _load_rbac_claims(db, str(person_uuid))
-        access_token = _issue_access_token(db, str(person_uuid), str(session.id), roles, permissions)
+        roles, permissions = _load_rbac_claims(db, str(subscriber_uuid))
+        access_token = _issue_access_token(db, str(subscriber_uuid), str(session.id), roles, permissions)
         return {"access_token": access_token, "refresh_token": refresh_token}
 
 
@@ -703,24 +703,24 @@ def request_password_reset(db: Session, email: str) -> dict | None:
     Returns dict with token and person info if successful, None if email not found.
     Does not raise an error if email doesn't exist (security best practice).
     """
-    person = db.query(Person).filter(Person.email == email).first()
-    if not person:
+    subscriber = db.query(Subscriber).filter(Subscriber.email == email).first()
+    if not subscriber:
         return None
 
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.person_id == person.id)
+        .filter(UserCredential.subscriber_id == subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .first()
     )
     if not credential:
         return None
 
-    token = _issue_password_reset_token(db, str(person.id), email)
+    token = _issue_password_reset_token(db, str(subscriber.id), email)
     return {
         "token": token,
         "email": email,
-        "person_name": person.display_name or person.first_name,
+        "subscriber_name": subscriber.display_name or subscriber.first_name,
     }
 
 
@@ -730,19 +730,19 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     Returns the timestamp when password was reset.
     """
     payload = _decode_password_reset_token(db, token)
-    person_id = payload.get("sub")
+    subscriber_id = payload.get("sub")
     email = payload.get("email")
 
-    if not person_id or not email:
+    if not subscriber_id or not email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
-    person = db.get(Person, coerce_uuid(person_id))
-    if not person or person.email != email:
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber or subscriber.email != email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.person_id == person.id)
+        .filter(UserCredential.subscriber_id == subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .first()
     )

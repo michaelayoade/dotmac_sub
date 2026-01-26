@@ -22,7 +22,7 @@ from app.services.common import validate_enum, apply_pagination, apply_ordering,
 from app.services.response import ListResponseMixin
 from app.models.radius import RadiusServer
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services import settings_spec
 from app.schemas.auth import (
     ApiKeyCreate,
@@ -90,10 +90,10 @@ def _get_redis_client() -> redis.Redis | None:
 
 
 
-def _ensure_person(db: Session, person_id: str):
-    person = db.get(Person, coerce_uuid(person_id))
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
+def _ensure_subscriber(db: Session, subscriber_id: str):
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
 
 
 def _ensure_radius_server(db: Session, server_id: str):
@@ -105,7 +105,7 @@ def _ensure_radius_server(db: Session, server_id: str):
 class UserCredentials(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: UserCredentialCreate):
-        _ensure_person(db, str(payload.person_id))
+        _ensure_subscriber(db, str(payload.subscriber_id))
         if payload.radius_server_id:
             _ensure_radius_server(db, str(payload.radius_server_id))
         data = payload.model_dump()
@@ -134,7 +134,7 @@ class UserCredentials(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         provider: str | None,
         is_active: bool | None,
         order_by: str,
@@ -143,8 +143,8 @@ class UserCredentials(ListResponseMixin):
         offset: int,
     ):
         query = db.query(UserCredential)
-        if person_id:
-            query = query.filter(UserCredential.person_id == coerce_uuid(person_id))
+        if subscriber_id:
+            query = query.filter(UserCredential.subscriber_id == coerce_uuid(subscriber_id))
         if provider:
             query = query.filter(
                 UserCredential.provider
@@ -172,8 +172,8 @@ class UserCredentials(ListResponseMixin):
         if not credential:
             raise HTTPException(status_code=404, detail="User credential not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data:
-            _ensure_person(db, str(data["person_id"]))
+        if "subscriber_id" in data:
+            _ensure_subscriber(db, str(data["subscriber_id"]))
         if "radius_server_id" in data and data["radius_server_id"]:
             _ensure_radius_server(db, str(data["radius_server_id"]))
         for key, value in data.items():
@@ -194,10 +194,10 @@ class UserCredentials(ListResponseMixin):
 class MFAMethods(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: MFAMethodCreate):
-        _ensure_person(db, str(payload.person_id))
+        _ensure_subscriber(db, str(payload.subscriber_id))
         if payload.is_primary:
             db.query(MFAMethod).filter(
-                MFAMethod.person_id == payload.person_id,
+                MFAMethod.subscriber_id == payload.subscriber_id,
                 MFAMethod.is_primary.is_(True),
             ).update({"is_primary": False})
         method = MFAMethod(**payload.model_dump())
@@ -223,7 +223,7 @@ class MFAMethods(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         method_type: str | None,
         is_primary: bool | None,
         enabled: bool | None,
@@ -234,8 +234,8 @@ class MFAMethods(ListResponseMixin):
         offset: int,
     ):
         query = db.query(MFAMethod)
-        if person_id:
-            query = query.filter(MFAMethod.person_id == coerce_uuid(person_id))
+        if subscriber_id:
+            query = query.filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
         if method_type:
             query = query.filter(
                 MFAMethod.method_type
@@ -267,12 +267,12 @@ class MFAMethods(ListResponseMixin):
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data:
-            _ensure_person(db, str(data["person_id"]))
+        if "subscriber_id" in data:
+            _ensure_subscriber(db, str(data["subscriber_id"]))
         if data.get("is_primary"):
-            person_id = data.get("person_id", method.person_id)
+            subscriber_id = data.get("subscriber_id", method.subscriber_id)
             db.query(MFAMethod).filter(
-                MFAMethod.person_id == person_id,
+                MFAMethod.subscriber_id == subscriber_id,
                 MFAMethod.id != method.id,
                 MFAMethod.is_primary.is_(True),
             ).update({"is_primary": False})
@@ -303,7 +303,7 @@ class MFAMethods(ListResponseMixin):
 class Sessions(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SessionCreate):
-        _ensure_person(db, str(payload.person_id))
+        _ensure_subscriber(db, str(payload.subscriber_id))
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "status" not in fields_set:
@@ -330,7 +330,7 @@ class Sessions(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         status: str | None,
         order_by: str,
         order_dir: str,
@@ -338,8 +338,8 @@ class Sessions(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AuthSession)
-        if person_id:
-            query = query.filter(AuthSession.person_id == coerce_uuid(person_id))
+        if subscriber_id:
+            query = query.filter(AuthSession.subscriber_id == coerce_uuid(subscriber_id))
         if status:
             query = query.filter(
                 AuthSession.status
@@ -363,8 +363,8 @@ class Sessions(ListResponseMixin):
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data:
-            _ensure_person(db, str(data["person_id"]))
+        if "subscriber_id" in data:
+            _ensure_subscriber(db, str(data["subscriber_id"]))
         for key, value in data.items():
             setattr(session, key, value)
         db.commit()
@@ -421,8 +421,8 @@ class ApiKeys(ListResponseMixin):
         data = payload.model_dump()
         data["key_hash"] = hash_api_key(raw_key)
         data.setdefault("is_active", True)
-        if data.get("person_id"):
-            _ensure_person(db, str(data["person_id"]))
+        if data.get("subscriber_id"):
+            _ensure_subscriber(db, str(data["subscriber_id"]))
         api_key = ApiKey(**data)
         db.add(api_key)
         db.commit()
@@ -431,8 +431,8 @@ class ApiKeys(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: ApiKeyCreate):
-        if payload.person_id:
-            _ensure_person(db, str(payload.person_id))
+        if payload.subscriber_id:
+            _ensure_subscriber(db, str(payload.subscriber_id))
         data = payload.model_dump()
         data["key_hash"] = hash_api_key(data["key_hash"])
         api_key = ApiKey(**data)
@@ -451,7 +451,7 @@ class ApiKeys(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        person_id: str | None,
+        subscriber_id: str | None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
@@ -459,8 +459,8 @@ class ApiKeys(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ApiKey)
-        if person_id:
-            query = query.filter(ApiKey.person_id == coerce_uuid(person_id))
+        if subscriber_id:
+            query = query.filter(ApiKey.subscriber_id == coerce_uuid(subscriber_id))
         if is_active is None:
             query = query.filter(ApiKey.is_active.is_(True))
         else:
@@ -479,8 +479,8 @@ class ApiKeys(ListResponseMixin):
         if not api_key:
             raise HTTPException(status_code=404, detail="API key not found")
         data = payload.model_dump(exclude_unset=True)
-        if "person_id" in data and data["person_id"] is not None:
-            _ensure_person(db, str(data["person_id"]))
+        if "subscriber_id" in data and data["subscriber_id"] is not None:
+            _ensure_subscriber(db, str(data["subscriber_id"]))
         if "key_hash" in data and data["key_hash"]:
             data["key_hash"] = hash_api_key(data["key_hash"])
         for key, value in data.items():

@@ -16,7 +16,7 @@ from uuid import UUID
 from app.db import SessionLocal
 from app.models.auth import ApiKey, MFAMethod, UserCredential, Session as AuthSession
 from app.models.domain_settings import SettingDomain
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.crm.conversation import Conversation, ConversationAssignment
 from app.models.crm.sales import Lead, Quote
 from app.models.crm.team import CrmAgent
@@ -30,7 +30,8 @@ from app.models.workflow import WorkflowEntityType
 from app.models.workforce import WorkOrder, WorkOrderAssignment, WorkOrderNote, WorkOrderStatus
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookSubscription
 from app.schemas.auth import UserCredentialCreate
-from app.schemas.person import PersonCreate, PersonUpdate
+# TODO: person schemas no longer exist - need to use subscriber schemas
+# from app.schemas.person import PersonCreate, PersonUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.schemas.billing import BankAccountCreate, BankAccountUpdate
 from app.schemas.workflow import (
@@ -56,7 +57,8 @@ from app.services import (
     rbac as rbac_service,
     settings_api as settings_service,
     scheduler as scheduler_service,
-    person as person_service,
+    # TODO: person service no longer exists - use subscriber service instead
+    # person as person_service,
     workflow as workflow_service,
     billing as billing_service,
 )
@@ -419,8 +421,8 @@ def _build_settings_context(db: Session, domain_value: str | None) -> dict:
 
 
 def _user_stats(db: Session) -> dict:
-    total = db.query(Person).count()
-    active = db.query(Person).filter(Person.is_active.is_(True)).count()
+    total = db.query(Subscriber).count()
+    active = db.query(Subscriber).filter(Subscriber.is_active.is_(True)).count()
 
     admin_role = (
         db.query(Role)
@@ -440,18 +442,18 @@ def _user_stats(db: Session) -> dict:
 
     active_credential = (
         db.query(UserCredential.id)
-        .filter(UserCredential.person_id == Person.id)
+        .filter(UserCredential.person_id == Subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .exists()
     )
     pending_credential = (
         db.query(UserCredential.id)
-        .filter(UserCredential.person_id == Person.id)
+        .filter(UserCredential.person_id == Subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .filter(UserCredential.must_change_password.is_(True))
         .exists()
     )
-    pending = db.query(Person).filter(or_(~active_credential, pending_credential)).count()
+    pending = db.query(Subscriber).filter(or_(~active_credential, pending_credential)).count()
 
     return {"total": total, "active": active, "admins": admins, "pending": pending}
 
@@ -464,16 +466,16 @@ def _build_users(
     offset: int,
     limit: int,
 ):
-    query = db.query(Person)
+    query = db.query(Subscriber)
 
     if search:
         search_value = f"%{search.strip()}%"
         query = query.filter(
             or_(
-                Person.first_name.ilike(search_value),
-                Person.last_name.ilike(search_value),
-                Person.email.ilike(search_value),
-                Person.display_name.ilike(search_value),
+                Subscriber.first_name.ilike(search_value),
+                Subscriber.last_name.ilike(search_value),
+                Subscriber.email.ilike(search_value),
+                Subscriber.display_name.ilike(search_value),
             )
         )
 
@@ -482,19 +484,19 @@ def _build_users(
 
     if status:
         if status == "active":
-            query = query.filter(Person.is_active.is_(True))
+            query = query.filter(Subscriber.is_active.is_(True))
         elif status == "inactive":
-            query = query.filter(Person.is_active.is_(False))
+            query = query.filter(Subscriber.is_active.is_(False))
         elif status == "pending":
             active_credential = (
                 db.query(UserCredential.id)
-                .filter(UserCredential.person_id == Person.id)
+                .filter(UserCredential.person_id == Subscriber.id)
                 .filter(UserCredential.is_active.is_(True))
                 .exists()
             )
             pending_credential = (
                 db.query(UserCredential.id)
-                .filter(UserCredential.person_id == Person.id)
+                .filter(UserCredential.person_id == Subscriber.id)
                 .filter(UserCredential.is_active.is_(True))
                 .filter(UserCredential.must_change_password.is_(True))
                 .exists()
@@ -503,7 +505,7 @@ def _build_users(
 
     total = query.count()
     people = (
-        query.order_by(Person.last_name.asc(), Person.first_name.asc())
+        query.order_by(Subscriber.last_name.asc(), Subscriber.first_name.asc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -773,7 +775,7 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
 
     if current_user and current_user.get("person_id"):
         person_id = current_user["person_id"]
-        person = db.get(Person, coerce_uuid(person_id))
+        person = db.get(Subscriber, coerce_uuid(person_id))
         if person:
             # Get credential
             credential = db.query(UserCredential).filter(
@@ -827,7 +829,7 @@ def user_profile_update(
 
     if current_user and current_user.get("person_id"):
         person_id = current_user["person_id"]
-        person = db.get(Person, coerce_uuid(person_id))
+        person = db.get(Subscriber, coerce_uuid(person_id))
         if person:
             try:
                 payload = PersonUpdate(
@@ -837,7 +839,7 @@ def user_profile_update(
                     phone=phone or None,
                 )
                 person_service.people.update(db, str(person.id), payload)
-                person = db.get(Person, person.id)  # Refresh
+                person = db.get(Subscriber, person.id)  # Refresh
                 success = "Profile updated successfully."
             except Exception as e:
                 error = str(e)
@@ -2051,7 +2053,7 @@ def audit_log(
         offset=offset,
     )
 
-    from app.models.person import Person
+    from app.models.subscriber import Subscriber
     from app.services.audit_helpers import (
         extract_changes,
         format_audit_datetime,
@@ -2075,7 +2077,7 @@ def audit_log(
         try:
             people = {
                 str(person.id): person
-                for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+                for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
             }
         except Exception:
             people = {}

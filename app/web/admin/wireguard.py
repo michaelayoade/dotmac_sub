@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.csrf import get_csrf_token
 from app.db import SessionLocal
 from app.models.catalog import NasDevice
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.wireguard import WireGuardPeerStatus
 from app.schemas.wireguard import (
     WireGuardPeerCreate,
@@ -199,7 +199,7 @@ def _build_audit_activities(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in events:

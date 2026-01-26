@@ -9,7 +9,6 @@ from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.network import FiberAccessPoint, FiberSegment, FiberSpliceClosure, FdhCabinet, Splitter
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.models.person import Person
 from app.models.subscriber import Address, Subscriber, SubscriberAccount
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.models.wireless_survey import SurveyPoint, WirelessSiteSurvey
@@ -243,12 +242,11 @@ def build_network_map_context(db: Session) -> dict:
             Address.latitude,
             Address.longitude,
             Subscriber.id.label("subscriber_id"),
-            Person.first_name,
-            Person.last_name,
+            Subscriber.first_name,
+            Subscriber.last_name,
             (active_sessions_subq.c.subscriber_id.isnot(None)).label("is_online"),
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
         .outerjoin(active_sessions_subq, active_sessions_subq.c.subscriber_id == Subscriber.id)
         .filter(
             Address.latitude.isnot(None),

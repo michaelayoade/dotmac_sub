@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.auth import Session as AuthSession, SessionStatus
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services.auth_flow import decode_access_token
 
 
@@ -63,16 +63,16 @@ def validate_session_token(
     except Exception:
         return None
 
-    person_id = payload.get("sub")
+    subscriber_id = payload.get("sub")
     session_id = payload.get("session_id")
-    if not person_id or not session_id:
+    if not subscriber_id or not session_id:
         return None
 
     now = datetime.now(timezone.utc)
     session = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)
-        .filter(AuthSession.person_id == person_id)
+        .filter(AuthSession.subscriber_id == subscriber_id)
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .filter(AuthSession.expires_at > now)
@@ -81,20 +81,20 @@ def validate_session_token(
     if not session:
         return None
 
-    # Get person details
-    person = db.get(Person, person_id)
-    if not person:
+    # Get subscriber details
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
         return None
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])
 
     return {
-        "person_id": str(person_id),
+        "subscriber_id": str(subscriber_id),
         "session_id": str(session_id),
         "roles": roles if isinstance(roles, list) else [],
         "scopes": scopes if isinstance(scopes, list) else [],
-        "person": person,
+        "subscriber": subscriber,
     }
 
 
@@ -118,8 +118,8 @@ def require_web_auth(
 
     # Store auth info in request state for use by templates
     request.state.auth = auth_info
-    request.state.user = auth_info["person"]
-    request.state.actor_id = auth_info["person_id"]
+    request.state.user = auth_info["subscriber"]
+    request.state.actor_id = auth_info["subscriber_id"]
     request.state.actor_type = "user"
 
     return auth_info
@@ -127,8 +127,8 @@ def require_web_auth(
 
 def get_current_user_from_auth(auth: dict = Depends(require_web_auth)) -> dict:
     """Get current user info formatted for templates."""
-    person = auth.get("person")
-    if not person:
+    subscriber = auth.get("subscriber")
+    if not subscriber:
         return {
             "id": "",
             "initials": "??",
@@ -136,14 +136,14 @@ def get_current_user_from_auth(auth: dict = Depends(require_web_auth)) -> dict:
             "email": "",
         }
 
-    name = f"{person.first_name} {person.last_name}".strip()
+    name = f"{subscriber.first_name} {subscriber.last_name}".strip()
     initials = _get_initials(name)
 
     return {
-        "id": str(person.id),
+        "id": str(subscriber.id),
         "initials": initials,
         "name": name,
-        "email": person.email or "",
+        "email": subscriber.email or "",
         "roles": auth.get("roles", []),
     }
 

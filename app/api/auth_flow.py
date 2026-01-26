@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.auth import Session as AuthSession, SessionStatus, UserCredential
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.schemas.auth import MFAMethodRead
 from app.schemas.auth_flow import (
     AvatarUploadResponse,
@@ -87,10 +87,10 @@ def mfa_setup(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    if str(payload.person_id) != str(auth["person_id"]):
+    if str(payload.subscriber_id) != str(auth["subscriber_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     return auth_flow_service.auth_flow.mfa_setup(
-        db, str(payload.person_id), payload.label
+        db, str(payload.subscriber_id), payload.label
     )
 
 
@@ -111,7 +111,7 @@ def mfa_confirm(
     db: Session = Depends(get_db),
 ):
     return auth_flow_service.auth_flow.mfa_confirm(
-        db, str(payload.method_id), payload.code, auth["person_id"]
+        db, str(payload.method_id), payload.code, auth["subscriber_id"]
     )
 
 
@@ -170,7 +170,7 @@ def get_me(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    person = db.get(Person, auth["person_id"])
+    person = db.get(Subscriber, auth["subscriber_id"])
     if not person:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -206,7 +206,7 @@ def update_me(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    person = db.get(Person, auth["person_id"])
+    person = db.get(Subscriber, auth["subscriber_id"])
     if not person:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -250,7 +250,7 @@ async def upload_avatar(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    person = db.get(Person, auth["person_id"])
+    person = db.get(Subscriber, auth["subscriber_id"])
     if not person:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -278,7 +278,7 @@ def delete_avatar(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    person = db.get(Person, auth["person_id"])
+    person = db.get(Subscriber, auth["subscriber_id"])
     if not person:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -301,7 +301,7 @@ def list_sessions(
 ):
     sessions = (
         db.query(AuthSession)
-        .filter(AuthSession.person_id == auth["person_id"])
+        .filter(AuthSession.subscriber_id == auth["subscriber_id"])
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .order_by(AuthSession.created_at.desc())
@@ -345,7 +345,7 @@ def revoke_session(
     session = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)
-        .filter(AuthSession.person_id == auth["person_id"])
+        .filter(AuthSession.subscriber_id == auth["subscriber_id"])
         .first()
     )
 
@@ -379,7 +379,7 @@ def revoke_all_other_sessions(
 
     sessions = (
         db.query(AuthSession)
-        .filter(AuthSession.person_id == auth["person_id"])
+        .filter(AuthSession.subscriber_id == auth["subscriber_id"])
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .filter(AuthSession.id != current_session_id)
@@ -413,7 +413,7 @@ def change_password(
 ):
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.person_id == auth["person_id"])
+        .filter(UserCredential.subscriber_id == auth["subscriber_id"])
         .filter(UserCredential.is_active.is_(True))
         .first()
     )

@@ -7,9 +7,9 @@ from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
     PermissionUpdate,
-    PersonRoleCreate,
-    PersonRoleRead,
-    PersonRoleUpdate,
+    SubscriberRoleCreate,
+    SubscriberRoleRead,
+    SubscriberRoleUpdate,
     RoleCreate,
     RolePermissionCreate,
     RolePermissionRead,
@@ -201,30 +201,30 @@ def delete_role_permission(link_id: str, db: Session = Depends(get_db)):
 
 @router.post(
     "/person-roles",
-    response_model=PersonRoleRead,
+    response_model=SubscriberRoleRead,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def create_person_role(payload: PersonRoleCreate, db: Session = Depends(get_db)):
-    return rbac_service.person_roles.create(db, payload)
+def create_subscriber_role(payload: SubscriberRoleCreate, db: Session = Depends(get_db)):
+    return rbac_service.subscriber_roles.create(db, payload)
 
 
 @router.get(
     "/person-roles/{link_id}",
-    response_model=PersonRoleRead,
+    response_model=SubscriberRoleRead,
     dependencies=[Depends(require_permission("rbac:roles:read"))],
 )
-def get_person_role(link_id: str, db: Session = Depends(get_db)):
-    return rbac_service.person_roles.get(db, link_id)
+def get_subscriber_role(link_id: str, db: Session = Depends(get_db)):
+    return rbac_service.subscriber_roles.get(db, link_id)
 
 
 @router.get(
     "/person-roles",
-    response_model=ListResponse[PersonRoleRead],
+    response_model=ListResponse[SubscriberRoleRead],
     dependencies=[Depends(require_permission("rbac:roles:read"))],
 )
-def list_person_roles(
-    person_id: str | None = None,
+def list_subscriber_roles(
+    subscriber_id: str | None = None,
     role_id: str | None = None,
     order_by: str = Query(default="assigned_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
@@ -232,20 +232,20 @@ def list_person_roles(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return rbac_service.person_roles.list_response(
-        db, person_id, role_id, order_by, order_dir, limit, offset
+    return rbac_service.subscriber_roles.list_response(
+        db, subscriber_id, role_id, order_by, order_dir, limit, offset
     )
 
 
 @router.patch(
     "/person-roles/{link_id}",
-    response_model=PersonRoleRead,
+    response_model=SubscriberRoleRead,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def update_person_role(
-    link_id: str, payload: PersonRoleUpdate, db: Session = Depends(get_db)
+def update_subscriber_role(
+    link_id: str, payload: SubscriberRoleUpdate, db: Session = Depends(get_db)
 ):
-    return rbac_service.person_roles.update(db, link_id, payload)
+    return rbac_service.subscriber_roles.update(db, link_id, payload)
 
 
 @router.delete(
@@ -253,5 +253,5 @@ def update_person_role(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def delete_person_role(link_id: str, db: Session = Depends(get_db)):
-    rbac_service.person_roles.delete(db, link_id)
+def delete_subscriber_role(link_id: str, db: Session = Depends(get_db)):
+    rbac_service.subscriber_roles.delete(db, link_id)

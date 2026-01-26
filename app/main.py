@@ -35,7 +35,6 @@ from app.api.imports import router as imports_router
 from app.api.webhooks import router as webhooks_router
 from app.api.connectors import router as connectors_router
 from app.api.integrations import router as integrations_router
-from app.api.persons import router as people_router
 from app.api.customers import router as customers_router
 from app.api.subscribers import router as subscriber_router
 from app.api.search import router as search_router
@@ -324,7 +323,6 @@ _include_api_router(auth_router, dependencies=[Depends(require_role("admin"))])
 # Only include auth_flow at /api/v1 to avoid conflict with web /auth/login
 app.include_router(auth_flow_router, prefix="/api/v1")
 _include_api_router(rbac_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(people_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(customers_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(search_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])

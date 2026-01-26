@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, NasDevice, Subscription
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.models.person import Person
 from app.models.subscriber import AccountRole, Organization, Reseller, Subscriber, SubscriberAccount
 from app.models.vendor import Vendor
 from app.services.response import list_response
@@ -12,11 +11,11 @@ from app.services.response import list_response
 
 def _account_label(account: SubscriberAccount) -> str:
     subscriber = account.subscriber
-    if subscriber and subscriber.person:
-        if subscriber.person.organization:
-            base = subscriber.person.organization.name
+    if subscriber and subscriber.subscriber:
+        if subscriber.subscriber.organization:
+            base = subscriber.subscriber.organization.name
         else:
-            base = f"{subscriber.person.first_name} {subscriber.person.last_name}"
+            base = f"{subscriber.subscriber.first_name} {subscriber.subscriber.last_name}"
     else:
         base = "Account"
     if account.account_number:
@@ -25,10 +24,10 @@ def _account_label(account: SubscriberAccount) -> str:
 
 
 def _subscriber_label(subscriber: Subscriber) -> str:
-    if subscriber.person:
-        if subscriber.person.organization:
-            return subscriber.person.organization.name
-        return f"{subscriber.person.first_name} {subscriber.person.last_name}"
+    if subscriber.subscriber:
+        if subscriber.subscriber.organization:
+            return subscriber.subscriber.organization.name
+        return f"{subscriber.subscriber.first_name} {subscriber.subscriber.last_name}"
     return "Subscriber"
 
 
@@ -41,8 +40,8 @@ def _subscription_label(subscription: Subscription) -> str:
 
 
 def _contact_label(role: AccountRole) -> str:
-    person = role.person
-    label = f"{person.first_name} {person.last_name}" if person else "Contact"
+    subscriber = role.subscriber
+    label = f"{subscriber.first_name} {subscriber.last_name}" if subscriber else "Contact"
     account_label = _account_label(role.account) if role.account else None
     return f"{label} - {account_label}" if account_label else label
 
@@ -69,18 +68,18 @@ def accounts(db: Session, query: str, limit: int) -> list[dict]:
     results = (
         db.query(SubscriberAccount)
         .join(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(
             joinedload(SubscriberAccount.subscriber)
-            .joinedload(Subscriber.person),
+            .joinedload(Subscriber.subscriber),
         )
         .filter(
             or_(
                 SubscriberAccount.account_number.ilike(like_term),
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
                 Organization.name.ilike(like_term),
                 Organization.domain.ilike(like_term),
             )
@@ -98,14 +97,14 @@ def subscribers(db: Session, query: str, limit: int) -> list[dict]:
     like_term = f"%{term}%"
     results = (
         db.query(Subscriber)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
-        .options(joinedload(Subscriber.person).joinedload(Person.organization))
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
+        .options(joinedload(Subscriber.subscriber).joinedload(Subscriber.organization))
         .filter(
             or_(
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
                 Organization.name.ilike(like_term),
                 Organization.domain.ilike(like_term),
             )
@@ -126,25 +125,25 @@ def subscriptions(db: Session, query: str, limit: int) -> list[dict]:
         .join(SubscriberAccount, Subscription.account_id == SubscriberAccount.id)
         .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
         .outerjoin(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(
             joinedload(Subscription.account)
             .joinedload(SubscriberAccount.subscriber)
-            .joinedload(Subscriber.person),
+            .joinedload(Subscriber.subscriber),
             joinedload(Subscription.account)
             .joinedload(SubscriberAccount.subscriber)
-            .joinedload(Subscriber.person)
-            .joinedload(Person.organization),
+            .joinedload(Subscriber.subscriber)
+            .joinedload(Subscriber.organization),
             joinedload(Subscription.offer),
         )
         .filter(
             or_(
                 CatalogOffer.name.ilike(like_term),
                 SubscriberAccount.account_number.ilike(like_term),
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
                 Organization.name.ilike(like_term),
             )
         )
@@ -163,13 +162,13 @@ def contacts(db: Session, query: str, limit: int) -> list[dict]:
         db.query(AccountRole)
         .join(SubscriberAccount, AccountRole.account_id == SubscriberAccount.id)
         .outerjoin(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(joinedload(AccountRole.account).joinedload(SubscriberAccount.subscriber))
         .filter(
             or_(
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
                 SubscriberAccount.account_number.ilike(like_term),
                 Organization.name.ilike(like_term),
             )
@@ -186,26 +185,26 @@ def people(db: Session, query: str, limit: int) -> list[dict]:
         return []
     like_term = f"%{term}%"
     results = (
-        db.query(Person)
+        db.query(Subscriber)
         .filter(
             or_(
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
-                Person.phone.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
+                Subscriber.phone.ilike(like_term),
             )
         )
         .limit(limit)
         .all()
     )
     items = []
-    for person in results:
-        label = " ".join(part for part in [person.first_name, person.last_name] if part)
-        if person.email:
-            label = f"{label} ({person.email})"
-        elif person.phone:
-            label = f"{label} ({person.phone})"
-        items.append({"id": person.id, "label": label})
+    for subscriber in results:
+        label = " ".join(part for part in [subscriber.first_name, subscriber.last_name] if part)
+        if subscriber.email:
+            label = f"{label} ({subscriber.email})"
+        elif subscriber.phone:
+            label = f"{label} ({subscriber.phone})"
+        items.append({"id": subscriber.id, "label": label})
     return items
 
 
@@ -218,15 +217,15 @@ def invoices(db: Session, query: str, limit: int, account_id: str | None = None)
         db.query(Invoice)
         .join(SubscriberAccount, Invoice.account_id == SubscriberAccount.id)
         .outerjoin(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(joinedload(Invoice.account).joinedload(SubscriberAccount.subscriber))
         .filter(
             or_(
                 Invoice.invoice_number.ilike(like_term),
                 SubscriberAccount.account_number.ilike(like_term),
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
                 Organization.name.ilike(like_term),
             )
         )
@@ -486,14 +485,14 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
     # Search customers/subscribers
     customer_results = (
         db.query(Subscriber)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
-        .options(joinedload(Subscriber.person).joinedload(Person.organization))
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
+        .options(joinedload(Subscriber.subscriber).joinedload(Subscriber.organization))
         .filter(
             or_(
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
                 Organization.name.ilike(like_term),
             )
         )
@@ -519,17 +518,17 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
     account_results = (
         db.query(SubscriberAccount)
         .join(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(
-            joinedload(SubscriberAccount.subscriber).joinedload(Subscriber.person),
-            joinedload(SubscriberAccount.subscriber).joinedload(Subscriber.person).joinedload(Person.organization),
+            joinedload(SubscriberAccount.subscriber).joinedload(Subscriber.subscriber),
+            joinedload(SubscriberAccount.subscriber).joinedload(Subscriber.subscriber).joinedload(Subscriber.organization),
         )
         .filter(
             or_(
                 SubscriberAccount.account_number.ilike(like_term),
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
                 Organization.name.ilike(like_term),
             )
         )
@@ -556,8 +555,8 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
         db.query(Invoice)
         .join(SubscriberAccount, Invoice.account_id == SubscriberAccount.id)
         .outerjoin(Subscriber, SubscriberAccount.subscriber_id == Subscriber.id)
-        .outerjoin(Person, Subscriber.person_id == Person.id)
-        .outerjoin(Organization, Person.organization_id == Organization.id)
+        .outerjoin(Subscriber, Subscriber.subscriber_id == Subscriber.id)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
         .options(joinedload(Invoice.account).joinedload(SubscriberAccount.subscriber))
         .filter(
             or_(

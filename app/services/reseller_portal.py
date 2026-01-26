@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.auth import Session as AuthSession, SessionStatus
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.domain_settings import SettingDomain
-from app.models.person import Person
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, SubscriberAccount
 import app.services.auth_flow as auth_flow_service
 from app.services import customer_portal
@@ -29,9 +28,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _initials(person: Person) -> str:
-    first = (person.first_name or "").strip()[:1]
-    last = (person.last_name or "").strip()[:1]
+def _initials(subscriber: Subscriber) -> str:
+    first = (subscriber.first_name or "").strip()[:1]
+    last = (subscriber.last_name or "").strip()[:1]
     initials = f"{first}{last}".upper()
     return initials or "RS"
 
@@ -39,23 +38,23 @@ def _initials(person: Person) -> str:
 def _subscriber_label(subscriber: Subscriber | None) -> str:
     if not subscriber:
         return "Account"
-    if subscriber.person:
+    if subscriber.subscriber:
         # Check for organization first (B2B case)
-        if subscriber.person.organization:
-            organization = subscriber.person.organization
+        if subscriber.subscriber.organization:
+            organization = subscriber.subscriber.organization
             return organization.legal_name or organization.name or "Customer"
         # Individual subscriber
-        first = subscriber.person.first_name or ""
-        last = subscriber.person.last_name or ""
+        first = subscriber.subscriber.first_name or ""
+        last = subscriber.subscriber.last_name or ""
         display = f"{first} {last}".strip()
-        return display or subscriber.person.display_name or "Customer"
+        return display or subscriber.subscriber.display_name or "Customer"
     return "Customer"
 
 
-def _get_reseller_user(db: Session, person_id: str) -> ResellerUser | None:
+def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
     return (
         db.query(ResellerUser)
-        .filter(ResellerUser.person_id == coerce_uuid(person_id))
+        .filter(ResellerUser.subscriber_id == coerce_uuid(subscriber_id))
         .filter(ResellerUser.is_active.is_(True))
         .order_by(ResellerUser.created_at.desc())
         .first()
@@ -64,7 +63,7 @@ def _get_reseller_user(db: Session, person_id: str) -> ResellerUser | None:
 
 def _create_session(
     username: str,
-    person_id: str,
+    subscriber_id: str,
     reseller_id: str,
     remember: bool,
     db: Session | None = None,
@@ -73,7 +72,7 @@ def _create_session(
     ttl_seconds = _session_ttl_seconds(remember, db)
     _RESELLER_SESSIONS[session_token] = {
         "username": username,
-        "person_id": person_id,
+        "subscriber_id": subscriber_id,
         "reseller_id": reseller_id,
         "remember": remember,
         "created_at": _now().isoformat(),
@@ -122,9 +121,9 @@ def _session_from_access_token(
     remember: bool,
 ) -> dict:
     payload = auth_flow_service.decode_access_token(db, access_token)
-    person_id = payload.get("sub")
+    subscriber_id = payload.get("sub")
     session_id = payload.get("session_id")
-    if not person_id or not session_id:
+    if not subscriber_id or not session_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
 
     auth_session = db.get(AuthSession, coerce_uuid(session_id))
@@ -133,17 +132,17 @@ def _session_from_access_token(
     if auth_session.expires_at and auth_session.expires_at <= _now():
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
 
-    reseller_user = _get_reseller_user(db, str(person_id))
+    reseller_user = _get_reseller_user(db, str(subscriber_id))
     if not reseller_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required")
 
-    person = db.get(Person, reseller_user.person_id)
-    if not person:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+    subscriber = db.get(Subscriber, reseller_user.subscriber_id)
+    if not subscriber:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found")
 
     session_token = _create_session(
-        username=username or person.email,
-        person_id=str(person.id),
+        username=username or subscriber.email,
+        subscriber_id=str(subscriber.id),
         reseller_id=str(reseller_user.reseller_id),
         remember=remember,
         db=db,
@@ -156,24 +155,24 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     if not session:
         return None
 
-    person = db.get(Person, coerce_uuid(session["person_id"]))
+    subscriber = db.get(Subscriber, coerce_uuid(session["subscriber_id"]))
     reseller = db.get(Reseller, coerce_uuid(session["reseller_id"]))
-    if not person or not reseller:
+    if not subscriber or not reseller:
         return None
 
-    reseller_user = _get_reseller_user(db, str(person.id))
+    reseller_user = _get_reseller_user(db, str(subscriber.id))
     if not reseller_user:
         return None
 
     current_user = {
-        "name": person.display_name or f"{person.first_name} {person.last_name}".strip(),
-        "email": person.email,
-        "initials": _initials(person),
+        "name": subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip(),
+        "email": subscriber.email,
+        "initials": _initials(subscriber),
     }
     return {
         "session": session,
         "current_user": current_user,
-        "person": person,
+        "subscriber": subscriber,
         "reseller": reseller,
         "reseller_user": reseller_user,
     }
@@ -220,8 +219,8 @@ def list_accounts(
         db.query(SubscriberAccount)
         .options(
             selectinload(SubscriberAccount.subscriber)
-            .selectinload(Subscriber.person)
-            .selectinload(Person.organization),
+            .selectinload(Subscriber.subscriber)
+            .selectinload(Subscriber.organization),
         )
         .filter(SubscriberAccount.reseller_id == coerce_uuid(reseller_id))
         .order_by(SubscriberAccount.created_at.desc())
@@ -325,7 +324,7 @@ def get_dashboard_summary(
     }
 
 
-def create_customer_impersonation_session(
+def create_customer_imsubscriberation_session(
     db: Session,
     reseller_id: str,
     account_id: str,
@@ -363,7 +362,7 @@ def create_customer_impersonation_session(
             selected_subscription_id = any_subs[0].id
 
     session_token = customer_portal.create_customer_session(
-        username=f"impersonate:reseller:{reseller_id}:{account.id}",
+        username=f"imsubscriberate:reseller:{reseller_id}:{account.id}",
         account_id=account.id,
         subscriber_id=account.subscriber_id,
         subscription_id=selected_subscription_id,

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
 from app.models.auth import ApiKey, Session as AuthSession, SessionStatus
-from app.models.rbac import Permission, PersonPermission, PersonRole, Role, RolePermission
+from app.models.rbac import Permission, SubscriberPermission, SubscriberRole, Role, RolePermission
 from app.services.auth import hash_api_key
 from app.services.auth_flow import decode_access_token, hash_session_token
 
@@ -93,9 +93,9 @@ def require_audit_auth(
         )
         if session:
             if request is not None:
-                request.state.actor_id = str(session.person_id)
+                request.state.actor_id = str(session.subscriber_id)
                 request.state.actor_type = "user"
-            return {"actor_type": "user", "actor_id": str(session.person_id)}
+            return {"actor_type": "user", "actor_id": str(session.subscriber_id)}
     if x_api_key:
         api_key = (
             db.query(ApiKey)
@@ -124,16 +124,16 @@ def require_user_auth(
     if not token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_access_token(db, token)
-    person_id = payload.get("sub")
+    subscriber_id = payload.get("sub")
     session_id = payload.get("session_id")
-    if not person_id or not session_id:
+    if not subscriber_id or not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     now = datetime.now(timezone.utc)
     session = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)
-        .filter(AuthSession.person_id == person_id)
+        .filter(AuthSession.subscriber_id == subscriber_id)
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .filter(AuthSession.expires_at > now)
@@ -145,12 +145,12 @@ def require_user_auth(
     scopes_value = payload.get("scopes")
     roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
     scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
-    actor_id = str(person_id)
+    actor_id = str(subscriber_id)
     if request is not None:
         request.state.actor_id = actor_id
         request.state.actor_type = "user"
     return {
-        "person_id": str(person_id),
+        "subscriber_id": str(subscriber_id),
         "session_id": str(session_id),
         "roles": roles,
         "scopes": scopes,
@@ -162,7 +162,7 @@ def require_role(role_name: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        person_id = auth["person_id"]
+        subscriber_id = auth["subscriber_id"]
         roles = set(auth.get("roles") or [])
         if role_name in roles:
             return auth
@@ -175,9 +175,9 @@ def require_role(role_name: str):
         if not role:
             raise HTTPException(status_code=403, detail="Role not found")
         link = (
-            db.query(PersonRole)
-            .filter(PersonRole.person_id == person_id)
-            .filter(PersonRole.role_id == role.id)
+            db.query(SubscriberRole)
+            .filter(SubscriberRole.subscriber_id == subscriber_id)
+            .filter(SubscriberRole.role_id == role.id)
             .first()
         )
         if not link:
@@ -228,7 +228,7 @@ def require_permission(permission_key: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        person_id = auth["person_id"]
+        subscriber_id = auth["subscriber_id"]
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             return auth
@@ -257,8 +257,8 @@ def require_permission(permission_key: str):
         has_role_permission = (
             db.query(RolePermission)
             .join(Role, RolePermission.role_id == Role.id)
-            .join(PersonRole, PersonRole.role_id == Role.id)
-            .filter(PersonRole.person_id == person_id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == subscriber_id)
             .filter(RolePermission.permission_id.in_(permission_ids))
             .filter(Role.is_active.is_(True))
             .first()
@@ -266,9 +266,9 @@ def require_permission(permission_key: str):
 
         # Check if user has any direct permission grants
         has_direct_permission = (
-            db.query(PersonPermission)
-            .filter(PersonPermission.person_id == person_id)
-            .filter(PersonPermission.permission_id.in_(permission_ids))
+            db.query(SubscriberPermission)
+            .filter(SubscriberPermission.subscriber_id == subscriber_id)
+            .filter(SubscriberPermission.permission_id.in_(permission_ids))
             .first()
         )
 
@@ -285,7 +285,7 @@ def require_any_permission(*permission_keys: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        person_id = auth["person_id"]
+        subscriber_id = auth["subscriber_id"]
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             return auth
@@ -310,8 +310,8 @@ def require_any_permission(*permission_keys: str):
         has_role_permission = (
             db.query(RolePermission)
             .join(Role, RolePermission.role_id == Role.id)
-            .join(PersonRole, PersonRole.role_id == Role.id)
-            .filter(PersonRole.person_id == person_id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == subscriber_id)
             .filter(RolePermission.permission_id.in_(permission_ids))
             .filter(Role.is_active.is_(True))
             .first()
@@ -319,9 +319,9 @@ def require_any_permission(*permission_keys: str):
 
         # Check if user has any direct permission grants
         has_direct_permission = (
-            db.query(PersonPermission)
-            .filter(PersonPermission.person_id == person_id)
-            .filter(PersonPermission.permission_id.in_(permission_ids))
+            db.query(SubscriberPermission)
+            .filter(SubscriberPermission.subscriber_id == subscriber_id)
+            .filter(SubscriberPermission.permission_id.in_(permission_ids))
             .first()
         )
 

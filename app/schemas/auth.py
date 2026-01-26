@@ -9,7 +9,7 @@ from app.models.auth import AuthProvider, MFAMethodType, SessionStatus
 
 
 class UserCredentialBase(BaseModel):
-    person_id: UUID
+    subscriber_id: UUID
     provider: AuthProvider = AuthProvider.local
     username: str | None = Field(default=None, max_length=150)
     radius_server_id: UUID | None = None
@@ -33,7 +33,7 @@ class UserCredentialCreate(UserCredentialBase):
 
 
 class UserCredentialUpdate(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     provider: AuthProvider | None = None
     username: str | None = Field(default=None, max_length=150)
     password_hash: str | None = Field(default=None, max_length=255)
@@ -71,7 +71,7 @@ class UserCredentialRead(UserCredentialBase):
 
 
 class MFAMethodBase(BaseModel):
-    person_id: UUID
+    subscriber_id: UUID
     method_type: MFAMethodType
     label: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
@@ -88,7 +88,7 @@ class MFAMethodCreate(MFAMethodBase):
 
 
 class MFAMethodUpdate(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     method_type: MFAMethodType | None = None
     label: str | None = Field(default=None, max_length=120)
     secret: str | None = Field(default=None, max_length=255)
@@ -110,7 +110,7 @@ class MFAMethodRead(MFAMethodBase):
 
 
 class SessionBase(BaseModel):
-    person_id: UUID
+    subscriber_id: UUID
     status: SessionStatus = SessionStatus.active
     token_hash: str = Field(min_length=1, max_length=255)
     ip_address: str | None = Field(default=None, max_length=64)
@@ -125,7 +125,7 @@ class SessionCreate(SessionBase):
 
 
 class SessionUpdate(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     status: SessionStatus | None = None
     token_hash: str | None = Field(default=None, min_length=1, max_length=255)
     ip_address: str | None = Field(default=None, max_length=64)
@@ -143,7 +143,7 @@ class SessionRead(SessionBase):
 
 
 class ApiKeyBase(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     label: str | None = Field(default=None, max_length=120)
     key_hash: str = Field(min_length=1, max_length=255)
     is_active: bool = True
@@ -157,13 +157,13 @@ class ApiKeyCreate(ApiKeyBase):
 
 
 class ApiKeyGenerateRequest(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     label: str | None = Field(default=None, max_length=120)
     expires_at: datetime | None = None
 
 
 class ApiKeyUpdate(BaseModel):
-    person_id: UUID | None = None
+    subscriber_id: UUID | None = None
     label: str | None = Field(default=None, max_length=120)
     key_hash: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None

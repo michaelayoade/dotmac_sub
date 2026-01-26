@@ -12,7 +12,7 @@ from app.services.auth_dependencies import (
 def get_current_user(auth=Depends(require_user_auth)):
     """Get current authenticated user info.
 
-    Returns a dict with person_id, session_id, roles, and scopes.
+    Returns a dict with subscriber_id, session_id, roles, and scopes.
     """
     return auth
 

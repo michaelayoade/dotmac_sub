@@ -1,8 +1,7 @@
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.person import Person
-from app.models.subscriber import Organization
+from app.models.subscriber import Subscriber, Organization
 from app.services.response import list_response
 
 
@@ -12,12 +11,12 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
         return []
     like_term = f"%{term}%"
     people = (
-        db.query(Person)
+        db.query(Subscriber)
         .filter(
             or_(
-                Person.first_name.ilike(like_term),
-                Person.last_name.ilike(like_term),
-                Person.email.ilike(like_term),
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
             )
         )
         .limit(limit)
@@ -35,16 +34,16 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
         .all()
     )
     items: list[dict] = []
-    for person in people:
-        label = f"{person.first_name} {person.last_name}"
-        if person.email:
-            label = f"{label} ({person.email})"
+    for subscriber in people:
+        label = f"{subscriber.first_name} {subscriber.last_name}"
+        if subscriber.email:
+            label = f"{label} ({subscriber.email})"
         items.append(
             {
-                "id": person.id,
-                "type": "person",
+                "id": subscriber.id,
+                "type": "subscriber",
                 "label": label,
-                "ref": f"person:{person.id}",
+                "ref": f"subscriber:{subscriber.id}",
             }
         )
     for org in organizations:

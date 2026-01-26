@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
 from app.models.audit import AuditActorType
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 
@@ -177,13 +177,13 @@ def log_audit_event(
     actor_type = AuditActorType.user if actor_id else AuditActorType.system
     metadata_payload = dict(metadata or {})
     if request is not None:
-        person = getattr(request.state, "user", None)
-        if person:
-            display_name = person.display_name or f"{person.first_name} {person.last_name}".strip()
+        subscriber = getattr(request.state, "user", None)
+        if subscriber:
+            display_name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip()
             if display_name and not metadata_payload.get("actor_name"):
                 metadata_payload["actor_name"] = display_name
-            if getattr(person, "email", None) and not metadata_payload.get("actor_email"):
-                metadata_payload["actor_email"] = person.email
+            if getattr(subscriber, "email", None) and not metadata_payload.get("actor_email"):
+                metadata_payload["actor_email"] = subscriber.email
     payload = AuditEventCreate(
         actor_type=actor_type,
         actor_id=actor_id,
@@ -204,16 +204,16 @@ def _is_user_actor(actor_type) -> bool:
     return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
 
 
-def _resolve_actor_name(event, people: dict[str, Person]) -> str:
+def _resolve_actor_name(event, subscribers: dict[str, Subscriber]) -> str:
     actor_id = getattr(event, "actor_id", None)
     actor_type = getattr(event, "actor_type", None)
     if actor_id and _is_user_actor(actor_type):
-        person = people.get(str(actor_id))
-        if person:
+        subscriber = subscribers.get(str(actor_id))
+        if subscriber:
             return (
-                person.display_name
-                or f"{person.first_name} {person.last_name}".strip()
-                or person.email
+                subscriber.display_name
+                or f"{subscriber.first_name} {subscriber.last_name}".strip()
+                or subscriber.email
             )
         metadata = getattr(event, "metadata_", None) or {}
         return metadata.get("actor_email") or str(actor_id)
@@ -235,11 +235,11 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
         for event in sliced_events
         if getattr(event, "actor_id", None) and _is_user_actor(getattr(event, "actor_type", None))
     }
-    people: dict[str, Person] = {}
+    subscribers: dict[str, Subscriber] = {}
     if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+        subscribers = {
+            str(subscriber.id): subscriber
+            for subscriber in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in sliced_events:
@@ -248,7 +248,7 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
         change_summary = format_changes(changes)
         action_label = humanize_action(getattr(event, "action", None))
         entity_label = humanize_entity(getattr(event, "entity_type", None), getattr(event, "entity_id", None))
-        actor_name = _resolve_actor_name(event, people)
+        actor_name = _resolve_actor_name(event, subscribers)
         time_str = format_audit_datetime(getattr(event, "occurred_at", None), "%b %d, %H:%M")
         message = f"{actor_name} {action_label} {entity_label}"
         detail = change_summary or entity_label

@@ -27,7 +27,7 @@ from app.models.billing import (
     PaymentMethodType,
 )
 from app.models.domain_settings import SettingDomain
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import settings_spec
@@ -177,10 +177,10 @@ def _customer_label(db: Session, customer_ref: str | None) -> str | None:
             if organization:
                 return organization.name
         else:
-            from app.models.person import Person
-            person = db.get(Person, ref_id)
-            if person:
-                label = " ".join(part for part in [person.first_name, person.last_name] if part)
+            from app.models.subscriber import Subscriber
+            subscriber = db.get(Subscriber, ref_id)
+            if subscriber:
+                label = " ".join(part for part in [subscriber.first_name, subscriber.last_name] if part)
                 return label or None
     except Exception:
         return None
@@ -1236,7 +1236,7 @@ def invoice_detail(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in audit_events:

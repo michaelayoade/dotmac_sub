@@ -19,7 +19,7 @@ from app.models.catalog import (
     ProvisioningAction,
 )
 from app.models.network_monitoring import PopSite
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
     NasDeviceCreate,
     NasDeviceUpdate,
@@ -116,7 +116,7 @@ def _build_audit_activities(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in events:

@@ -44,7 +44,6 @@ from app.models.network import (
     SplitterPortAssignment,
     Vlan,
 )
-from app.models.person import Person
 import uuid
 from app.models.subscriber import Subscriber, SubscriberAccount
 from app.models.domain_settings import SettingDomain
@@ -214,14 +213,11 @@ class Ports(ListResponseMixin):
         if not data.get("device_id") and payload.olt_id:
             data["device_id"] = payload.olt_id
         if data.get("device_id") and not db.get(CPEDevice, data["device_id"]) and payload.olt_id:
-            person = Person(
+            subscriber = Subscriber(
                 first_name="OLT",
                 last_name="Port",
                 email=f"olt-port-{uuid.uuid4()}@example.invalid",
             )
-            db.add(person)
-            db.flush()
-            subscriber = Subscriber(person_id=person.id)
             db.add(subscriber)
             db.flush()
             account = SubscriberAccount(subscriber_id=subscriber.id)

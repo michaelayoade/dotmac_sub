@@ -36,7 +36,7 @@ from app.schemas.radius import (
     RadiusServerCreate,
     RadiusServerUpdate,
 )
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.audit import AuditEvent
 from app.services import audit as audit_service
 from app.services import catalog as catalog_service
@@ -105,7 +105,7 @@ def _build_audit_activities(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in events:
@@ -144,7 +144,7 @@ def _build_audit_activities_for_types(
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
     activities = []
     for event in events:
@@ -5061,7 +5061,7 @@ def fiber_reports(request: Request, db: Session = Depends(get_db), map_limit: in
 
     # Customer locations with fiber service
     customer_features = []
-    from app.models.person import Person
+    from app.models.subscriber import Subscriber
     # Get addresses with coordinates that have ONT assignments, join to get person name
     customer_total = db.query(func.count(Address.id)).join(
         OntAssignment, OntAssignment.service_address_id == Address.id
@@ -5079,14 +5079,12 @@ def fiber_reports(request: Request, db: Session = Depends(get_db), map_limit: in
         Address.city,
         Address.latitude,
         Address.longitude,
-        Person.first_name,
-        Person.last_name
+        Subscriber.first_name,
+        Subscriber.last_name
     ).join(
         OntAssignment, OntAssignment.service_address_id == Address.id
     ).join(
         Subscriber, Address.subscriber_id == Subscriber.id
-    ).outerjoin(
-        Person, Subscriber.person_id == Person.id
     ).filter(
         OntAssignment.active.is_(True),
         Address.latitude.isnot(None),

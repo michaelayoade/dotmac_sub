@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.models.subscriber import Organization
 from app.services.auth_dependencies import require_user_auth
 
@@ -135,9 +135,9 @@ async def validate_email_unique(
     if not email:
         return True, None
 
-    query = db.query(Person).filter(func.lower(Person.email) == email.lower())
+    query = db.query(Subscriber).filter(func.lower(Subscriber.email) == email.lower())
     if exclude_id:
-        query = query.filter(Person.id != exclude_id)
+        query = query.filter(Subscriber.id != exclude_id)
 
     exists = query.first() is not None
     if exists:

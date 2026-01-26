@@ -103,10 +103,10 @@ def send_eta_notification(db: Session, work_order_id: str) -> bool:
 
     # Get technician name
     technician_name = "Our technician"
-    if work_order.assigned_to_person_id:
-        from app.models.person import Person
+    if work_order.assigned_to_subscriber_id:
+        from app.models.subscriber import Subscriber
 
-        technician = db.get(Person, work_order.assigned_to_person_id)
+        technician = db.get(Subscriber, work_order.assigned_to_subscriber_id)
         if technician:
             technician_name = technician.display_name or technician.first_name or "Our technician"
 
@@ -208,10 +208,10 @@ def send_technician_assigned_notification(db: Session, work_order_id: str) -> bo
 
     # Get technician name
     technician_name = "A technician"
-    if work_order.assigned_to_person_id:
-        from app.models.person import Person
+    if work_order.assigned_to_subscriber_id:
+        from app.models.subscriber import Subscriber
 
-        technician = db.get(Person, work_order.assigned_to_person_id)
+        technician = db.get(Subscriber, work_order.assigned_to_subscriber_id)
         if technician:
             technician_name = technician.display_name or technician.first_name or "A technician"
 
@@ -319,10 +319,10 @@ def send_work_order_completed_notification(db: Session, work_order_id: str) -> b
 
     # Get technician name
     technician_name = "Our technician"
-    if work_order.assigned_to_person_id:
-        from app.models.person import Person
+    if work_order.assigned_to_subscriber_id:
+        from app.models.subscriber import Subscriber
 
-        technician = db.get(Person, work_order.assigned_to_person_id)
+        technician = db.get(Subscriber, work_order.assigned_to_subscriber_id)
         if technician:
             technician_name = technician.display_name or technician.first_name or "Our technician"
 

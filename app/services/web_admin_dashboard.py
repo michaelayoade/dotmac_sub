@@ -10,7 +10,7 @@ from app.models.audit import AuditActorType
 from app.models.network import OLTDevice, OntUnit
 from app.models.network_monitoring import DeviceStatus, NetworkDevice
 from app.models.domain_settings import SettingDomain
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services import (
     audit as audit_service,
     billing as billing_service,
@@ -115,8 +115,7 @@ def dashboard(request: Request, db: Session):
     subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
-        organization_id=None,
+                organization_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=1000,
@@ -144,8 +143,8 @@ def dashboard(request: Request, db: Session):
         priority=None,
         channel=None,
         search=None,
-        created_by_person_id=None,
-        assigned_to_person_id=None,
+        created_by_subscriber_id=None,
+        assigned_to_subscriber_id=None,
         is_active=None,
         order_by="created_at",
         order_dir="desc",
@@ -173,7 +172,6 @@ def dashboard(request: Request, db: Session):
     recent_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -262,11 +260,11 @@ def dashboard(request: Request, db: Session):
         for event in recent_activity
         if event.actor_id and _is_user_actor(getattr(event, "actor_type", None))
     }
-    people = {}
+    subscribers_lookup = {}
     if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Person).filter(Person.id.in_(actor_ids)).all()
+        subscribers_lookup = {
+            str(subscriber.id): subscriber
+            for subscriber in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
 
     recent_activities = []
@@ -285,7 +283,7 @@ def dashboard(request: Request, db: Session):
 
         actor_name = None
         if event.actor_id and _is_user_actor(getattr(event, "actor_type", None)):
-            actor = people.get(str(event.actor_id))
+            actor = subscribers_lookup.get(str(event.actor_id))
             if actor:
                 actor_name = f"{actor.first_name} {actor.last_name}".strip()
         if not actor_name:
@@ -380,7 +378,6 @@ def dashboard_stats_partial(request: Request, db: Session):
     subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
