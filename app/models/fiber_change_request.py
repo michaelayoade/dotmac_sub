@@ -40,14 +40,11 @@ class FiberChangeRequest(Base):
     status: Mapped[FiberChangeRequestStatus] = mapped_column(
         Enum(FiberChangeRequestStatus), default=FiberChangeRequestStatus.pending
     )
-    requested_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    requested_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    requested_by_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vendors.id")
-    )
-    reviewed_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    reviewed_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     review_notes: Mapped[str | None] = mapped_column(Text)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -62,6 +59,5 @@ class FiberChangeRequest(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    requested_by = relationship("Person", foreign_keys=[requested_by_person_id])
-    requested_vendor = relationship("Vendor", foreign_keys=[requested_by_vendor_id])
-    reviewed_by = relationship("Person", foreign_keys=[reviewed_by_person_id])
+    requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
+    reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])

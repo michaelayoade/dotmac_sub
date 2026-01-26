@@ -189,14 +189,6 @@ from app.models.tr069 import (  # noqa: F401
     Tr069Session,
 )
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
-from app.models.person import (  # noqa: F401
-    ChannelType as PersonChannelType,
-    PartyStatus,
-    Person,
-    PersonChannel,
-    PersonMergeLog,
-    PersonStatusLog,
-)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningTask,
@@ -213,16 +205,17 @@ from app.models.provisioning import (  # noqa: F401
     TaskStatus,
 )
 from app.models.subscriber import (  # noqa: F401
-    AccountRole,
-    AccountRoleType,
-    AccountStatus,
     Address,
+    AddressType,
+    ChannelType,
+    ContactMethod,
+    Gender,
     Organization,
     Reseller,
-    ResellerUser,
     Subscriber,
-    SubscriberAccount,
+    SubscriberChannel,
     SubscriberCustomField,
+    SubscriberStatus,
 )
 from app.models.subscription_engine import (  # noqa: F401
     SettingValueType,
@@ -246,9 +239,10 @@ from app.models.usage import (  # noqa: F401
 )
 from app.models.rbac import (  # noqa: F401
     Permission,
-    PersonRole,
     Role,
     RolePermission,
+    SubscriberPermission,
+    SubscriberRole,
 )
 from app.models.webhook import (  # noqa: F401
     WebhookDelivery,
@@ -308,8 +302,6 @@ from app.models.workflow import (  # noqa: F401
     SlaClockStatus,
     SlaPolicy,
     SlaTarget,
-    TicketStatusTransition,
-    WorkOrderStatusTransition,
     WorkflowEntityType,
 )
 from app.models.comms import (  # noqa: F401

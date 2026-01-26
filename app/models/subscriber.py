@@ -1,12 +1,12 @@
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     Boolean,
-    CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -17,14 +17,36 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    select,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.subscription_engine import SettingValueType
+
+
+class Gender(enum.Enum):
+    unknown = "unknown"
+    female = "female"
+    male = "male"
+    non_binary = "non_binary"
+    other = "other"
+
+
+class ContactMethod(enum.Enum):
+    email = "email"
+    phone = "phone"
+    sms = "sms"
+    push = "push"
+
+
+class SubscriberStatus(enum.Enum):
+    """Account/billing status for subscriber."""
+    active = "active"
+    suspended = "suspended"
+    canceled = "canceled"
+    delinquent = "delinquent"
 
 
 class AddressType(enum.Enum):
@@ -33,22 +55,16 @@ class AddressType(enum.Enum):
     mailing = "mailing"
 
 
-class AccountRoleType(enum.Enum):
-    """Role types for AccountRole (person-to-account relationships)."""
-    primary = "primary"      # Main account holder
-    billing = "billing"      # Receives invoices
-    technical = "technical"  # Technical contact
-    support = "support"      # Support requests
-
-
-class AccountStatus(enum.Enum):
-    active = "active"
-    suspended = "suspended"
-    canceled = "canceled"
-    delinquent = "delinquent"
+class ChannelType(enum.Enum):
+    """Communication channel types."""
+    email = "email"
+    phone = "phone"
+    sms = "sms"
+    whatsapp = "whatsapp"
 
 
 class Organization(Base):
+    """Organization for B2B subscribers."""
     __tablename__ = "organizations"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -74,10 +90,11 @@ class Organization(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    people = relationship("Person", back_populates="organization")
+    subscribers = relationship("Subscriber", back_populates="organization")
 
 
 class Reseller(Base):
+    """Reseller/partner who manages subscribers."""
     __tablename__ = "resellers"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -97,59 +114,101 @@ class Reseller(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    accounts = relationship("SubscriberAccount", back_populates="reseller")
-    users = relationship("ResellerUser", back_populates="reseller")
-
-
-class ResellerUser(Base):
-    __tablename__ = "reseller_users"
-    __table_args__ = (
-        UniqueConstraint("reseller_id", "person_id", name="uq_reseller_users_reseller_person"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    reseller_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("resellers.id"), nullable=False
-    )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
-    )
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    reseller = relationship("Reseller", back_populates="users")
-    person = relationship("Person")
+    subscribers = relationship("Subscriber", back_populates="reseller")
 
 
 class Subscriber(Base):
-    """Subscriber represents a billing entity linked to a Person.
+    """Unified subscriber model combining identity, account, and billing.
 
-    In the unified party model, subscribers are always person-based.
-    For B2B cases, the Person has an organization_id set.
-    Organization info is accessible via subscriber.person.organization.
+    This is the core entity representing a customer with:
+    - Identity info (name, contact details)
+    - Account info (subscriber number, status)
+    - Billing info (payment settings, billing address)
     """
     __tablename__ = "subscribers"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+
+    # === Identity Fields (from Person) ===
+    first_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(120))
+    avatar_url: Mapped[str | None] = mapped_column(String(512))
+
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    phone: Mapped[str | None] = mapped_column(String(40))
+
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    gender: Mapped[Gender] = mapped_column(Enum(Gender), default=Gender.unknown)
+
+    preferred_contact_method: Mapped[ContactMethod | None] = mapped_column(
+        Enum(ContactMethod)
+    )
+    locale: Mapped[str | None] = mapped_column(String(16))
+    timezone: Mapped[str | None] = mapped_column(String(64))
+
+    # Contact address
+    address_line1: Mapped[str | None] = mapped_column(String(120))
+    address_line2: Mapped[str | None] = mapped_column(String(120))
+    city: Mapped[str | None] = mapped_column(String(80))
+    region: Mapped[str | None] = mapped_column(String(80))
+    postal_code: Mapped[str | None] = mapped_column(String(20))
+    country_code: Mapped[str | None] = mapped_column(String(2))
+
+    # === Account Fields (from Subscriber + SubscriberAccount) ===
     subscriber_number: Mapped[str | None] = mapped_column(String(80), unique=True)
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    account_number: Mapped[str | None] = mapped_column(String(80))
+    account_start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    status: Mapped[SubscriberStatus] = mapped_column(
+        Enum(SubscriberStatus), default=SubscriberStatus.active
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    marketing_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # === Organization & Reseller ===
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id")
+    )
+
+    # === Billing Fields (from SubscriberAccount) ===
+    tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tax_rates.id")
+    )
+    billing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Billing address (can differ from contact address)
+    billing_name: Mapped[str | None] = mapped_column(String(160))
+    billing_address_line1: Mapped[str | None] = mapped_column(String(160))
+    billing_address_line2: Mapped[str | None] = mapped_column(String(120))
+    billing_city: Mapped[str | None] = mapped_column(String(80))
+    billing_region: Mapped[str | None] = mapped_column(String(80))
+    billing_postal_code: Mapped[str | None] = mapped_column(String(20))
+    billing_country_code: Mapped[str | None] = mapped_column(String(2))
+
+    # Payment settings
+    payment_method: Mapped[str | None] = mapped_column(String(80))
+    deposit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    billing_day: Mapped[int | None] = mapped_column(Integer)  # Day of month for billing
+    payment_due_days: Mapped[int | None] = mapped_column(Integer)  # Days after invoice
+    grace_period_days: Mapped[int | None] = mapped_column(Integer)
+
+    # Prepaid/balance settings
+    min_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    prepaid_low_balance_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    prepaid_deactivation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # === Common Fields ===
     notes: Mapped[str | None] = mapped_column(Text)
-    account_start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON)
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -158,31 +217,66 @@ class Subscriber(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    person = relationship("Person", back_populates="subscribers")
-    accounts = relationship("SubscriberAccount", back_populates="subscriber")
-    addresses = relationship("Address", back_populates="subscriber")
-    custom_fields = relationship("SubscriberCustomField", back_populates="subscriber")
+    # === Relationships ===
+    organization = relationship("Organization", back_populates="subscribers")
+    reseller = relationship("Reseller", back_populates="subscribers")
+    tax_rate = relationship("TaxRate")
 
-    @hybrid_property
-    def organization_id(self):
-        return self.person.organization_id if self.person else None
+    addresses = relationship("Address", back_populates="subscriber", cascade="all, delete-orphan")
+    custom_fields = relationship("SubscriberCustomField", back_populates="subscriber", cascade="all, delete-orphan")
+    channels = relationship("SubscriberChannel", back_populates="subscriber", cascade="all, delete-orphan")
 
-    @organization_id.expression
-    def organization_id(cls):
-        from app.models.person import Person
-
-        return (
-            select(Person.organization_id)
-            .where(Person.id == cls.person_id)
-            .scalar_subquery()
-        )
+    # Service relationships
+    subscriptions = relationship("Subscription", back_populates="subscriber")
+    access_credentials = relationship("AccessCredential", back_populates="subscriber")
+    service_orders = relationship("ServiceOrder", back_populates="subscriber")
+    cpe_devices = relationship("CPEDevice", back_populates="subscriber")
+    ip_assignments = relationship("IPAssignment", back_populates="subscriber")
+    ont_assignments = relationship("OntAssignment", back_populates="subscriber")
+    dunning_cases = relationship("DunningCase", back_populates="subscriber")
 
     @property
-    def organization(self):
-        return self.person.organization if self.person else None
+    def full_name(self) -> str:
+        """Return full name."""
+        return f"{self.first_name} {self.last_name}"
+
+
+class SubscriberChannel(Base):
+    """Additional communication channels for a subscriber."""
+    __tablename__ = "subscriber_channels"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscriber_id", "channel_type", "address",
+            name="uq_subscriber_channels_subscriber_type_address"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    )
+    channel_type: Mapped[ChannelType] = mapped_column(Enum(ChannelType), nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(60))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", MutableDict.as_mutable(JSON))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    subscriber = relationship("Subscriber", back_populates="channels")
 
 
 class SubscriberCustomField(Base):
+    """Custom fields for subscribers."""
     __tablename__ = "subscriber_custom_fields"
     __table_args__ = (
         UniqueConstraint(
@@ -214,63 +308,8 @@ class SubscriberCustomField(Base):
     subscriber = relationship("Subscriber", back_populates="custom_fields")
 
 
-class SubscriberAccount(Base):
-    __tablename__ = "subscriber_accounts"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
-    )
-    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("resellers.id")
-    )
-    tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tax_rates.id")
-    )
-    account_number: Mapped[str | None] = mapped_column(String(80))
-    status: Mapped[AccountStatus] = mapped_column(
-        Enum(AccountStatus), default=AccountStatus.active
-    )
-    billing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    billing_person: Mapped[str | None] = mapped_column(String(160))
-    billing_street_1: Mapped[str | None] = mapped_column(String(160))
-    billing_zip_code: Mapped[str | None] = mapped_column(String(20))
-    billing_city: Mapped[str | None] = mapped_column(String(80))
-    deposit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    payment_method: Mapped[str | None] = mapped_column(String(80))
-    billing_date: Mapped[int | None] = mapped_column(Integer)
-    billing_due: Mapped[int | None] = mapped_column(Integer)
-    grace_period: Mapped[int | None] = mapped_column(Integer)
-    min_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    month_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    prepaid_low_balance_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    prepaid_deactivation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    notes: Mapped[str | None] = mapped_column(Text)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
-    )
-
-    subscriber = relationship("Subscriber", back_populates="accounts")
-    reseller = relationship("Reseller", back_populates="accounts")
-    tax_rate = relationship("TaxRate")
-    account_roles = relationship("AccountRole", back_populates="account", cascade="all, delete-orphan")
-    addresses = relationship("Address", back_populates="account")
-    subscriptions = relationship("Subscription", back_populates="account")
-    access_credentials = relationship("AccessCredential", back_populates="account")
-    service_orders = relationship("ServiceOrder", back_populates="account")
-    cpe_devices = relationship("CPEDevice", back_populates="account")
-    ip_assignments = relationship("IPAssignment", back_populates="account")
-    ont_assignments = relationship("OntAssignment", back_populates="account")
-    dunning_cases = relationship("DunningCase", back_populates="account")
-
-
 class Address(Base):
+    """Service/installation addresses for subscribers."""
     __tablename__ = "addresses"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -278,9 +317,6 @@ class Address(Base):
     )
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
-    )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id")
     )
     tax_rate_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tax_rates.id")
@@ -308,46 +344,4 @@ class Address(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="addresses")
-    account = relationship("SubscriberAccount", back_populates="addresses")
     tax_rate = relationship("TaxRate")
-
-
-class AccountRole(Base):
-    """Links a Person to a SubscriberAccount with a specific role.
-
-    This replaces the legacy Contact model, providing a unified way to
-    associate people with accounts in various capacities (billing, technical, etc.).
-    """
-    __tablename__ = "account_roles"
-    __table_args__ = (
-        UniqueConstraint(
-            "account_id", "person_id", "role",
-            name="uq_account_roles_account_person_role"
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
-    )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
-    )
-    role: Mapped[AccountRoleType] = mapped_column(
-        Enum(AccountRoleType), default=AccountRoleType.primary
-    )
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
-    title: Mapped[str | None] = mapped_column(String(120))  # Job title
-    notes: Mapped[str | None] = mapped_column(Text)
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
-    )
-
-    account = relationship("SubscriberAccount", back_populates="account_roles")
-    person = relationship("Person")

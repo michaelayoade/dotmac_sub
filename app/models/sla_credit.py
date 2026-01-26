@@ -51,8 +51,8 @@ class SlaCreditItem(Base):
     report_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sla_credit_reports.id"), nullable=False
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id")
@@ -76,7 +76,7 @@ class SlaCreditItem(Base):
     )
 
     report = relationship("SlaCreditReport", back_populates="items")
-    account = relationship("SubscriberAccount")
+    subscriber = relationship("Subscriber")
     subscription = relationship("Subscription")
     invoice = relationship("Invoice")
     sla_profile = relationship("SlaProfile")

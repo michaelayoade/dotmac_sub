@@ -567,8 +567,8 @@ class Subscription(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     offer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("catalog_offers.id"), nullable=False
@@ -625,7 +625,7 @@ class Subscription(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount", back_populates="subscriptions")
+    subscriber = relationship("Subscriber", back_populates="subscriptions")
     offer = relationship("CatalogOffer", back_populates="subscriptions")
     offer_version = relationship("OfferVersion", back_populates="subscriptions")
     service_address = relationship("Address")
@@ -883,8 +883,8 @@ class AccessCredential(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     secret_hash: Mapped[str | None] = mapped_column(String(255))
@@ -901,7 +901,7 @@ class AccessCredential(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount", back_populates="access_credentials")
+    subscriber = relationship("Subscriber", back_populates="access_credentials")
     radius_profile = relationship("RadiusProfile", back_populates="access_credentials")
     radius_users = relationship("RadiusUser", back_populates="access_credential")
 

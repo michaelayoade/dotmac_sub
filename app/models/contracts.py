@@ -27,8 +27,8 @@ class ContractSignature(Base):
     )
 
     # Links to related entities
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     service_order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_orders.id")
@@ -68,6 +68,6 @@ class ContractSignature(Base):
     )
 
     # Relationships
-    account = relationship("SubscriberAccount")
+    subscriber = relationship("Subscriber")
     service_order = relationship("ServiceOrder")
     document = relationship("LegalDocument")

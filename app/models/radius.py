@@ -89,8 +89,8 @@ class RadiusUser(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id")
@@ -115,7 +115,7 @@ class RadiusUser(Base):
 
     access_credential = relationship("AccessCredential", back_populates="radius_users")
     subscription = relationship("Subscription")
-    account = relationship("SubscriberAccount")
+    subscriber = relationship("Subscriber")
     radius_profile = relationship("RadiusProfile")
 
 

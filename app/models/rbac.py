@@ -27,7 +27,7 @@ class Role(Base):
     )
 
     permissions = relationship("RolePermission", back_populates="role")
-    members = relationship("PersonRole", back_populates="role")
+    members = relationship("SubscriberRole", back_populates="role")
 
 
 class Permission(Base):
@@ -71,17 +71,17 @@ class RolePermission(Base):
     permission = relationship("Permission", back_populates="roles")
 
 
-class PersonRole(Base):
-    __tablename__ = "person_roles"
+class SubscriberRole(Base):
+    __tablename__ = "subscriber_roles"
     __table_args__ = (
-        UniqueConstraint("person_id", "role_id", name="uq_person_roles_person_role"),
+        UniqueConstraint("subscriber_id", "role_id", name="uq_subscriber_roles_subscriber_role"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False
@@ -93,21 +93,21 @@ class PersonRole(Base):
     role = relationship("Role", back_populates="members")
 
 
-class PersonPermission(Base):
-    """Direct permission grants to individual users, bypassing role-based assignment."""
+class SubscriberPermission(Base):
+    """Direct permission grants to individual subscribers, bypassing role-based assignment."""
 
-    __tablename__ = "person_permissions"
+    __tablename__ = "subscriber_permissions"
     __table_args__ = (
         UniqueConstraint(
-            "person_id", "permission_id", name="uq_person_permissions_person_permission"
+            "subscriber_id", "permission_id", name="uq_subscriber_permissions_subscriber_permission"
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     permission_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("permissions.id"), nullable=False
@@ -115,8 +115,8 @@ class PersonPermission(Base):
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    granted_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=True
+    granted_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
     )
 
     permission = relationship("Permission")

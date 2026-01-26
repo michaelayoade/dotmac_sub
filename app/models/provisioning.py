@@ -7,7 +7,6 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.projects import ProjectType
 
 
 class ServiceOrderStatus(enum.Enum):
@@ -74,19 +73,16 @@ class ServiceOrder(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id")
     )
-    requested_by_contact_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
-    )
     status: Mapped[ServiceOrderStatus] = mapped_column(
         Enum(ServiceOrderStatus), default=ServiceOrderStatus.draft
     )
-    project_type: Mapped[ProjectType | None] = mapped_column(Enum(ProjectType))
+    order_type: Mapped[str | None] = mapped_column(String(60))  # new_install, upgrade, downgrade, disconnect
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -96,16 +92,14 @@ class ServiceOrder(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
-    subscription = relationship("Subscription")
-    requested_by_contact = relationship("Person")
+    subscriber = relationship("Subscriber", back_populates="service_orders")
+    subscription = relationship("Subscription", back_populates="service_orders")
     appointments = relationship("InstallAppointment", back_populates="service_order")
     tasks = relationship("ProvisioningTask", back_populates="service_order")
     state_transitions = relationship(
         "ServiceStateTransition", back_populates="service_order"
     )
     provisioning_runs = relationship("ProvisioningRun", back_populates="service_order")
-    projects = relationship("Project", back_populates="service_order")
 
 
 class InstallAppointment(Base):

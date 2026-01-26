@@ -116,7 +116,7 @@ class Invoice(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_number: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[InvoiceStatus] = mapped_column(
@@ -144,7 +144,7 @@ class Invoice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     lines = relationship("InvoiceLine", back_populates="invoice")
     payments = relationship("Payment", back_populates="invoice")
     payment_allocations = relationship("PaymentAllocation", back_populates="invoice")
@@ -170,7 +170,7 @@ class CreditNote(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id")
@@ -198,7 +198,7 @@ class CreditNote(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     invoice = relationship("Invoice")
     lines = relationship("CreditNoteLine", back_populates="credit_note")
     applications = relationship("CreditNoteApplication", back_populates="credit_note")
@@ -305,7 +305,7 @@ class PaymentMethod(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     payment_channel_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_channels.id")
@@ -329,7 +329,7 @@ class PaymentMethod(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     payment_channel = relationship("PaymentChannel", back_populates="payment_methods")
     payments = relationship("Payment", back_populates="payment_method")
 
@@ -341,7 +341,7 @@ class BankAccount(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_methods.id")
@@ -363,7 +363,7 @@ class BankAccount(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     payment_method = relationship("PaymentMethod")
 
 
@@ -374,7 +374,7 @@ class Payment(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id")
@@ -408,7 +408,7 @@ class Payment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     invoice = relationship("Invoice", back_populates="payments")
     payment_method = relationship("PaymentMethod", back_populates="payments")
     payment_channel = relationship("PaymentChannel", back_populates="payments")
@@ -453,7 +453,7 @@ class LedgerEntry(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id")
@@ -474,7 +474,7 @@ class LedgerEntry(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount")
+    account = relationship("Subscriber")
     invoice = relationship("Invoice", back_populates="ledger_entries")
     payment = relationship("Payment", back_populates="ledger_entries")
 

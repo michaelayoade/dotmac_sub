@@ -47,8 +47,8 @@ class PaymentArrangement(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id")
@@ -66,11 +66,11 @@ class PaymentArrangement(Base):
     status: Mapped[ArrangementStatus] = mapped_column(
         Enum(ArrangementStatus), default=ArrangementStatus.pending
     )
-    requested_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    requested_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    approved_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    approved_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
@@ -85,10 +85,10 @@ class PaymentArrangement(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    account = relationship("SubscriberAccount")
+    subscriber = relationship("Subscriber")
     invoice = relationship("Invoice")
-    requested_by = relationship("Person", foreign_keys=[requested_by_person_id])
-    approved_by = relationship("Person", foreign_keys=[approved_by_person_id])
+    requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
+    approved_by = relationship("Subscriber", foreign_keys=[approved_by_subscriber_id])
     installments = relationship(
         "PaymentArrangementInstallment",
         back_populates="arrangement",

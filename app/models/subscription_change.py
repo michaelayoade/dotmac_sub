@@ -44,11 +44,11 @@ class SubscriptionChangeRequest(Base):
         Enum(SubscriptionChangeStatus), default=SubscriptionChangeStatus.pending
     )
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
-    requested_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    requested_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    reviewed_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    reviewed_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     requested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -71,5 +71,5 @@ class SubscriptionChangeRequest(Base):
     subscription = relationship("Subscription", foreign_keys=[subscription_id])
     current_offer = relationship("CatalogOffer", foreign_keys=[current_offer_id])
     requested_offer = relationship("CatalogOffer", foreign_keys=[requested_offer_id])
-    requested_by = relationship("Person", foreign_keys=[requested_by_person_id])
-    reviewed_by = relationship("Person", foreign_keys=[reviewed_by_person_id])
+    requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
+    reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])

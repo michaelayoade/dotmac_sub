@@ -158,8 +158,8 @@ class UsageCharge(Base):
     subscription_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id"), nullable=False
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     invoice_line_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoice_lines.id")
@@ -188,5 +188,5 @@ class UsageCharge(Base):
     )
 
     subscription = relationship("Subscription")
-    account = relationship("SubscriberAccount")
+    subscriber = relationship("Subscriber")
     invoice_line = relationship("InvoiceLine")

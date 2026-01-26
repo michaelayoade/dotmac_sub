@@ -23,8 +23,8 @@ class DunningCase(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriber_accounts.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     policy_set_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("policy_sets.id")
@@ -46,7 +46,7 @@ class DunningCase(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("SubscriberAccount", back_populates="dunning_cases")
+    subscriber = relationship("Subscriber", back_populates="dunning_cases")
     policy_set = relationship("PolicySet")
     actions = relationship("DunningActionLog", back_populates="case")
 

@@ -56,8 +56,8 @@ class UserCredential(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     provider: Mapped[AuthProvider] = mapped_column(
         Enum(AuthProvider), default=AuthProvider.local, nullable=False
@@ -84,7 +84,7 @@ class UserCredential(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    person = relationship("Person")
+    subscriber = relationship("Subscriber")
     radius_server = relationship("RadiusServer")
 
 
@@ -92,8 +92,8 @@ class MFAMethod(Base):
     __tablename__ = "mfa_methods"
     __table_args__ = (
         Index(
-            "ix_mfa_methods_primary_per_person",
-            "person_id",
+            "ix_mfa_methods_primary_per_subscriber",
+            "subscriber_id",
             unique=True,
             postgresql_where=text("is_primary"),
             sqlite_where=text("is_primary"),
@@ -103,8 +103,8 @@ class MFAMethod(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     method_type: Mapped[MFAMethodType] = mapped_column(
         Enum(MFAMethodType), nullable=False
@@ -128,7 +128,7 @@ class MFAMethod(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    person = relationship("Person")
+    subscriber = relationship("Subscriber")
 
 
 class Session(Base):
@@ -145,8 +145,8 @@ class Session(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     status: Mapped[SessionStatus] = mapped_column(
         Enum(SessionStatus), default=SessionStatus.active, nullable=False
@@ -163,7 +163,7 @@ class Session(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    person = relationship("Person")
+    subscriber = relationship("Subscriber")
 
 
 class ApiKey(Base):
@@ -172,8 +172,8 @@ class ApiKey(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("people.id")
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     label: Mapped[str | None] = mapped_column(String(120))
     key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
@@ -185,4 +185,4 @@ class ApiKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    person = relationship("Person")
+    subscriber = relationship("Subscriber")
