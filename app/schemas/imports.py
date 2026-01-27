@@ -45,7 +45,7 @@ class CSVRowModel(BaseModel):
 
 
 class SubscriberImportRow(CSVRowModel):
-    person_id: UUID
+    subscriber_id: UUID
     is_active: bool = True
     notes: str | None = None
 

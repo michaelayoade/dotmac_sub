@@ -66,11 +66,6 @@ class WebhookEventType(enum.Enum):
     session_ended = "session.ended"
     network_alert = "network.alert"
 
-    # Support - Ticket events (3)
-    ticket_created = "ticket.created"
-    ticket_escalated = "ticket.escalated"
-    ticket_resolved = "ticket.resolved"
-
     # Custom event type for extensibility
     custom = "custom"
 

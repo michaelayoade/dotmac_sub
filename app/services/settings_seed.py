@@ -20,7 +20,6 @@ from app.services.domain_settings import (
     provisioning_settings,
     radius_settings,
     scheduler_settings,
-    workflow_settings,
     usage_settings,
     lifecycle_settings,
     network_monitoring_settings,
@@ -958,39 +957,6 @@ def seed_tr069_settings(db: Session) -> None:
         key="default_acs_server_id",
         value_type=SettingValueType.string,
         value_text=os.getenv("TR069_DEFAULT_ACS_SERVER_ID", ""),
-    )
-
-
-def seed_workflow_settings(db: Session) -> None:
-    workflow_settings.ensure_by_key(
-        db,
-        key="default_sla_clock_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WORKFLOW_DEFAULT_SLA_CLOCK_STATUS", "running"),
-    )
-    workflow_settings.ensure_by_key(
-        db,
-        key="default_sla_breach_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("WORKFLOW_DEFAULT_SLA_BREACH_STATUS", "open"),
-    )
-    workflow_settings.ensure_by_key(
-        db,
-        key="sla_breach_detection_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("SLA_BREACH_DETECTION_ENABLED", "true"),
-    )
-    workflow_settings.ensure_by_key(
-        db,
-        key="sla_breach_detection_interval_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("SLA_BREACH_DETECTION_INTERVAL_SECONDS", "1800"),
-    )
-    workflow_settings.ensure_by_key(
-        db,
-        key="ticket_auto_assignment_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("TICKET_AUTO_ASSIGNMENT_ENABLED", "false"),
     )
 
 

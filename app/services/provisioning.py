@@ -34,7 +34,6 @@ from app.models.provisioning import (
     ServiceOrderStatus,
     TaskStatus,
 )
-from app.models.projects import Project, ProjectTemplate
 from app.models.tr069 import Tr069CpeDevice
 from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
@@ -60,51 +59,11 @@ from app.schemas.provisioning import (
     ServiceStateTransitionUpdate,
 )
 from app.schemas.network import IPAssignmentCreate
-from app.schemas.projects import ProjectCreate
 from app.services import network as network_service
-from app.services import projects as projects_service
 from app.services.provisioning_adapters import get_provisioner
 from app.validators import provisioning as provisioning_validators
 
 logger = logging.getLogger(__name__)
-
-def _build_service_order_project_name(order: ServiceOrder) -> str:
-    base_name = "Service Order"
-    if order.subscription and order.subscription.offer and order.subscription.offer.name:
-        base_name = order.subscription.offer.name
-    return f"{base_name} - {str(order.id)[:8]}"
-
-
-def _resolve_project_template_id(db: Session, project_type):
-    if not project_type:
-        return None
-    template = (
-        db.query(ProjectTemplate)
-        .filter(ProjectTemplate.project_type == project_type)
-        .filter(ProjectTemplate.is_active.is_(True))
-        .first()
-    )
-    return template.id if template else None
-
-
-def _ensure_project_for_service_order(db: Session, order: ServiceOrder) -> Project:
-    existing = (
-        db.query(Project)
-        .filter(Project.service_order_id == order.id)
-        .first()
-    )
-    if existing:
-        return existing
-    payload = ProjectCreate(
-        name=_build_service_order_project_name(order),
-        description=order.notes,
-        project_type=order.project_type,
-        project_template_id=_resolve_project_template_id(db, order.project_type),
-        account_id=order.account_id,
-        service_order_id=order.id,
-    )
-    return projects_service.projects.create(db, payload)
-
 
 def _resolve_connector_context(db: Session, config: dict | None) -> dict | None:
     if not config:
@@ -488,8 +447,6 @@ class ServiceOrders(ListResponseMixin):
         db.add(order)
         db.commit()
         db.refresh(order)
-        if order.status == ServiceOrderStatus.submitted:
-            _ensure_project_for_service_order(db, order)
 
         # Emit service_order.created event
         emit_event(
@@ -565,11 +522,6 @@ class ServiceOrders(ListResponseMixin):
             setattr(order, key, value)
         db.commit()
         db.refresh(order)
-        if (
-            order.status == ServiceOrderStatus.submitted
-            and previous_status != ServiceOrderStatus.submitted
-        ):
-            _ensure_project_for_service_order(db, order)
 
         # Emit events based on status transitions
         new_status = order.status

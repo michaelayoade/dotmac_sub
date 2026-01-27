@@ -68,10 +68,6 @@ EVENT_TYPE_TO_WEBHOOK = {
     EventType.session_started: WebhookEventType.session_started,
     EventType.session_ended: WebhookEventType.session_ended,
     EventType.network_alert: WebhookEventType.network_alert,
-    # Ticket events
-    EventType.ticket_created: WebhookEventType.ticket_created,
-    EventType.ticket_escalated: WebhookEventType.ticket_escalated,
-    EventType.ticket_resolved: WebhookEventType.ticket_resolved,
     # Custom
     EventType.custom: WebhookEventType.custom,
 }

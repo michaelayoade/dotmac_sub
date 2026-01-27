@@ -24,14 +24,10 @@ from app.models.subscriber import Subscriber
 from app.schemas.subscriber import AccountRoleCreate
 from app.models.subscriber import AccountRoleType
 from app.models.subscriber import Organization, Subscriber
-from app.models.tickets import Ticket, TicketStatus
 from app.services.auth_dependencies import require_permission
-# TODO: person service no longer exists - use subscriber service instead
-# from app.services.person import People as people_service
 from app.services import subscriber as subscriber_service
 from app.services import audit as audit_service
 from app.services.audit_helpers import build_changes_metadata, extract_changes, format_changes, log_audit_event
-from app.services.crm import conversation as crm_service
 from app.services import notification as notification_service
 
 logger = logging.getLogger(__name__)
@@ -1116,9 +1112,7 @@ def person_detail(
     # Get addresses and accounts for all subscribers
     invoices = []
     payments = []
-    tickets = []
     balance_due = 0
-    open_tickets_count = 0
     for sub in subscribers:
         # Get addresses for this subscriber
         try:
@@ -1213,21 +1207,6 @@ def person_detail(
             .order_by(Payment.created_at.desc())
             .limit(10)
             .all()
-        )
-        tickets = (
-            db.query(Ticket)
-            .filter(Ticket.account_id.in_(account_ids))
-            .filter(Ticket.is_active.is_(True))
-            .order_by(Ticket.created_at.desc())
-            .limit(10)
-            .all()
-        )
-        open_tickets_count = (
-            db.query(Ticket)
-            .filter(Ticket.account_id.in_(account_ids))
-            .filter(Ticket.is_active.is_(True))
-            .filter(Ticket.status.in_([TicketStatus.new, TicketStatus.open, TicketStatus.pending, TicketStatus.on_hold]))
-            .count()
         )
 
     def get_status(obj):
@@ -1411,7 +1390,6 @@ def person_detail(
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
-        "open_tickets": open_tickets_count,
     }
     financials = {
         "total_invoiced": total_invoiced,
@@ -1434,23 +1412,6 @@ def person_detail(
         .filter(Subscriber.person_id == person_uuid)
         .count()
     )
-
-    # Get customer's conversations (from CRM inbox)
-    conversations = []
-    try:
-        conversations = crm_service.Conversations.list(
-            db=db,
-            person_id=customer_id,
-            ticket_id=None,
-            status=None,
-            is_active=True,
-            order_by="last_message_at",
-            order_dir="desc",
-            limit=5,
-            offset=0,
-        )
-    except Exception:
-        pass
 
     # Get notifications sent to this customer
     notifications = []
@@ -1539,8 +1500,6 @@ def person_detail(
             "contacts": contacts,
             "invoices": invoices,
             "payments": payments,
-            "tickets": tickets,
-            "conversations": conversations,
             "notifications": notifications,
             "stats": stats,
             "financials": financials,
@@ -1592,9 +1551,7 @@ def organization_detail(
     # Get addresses and accounts for all subscribers
     invoices = []
     payments = []
-    tickets = []
     balance_due = 0
-    open_tickets_count = 0
     for sub in subscribers:
         # Get addresses for this subscriber
         try:
@@ -1662,21 +1619,6 @@ def organization_detail(
             .order_by(Payment.created_at.desc())
             .limit(10)
             .all()
-        )
-        tickets = (
-            db.query(Ticket)
-            .filter(Ticket.account_id.in_(account_ids))
-            .filter(Ticket.is_active.is_(True))
-            .order_by(Ticket.created_at.desc())
-            .limit(10)
-            .all()
-        )
-        open_tickets_count = (
-            db.query(Ticket)
-            .filter(Ticket.account_id.in_(account_ids))
-            .filter(Ticket.is_active.is_(True))
-            .filter(Ticket.status.in_([TicketStatus.new, TicketStatus.open, TicketStatus.pending, TicketStatus.on_hold]))
-            .count()
         )
 
     def get_status(obj):
@@ -1784,7 +1726,6 @@ def organization_detail(
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
-        "open_tickets": open_tickets_count,
     }
     financials = {
         "total_invoiced": total_invoiced,
@@ -1811,29 +1752,6 @@ def organization_detail(
         .filter(Subscriber.organization_id == org_uuid)
         .count()
     )
-
-    # Get conversations for organization's people
-    conversations = []
-    try:
-        # Get all person IDs belonging to this organization
-        org_person_ids = [str(p.id) for p in db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).all()]
-        for person_id in org_person_ids[:5]:  # Limit to avoid too many queries
-            person_convos = crm_service.Conversations.list(
-                db=db,
-                person_id=person_id,
-                ticket_id=None,
-                status=None,
-                is_active=True,
-                order_by="last_message_at",
-                order_dir="desc",
-                limit=3,
-                offset=0,
-            )
-            conversations.extend(person_convos)
-        # Sort by last_message_at and limit
-        conversations = sorted(conversations, key=lambda c: c.last_message_at or c.created_at, reverse=True)[:5]
-    except Exception:
-        pass
 
     # Get notifications sent to organization contacts
     notifications = []
@@ -1925,8 +1843,6 @@ def organization_detail(
             "contacts": contacts,
             "invoices": invoices,
             "payments": payments,
-            "tickets": tickets,
-            "conversations": conversations,
             "notifications": notifications,
             "stats": stats,
             "financials": financials,
@@ -2264,7 +2180,7 @@ def person_update(
             action="update",
             entity_type="person",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
         # Update subscriber's account_start_date if provided
@@ -2345,7 +2261,7 @@ def organization_update(
             action="update",
             entity_type="organization",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
         # Update subscriber's account_start_date if provided
@@ -2422,7 +2338,7 @@ def person_deactivate(
         action="update",
         entity_type="person",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata_payload,
     )
     if request.headers.get("HX-Request"):
@@ -2457,7 +2373,7 @@ def organization_deactivate(
         action="update",
         entity_type="organization",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"changes": {"is_active": {"from": True, "to": False}}},
     )
     if request.headers.get("HX-Request"):
@@ -2493,7 +2409,7 @@ def person_delete(
             action="delete",
             entity_type="person",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})
@@ -2551,7 +2467,7 @@ def organization_delete(
             action="delete",
             entity_type="organization",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})

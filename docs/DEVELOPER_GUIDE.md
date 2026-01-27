@@ -1,6 +1,6 @@
-# DotMac SM Developer Guide
+# DotMac Sub Developer Guide
 
-A comprehensive guide for developers working on the DotMac Subscriber Management platform.
+A comprehensive guide for developers working on the DotMac Subscription Management platform.
 
 ---
 
@@ -22,7 +22,7 @@ A comprehensive guide for developers working on the DotMac Subscriber Management
 
 ## Architecture Overview
 
-DotMac SM is a multi-portal subscriber management system built with a clean separation between:
+DotMac Sub is a multi-portal subscription management system built with a clean separation between:
 
 - **Web Layer** (`app/web/`) - HTML responses using Jinja2 templates
 - **API Layer** (`app/api/`) - RESTful JSON endpoints
@@ -70,7 +70,7 @@ DotMac SM is a multi-portal subscriber management system built with a clean sepa
 ## Project Structure
 
 ```
-dotmac_sm/
+dotmac_sub/
 ├── app/
 │   ├── main.py                 # FastAPI app initialization
 │   ├── config.py               # Configuration settings
@@ -173,19 +173,8 @@ Dashboard (/admin/dashboard)
     │   ├── RADIUS accounts
     │   └── POP Sites
     │
-    ├── Tickets (/admin/tickets)
-    │   ├── View all tickets
-    │   ├── Assign tickets
-    │   └── Resolve tickets
-    │
-    ├── Projects (/admin/projects)
-    │   ├── Installation projects
-    │   ├── Assign vendors
-    │   └── Track progress
-    │
     ├── Operations (/admin/operations)
     │   ├── Service orders
-    │   ├── Work orders
     │   └── Scheduling
     │
     ├── Reports (/admin/reports)
@@ -215,12 +204,6 @@ Dashboard (/admin/dashboard)
    Update Ledger → Send Notifications
    ```
 
-3. **Support Ticket Resolution**
-   ```
-   Receive Ticket → Assign Agent → Diagnose Issue →
-   Create Work Order (if needed) → Resolve → Close Ticket
-   ```
-
 ---
 
 ### Customer Portal Journey
@@ -243,11 +226,6 @@ Dashboard (/portal/dashboard)
     │   ├── Payment history
     │   └── Download statements
     │
-    ├── Support (/portal/support)
-    │   ├── Create ticket
-    │   ├── View my tickets
-    │   └── Ticket details
-    │
     ├── Installations (/portal/installations)
     │   ├── View installation status
     │   └── Schedule appointment
@@ -267,13 +245,7 @@ Dashboard (/portal/dashboard)
    Dashboard → Billing → Select Invoice → View Details → Make Payment
    ```
 
-2. **Create Support Ticket**
-   ```
-   Dashboard → Support → New Ticket → Select Category →
-   Describe Issue → Submit → Track Status
-   ```
-
-3. **Check Service Status**
+2. **Check Service Status**
    ```
    Dashboard → Services → Select Service → View Usage →
    Check Connection Status

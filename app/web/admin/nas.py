@@ -333,7 +333,7 @@ async def device_create(
             action="create",
             entity_type="nas_device",
             entity_id=str(device.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": device.name, "ip_address": device.ip_address},
         )
         return RedirectResponse(f"/admin/network/nas/devices/{device.id}", status_code=303)
@@ -540,7 +540,7 @@ async def device_update(
             action="update",
             entity_type="nas_device",
             entity_id=str(updated_device.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
         return RedirectResponse(f"/admin/network/nas/devices/{device_id}", status_code=303)
@@ -570,7 +570,7 @@ async def device_delete(request: Request, device_id: str, db: Session = Depends(
         action="delete",
         entity_type="nas_device",
         entity_id=str(device.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": device.name, "ip_address": device.ip_address},
     )
     nas_service.NasDevices.delete(db, device_id)
@@ -642,7 +642,7 @@ async def device_backup_trigger(
             action="backup_triggered",
             entity_type="nas_backup",
             entity_id=str(backup.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "nas_device_id": str(backup.nas_device_id),
                 "triggered_by": triggered_by,
@@ -822,7 +822,7 @@ async def template_create(
             action="create",
             entity_type="nas_template",
             entity_id=str(template.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": template.name},
         )
         return RedirectResponse(f"/admin/network/nas/templates/{template.id}", status_code=303)
@@ -933,7 +933,7 @@ async def template_update(
             action="update",
             entity_type="nas_template",
             entity_id=str(updated_template.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
         return RedirectResponse(f"/admin/network/nas/templates/{template_id}", status_code=303)
@@ -962,7 +962,7 @@ async def template_delete(request: Request, template_id: str, db: Session = Depe
         action="delete",
         entity_type="nas_template",
         entity_id=str(template.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": template.name},
     )
     nas_service.ProvisioningTemplates.delete(db, template_id)

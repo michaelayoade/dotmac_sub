@@ -17,30 +17,18 @@ from app.db import SessionLocal
 from app.models.auth import ApiKey, MFAMethod, UserCredential, Session as AuthSession
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
-from app.models.crm.conversation import Conversation, ConversationAssignment
-from app.models.crm.sales import Lead, Quote
-from app.models.crm.team import CrmAgent
-from app.models.projects import TaskStatus
-from app.models.projects import Project, ProjectTask, ProjectComment, ProjectTaskComment
-from app.models.rbac import Permission, PersonPermission, PersonRole, Role, RolePermission
-from app.models.vendor import VendorUser
+from app.models.rbac import (
+    Permission,
+    SubscriberPermission as PersonPermission,
+    SubscriberRole as PersonRole,
+    Role,
+    RolePermission,
+)
 from app.models.subscriber import ResellerUser, Subscriber
-from app.models.tickets import Ticket, TicketComment, TicketStatus
-from app.models.workflow import WorkflowEntityType
-from app.models.workforce import WorkOrder, WorkOrderAssignment, WorkOrderNote, WorkOrderStatus
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookSubscription
 from app.schemas.auth import UserCredentialCreate
-# TODO: person schemas no longer exist - need to use subscriber schemas
-# from app.schemas.person import PersonCreate, PersonUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.schemas.billing import BankAccountCreate, BankAccountUpdate
-from app.schemas.workflow import (
-    ProjectTaskStatusTransitionCreate,
-    SlaPolicyCreate,
-    SlaTargetCreate,
-    TicketStatusTransitionCreate,
-    WorkOrderStatusTransitionCreate,
-)
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionUpdate,
@@ -57,9 +45,6 @@ from app.services import (
     rbac as rbac_service,
     settings_api as settings_service,
     scheduler as scheduler_service,
-    # TODO: person service no longer exists - use subscriber service instead
-    # person as person_service,
-    workflow as workflow_service,
     billing as billing_service,
 )
 from app.services import settings_spec
@@ -153,47 +138,9 @@ def _form_bool(value: str | None) -> bool:
 
 
 def _linked_user_labels(db: Session, person_id) -> list[str]:
+    """Check for linked data that would prevent user deletion."""
     checks = [
-        ("CRM agent", db.query(CrmAgent.id).filter(CrmAgent.person_id == person_id)),
         ("Subscribers", db.query(Subscriber.id).filter(Subscriber.person_id == person_id)),
-        ("CRM conversations", db.query(Conversation.id).filter(Conversation.person_id == person_id)),
-        ("CRM assignments", db.query(ConversationAssignment.id).filter(ConversationAssignment.assigned_by_id == person_id)),
-        ("CRM leads", db.query(Lead.id).filter(Lead.person_id == person_id)),
-        ("CRM quotes", db.query(Quote.id).filter(Quote.person_id == person_id)),
-        (
-            "Tickets",
-            db.query(Ticket.id).filter(
-                or_(
-                    Ticket.created_by_person_id == person_id,
-                    Ticket.assigned_to_person_id == person_id,
-                )
-            ),
-        ),
-        ("Ticket comments", db.query(TicketComment.id).filter(TicketComment.author_person_id == person_id)),
-        ("Work orders", db.query(WorkOrder.id).filter(WorkOrder.assigned_to_person_id == person_id)),
-        ("Work order assignments", db.query(WorkOrderAssignment.id).filter(WorkOrderAssignment.person_id == person_id)),
-        ("Work order notes", db.query(WorkOrderNote.id).filter(WorkOrderNote.author_person_id == person_id)),
-        (
-            "Projects",
-            db.query(Project.id).filter(
-                or_(
-                    Project.created_by_person_id == person_id,
-                    Project.owner_person_id == person_id,
-                    Project.manager_person_id == person_id,
-                )
-            ),
-        ),
-        (
-            "Project tasks",
-            db.query(ProjectTask.id).filter(
-                or_(
-                    ProjectTask.assigned_to_person_id == person_id,
-                    ProjectTask.created_by_person_id == person_id,
-                )
-            ),
-        ),
-        ("Project task comments", db.query(ProjectTaskComment.id).filter(ProjectTaskComment.author_person_id == person_id)),
-        ("Project comments", db.query(ProjectComment.id).filter(ProjectComment.author_person_id == person_id)),
     ]
     linked = []
     for label, query in checks:
@@ -580,71 +527,14 @@ def _build_users(
 
 
 def _workflow_context(request: Request, db: Session, error: str | None = None):
+    """Build context for workflow page - simplified after CRM cleanup."""
     from app.web.admin import get_sidebar_stats, get_current_user
-    policies = workflow_service.sla_policies.list(
-        db=db,
-        entity_type=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    targets = workflow_service.sla_targets.list(
-        db=db,
-        policy_id=None,
-        priority=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    ticket_transitions = workflow_service.ticket_transitions.list(
-        db=db,
-        from_status=None,
-        to_status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    work_order_transitions = workflow_service.work_order_transitions.list(
-        db=db,
-        from_status=None,
-        to_status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    project_task_transitions = workflow_service.project_task_transitions.list(
-        db=db,
-        from_status=None,
-        to_status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
     context = {
         "request": request,
         "active_page": "workflow",
         "active_menu": "system",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "policies": policies,
-        "targets": targets,
-        "ticket_transitions": ticket_transitions,
-        "work_order_transitions": work_order_transitions,
-        "project_task_transitions": project_task_transitions,
-        "workflow_entities": [item.value for item in WorkflowEntityType],
-        "ticket_statuses": [item.value for item in TicketStatus],
-        "work_order_statuses": [item.value for item in WorkOrderStatus],
-        "task_statuses": [item.value for item in TaskStatus],
     }
     if error:
         context["error"] = error
@@ -773,7 +663,7 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
     mfa_enabled = False
     api_key_count = 0
 
-    if current_user and current_user.get("person_id"):
+    if current_user and current_user.get("subscriber_id"):
         person_id = current_user["person_id"]
         person = db.get(Subscriber, coerce_uuid(person_id))
         if person:
@@ -827,22 +717,31 @@ def user_profile_update(
     success = None
     person = None
 
-    if current_user and current_user.get("person_id"):
+    if current_user and current_user.get("subscriber_id"):
         person_id = current_user["person_id"]
-        person = db.get(Subscriber, coerce_uuid(person_id))
-        if person:
+        subscriber = db.get(Subscriber, coerce_uuid(person_id))
+        if subscriber:
             try:
-                payload = PersonUpdate(
-                    first_name=first_name or None,
-                    last_name=last_name or None,
-                    email=email or None,
-                    phone=phone or None,
-                )
-                person_service.people.update(db, str(person.id), payload)
-                person = db.get(Subscriber, person.id)  # Refresh
+                # Direct model update instead of person_service
+                if first_name:
+                    subscriber.first_name = first_name
+                if last_name:
+                    subscriber.last_name = last_name
+                if email:
+                    subscriber.email = email
+                if phone:
+                    subscriber.phone = phone
+                db.commit()
+                db.refresh(subscriber)
+                person = subscriber  # Keep variable for template compatibility
                 success = "Profile updated successfully."
             except Exception as e:
+                db.rollback()
                 error = str(e)
+        else:
+            person = None
+    else:
+        person = None
 
     # Get related data
     credential = None
@@ -884,18 +783,19 @@ def user_profile_update(
 def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_sidebar_stats, get_current_user
 
-    person = person_service.people.get(db, user_id)
-    if not person:
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    if not subscriber:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "User not found"},
             status_code=404,
         )
+    person = subscriber  # Keep for template compatibility
 
     # Get user's roles
     person_roles = (
         db.query(PersonRole)
-        .filter(PersonRole.person_id == person.id)
+        .filter(PersonRole.person_id == subscriber.id)
         .all()
     )
     roles = []
@@ -939,13 +839,14 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_sidebar_stats, get_current_user
 
-    person = person_service.people.get(db, user_id)
-    if not person:
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    if not subscriber:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "User not found"},
             status_code=404,
         )
+    person = subscriber  # Keep for template compatibility
 
     roles = rbac_service.roles.list(
         db=db,
@@ -1004,13 +905,14 @@ async def user_edit_submit(
 ):
     from app.web.admin import get_sidebar_stats, get_current_user
 
-    person = person_service.people.get(db, user_id)
-    if not person:
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    if not subscriber:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "User not found"},
             status_code=404,
         )
+    person = subscriber  # Keep for template compatibility
 
     # Parse form data manually to handle multiple checkbox values
     form_data = await request.form()
@@ -1027,17 +929,6 @@ async def user_edit_submit(
     # Get multiple values for role_ids and direct_permission_ids
     role_ids = form_data.getlist("role_ids")
     direct_permission_ids = form_data.getlist("direct_permission_ids")
-
-    status_value = "active" if _form_bool(is_active) else "inactive"
-    payload = PersonUpdate(
-        first_name=first_name.strip(),
-        last_name=last_name.strip(),
-        display_name=display_name.strip() if display_name else None,
-        email=email.strip(),
-        phone=phone.strip() if phone else None,
-        is_active=_form_bool(is_active),
-        status=status_value,
-    )
 
     roles = rbac_service.roles.list(
         db=db,
@@ -1057,15 +948,23 @@ async def user_edit_submit(
     )
 
     try:
-        person_service.people.update(db, user_id, payload)
+        # Direct model update instead of person_service
+        subscriber.first_name = first_name.strip()
+        subscriber.last_name = last_name.strip()
+        subscriber.display_name = display_name.strip() if display_name else None
+        subscriber.email = email.strip()
+        subscriber.phone = phone.strip() if phone else None
+        subscriber.is_active = _form_bool(is_active)
+        subscriber.status = "active" if _form_bool(is_active) else "inactive"
+
         db.query(UserCredential).filter(
-            UserCredential.person_id == person.id,
+            UserCredential.person_id == subscriber.id,
             UserCredential.is_active.is_(True),
         ).update({"username": email.strip()})
 
         # Sync roles - add new, remove deselected, keep existing
         desired_role_ids = set(role_ids)
-        existing_roles = db.query(PersonRole).filter(PersonRole.person_id == person.id).all()
+        existing_roles = db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).all()
         existing_role_map = {str(pr.role_id): pr for pr in existing_roles}
 
         # Remove roles not in desired set
@@ -1076,12 +975,12 @@ async def user_edit_submit(
         # Add new roles
         for role_id_str in desired_role_ids:
             if role_id_str not in existing_role_map:
-                db.add(PersonRole(person_id=person.id, role_id=UUID(role_id_str)))
+                db.add(PersonRole(person_id=subscriber.id, role_id=UUID(role_id_str)))
 
         # Sync direct permissions
         rbac_service.person_permissions.sync_for_person(
             db,
-            str(person.id),
+            str(subscriber.id),
             set(direct_permission_ids),
             granted_by=getattr(request.state, "actor_id", None),
         )
@@ -1095,7 +994,7 @@ async def user_edit_submit(
                 raise ValueError("Passwords do not match.")
             must_change = _form_bool(require_password_change)
             updated = db.query(UserCredential).filter(
-                UserCredential.person_id == person.id,
+                UserCredential.person_id == subscriber.id,
                 UserCredential.is_active.is_(True),
             ).update(
                 {
@@ -1108,7 +1007,7 @@ async def user_edit_submit(
                 auth_service.user_credentials.create(
                     db,
                     UserCredentialCreate(
-                        person_id=person.id,
+                        person_id=subscriber.id,
                         username=email.strip(),
                         password_hash=hash_password(new_password),
                         must_change_password=must_change,
@@ -1117,9 +1016,9 @@ async def user_edit_submit(
         db.commit()
     except Exception as exc:
         db.rollback()
-        current_roles = db.query(PersonRole).filter(PersonRole.person_id == person.id).all()
+        current_roles = db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).all()
         current_role_ids = {str(pr.role_id) for pr in current_roles}
-        direct_permissions = rbac_service.person_permissions.list_for_person(db, str(person.id))
+        direct_permissions = rbac_service.person_permissions.list_for_person(db, str(subscriber.id))
         direct_permission_ids_set = {str(pp.permission_id) for pp in direct_permissions}
         return templates.TemplateResponse(
             "admin/system/users/edit.html",
@@ -1144,12 +1043,12 @@ async def user_edit_submit(
 
 @router.post("/users/{user_id}/activate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_activate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    person = person_service.people.get(db, user_id)
-    person_service.people.update(
-        db, user_id, PersonUpdate(is_active=True, status="active")
-    )
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    # Direct model update instead of person_service
+    subscriber.is_active = True
+    subscriber.status = "active"
     db.query(UserCredential).filter(
-        UserCredential.person_id == person.id
+        UserCredential.person_id == subscriber.id
     ).update({"is_active": True})
     db.commit()
     if request.headers.get("HX-Request"):
@@ -1159,12 +1058,12 @@ def user_activate(request: Request, user_id: str, db: Session = Depends(get_db))
 
 @router.post("/users/{user_id}/deactivate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    person = person_service.people.get(db, user_id)
-    person_service.people.update(
-        db, user_id, PersonUpdate(is_active=False, status="inactive")
-    )
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    # Direct model update instead of person_service
+    subscriber.is_active = False
+    subscriber.status = "inactive"
     db.query(UserCredential).filter(
-        UserCredential.person_id == person.id
+        UserCredential.person_id == subscriber.id
     ).update({"is_active": False})
     db.commit()
     if request.headers.get("HX-Request"):
@@ -1174,8 +1073,8 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
 
 @router.post("/users/{user_id}/disable-mfa", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
-    person = person_service.people.get(db, user_id)
-    db.query(MFAMethod).filter(MFAMethod.person_id == person.id).update(
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    db.query(MFAMethod).filter(MFAMethod.person_id == subscriber.id).update(
         {"enabled": False, "is_active": False}
     )
     db.commit()
@@ -1184,10 +1083,10 @@ def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_d
 
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_reset_password(request: Request, user_id: str, db: Session = Depends(get_db)):
-    person = person_service.people.get(db, user_id)
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
     temp_password = secrets.token_urlsafe(16)
     db.query(UserCredential).filter(
-        UserCredential.person_id == person.id,
+        UserCredential.person_id == subscriber.id,
         UserCredential.is_active.is_(True),
     ).update(
         {
@@ -1221,31 +1120,32 @@ def user_create(
     role = rbac_service.roles.get(db, role_id)
 
     try:
-        person = person_service.people.create(
-            db,
-            PersonCreate(
-                first_name=first_name,
-                last_name=last_name,
-                display_name=f"{first_name} {last_name}".strip(),
-                email=email,
-            ),
+        # Direct model creation instead of person_service
+        subscriber = Subscriber(
+            first_name=first_name,
+            last_name=last_name,
+            display_name=f"{first_name} {last_name}".strip(),
+            email=email,
         )
+        db.add(subscriber)
+        db.flush()  # Get the ID without committing
 
         rbac_service.person_roles.create(
             db,
-            PersonRoleCreate(person_id=person.id, role_id=role.id),
+            PersonRoleCreate(person_id=subscriber.id, role_id=role.id),
         )
 
         temp_password = secrets.token_urlsafe(16)
         auth_service.user_credentials.create(
             db,
             UserCredentialCreate(
-                person_id=person.id,
+                person_id=subscriber.id,
                 username=email,
                 password_hash=hash_password(temp_password),
                 must_change_password=True,
             ),
         )
+        db.commit()
     except IntegrityError as exc:
         db.rollback()
         return _error_banner(_humanize_integrity_error(exc))
@@ -1275,26 +1175,25 @@ def user_create(
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
-    person = person_service.people.get(db, user_id)
-    if person.is_active:
+    subscriber = db.get(Subscriber, coerce_uuid(user_id))
+    if subscriber.is_active:
         return _blocked_delete_response(request, [], detail="Deactivate user before deleting.")
-    linked = _linked_user_labels(db, person.id)
+    linked = _linked_user_labels(db, subscriber.id)
     if linked:
         return _blocked_delete_response(request, linked)
     try:
-        db.query(UserCredential).filter(UserCredential.person_id == person.id).delete(synchronize_session=False)
-        db.query(MFAMethod).filter(MFAMethod.person_id == person.id).delete(synchronize_session=False)
-        db.query(AuthSession).filter(AuthSession.person_id == person.id).delete(synchronize_session=False)
-        db.query(ApiKey).filter(ApiKey.person_id == person.id).delete(synchronize_session=False)
-        db.query(PersonRole).filter(PersonRole.person_id == person.id).delete(synchronize_session=False)
-        db.query(PersonPermission).filter(PersonPermission.person_id == person.id).delete(synchronize_session=False)
-        db.query(VendorUser).filter(VendorUser.person_id == person.id).delete(synchronize_session=False)
-        db.query(ResellerUser).filter(ResellerUser.person_id == person.id).delete(synchronize_session=False)
-        db.delete(person)
+        db.query(UserCredential).filter(UserCredential.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(MFAMethod).filter(MFAMethod.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(AuthSession).filter(AuthSession.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(ApiKey).filter(ApiKey.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(PersonPermission).filter(PersonPermission.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(ResellerUser).filter(ResellerUser.person_id == subscriber.id).delete(synchronize_session=False)
+        db.delete(subscriber)
         db.commit()
     except IntegrityError:
         db.rollback()
-        linked = _linked_user_labels(db, person.id)
+        linked = _linked_user_labels(db, subscriber.id)
         return _blocked_delete_response(request, linked)
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
@@ -1767,7 +1666,7 @@ def api_keys_list(request: Request, new_key: str = None, db: Session = Depends(g
     current_user = get_current_user(request)
     api_keys = []
 
-    if current_user and current_user.get("person_id"):
+    if current_user and current_user.get("subscriber_id"):
         person_id = current_user["person_id"]
         api_keys = db.query(ApiKey).filter(
             ApiKey.person_id == coerce_uuid(person_id)
@@ -1813,7 +1712,7 @@ def api_key_create(
 
     current_user = get_current_user(request)
 
-    if not current_user or not current_user.get("person_id"):
+    if not current_user or not current_user.get("subscriber_id"):
         return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
     try:
@@ -2303,100 +2202,6 @@ def workflow_overview(request: Request, db: Session = Depends(get_db)):
     """Workflow and SLA configuration overview."""
     context = _workflow_context(request, db)
     return templates.TemplateResponse("admin/system/workflow.html", context)
-
-
-@router.post("/workflow/policies", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-async def workflow_policy_create(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    try:
-        payload = SlaPolicyCreate(
-            name=(form.get("name") or "").strip(),
-            entity_type=(form.get("entity_type") or "").strip(),
-            description=(form.get("description") or "").strip() or None,
-            is_active=_form_bool(form.get("is_active")),
-        )
-        workflow_service.sla_policies.create(db=db, payload=payload)
-        return RedirectResponse(url="/admin/system/workflow", status_code=303)
-    except Exception as exc:
-        error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = _workflow_context(request, db, error or "Unable to create policy.")
-        return templates.TemplateResponse("admin/system/workflow.html", context, status_code=400)
-
-
-@router.post("/workflow/targets", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-async def workflow_target_create(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    try:
-        target_minutes = int(form.get("target_minutes") or "0")
-        warning_raw = (form.get("warning_minutes") or "").strip()
-        warning_minutes = int(warning_raw) if warning_raw else None
-        payload = SlaTargetCreate(
-            policy_id=(form.get("policy_id") or "").strip(),
-            priority=(form.get("priority") or "").strip() or None,
-            target_minutes=target_minutes,
-            warning_minutes=warning_minutes,
-            is_active=_form_bool(form.get("is_active")),
-        )
-        workflow_service.sla_targets.create(db=db, payload=payload)
-        return RedirectResponse(url="/admin/system/workflow", status_code=303)
-    except Exception as exc:
-        error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = _workflow_context(request, db, error or "Unable to create SLA target.")
-        return templates.TemplateResponse("admin/system/workflow.html", context, status_code=400)
-
-
-@router.post("/workflow/transitions/ticket", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-async def workflow_ticket_transition_create(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    try:
-        payload = TicketStatusTransitionCreate(
-            from_status=(form.get("from_status") or "").strip(),
-            to_status=(form.get("to_status") or "").strip(),
-            requires_note=_form_bool(form.get("requires_note")),
-            is_active=_form_bool(form.get("is_active")),
-        )
-        workflow_service.ticket_transitions.create(db=db, payload=payload)
-        return RedirectResponse(url="/admin/system/workflow", status_code=303)
-    except Exception as exc:
-        error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = _workflow_context(request, db, error or "Unable to create ticket transition.")
-        return templates.TemplateResponse("admin/system/workflow.html", context, status_code=400)
-
-
-@router.post("/workflow/transitions/work-order", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-async def workflow_work_order_transition_create(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    try:
-        payload = WorkOrderStatusTransitionCreate(
-            from_status=(form.get("from_status") or "").strip(),
-            to_status=(form.get("to_status") or "").strip(),
-            requires_note=_form_bool(form.get("requires_note")),
-            is_active=_form_bool(form.get("is_active")),
-        )
-        workflow_service.work_order_transitions.create(db=db, payload=payload)
-        return RedirectResponse(url="/admin/system/workflow", status_code=303)
-    except Exception as exc:
-        error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = _workflow_context(request, db, error or "Unable to create work order transition.")
-        return templates.TemplateResponse("admin/system/workflow.html", context, status_code=400)
-
-
-@router.post("/workflow/transitions/project-task", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-async def workflow_project_task_transition_create(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    try:
-        payload = ProjectTaskStatusTransitionCreate(
-            from_status=(form.get("from_status") or "").strip(),
-            to_status=(form.get("to_status") or "").strip(),
-            requires_note=_form_bool(form.get("requires_note")),
-            is_active=_form_bool(form.get("is_active")),
-        )
-        workflow_service.project_task_transitions.create(db=db, payload=payload)
-        return RedirectResponse(url="/admin/system/workflow", status_code=303)
-    except Exception as exc:
-        error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = _workflow_context(request, db, error or "Unable to create project task transition.")
-        return templates.TemplateResponse("admin/system/workflow.html", context, status_code=400)
 
 
 @router.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])

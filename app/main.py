@@ -20,7 +20,6 @@ from app.api.auth import router as auth_router
 from app.api.auth_flow import router as auth_flow_router
 from app.api.rbac import router as rbac_router
 from app.api.notifications import router as notifications_router
-from app.api.workflow import router as workflow_router
 from app.api.comms import router as comms_router
 from app.api.analytics import router as analytics_router
 from app.api.external import router as external_router
@@ -39,7 +38,6 @@ from app.api.customers import router as customers_router
 from app.api.subscribers import router as subscriber_router
 from app.api.search import router as search_router
 from app.api.scheduler import router as scheduler_router
-from app.api.sla_credit import router as sla_credit_router
 from app.api.fiber_plant import router as fiber_plant_router
 from app.api.nextcloud_talk import router as nextcloud_talk_router
 from app.api.wireguard import router as wireguard_router, public_router as wireguard_public_router
@@ -81,7 +79,6 @@ from app.services.settings_seed import (
     seed_usage_policy_settings,
     seed_subscriber_settings,
     seed_wireguard_settings,
-    seed_workflow_settings,
 )
 from app.logging import configure_logging
 from app.observability import ObservabilityMiddleware
@@ -337,10 +334,8 @@ _include_api_router(webhooks_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(connectors_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(integrations_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(scheduler_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(workflow_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(comms_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(analytics_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(sla_credit_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(fiber_plant_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(nextcloud_talk_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(wireguard_router, dependencies=[Depends(require_user_auth)])
@@ -394,7 +389,6 @@ def _start_jobs():
         seed_subscriber_settings(db)
         seed_provisioning_settings(db)
         seed_tr069_settings(db)
-        seed_workflow_settings(db)
         seed_network_policy_settings(db)
         seed_network_settings(db)
         seed_network_monitoring_settings(db)

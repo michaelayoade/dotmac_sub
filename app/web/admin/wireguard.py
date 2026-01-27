@@ -464,7 +464,7 @@ async def server_create(
             action="create",
             entity_type="wireguard_server",
             entity_id=str(server.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": server.name},
         )
 
@@ -672,7 +672,7 @@ async def server_update(
             action="update",
             entity_type="wireguard_server",
             entity_id=str(server.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
 
@@ -722,7 +722,7 @@ async def server_regenerate_keys(
         action="regenerate_keys",
         entity_type="wireguard_server",
         entity_id=str(server_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=None,
     )
     return RedirectResponse(url="/admin/network/vpn", status_code=303)
@@ -742,7 +742,7 @@ async def server_deploy(request: Request, server_id: UUID, db: Session = Depends
         action="deploy",
         entity_type="wireguard_server",
         entity_id=str(server_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"success": success, "message": message},
     )
     # TODO: Flash message with result
@@ -763,7 +763,7 @@ async def server_undeploy(request: Request, server_id: UUID, db: Session = Depen
         action="undeploy",
         entity_type="wireguard_server",
         entity_id=str(server_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"success": success, "message": message},
     )
     return RedirectResponse(url="/admin/network/vpn", status_code=303)
@@ -879,7 +879,7 @@ async def server_delete(request: Request, server_id: UUID, db: Session = Depends
             action="delete",
             entity_type="wireguard_server",
             entity_id=str(server_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": server.name},
         )
 
@@ -992,7 +992,7 @@ async def peer_create(
             action="create",
             entity_type="wireguard_peer",
             entity_id=str(created.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": created.name},
         )
 
@@ -1198,7 +1198,7 @@ async def peer_update(
             action="update",
             entity_type="wireguard_peer",
             entity_id=str(updated_peer.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=audit_metadata,
         )
         return RedirectResponse(
@@ -1234,7 +1234,7 @@ async def peer_disable(request: Request, peer_id: UUID, db: Session = Depends(ge
         action="disable",
         entity_type="wireguard_peer",
         entity_id=str(peer.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"status": peer.status.value if peer.status else None},
     )
     return RedirectResponse(
@@ -1255,7 +1255,7 @@ async def peer_enable(request: Request, peer_id: UUID, db: Session = Depends(get
         action="enable",
         entity_type="wireguard_peer",
         entity_id=str(peer.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"status": peer.status.value if peer.status else None},
     )
     return RedirectResponse(
@@ -1277,7 +1277,7 @@ async def peer_delete(request: Request, peer_id: UUID, db: Session = Depends(get
         action="delete",
         entity_type="wireguard_peer",
         entity_id=str(peer.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": peer.name},
     )
     wg_service.wg_peers.delete(db, peer_id)
@@ -1303,7 +1303,7 @@ async def peer_regenerate_token(
         action="regenerate_token",
         entity_type="wireguard_peer",
         entity_id=str(peer_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=None,
     )
     return RedirectResponse(

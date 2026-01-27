@@ -91,18 +91,6 @@
                         </div>
                     </div>
 
-                    <div>
-                        <label for="project_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Project</label>
-                        <select name="project_id" id="project_id"
-                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">-- No Project --</option>
-                            {% for project in projects %}
-                            <option value="{{ project.id }}" {% if survey and survey.project_id == project.id %}selected{% endif %}>
-                                {{ project.name }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                    </div>
                 </div>
 
                 {% if survey %}

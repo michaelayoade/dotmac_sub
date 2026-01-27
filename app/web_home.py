@@ -23,8 +23,6 @@ def get_db():
 def home(request: Request, db: Session = Depends(get_db)):
     subscribers = subscriber_service.subscribers.list(
         db=db,
-        subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",

@@ -520,27 +520,6 @@ class TestSeedProjectsSettings:
 
 
 # =============================================================================
-# Workflow Settings Tests
-# =============================================================================
-
-
-class TestSeedWorkflowSettings:
-    """Tests for seed_workflow_settings function."""
-
-    def test_seeds_default_sla_clock_status(self, db_session, monkeypatch):
-        """Test default SLA clock status is seeded."""
-        monkeypatch.setenv("WORKFLOW_DEFAULT_SLA_CLOCK_STATUS", "paused")
-
-        settings_seed.seed_workflow_settings(db_session)
-
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.workflow,
-            DomainSetting.key == "default_sla_clock_status",
-        ).first()
-        assert setting is not None
-
-
-# =============================================================================
 # Network Policy Settings Tests
 # =============================================================================
 

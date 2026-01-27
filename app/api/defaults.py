@@ -52,13 +52,6 @@ class SubscriptionDefaultsResponse(BaseModel):
     auto_renew: bool
 
 
-class TicketDefaultsResponse(BaseModel):
-    """Response model for ticket defaults."""
-    priority: str
-    category_id: Optional[str] = None
-    status: str
-
-
 class CurrencySettingsResponse(BaseModel):
     """Response model for currency settings."""
     default_currency: str
@@ -130,21 +123,6 @@ async def get_subscription_defaults(
     service = SmartDefaultsService(db)
     defaults = service.get_subscription_defaults()
     return SubscriptionDefaultsResponse(**defaults)
-
-
-@router.get("/ticket", response_model=TicketDefaultsResponse)
-async def get_ticket_defaults(
-    db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
-):
-    """
-    Get default values for creating a new support ticket.
-
-    Returns default priority, category, and status.
-    """
-    service = SmartDefaultsService(db)
-    defaults = service.get_ticket_defaults()
-    return TicketDefaultsResponse(**defaults)
 
 
 @router.get("/currency", response_model=CurrencySettingsResponse)

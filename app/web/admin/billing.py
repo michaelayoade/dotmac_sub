@@ -857,7 +857,7 @@ def invoice_create(
         action="create",
         entity_type="invoice",
         entity_id=str(invoice.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"invoice_number": invoice.invoice_number},
     )
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice.id}", status_code=303)
@@ -1010,7 +1010,7 @@ def invoice_update(
             action="update",
             entity_type="invoice",
             entity_id=str(invoice_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
     except Exception as exc:
@@ -1339,7 +1339,7 @@ def invoice_apply_credit(
             action="apply",
             entity_type="credit_note",
             entity_id=str(credit_note_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
     except Exception as exc:
@@ -1400,7 +1400,7 @@ def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         action="send",
         entity_type="invoice",
         entity_id=str(invoice_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -1419,7 +1419,7 @@ def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         action="void",
         entity_type="invoice",
         entity_id=str(invoice_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -1458,7 +1458,7 @@ def invoice_bulk_issue(
                     action="issue",
                     entity_type="invoice",
                     entity_id=invoice_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:
@@ -1494,7 +1494,7 @@ def invoice_bulk_send(
                     action="send",
                     entity_type="invoice",
                     entity_id=invoice_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:
@@ -1532,7 +1532,7 @@ def invoice_bulk_void(
                     action="void",
                     entity_type="invoice",
                     entity_id=invoice_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:
@@ -2113,7 +2113,7 @@ def payment_create(
             action="create",
             entity_type="payment",
             entity_id=str(payment.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"amount": str(payment.amount), "invoice_id": str(payment.invoice_id) if payment.invoice_id else None},
         )
     except Exception as exc:
@@ -2329,7 +2329,7 @@ def payment_update(
             action="update",
             entity_type="payment",
             entity_id=str(payment_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
     except Exception as exc:
@@ -2542,7 +2542,7 @@ async def payment_import_submit(request: Request, db: Session = Depends(get_db))
             action="import",
             entity_type="payment",
             entity_id="bulk",
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"imported": imported_count, "errors": len(errors)},
         )
 
@@ -3011,7 +3011,7 @@ def dunning_pause(request: Request, case_id: str, db: Session = Depends(get_db))
         action="pause",
         entity_type="dunning_case",
         entity_id=case_id,
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
@@ -3028,7 +3028,7 @@ def dunning_resume(request: Request, case_id: str, db: Session = Depends(get_db)
         action="resume",
         entity_type="dunning_case",
         entity_id=case_id,
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
@@ -3045,7 +3045,7 @@ def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db))
         action="close",
         entity_type="dunning_case",
         entity_id=case_id,
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
@@ -3067,7 +3067,7 @@ def dunning_bulk_pause(request: Request, case_ids: str = Form(...), db: Session 
                     action="pause",
                     entity_type="dunning_case",
                     entity_id=case_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
             except Exception:
@@ -3092,7 +3092,7 @@ def dunning_bulk_resume(request: Request, case_ids: str = Form(...), db: Session
                     action="resume",
                     entity_type="dunning_case",
                     entity_id=case_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
             except Exception:

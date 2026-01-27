@@ -15,7 +15,6 @@ from app.services import (
     audit as audit_service,
     billing as billing_service,
     subscriber as subscriber_service,
-    tickets as tickets_service,
     web_admin as web_admin_service,
     system_health as system_health_service,
     settings_spec,
@@ -135,23 +134,6 @@ def dashboard(request: Request, db: Session):
         offset=0,
     )
 
-    tickets = tickets_service.tickets.list(
-        db=db,
-        account_id=None,
-        subscription_id=None,
-        status=None,
-        priority=None,
-        channel=None,
-        search=None,
-        created_by_subscriber_id=None,
-        assigned_to_subscriber_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=100,
-        offset=0,
-    )
-
     recent_activity = audit_service.audit_events.list(
         db=db,
         actor_id=None,
@@ -202,10 +184,6 @@ def dashboard(request: Request, db: Session):
 
     arpu = paid_revenue / active_subscribers if active_subscribers > 0 else 0
 
-    open_ticket_count = sum(1 for t in tickets if _get_status(t) in ("open", "new"))
-    in_progress_tickets = sum(1 for t in tickets if _get_status(t) == "in_progress")
-    resolved_today = sum(1 for t in tickets if _get_status(t) == "resolved")
-
     health_pct = int((olts_online / olts_total) * 100) if olts_total > 0 else 0
     warn_pct = thresholds.get("network_warn_pct") or 90
     crit_pct = thresholds.get("network_crit_pct") or 70
@@ -224,8 +202,6 @@ def dashboard(request: Request, db: Session):
         "mrr": paid_revenue,
         "arpu": arpu,
         "revenue_change": 0,
-        "open_tickets": open_ticket_count + in_progress_tickets,
-        "tickets_change": 0,
         "system_uptime": 99.9,
         "ar_current": pending_amount,
         "ar_30": 0,
@@ -237,7 +213,7 @@ def dashboard(request: Request, db: Session):
         "orders_scheduled": 0,
         "orders_in_progress": 0,
         "orders_pending_activation": 0,
-        "orders_completed_today": resolved_today,
+        "orders_completed_today": 0,
         "olts_online": olts_online,
         "olts_total": olts_total,
         "onts_active": onts_active,
@@ -278,8 +254,6 @@ def dashboard(request: Request, db: Session):
             activity_type = "payment"
         elif "subscriber" in entity_type.lower():
             activity_type = "signup" if "create" in action.lower() else "activation"
-        elif "ticket" in entity_type.lower():
-            activity_type = "ticket"
 
         actor_name = None
         if event.actor_id and _is_user_actor(getattr(event, "actor_type", None)):
@@ -391,8 +365,6 @@ def dashboard_stats_partial(request: Request, db: Session):
         "subscribers_change": 12,
         "monthly_revenue": 45231.89,
         "revenue_change": 8,
-        "open_tickets": 23,
-        "tickets_change": -5,
         "system_uptime": 99.9,
     }
 

@@ -6,18 +6,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from sqlalchemy import or_
-
 from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential, CatalogOffer, Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import AccountStatus, Subscriber, Organization
-from app.models.tickets import Ticket, TicketPriority, TicketStatus
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
-from app.services import tickets as tickets_service
 from app.services import provisioning as provisioning_service
 from app.services.settings_spec import resolve_value
 
@@ -325,28 +321,8 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             plan_name=services[0].name,
         )
 
+    # Tickets module removed - always return 0
     open_count = 0
-    if account_id:
-        tickets = tickets_service.tickets.list(
-            db=db,
-            account_id=account_id,
-            subscription_id=None,
-            status=None,
-            priority=None,
-            channel=None,
-            search=None,
-            created_by_subscriber_id=None,
-            assigned_to_subscriber_id=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=1000,
-            offset=0,
-        )
-        open_count = sum(
-            1 for ticket in tickets
-            if _get_status_value(ticket.status) in ("open", "new", "pending", "in_progress")
-        )
 
     return {
         "user": SimpleNamespace(**user),
@@ -480,72 +456,6 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
         billing_email = billing_email or current_user.get("email")
 
     return {"billing_name": billing_name, "billing_email": billing_email}
-
-
-def get_customer_tickets(
-    db: Session,
-    customer: dict,
-    status: str | None = None,
-    priority: str | None = None,
-    page: int = 1,
-    per_page: int = 25,
-) -> dict:
-    """Get tickets accessible by the customer with pagination.
-
-    Args:
-        db: Database session
-        customer: Customer session dict
-        status: Optional status filter
-        priority: Optional priority filter
-        page: Page number
-        per_page: Items per page
-
-    Returns:
-        Dict with 'tickets', 'total', 'total_pages' keys
-    """
-    account_id = customer.get("account_id")
-    account_id_str = str(account_id) if account_id else None
-    subscription_id = customer.get("subscription_id")
-    subscription_id_str = str(subscription_id) if subscription_id else None
-
-    allowed_account_ids = get_allowed_account_ids(customer, db)
-
-    subscriber_id = customer.get("subscriber_id")
-    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
-
-    conditions = []
-    if allowed_account_ids:
-        conditions.append(Ticket.account_id.in_([UUID(acc_id) for acc_id in allowed_account_ids]))
-    if subscription_id_str:
-        conditions.append(Ticket.subscription_id == UUID(subscription_id_str))
-    if subscriber:
-        conditions.append(Ticket.created_by_subscriber_id == subscriber.id)
-
-    if not conditions:
-        return {"tickets": [], "total": 0, "total_pages": 1}
-
-    query = db.query(Ticket).filter(Ticket.is_active.is_(True)).filter(or_(*conditions))
-    if status:
-        try:
-            query = query.filter(Ticket.status == TicketStatus(status))
-        except ValueError:
-            pass
-    if priority:
-        try:
-            query = query.filter(Ticket.priority == TicketPriority(priority))
-        except ValueError:
-            pass
-
-    total = query.count()
-    total_pages = (total + per_page - 1) // per_page if total else 1
-    tickets = (
-        query.order_by(Ticket.created_at.desc())
-        .limit(per_page)
-        .offset((page - 1) * per_page)
-        .all()
-    )
-
-    return {"tickets": tickets, "total": total, "total_pages": total_pages}
 
 
 def get_customer_appointments(

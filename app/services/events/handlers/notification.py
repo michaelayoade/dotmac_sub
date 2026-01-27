@@ -39,9 +39,6 @@ EVENT_TYPE_TO_TEMPLATE = {
     # Provisioning events
     EventType.provisioning_completed: "provisioning_completed",
     EventType.provisioning_failed: "provisioning_failed",
-    # Ticket events
-    EventType.ticket_created: "ticket_created",
-    EventType.ticket_resolved: "ticket_resolved",
 }
 
 

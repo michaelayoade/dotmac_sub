@@ -62,7 +62,6 @@ class EventDispatcher:
             account_id=event.account_id,
             subscription_id=event.subscription_id,
             invoice_id=event.invoice_id,
-            ticket_id=event.ticket_id,
             service_order_id=event.service_order_id,
         )
         db.add(event_record)
@@ -131,7 +130,6 @@ class EventDispatcher:
             account_id=event_record.account_id,
             subscription_id=event_record.subscription_id,
             invoice_id=event_record.invoice_id,
-            ticket_id=event_record.ticket_id,
             service_order_id=event_record.service_order_id,
         )
 
@@ -221,7 +219,6 @@ def emit_event(
     account_id: UUID | str | None = None,
     subscription_id: UUID | str | None = None,
     invoice_id: UUID | str | None = None,
-    ticket_id: UUID | str | None = None,
     service_order_id: UUID | str | None = None,
 ) -> Event:
     """Emit an event to all registered handlers.
@@ -241,7 +238,6 @@ def emit_event(
         account_id: Related account ID
         subscription_id: Related subscription ID
         invoice_id: Related invoice ID
-        ticket_id: Related ticket ID
         service_order_id: Related service order ID
 
     Returns:
@@ -275,7 +271,6 @@ def emit_event(
         account_id=to_uuid(account_id),
         subscription_id=to_uuid(subscription_id),
         invoice_id=to_uuid(invoice_id),
-        ticket_id=to_uuid(ticket_id),
         service_order_id=to_uuid(service_order_id),
     )
 

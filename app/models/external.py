@@ -10,12 +10,11 @@ from app.db import Base
 
 
 class ExternalEntityType(enum.Enum):
-    ticket = "ticket"
-    ticket_comment = "ticket_comment"
-    project = "project"
-    project_task = "project_task"
-    work_order = "work_order"
-    work_order_note = "work_order_note"
+    """Entity types that can be synced with external systems."""
+    subscriber = "subscriber"
+    subscription = "subscription"
+    invoice = "invoice"
+    service_order = "service_order"
 
 
 class ExternalReference(Base):

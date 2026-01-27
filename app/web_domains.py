@@ -10,21 +10,16 @@ from app.services import (
     bandwidth as bandwidth_service,
     billing as billing_service,
     catalog as catalog_service,
-    comms as comms_service,
     collections as collections_service,
     connector as connector_service,
-    dispatch as dispatch_service,
     external as external_service,
     gis as gis_service,
     integration as integration_service,
-    inventory as inventory_service,
     lifecycle as lifecycle_service,
     network as network_service,
     network_monitoring as monitoring_service,
     notification as notification_service,
-    person as person_service,
     provisioning as provisioning_service,
-    projects as projects_service,
     qualification as qualification_service,
     radius as radius_service,
     rbac as rbac_service,
@@ -32,14 +27,10 @@ from app.services import (
     settings_api as settings_api_service,
     snmp as snmp_service,
     subscription_engine as subscription_engine_service,
-    tickets as tickets_service,
     tr069 as tr069_service,
-    timecost as timecost_service,
     usage as usage_service,
     webhook as webhook_service,
-    workforce as workforce_service,
     subscriber as subscriber_service,
-    workflow as workflow_service,
 )
 
 templates = Jinja2Templates(directory="templates")
@@ -218,8 +209,6 @@ def subscription_engines_home(request: Request, db: Session = Depends(get_db)):
 def subscribers_home(request: Request, db: Session = Depends(get_db)):
     items = subscriber_service.subscribers.list(
         db=db,
-        subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -227,21 +216,6 @@ def subscribers_home(request: Request, db: Session = Depends(get_db)):
         offset=0,
     )
     return _render(request, "Subscribers", items)
-
-
-@router.get("/people", response_class=HTMLResponse)
-def people_home(request: Request, db: Session = Depends(get_db)):
-    items = person_service.people.list(
-        db=db,
-        email=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "People", items)
 
 
 @router.get("/rbac", response_class=HTMLResponse)
@@ -427,67 +401,6 @@ def audit_home(request: Request, db: Session = Depends(get_db)):
     return _render(request, "Audit Events", items)
 
 
-@router.get("/tickets", response_class=HTMLResponse)
-def tickets_home(request: Request, db: Session = Depends(get_db)):
-    items = tickets_service.tickets.list(
-        db=db,
-        account_id=None,
-        subscription_id=None,
-        status=None,
-        priority=None,
-        channel=None,
-        search=None,
-        created_by_person_id=None,
-        assigned_to_person_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Tickets", items)
-
-
-@router.get("/projects", response_class=HTMLResponse)
-def projects_home(request: Request, db: Session = Depends(get_db)):
-    items = projects_service.projects.list(
-        db=db,
-        account_id=None,
-        status=None,
-        priority=None,
-        owner_person_id=None,
-        manager_person_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Projects", items)
-
-
-@router.get("/work-orders", response_class=HTMLResponse)
-def work_orders_home(request: Request, db: Session = Depends(get_db)):
-    items = workforce_service.work_orders.list(
-        db=db,
-        account_id=None,
-        subscription_id=None,
-        service_order_id=None,
-        ticket_id=None,
-        project_id=None,
-        assigned_to_person_id=None,
-        status=None,
-        priority=None,
-        work_type=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Work Orders", items)
-
-
 @router.get("/external-references", response_class=HTMLResponse)
 def external_references_home(request: Request, db: Session = Depends(get_db)):
     items = external_service.external_references.list(
@@ -507,72 +420,8 @@ def external_references_home(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/workflow", response_class=HTMLResponse)
 def workflow_home(request: Request, db: Session = Depends(get_db)):
-    items = workflow_service.sla_policies.list(
-        db=db,
-        entity_type=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "SLA Policies", items)
-
-
-@router.get("/dispatch", response_class=HTMLResponse)
-def dispatch_home(request: Request, db: Session = Depends(get_db)):
-    items = dispatch_service.technicians.list(
-        db=db,
-        person_id=None,
-        region=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Technicians", items)
-
-
-@router.get("/inventory", response_class=HTMLResponse)
-def inventory_home(request: Request, db: Session = Depends(get_db)):
-    items = inventory_service.inventory_items.list(
-        db=db,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Inventory Items", items)
-
-
-@router.get("/timecost", response_class=HTMLResponse)
-def timecost_home(request: Request, db: Session = Depends(get_db)):
-    items = timecost_service.work_logs.list(
-        db=db,
-        work_order_id=None,
-        person_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "Work Logs", items)
-
-
-@router.get("/comms", response_class=HTMLResponse)
-def comms_home(request: Request, db: Session = Depends(get_db)):
-    items = comms_service.eta_updates.list(
-        db=db,
-        work_order_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "ETA Updates", items)
+    """Workflow page - SLA management removed, returns placeholder."""
+    return _render(request, "Workflow", [])
 
 
 @router.get("/analytics", response_class=HTMLResponse)

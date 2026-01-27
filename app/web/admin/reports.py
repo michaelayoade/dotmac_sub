@@ -809,21 +809,23 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 @router.get("/technician", response_class=HTMLResponse)
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_sidebar_stats, get_current_user
-    from app.services import dispatch as dispatch_service
+    # from app.services import dispatch as dispatch_service
     from app.models.provisioning import ServiceOrderStatus
 
     # Get technicians
-    technicians = dispatch_service.technicians.list(
-        db=db,
-        person_id=None,
-        region=None,
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=100,
-        offset=0,
-    )
-    total_technicians = len(technicians)
+    # technicians = dispatch_service.technicians.list(
+    #     db=db,
+    #     person_id=None,
+    #     region=None,
+    #     is_active=True,
+    #     order_by="created_at",
+    #     order_dir="desc",
+    #     limit=100,
+    #     offset=0,
+    # )
+    # total_technicians = len(technicians)
+    technicians = []
+    total_technicians = 0
 
     # Get service orders
     all_orders = operations_service.service_orders.list(
@@ -892,19 +894,20 @@ def reports_technician(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/technician/export")
 def reports_technician_export(days: int | None = None, db: Session = Depends(get_db)):
-    from app.services import dispatch as dispatch_service
+    # from app.services import dispatch as dispatch_service
     from app.models.provisioning import ServiceOrderStatus
 
-    technicians = dispatch_service.technicians.list(
-        db=db,
-        person_id=None,
-        region=None,
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
-    )
+    # technicians = dispatch_service.technicians.list(
+    #     db=db,
+    #     person_id=None,
+    #     region=None,
+    #     is_active=True,
+    #     order_by="created_at",
+    #     order_dir="desc",
+    #     limit=5000,
+    #     offset=0,
+    # )
+    technicians = []
     all_orders = operations_service.service_orders.list(
         db=db,
         account_id=None,

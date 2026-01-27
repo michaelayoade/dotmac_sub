@@ -58,7 +58,7 @@ def get_user_credential(credential_id: str, db: Session = Depends(get_db)):
     tags=["user-credentials"],
 )
 def list_user_credentials(
-    person_id: str | None = None,
+    subscriber_id: str | None = None,
     provider: str | None = None,
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
@@ -68,7 +68,7 @@ def list_user_credentials(
     db: Session = Depends(get_db),
 ):
     return auth_service.user_credentials.list_response(
-        db, person_id, provider, is_active, order_by, order_dir, limit, offset
+        db, subscriber_id, provider, is_active, order_by, order_dir, limit, offset
     )
 
 
@@ -117,7 +117,7 @@ def get_mfa_method(method_id: str, db: Session = Depends(get_db)):
     tags=["mfa-methods"],
 )
 def list_mfa_methods(
-    person_id: str | None = None,
+    subscriber_id: str | None = None,
     method_type: str | None = None,
     is_primary: bool | None = None,
     enabled: bool | None = None,
@@ -130,7 +130,7 @@ def list_mfa_methods(
 ):
     return auth_service.mfa_methods.list_response(
         db,
-        person_id,
+        subscriber_id,
         method_type,
         is_primary,
         enabled,
@@ -187,7 +187,7 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
     tags=["sessions"],
 )
 def list_sessions(
-    person_id: str | None = None,
+    subscriber_id: str | None = None,
     status: str | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
@@ -196,7 +196,7 @@ def list_sessions(
     db: Session = Depends(get_db),
 ):
     return auth_service.sessions.list_response(
-        db, person_id, status, order_by, order_dir, limit, offset
+        db, subscriber_id, status, order_by, order_dir, limit, offset
     )
 
 
@@ -259,7 +259,7 @@ def get_api_key(key_id: str, db: Session = Depends(get_db)):
     tags=["api-keys"],
 )
 def list_api_keys(
-    person_id: str | None = None,
+    subscriber_id: str | None = None,
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
@@ -268,7 +268,7 @@ def list_api_keys(
     db: Session = Depends(get_db),
 ):
     return auth_service.api_keys.list_response(
-        db, person_id, is_active, order_by, order_dir, limit, offset
+        db, subscriber_id, is_active, order_by, order_dir, limit, offset
     )
 
 

@@ -17,8 +17,6 @@ from app.models.catalog import (
     AddOn,
 )
 from app.models.connector import ConnectorConfig
-from app.models.crm.team import CrmAgent
-from app.models.projects import ProjectTemplate
 from app.models.radius import RadiusServer
 from app.models.webhook import WebhookEndpoint
 from app.models.wireguard import WireGuardServer, WireGuardPeer
@@ -70,12 +68,8 @@ def configuration_index(request: Request, db: Session = Depends(get_db)):
     connectors_count = db.query(ConnectorConfig).count()
     webhooks_count = db.query(WebhookEndpoint).count()
 
-    # Operations configuration counts
-    project_templates_count = db.query(ProjectTemplate).count()
-
     # Business configuration counts
     tax_rates_count = db.query(TaxRate).count()
-    crm_agents_count = db.query(CrmAgent).count()
 
     context = _base_context(request, db, active_page="configuration")
     context.update({
@@ -95,10 +89,7 @@ def configuration_index(request: Request, db: Session = Depends(get_db)):
         # Integrations
         "connectors_count": connectors_count,
         "webhooks_count": webhooks_count,
-        # Operations
-        "project_templates_count": project_templates_count,
         # Business
         "tax_rates_count": tax_rates_count,
-        "crm_agents_count": crm_agents_count,
     })
     return templates.TemplateResponse("admin/system/configuration/index.html", context)

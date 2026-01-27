@@ -72,11 +72,6 @@ class EventType(enum.Enum):
     session_started = "session.started"
     session_ended = "session.ended"
 
-    # Support - Ticket events (3)
-    ticket_created = "ticket.created"
-    ticket_escalated = "ticket.escalated"
-    ticket_resolved = "ticket.resolved"
-
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"
@@ -120,7 +115,6 @@ class Event:
     account_id: UUID | None = None
     subscription_id: UUID | None = None
     invoice_id: UUID | None = None
-    ticket_id: UUID | None = None
     service_order_id: UUID | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -147,7 +141,6 @@ class Event:
                 "account_id": str(self.account_id) if self.account_id else None,
                 "subscription_id": str(self.subscription_id) if self.subscription_id else None,
                 "invoice_id": str(self.invoice_id) if self.invoice_id else None,
-                "ticket_id": str(self.ticket_id) if self.ticket_id else None,
                 "service_order_id": str(self.service_order_id) if self.service_order_id else None,
             },
         }

@@ -15,7 +15,7 @@ def notifications_menu(request: Request, db: Session):
     current_user = web_admin_service.get_current_user(request)
     recipients = {
         current_user.get("email"),
-        current_user.get("person_id"),
+        current_user.get("subscriber_id"),
         current_user.get("id"),
     }
     recipients.discard(None)

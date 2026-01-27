@@ -247,18 +247,7 @@ class IntegrationJobs(ListResponseMixin):
         db.refresh(run)
         try:
             metrics = None
-            if job.target and job.target.connector_config_id:
-                config = db.get(ConnectorConfig, job.target.connector_config_id)
-                if config and config.connector_type == ConnectorType.email:
-                    from app.services.crm import inbox as crm_inbox_service
-                    logger.info(
-                        "EMAIL_POLL_SCHEDULER_ENTRY job_id=%s target_id=%s",
-                        job_id,
-                        job.target_id,
-                    )
-                    metrics = crm_inbox_service.poll_email_targets(
-                        db, target_id=str(job.target_id)
-                    )
+            # Email polling via CRM inbox removed
             run.status = IntegrationRunStatus.success
             run.metrics = metrics
         except Exception as exc:

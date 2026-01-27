@@ -124,11 +124,7 @@ def _patch_jsonb_for_sqlite():
 
 _patch_jsonb_for_sqlite()
 
-from app.models.person import Person
-from app.models.subscriber import Subscriber, SubscriberAccount
-from app.schemas.projects import ProjectCreate, ProjectTaskCreate
-from app.schemas.tickets import TicketCreate
-from app.schemas.workforce import WorkOrderCreate
+from app.models.subscriber import Subscriber, SubscriberChannel, ChannelType
 from app.schemas.network_monitoring import PopSiteCreate, NetworkDeviceCreate
 from app.schemas.network import OLTDeviceCreate
 from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate, SubscriptionCreate
@@ -136,9 +132,6 @@ from app.models.catalog import ServiceType, AccessType, PriceBasis, RegionZone
 from app.schemas.radius import RadiusServerCreate
 from app.schemas.tr069 import Tr069AcsServerCreate
 from app.schemas.gis import GeoLayerCreate
-from app.services import projects as projects_service
-from app.services import tickets as tickets_service
-from app.services import workforce as workforce_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import network as network_service
 from app.services import catalog as catalog_service
@@ -206,22 +199,12 @@ def _unique_email() -> str:
 
 
 @pytest.fixture()
-def person(db_session):
-    person = Person(
+def subscriber(db_session):
+    """Unified subscriber fixture - combines identity, account, and billing."""
+    subscriber = Subscriber(
         first_name="Test",
         last_name="User",
         email=_unique_email(),
-    )
-    db_session.add(person)
-    db_session.commit()
-    db_session.refresh(person)
-    return person
-
-
-@pytest.fixture()
-def subscriber(person, db_session):
-    subscriber = Subscriber(
-        person_id=person.id,
     )
     db_session.add(subscriber)
     db_session.commit()
@@ -229,65 +212,11 @@ def subscriber(person, db_session):
     return subscriber
 
 
+# Legacy alias for backwards compatibility with tests expecting 'person'
 @pytest.fixture()
-def subscriber_account(subscriber, db_session):
-    account = SubscriberAccount(
-        subscriber_id=subscriber.id,
-    )
-    db_session.add(account)
-    db_session.commit()
-    db_session.refresh(account)
-    return account
-
-
-@pytest.fixture()
-def ticket(db_session, subscriber_account):
-    ticket = tickets_service.tickets.create(
-        db_session,
-        TicketCreate(
-            account_id=subscriber_account.id,
-            title="Connectivity issue",
-        ),
-    )
-    return ticket
-
-
-@pytest.fixture()
-def project(db_session, subscriber_account):
-    project = projects_service.projects.create(
-        db_session,
-        ProjectCreate(
-            name="Fiber rollout",
-            account_id=subscriber_account.id,
-        ),
-    )
-    return project
-
-
-@pytest.fixture()
-def project_task(db_session, project):
-    task = projects_service.project_tasks.create(
-        db_session,
-        ProjectTaskCreate(
-            project_id=project.id,
-            title="Splice segment A",
-        ),
-    )
-    return task
-
-
-@pytest.fixture()
-def work_order(db_session, subscriber_account, project, ticket):
-    work_order = workforce_service.work_orders.create(
-        db_session,
-        WorkOrderCreate(
-            title="Install ONT",
-            account_id=subscriber_account.id,
-            project_id=project.id,
-            ticket_id=ticket.id,
-        ),
-    )
-    return work_order
+def person(subscriber):
+    """Alias for subscriber fixture for backward compatibility."""
+    return subscriber
 
 
 @pytest.fixture(autouse=True)
@@ -365,12 +294,12 @@ def catalog_offer(db_session):
 
 
 @pytest.fixture()
-def subscription(db_session, subscriber_account, catalog_offer):
+def subscription(db_session, subscriber, catalog_offer):
     """Active subscription for usage tests."""
     subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
-            account_id=subscriber_account.id,
+            subscriber_id=subscriber.id,
             offer_id=catalog_offer.id,
         ),
     )
@@ -414,83 +343,6 @@ def geo_layer(db_session):
         ),
     )
     return layer
-
-
-# ============================================================================
-# CRM Fixtures
-# ============================================================================
-
-from app.models.crm.team import CrmTeam, CrmAgent, CrmAgentTeam, CrmTeamChannel, CrmRoutingRule
-from app.models.person import Person, PersonChannel, ChannelType
-
-
-@pytest.fixture()
-def crm_contact(db_session):
-    """CRM contact for conversation tests."""
-    person = Person(
-        first_name="Test",
-        last_name="Contact",
-        display_name="Test Contact",
-        email=_unique_email(),
-        phone="+1555123456",
-    )
-    db_session.add(person)
-    db_session.commit()
-    db_session.refresh(person)
-    return person
-
-
-@pytest.fixture()
-def crm_contact_channel(db_session, crm_contact):
-    """CRM contact channel for messaging tests."""
-    channel = PersonChannel(
-        person_id=crm_contact.id,
-        channel_type=ChannelType.email,
-        address=crm_contact.email,
-        is_primary=True,
-    )
-    db_session.add(channel)
-    db_session.commit()
-    db_session.refresh(channel)
-    return channel
-
-
-@pytest.fixture()
-def crm_team(db_session):
-    """CRM team for routing tests."""
-    team = CrmTeam(
-        name="Support Team",
-    )
-    db_session.add(team)
-    db_session.commit()
-    db_session.refresh(team)
-    return team
-
-
-@pytest.fixture()
-def crm_agent(db_session, person):
-    """CRM agent for team tests."""
-    agent = CrmAgent(
-        person_id=person.id,
-        title="Support Agent",
-    )
-    db_session.add(agent)
-    db_session.commit()
-    db_session.refresh(agent)
-    return agent
-
-
-@pytest.fixture()
-def crm_agent_team(db_session, crm_agent, crm_team):
-    """Agent-team link for routing tests."""
-    link = CrmAgentTeam(
-        agent_id=crm_agent.id,
-        team_id=crm_team.id,
-    )
-    db_session.add(link)
-    db_session.commit()
-    db_session.refresh(link)
-    return link
 
 
 # ============================================================================

@@ -11,7 +11,7 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     Authenticate WebSocket connection.
 
     Extracts JWT from query param (?token=) or cookie (session_token).
-    Returns {person_id, session_id} if valid, None otherwise.
+    Returns {subscriber_id, session_id} if valid, None otherwise.
     """
     token = websocket.query_params.get("token")
 
@@ -25,14 +25,14 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
     db = SessionLocal()
     try:
         payload = decode_access_token(db, token)
-        person_id = payload.get("sub")
+        subscriber_id = payload.get("sub")
         session_id = payload.get("session_id")
 
-        if not person_id:
+        if not subscriber_id:
             await websocket.close(code=4001, reason="Invalid token")
             return None
 
-        return {"person_id": person_id, "session_id": session_id}
+        return {"subscriber_id": subscriber_id, "session_id": session_id}
     except Exception:
         await websocket.close(code=4001, reason="Invalid token")
         return None

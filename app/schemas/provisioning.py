@@ -14,7 +14,9 @@ from app.models.provisioning import (
     ServiceState,
     TaskStatus,
 )
-from app.models.projects import ProjectType
+# Deleted model - commented out
+# from app.models.projects import ProjectType
+ProjectType = str  # Fallback type alias
 
 
 class ServiceOrderBase(BaseModel):

@@ -22,8 +22,12 @@ def validate_subscribers(db: Session, payloads: list) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for idx, payload in enumerate(payloads):
         try:
-            subscriber.validate_subscriber_person_id(
-                _get(payload, "person_id"),
+            subscriber.validate_subscriber_email(
+                _get(payload, "email"),
+            )
+            subscriber.validate_subscriber_name(
+                _get(payload, "first_name"),
+                _get(payload, "last_name"),
             )
         except HTTPException as exc:
             issues.append(ValidationIssue(index=idx, detail=str(exc.detail)))

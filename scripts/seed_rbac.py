@@ -3,8 +3,8 @@ import argparse
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
-from app.models.person import Person
-from app.models.rbac import Permission, PersonRole, Role, RolePermission
+from app.models.subscriber import Subscriber
+from app.models.rbac import Permission, SubscriberRole, Role, RolePermission
 
 
 DEFAULT_PERMISSIONS = [
@@ -231,7 +231,7 @@ ROLE_PERMISSIONS = {
 def parse_args():
     parser = argparse.ArgumentParser(description="Seed RBAC roles and permissions.")
     parser.add_argument("--admin-email", help="Email to map to admin role.")
-    parser.add_argument("--admin-person-id", help="Person ID to map to admin role.")
+    parser.add_argument("--admin-subscriber-id", help="Subscriber ID to map to admin role.")
     return parser.parse_args()
 
 
@@ -274,15 +274,15 @@ def _ensure_role_permission(db, role_id, permission_id):
     return link
 
 
-def _ensure_person_role(db, person_id, role_id):
+def _ensure_subscriber_role(db, subscriber_id, role_id):
     link = (
-        db.query(PersonRole)
-        .filter(PersonRole.person_id == person_id)
-        .filter(PersonRole.role_id == role_id)
+        db.query(SubscriberRole)
+        .filter(SubscriberRole.subscriber_id == subscriber_id)
+        .filter(SubscriberRole.role_id == role_id)
         .first()
     )
     if not link:
-        link = PersonRole(person_id=person_id, role_id=role_id)
+        link = SubscriberRole(subscriber_id=subscriber_id, role_id=role_id)
         db.add(link)
     return link
 
@@ -312,15 +312,15 @@ def main():
         db.commit()
 
         admin_role = roles.get("admin")
-        if admin_role and (args.admin_email or args.admin_person_id):
-            person = None
-            if args.admin_person_id:
-                person = db.get(Person, args.admin_person_id)
-            if not person and args.admin_email:
-                person = db.query(Person).filter(Person.email == args.admin_email).first()
-            if not person:
-                raise SystemExit("Admin person not found.")
-            _ensure_person_role(db, person.id, admin_role.id)
+        if admin_role and (args.admin_email or args.admin_subscriber_id):
+            subscriber = None
+            if args.admin_subscriber_id:
+                subscriber = db.get(Subscriber, args.admin_subscriber_id)
+            if not subscriber and args.admin_email:
+                subscriber = db.query(Subscriber).filter(Subscriber.email == args.admin_email).first()
+            if not subscriber:
+                raise SystemExit("Admin subscriber not found.")
+            _ensure_subscriber_role(db, subscriber.id, admin_role.id)
             db.commit()
             print("Admin role assigned.")
         print("RBAC seed complete.")

@@ -26,21 +26,6 @@ class Settings:
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")
 
-    # Ticket attachment settings
-    ticket_attachment_upload_dir: str = os.getenv(
-        "TICKET_ATTACHMENT_UPLOAD_DIR", "static/uploads/tickets"
-    )
-    ticket_attachment_url_prefix: str = os.getenv(
-        "TICKET_ATTACHMENT_URL_PREFIX", "/static/uploads/tickets"
-    )
-    ticket_attachment_max_size_bytes: int = int(
-        os.getenv("TICKET_ATTACHMENT_MAX_SIZE_BYTES", str(5 * 1024 * 1024))
-    )
-    ticket_attachment_allowed_types: str = os.getenv(
-        "TICKET_ATTACHMENT_ALLOWED_TYPES",
-        "image/jpeg,image/png,image/gif,image/webp,application/pdf",
-    )
-
     # Meta Graph API settings
     meta_graph_api_version: str = os.getenv("META_GRAPH_API_VERSION", "v21.0")
     meta_graph_base_url: str = os.getenv(

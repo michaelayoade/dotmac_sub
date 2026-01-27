@@ -12,13 +12,10 @@ from uuid import UUID
 
 from app.db import SessionLocal
 from app.models.subscriber import Subscriber
-from app.models.subscriber import SubscriberAccount
-from app.models.tickets import Ticket, TicketStatus
 from app.services import auth as auth_service
 from app.services import subscriber as subscriber_service
 from app.services import audit as audit_service
 from app.services.audit_helpers import build_changes_metadata, extract_changes, format_changes, log_audit_event
-from app.services.crm import conversation as crm_service
 from app.services import notification as notification_service
 from app.models.auth import AuthProvider
 from app.models.catalog import ContractTerm, OfferStatus, SubscriptionStatus
@@ -418,7 +415,6 @@ def subscriber_detail(
 
     # Get subscriber's subscriptions (via their accounts)
     from app.services import billing as billing_service
-    from app.services import tickets as tickets_service
 
     subscriptions = []
     online_status = {}  # subscription_id -> is_online
@@ -505,47 +501,6 @@ def subscriber_detail(
     except Exception:
         pass
 
-    # Get subscriber's tickets scoped to their accounts
-    tickets = []
-    open_tickets_count = 0
-    try:
-        account_ids = [account.id for account in subscriber.accounts or []]
-        if account_ids:
-            tickets = (
-                db.query(Ticket)
-                .filter(Ticket.account_id.in_(account_ids))
-                .filter(Ticket.is_active.is_(True))
-                .order_by(Ticket.created_at.desc())
-                .limit(5)
-                .all()
-            )
-            open_tickets_count = (
-                db.query(Ticket)
-                .filter(Ticket.account_id.in_(account_ids))
-                .filter(Ticket.is_active.is_(True))
-                .filter(Ticket.status.in_([TicketStatus.new, TicketStatus.open, TicketStatus.in_progress]))
-                .count()
-            )
-    except Exception:
-        pass
-
-    # Get subscriber's conversations (from CRM inbox)
-    conversations = []
-    try:
-        if subscriber.person_id:
-            conversations = crm_service.Conversations.list(
-                db=db,
-                person_id=str(subscriber.person_id),
-                ticket_id=None,
-                status=None,
-                is_active=True,
-                order_by="last_message_at",
-                order_dir="desc",
-                limit=5,
-                offset=0,
-            )
-    except Exception:
-        pass
 
     # Get notifications sent to this subscriber
     notifications = []
@@ -582,7 +537,6 @@ def subscriber_detail(
         "monthly_bill": monthly_bill,
         "balance_due": balance_due,
         "data_usage": "0",  # Would come from RADIUS/monitoring
-        "open_tickets": open_tickets_count,
     }
 
     # Get subscriber's addresses with coordinates for mini-map
@@ -733,8 +687,6 @@ def subscriber_detail(
             "subscriptions": subscriptions,
             "online_status": online_status,
             "invoices": invoices,
-            "tickets": tickets,
-            "conversations": conversations,
             "notifications": notifications,
             "stats": stats,
             "addresses": addresses,
@@ -773,7 +725,7 @@ def subscriber_deactivate(
         action="update",
         entity_type="subscriber",
         entity_id=str(subscriber_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
     if request.headers.get("HX-Request"):
@@ -923,7 +875,7 @@ def subscriber_update(
                 action="update",
                 entity_type="subscriber",
                 entity_id=str(subscriber_id),
-                actor_id=str(current_user.get("person_id")) if current_user else None,
+                actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 metadata=metadata,
             )
         except Exception:
@@ -1013,7 +965,7 @@ def subscriber_delete(
             action="delete",
             entity_type="subscriber",
             entity_id=str(subscriber_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         )
 
         if request.headers.get("HX-Request"):

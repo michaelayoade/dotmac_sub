@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from app.db import SessionLocal
 from app.models.auth import AuthProvider, UserCredential
-from app.models.person import Person
+from app.models.subscriber import Subscriber
 from app.services.auth_flow import hash_password
 
 
@@ -24,29 +24,29 @@ def main():
     args = parse_args()
     db = SessionLocal()
     try:
-        person = db.query(Person).filter(Person.email == args.email).first()
-        if not person:
-            person = Person(
+        subscriber = db.query(Subscriber).filter(Subscriber.email == args.email).first()
+        if not subscriber:
+            subscriber = Subscriber(
                 first_name=args.first_name,
                 last_name=args.last_name,
                 email=args.email,
             )
-            db.add(person)
+            db.add(subscriber)
             db.commit()
-            db.refresh(person)
+            db.refresh(subscriber)
 
         credential = (
             db.query(UserCredential)
-            .filter(UserCredential.person_id == person.id)
+            .filter(UserCredential.subscriber_id == subscriber.id)
             .filter(UserCredential.provider == AuthProvider.local)
             .first()
         )
         if credential:
-            print("User credential already exists for this person.")
+            print("User credential already exists for this subscriber.")
             return
 
         credential = UserCredential(
-            person_id=person.id,
+            subscriber_id=subscriber.id,
             provider=AuthProvider.local,
             username=args.username,
             password_hash=hash_password(args.password),

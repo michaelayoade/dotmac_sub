@@ -82,11 +82,6 @@ from app.models.catalog import (  # noqa: F401
     SuspensionAction,
     UsageAllowance,
 )
-from app.models.sla_credit import (  # noqa: F401
-    SlaCreditItem,
-    SlaCreditReport,
-    SlaCreditReportStatus,
-)
 from app.models.radius import (  # noqa: F401
     RadiusClient,
     RadiusServer,
@@ -293,16 +288,6 @@ from app.models.gis import (  # noqa: F401
 from app.models.external import (  # noqa: F401
     ExternalEntityType,
     ExternalReference,
-)
-from app.models.workflow import (  # noqa: F401
-    ProjectTaskStatusTransition,
-    SlaBreach,
-    SlaBreachStatus,
-    SlaClock,
-    SlaClockStatus,
-    SlaPolicy,
-    SlaTarget,
-    WorkflowEntityType,
 )
 from app.models.comms import (  # noqa: F401
     CustomerNotificationEvent,

@@ -14,9 +14,6 @@ import httpx
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
-from app.schemas.crm.inbox import EmailWebhookPayload, MetaWebhookPayload, WhatsAppWebhookPayload
-from app.services import crm as crm_service
-from app.services import meta_webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -218,40 +215,17 @@ def retry_failed_deliveries():
 
 @celery_app.task(name="app.tasks.webhooks.process_whatsapp_webhook")
 def process_whatsapp_webhook(payload: dict):
-    session = SessionLocal()
-    try:
-        parsed = WhatsAppWebhookPayload(**payload)
-        crm_service.inbox.receive_whatsapp_message(session, parsed)
-    except Exception as exc:
-        logger.exception("whatsapp_webhook_processing_failed error=%s", exc)
-    finally:
-        session.close()
+    """CRM messaging removed - no-op."""
+    logger.info("whatsapp_webhook_received_but_crm_removed")
 
 
 @celery_app.task(name="app.tasks.webhooks.process_email_webhook")
 def process_email_webhook(payload: dict):
-    session = SessionLocal()
-    try:
-        parsed = EmailWebhookPayload(**payload)
-        crm_service.inbox.receive_email_message(session, parsed)
-    except Exception as exc:
-        logger.exception("email_webhook_processing_failed error=%s", exc)
-    finally:
-        session.close()
+    """CRM messaging removed - no-op."""
+    logger.info("email_webhook_received_but_crm_removed")
 
 
 @celery_app.task(name="app.tasks.webhooks.process_meta_webhook")
 def process_meta_webhook(payload: dict):
-    session = SessionLocal()
-    try:
-        parsed = MetaWebhookPayload(**payload)
-        if parsed.object == "page":
-            meta_webhooks.process_messenger_webhook(session, parsed)
-        elif parsed.object == "instagram":
-            meta_webhooks.process_instagram_webhook(session, parsed)
-        else:
-            logger.warning("meta_webhook_unknown_object object=%s", parsed.object)
-    except Exception as exc:
-        logger.exception("meta_webhook_processing_failed error=%s", exc)
-    finally:
-        session.close()
+    """CRM messaging removed - no-op."""
+    logger.info("meta_webhook_received_but_crm_removed")

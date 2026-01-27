@@ -35,7 +35,7 @@ class CustomerNotificationRead(CustomerNotificationBase):
 
 
 class EtaUpdateBase(BaseModel):
-    work_order_id: UUID
+    service_order_id: UUID
     eta_at: datetime
     note: str | None = None
 
@@ -79,8 +79,6 @@ class SurveyRead(SurveyBase):
 
 class SurveyResponseBase(BaseModel):
     survey_id: UUID
-    work_order_id: UUID | None = None
-    ticket_id: UUID | None = None
     responses: dict | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
 

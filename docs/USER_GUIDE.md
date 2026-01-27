@@ -1,6 +1,6 @@
-# DotMac SM User Guide
+# DotMac Sub User Guide
 
-A comprehensive guide for using the DotMac Subscriber Management platform.
+A comprehensive guide for using the DotMac Subscription Management platform.
 
 ---
 
@@ -65,7 +65,7 @@ The dashboard provides a real-time snapshot of your business:
 | **Network Health** | OLT/ONT status, active alarms, and connectivity metrics |
 | **Revenue Trends** | Monthly recurring revenue (MRR) charts and growth |
 | **Service Orders** | Pipeline view of pending, in-progress, and completed orders |
-| **Key Metrics** | MRR, ARPU, Active Subscribers, Open Tickets |
+| **Key Metrics** | MRR, ARPU, Active Subscribers |
 | **Billing Health** | AR aging breakdown (Current, 30, 60, 90+ days) |
 | **Recent Activity** | Live feed of system events |
 | **Today's Dispatch** | Field technician assignments and status |
@@ -181,31 +181,10 @@ The sidebar is organized into logical sections:
 - Track installation progress
 - Document completion with photos
 
-**Field Service / Work Orders**
-- Create maintenance and repair work orders
-- Assign to field technicians
-- Track work order lifecycle
-
 **Dispatch Board**
 - Visual calendar of technician schedules
 - Drag-and-drop assignment
 - Real-time status updates
-
-**Trouble Tickets**
-- Customer support ticket management
-- Assign to support agents
-- Track resolution time
-- Categorize by issue type
-
-**CRM Inbox**
-- Omni-channel messaging (email, SMS, chat)
-- Customer conversation history
-- Quick response templates
-
-**Projects**
-- Large-scale project management
-- Multi-phase installation projects
-- Vendor assignment and tracking
 
 #### Billing Section
 
@@ -357,7 +336,6 @@ The customer dashboard shows:
 | **Account Balance** | Current balance (green = credit, red = amount due) |
 | **Next Bill** | Upcoming bill amount and due date |
 | **Service Status** | Active or Suspended indicator |
-| **Open Tickets** | Number of pending support requests |
 | **Active Services** | List of subscribed services with speeds and costs |
 | **Quick Actions** | Shortcuts to common tasks |
 | **Recent Activity** | Timeline of recent account events |
@@ -366,7 +344,6 @@ The customer dashboard shows:
 
 - **Make a Payment** - Pay your bill online
 - **View Invoices** - Access billing history
-- **Report an Issue** - Create a support ticket
 - **Update Profile** - Change contact information
 
 ### Services
@@ -400,25 +377,6 @@ View your active services:
 - Payment method used
 - Transaction reference
 
-### Support
-
-**Create a Ticket**
-1. Navigate to **Support** > **New Ticket**
-2. Select issue category:
-   - Billing Question
-   - Technical Issue
-   - Service Request
-   - General Inquiry
-3. Describe your issue in detail
-4. Attach screenshots if helpful
-5. Submit ticket
-
-**Track Tickets**
-- View all your tickets
-- Check status (Open, In Progress, Resolved)
-- Add comments to existing tickets
-- Receive email updates
-
 ### Installations
 
 - View scheduled installation appointments
@@ -431,12 +389,6 @@ View your active services:
 - Track new service requests
 - View order progress
 - Estimated completion dates
-
-### Work Orders
-
-- View scheduled maintenance visits
-- Technician assignment details
-- Work order status updates
 
 ### Profile Settings
 
@@ -600,34 +552,6 @@ Document completed installations:
 7. Activate Service
    Provision network (RADIUS, VLAN)
    Generate first invoice
-```
-
-### Processing a Support Ticket (Admin)
-
-```
-1. Review Ticket
-   Admin > Operations > Trouble Tickets
-   Open ticket details
-   ↓
-2. Assess Issue
-   Review customer information
-   Check network status
-   ↓
-3. Assign Agent
-   Assign to appropriate team member
-   Set priority level
-   ↓
-4. Create Work Order (if needed)
-   If field visit required
-   Schedule technician
-   ↓
-5. Resolve Issue
-   Document resolution
-   Update ticket status
-   ↓
-6. Close Ticket
-   Mark as resolved
-   Customer notified automatically
 ```
 
 ### Running Monthly Billing (Admin)
@@ -801,7 +725,6 @@ The portals are mobile-responsive:
 | **POP** | Point of Presence - network location |
 | **FDH** | Fiber Distribution Hub |
 | **Service Order** | Request for new service or changes |
-| **Work Order** | Field service task assignment |
 
 ---
 

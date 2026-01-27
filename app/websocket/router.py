@@ -32,7 +32,7 @@ async def inbox_websocket(websocket: WebSocket):
     if not auth_result:
         return
 
-    user_id = auth_result["person_id"]
+    user_id = auth_result["subscriber_id"]
     manager = get_connection_manager()
 
     # Register connection

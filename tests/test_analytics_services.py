@@ -8,11 +8,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.analytics import KPIConfig, KPIAggregate
-from app.models.workflow import WorkflowEntityType
 from app.schemas.analytics import KPIConfigCreate, KPIConfigUpdate, KPIAggregateCreate
-from app.schemas.workflow import SlaBreachCreate, SlaClockCreate, SlaPolicyCreate, SlaTargetCreate
 from app.services import analytics as analytics_service
-from app.services import workflow as workflow_service
 from app.services.common import apply_ordering, apply_pagination
 
 
@@ -310,35 +307,7 @@ class TestKPIAggregatesList:
 # =============================================================================
 
 
-def test_compute_kpis(db_session, ticket, work_order):
-    """Test compute_kpis returns correct KPIs."""
-    policy = workflow_service.sla_policies.create(
-        db_session,
-        SlaPolicyCreate(name="Ticket SLA", entity_type=WorkflowEntityType.ticket),
-    )
-    workflow_service.sla_targets.create(
-        db_session, SlaTargetCreate(policy_id=policy.id, target_minutes=15)
-    )
-    clock = workflow_service.sla_clocks.create(
-        db_session,
-        SlaClockCreate(
-            policy_id=policy.id,
-            entity_type=WorkflowEntityType.ticket,
-            entity_id=ticket.id,
-        ),
-    )
-    workflow_service.sla_breaches.create(
-        db_session, SlaBreachCreate(clock_id=clock.id, notes="late")
-    )
+def test_compute_kpis_returns_empty_after_crm_removal(db_session):
+    """Test compute_kpis returns empty list after CRM/SLA removal."""
     kpis = analytics_service.compute_kpis(db_session)
-    keys = {item["key"] for item in kpis}
-    assert "tickets_backlog" in keys
-    assert "work_orders_backlog" in keys
-    assert "sla_breaches" in keys
-
-
-def test_compute_kpis_values_are_decimal(db_session):
-    """Test compute_kpis returns Decimal values."""
-    kpis = analytics_service.compute_kpis(db_session)
-    for kpi in kpis:
-        assert isinstance(kpi["value"], Decimal)
+    assert kpis == []

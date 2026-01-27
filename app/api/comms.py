@@ -93,7 +93,6 @@ def get_eta_update(update_id: str, db: Session = Depends(get_db)):
 
 @router.get("/eta-updates", response_model=ListResponse[EtaUpdateRead])
 def list_eta_updates(
-    work_order_id: str | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -101,7 +100,7 @@ def list_eta_updates(
     db: Session = Depends(get_db),
 ):
     items = comms_service.eta_updates.list(
-        db, work_order_id, order_by, order_dir, limit, offset
+        db, order_by=order_by, order_dir=order_dir, limit=limit, offset=offset
     )
     return list_response(items, limit, offset)
 
@@ -158,8 +157,6 @@ def get_survey_response(response_id: str, db: Session = Depends(get_db)):
 @router.get("/survey-responses", response_model=ListResponse[SurveyResponseRead])
 def list_survey_responses(
     survey_id: str | None = None,
-    work_order_id: str | None = None,
-    ticket_id: str | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -167,6 +164,6 @@ def list_survey_responses(
     db: Session = Depends(get_db),
 ):
     items = comms_service.survey_responses.list(
-        db, survey_id, work_order_id, ticket_id, order_by, order_dir, limit, offset
+        db, survey_id=survey_id, order_by=order_by, order_dir=order_dir, limit=limit, offset=offset
     )
     return list_response(items, limit, offset)

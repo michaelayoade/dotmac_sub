@@ -600,7 +600,7 @@ async def catalog_offers_create_post(request: Request, db: Session = Depends(get
             action="create",
             entity_type="catalog_offer",
             entity_id=str(created_offer.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "name": created_offer.name,
                 "service_type": created_offer.service_type.value if created_offer.service_type else None,
@@ -644,7 +644,7 @@ async def catalog_offers_create_post(request: Request, db: Session = Depends(get
                 action="price_created",
                 entity_type="catalog_offer",
                 entity_id=str(created_offer.id),
-                actor_id=str(current_user.get("person_id")) if current_user else None,
+                actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 metadata={
                     "price_amount": str(created_price.amount),
                     "currency": created_price.currency,
@@ -916,7 +916,7 @@ async def catalog_offer_edit_post(request: Request, offer_id: str, db: Session =
             action="update",
             entity_type="catalog_offer",
             entity_id=str(updated_offer.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
 
@@ -974,7 +974,7 @@ async def catalog_offer_edit_post(request: Request, offer_id: str, db: Session =
                     action="price_updated",
                     entity_type="catalog_offer",
                     entity_id=str(offer_id),
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                     metadata={
                         "price_amount": str(updated_price.amount),
                         "currency": updated_price.currency,
@@ -990,7 +990,7 @@ async def catalog_offer_edit_post(request: Request, offer_id: str, db: Session =
                     action="price_created",
                     entity_type="catalog_offer",
                     entity_id=str(offer_id),
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                     metadata={
                         "price_amount": str(created_price.amount),
                         "currency": created_price.currency,
@@ -1239,7 +1239,7 @@ async def catalog_subscription_create(request: Request, db: Session = Depends(ge
             action="create",
             entity_type="subscription",
             entity_id=str(created.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"offer_id": str(created.offer_id), "account_id": str(created.account_id)},
         )
 
@@ -1507,7 +1507,7 @@ async def catalog_subscription_update(
             action="update",
             entity_type="subscription",
             entity_id=str(subscription_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
         return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
@@ -1555,7 +1555,7 @@ def subscription_bulk_activate(
                     action="activate",
                     entity_type="subscription",
                     entity_id=sub_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:
@@ -1593,7 +1593,7 @@ def subscription_bulk_suspend(
                     action="suspend",
                     entity_type="subscription",
                     entity_id=sub_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:
@@ -1631,7 +1631,7 @@ def subscription_bulk_cancel(
                     action="cancel",
                     entity_type="subscription",
                     entity_id=sub_id,
-                    actor_id=str(current_user.get("person_id")) if current_user else None,
+                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
                 )
                 count += 1
         except Exception:

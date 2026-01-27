@@ -600,7 +600,7 @@ async def olt_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="olt",
             entity_id=str(olt.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": olt.name, "mgmt_ip": olt.mgmt_ip or None},
         )
     except IntegrityError as exc:
@@ -724,7 +724,7 @@ async def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db
             action="update",
             entity_type="olt",
             entity_id=str(olt_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
     except IntegrityError as exc:
@@ -909,7 +909,7 @@ async def ont_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="ont",
             entity_id=str(ont.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"serial_number": ont.serial_number},
         )
     except IntegrityError as exc:
@@ -1217,7 +1217,7 @@ async def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db
             action="update",
             entity_type="ont",
             entity_id=str(ont_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
     except IntegrityError as exc:
@@ -1649,7 +1649,7 @@ async def ip_block_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="ip_block",
             entity_id=str(block.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"cidr": block.cidr, "pool_id": str(block.pool_id)},
         )
         return RedirectResponse("/admin/network/ip-management", status_code=303)
@@ -1728,7 +1728,7 @@ async def ip_pool_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="ip_pool",
             entity_id=str(pool.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": pool.name, "cidr": pool.cidr},
         )
         return RedirectResponse("/admin/network/ip-management", status_code=303)
@@ -1880,7 +1880,7 @@ async def ip_pool_update(request: Request, pool_id: str, db: Session = Depends(g
             action="update",
             entity_type="ip_pool",
             entity_id=str(pool_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
         return RedirectResponse(f"/admin/network/ip-management/pools/{pool_id}", status_code=303)
@@ -2216,7 +2216,7 @@ async def radius_server_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="radius_server",
             entity_id=str(server.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": server.name, "host": server.host},
         )
         return RedirectResponse("/admin/network/radius", status_code=303)
@@ -2317,7 +2317,7 @@ async def radius_server_update(request: Request, server_id: str, db: Session = D
             action="update",
             entity_type="radius_server",
             entity_id=str(updated_server.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
         return RedirectResponse("/admin/network/radius", status_code=303)
@@ -2430,7 +2430,7 @@ async def radius_client_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="radius_client",
             entity_id=str(client.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"client_ip": client.client_ip, "server_id": str(client.server_id)},
         )
         return RedirectResponse("/admin/network/radius", status_code=303)
@@ -2527,7 +2527,7 @@ async def radius_client_update(request: Request, client_id: str, db: Session = D
             action="update",
             entity_type="radius_client",
             entity_id=str(updated_client.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
         return RedirectResponse("/admin/network/radius", status_code=303)
@@ -2662,7 +2662,7 @@ async def radius_profile_create(request: Request, db: Session = Depends(get_db))
         action="create",
         entity_type="radius_profile",
         entity_id=str(profile.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={
             "name": profile.name,
             "vendor": profile.vendor.value if profile.vendor else None,
@@ -2757,7 +2757,7 @@ async def radius_profile_update(request: Request, profile_id: str, db: Session =
         action="update",
         entity_type="radius_profile",
         entity_id=str(updated_profile.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
     return RedirectResponse("/admin/network/radius", status_code=303)
@@ -3061,7 +3061,7 @@ async def pop_site_create(request: Request, db: Session = Depends(get_db)):
         action="create",
         entity_type="pop_site",
         entity_id=str(pop_site.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": pop_site.name, "code": pop_site.code},
     )
 
@@ -3165,7 +3165,7 @@ async def pop_site_update(request: Request, pop_site_id: str, db: Session = Depe
         action="update",
         entity_type="pop_site",
         entity_id=str(pop_site.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata_payload,
     )
 
@@ -3545,7 +3545,7 @@ async def core_device_create(request: Request, db: Session = Depends(get_db)):
         action="create",
         entity_type="core_device",
         entity_id=str(device.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": device.name, "mgmt_ip": device.mgmt_ip or None},
     )
     return RedirectResponse(f"/admin/network/core-devices/{device.id}", status_code=303)
@@ -4410,7 +4410,7 @@ async def core_device_update(request: Request, device_id: str, db: Session = Dep
         action="update",
         entity_type="core_device",
         entity_id=str(device.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata_payload,
     )
     return RedirectResponse(f"/admin/network/core-devices/{device.id}", status_code=303)
@@ -4706,7 +4706,7 @@ async def fiber_change_request_approve(request: Request, request_id: str, db: Se
         action="approve",
         entity_type="fiber_change_request",
         entity_id=str(request_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"force_apply": force_apply, "review_notes": review_notes},
     )
     return RedirectResponse(
@@ -4733,7 +4733,7 @@ async def fiber_change_request_reject(request: Request, request_id: str, db: Ses
         action="reject",
         entity_type="fiber_change_request",
         entity_id=str(request_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"review_notes": review_notes},
     )
     return RedirectResponse(
@@ -4765,7 +4765,7 @@ async def fiber_change_requests_bulk_approve(request: Request, db: Session = Dep
             action="approve",
             entity_type="fiber_change_request",
             entity_id=str(request_id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"force_apply": force_apply, "review_notes": "Bulk approved"},
         )
     return RedirectResponse(
@@ -5231,7 +5231,7 @@ async def fdh_cabinet_create(request: Request, db: Session = Depends(get_db)):
         action="create",
         entity_type="fdh_cabinet",
         entity_id=str(cabinet.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": cabinet.name, "code": cabinet.code},
     )
 
@@ -5316,7 +5316,7 @@ async def fdh_cabinet_update(request: Request, cabinet_id: str, db: Session = De
         action="update",
         entity_type="fdh_cabinet",
         entity_id=str(cabinet.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
 
@@ -5443,7 +5443,7 @@ async def splitter_create(request: Request, db: Session = Depends(get_db)):
         action="create",
         entity_type="splitter",
         entity_id=str(splitter.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": splitter.name, "fdh_id": str(splitter.fdh_id) if splitter.fdh_id else None},
     )
 
@@ -5551,7 +5551,7 @@ async def splitter_update(request: Request, splitter_id: str, db: Session = Depe
         action="update",
         entity_type="splitter",
         entity_id=str(splitter.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
 
@@ -5669,7 +5669,7 @@ async def fiber_strand_create(request: Request, db: Session = Depends(get_db)):
             action="create",
             entity_type="fiber_strand",
             entity_id=str(strand.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "cable_name": strand.cable_name,
                 "strand_number": strand.strand_number,
@@ -5772,7 +5772,7 @@ async def fiber_strand_update(request: Request, strand_id: str, db: Session = De
             action="update",
             entity_type="fiber_strand",
             entity_id=str(updated_strand.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
         return RedirectResponse("/admin/network/fiber-strands", status_code=303)
@@ -5851,7 +5851,7 @@ async def splice_closure_create(request: Request, db: Session = Depends(get_db))
         action="create",
         entity_type="splice_closure",
         entity_id=str(closure.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": closure.name},
     )
 
@@ -5923,7 +5923,7 @@ async def splice_closure_update(request: Request, closure_id: str, db: Session =
         action="update",
         entity_type="splice_closure",
         entity_id=str(closure.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
 
@@ -6068,7 +6068,7 @@ async def splice_tray_create(request: Request, closure_id: str, db: Session = De
             action="tray_created",
             entity_type="splice_closure",
             entity_id=str(closure.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"tray_number": tray.tray_number, "tray_name": tray.name},
         )
         return RedirectResponse(f"/admin/network/splice-closures/{closure.id}", status_code=303)
@@ -6146,7 +6146,7 @@ async def splice_tray_update(
             action="tray_updated",
             entity_type="splice_closure",
             entity_id=str(closure.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"tray_number": tray.tray_number, "tray_name": tray.name},
         )
         return RedirectResponse(f"/admin/network/splice-closures/{closure.id}", status_code=303)
@@ -6267,7 +6267,7 @@ async def splice_create(request: Request, closure_id: str, db: Session = Depends
             action="splice_created",
             entity_type="splice_closure",
             entity_id=str(closure.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "from_strand_id": str(splice.from_strand_id) if splice.from_strand_id else None,
                 "to_strand_id": str(splice.to_strand_id) if splice.to_strand_id else None,
@@ -6419,7 +6419,7 @@ async def splice_update(
             action="splice_updated",
             entity_type="splice_closure",
             entity_id=str(closure.id),
-            actor_id=str(current_user.get("person_id")) if current_user else None,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "from_strand_id": str(updated_splice.from_strand_id) if updated_splice.from_strand_id else None,
                 "to_strand_id": str(updated_splice.to_strand_id) if updated_splice.to_strand_id else None,
@@ -6525,7 +6525,7 @@ def site_survey_create(
         action="create",
         entity_type="site_survey",
         entity_id=str(survey.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": survey.name},
     )
     redirect_url = ws_service.wireless_surveys.build_post_create_redirect(
@@ -6600,7 +6600,7 @@ def site_survey_update(
         action="update",
         entity_type="site_survey",
         entity_id=str(updated_survey.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata,
     )
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
@@ -6620,7 +6620,7 @@ def site_survey_delete(request: Request, survey_id: str, db: Session = Depends(g
         action="delete",
         entity_type="site_survey",
         entity_id=str(survey.id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": survey.name},
     )
     ws_service.wireless_surveys.delete(db, survey_id)
@@ -6675,7 +6675,7 @@ def site_survey_add_point(
         action="point_added",
         entity_type="site_survey",
         entity_id=str(survey_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={
             "point": point.name,
             "point_type": point.point_type.value if point.point_type else None,
@@ -6699,7 +6699,7 @@ def site_survey_delete_point(request: Request, point_id: str, db: Session = Depe
         action="point_deleted",
         entity_type="site_survey",
         entity_id=str(survey_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={
             "point": point.name,
             "point_type": point.point_type.value if point.point_type else None,
@@ -6729,7 +6729,7 @@ def site_survey_analyze_los(
         action="los_analyzed",
         entity_type="site_survey",
         entity_id=str(survey_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={
             "from_point_id": str(los_path.from_point_id),
             "to_point_id": str(los_path.to_point_id),
@@ -6778,7 +6778,7 @@ def site_survey_delete_los(request: Request, path_id: str, db: Session = Depends
         action="los_deleted",
         entity_type="site_survey",
         entity_id=str(survey_id),
-        actor_id=str(current_user.get("person_id")) if current_user else None,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={
             "from_point_id": str(los_path.from_point_id),
             "to_point_id": str(los_path.to_point_id),

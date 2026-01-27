@@ -133,22 +133,6 @@ class SmartDefaultsService:
             "auto_renew": True
         }
 
-    def get_ticket_defaults(self) -> dict[str, Any]:
-        """
-        Get default values for creating a new support ticket.
-
-        Returns:
-            Dictionary containing default values for ticket fields.
-        """
-        default_priority = self._get_setting(SettingDomain.workflow, "default_ticket_priority", "medium")
-        default_category = self._get_setting(SettingDomain.workflow, "default_ticket_category", None)
-
-        return {
-            "priority": default_priority,
-            "category_id": default_category,
-            "status": "open"
-        }
-
     def calculate_due_date(
         self,
         issued_at: Optional[date] = None,

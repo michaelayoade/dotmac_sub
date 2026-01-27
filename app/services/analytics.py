@@ -5,9 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.models.analytics import KPIAggregate, KPIConfig
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.models.tickets import Ticket, TicketStatus
-from app.models.workflow import SlaBreach
-from app.models.workforce import WorkOrder, WorkOrderStatus
 from app.schemas.analytics import KPIAggregateCreate, KPIConfigCreate, KPIConfigUpdate
 from app.services.response import ListResponseMixin
 
@@ -102,28 +99,8 @@ class KPIAggregates(ListResponseMixin):
 
 
 def compute_kpis(db: Session) -> list[dict]:
-    ticket_backlog = (
-        db.query(Ticket)
-        .filter(Ticket.status.notin_([TicketStatus.resolved, TicketStatus.closed]))
-        .count()
-    )
-    work_order_backlog = (
-        db.query(WorkOrder)
-        .filter(
-            WorkOrder.status.notin_([WorkOrderStatus.completed, WorkOrderStatus.canceled])
-        )
-        .count()
-    )
-    sla_breaches = db.query(SlaBreach).count()
-    return [
-        {"key": "tickets_backlog", "value": Decimal(ticket_backlog), "label": "Tickets Backlog"},
-        {
-            "key": "work_orders_backlog",
-            "value": Decimal(work_order_backlog),
-            "label": "Work Orders Backlog",
-        },
-        {"key": "sla_breaches", "value": Decimal(sla_breaches), "label": "SLA Breaches"},
-    ]
+    """Compute key performance indicators. CRM/ticket KPIs removed."""
+    return []
 
 
 kpi_configs = KPIConfigs()

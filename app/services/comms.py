@@ -9,8 +9,6 @@ from app.models.comms import (
     SurveyResponse,
 )
 from app.models.domain_settings import SettingDomain
-from app.models.tickets import Ticket
-from app.models.workforce import WorkOrder
 from app.schemas.comms import (
     CustomerNotificationCreate,
     CustomerNotificationUpdate,
@@ -22,16 +20,6 @@ from app.schemas.comms import (
 from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
 from app.services.response import ListResponseMixin
 from app.services import settings_spec
-
-
-def _ensure_work_order(db: Session, work_order_id: str):
-    if not db.get(WorkOrder, coerce_uuid(work_order_id)):
-        raise HTTPException(status_code=404, detail="Work order not found")
-
-
-def _ensure_ticket(db: Session, ticket_id: str):
-    if not db.get(Ticket, coerce_uuid(ticket_id)):
-        raise HTTPException(status_code=404, detail="Ticket not found")
 
 
 class CustomerNotifications(ListResponseMixin):
@@ -102,7 +90,6 @@ class CustomerNotifications(ListResponseMixin):
 class EtaUpdates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: EtaUpdateCreate):
-        _ensure_work_order(db, str(payload.work_order_id))
         update = EtaUpdate(**payload.model_dump())
         db.add(update)
         db.commit()
@@ -119,15 +106,12 @@ class EtaUpdates(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        work_order_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(EtaUpdate)
-        if work_order_id:
-            query = query.filter(EtaUpdate.work_order_id == work_order_id)
         query = apply_ordering(query, order_by, order_dir, {"created_at": EtaUpdate.created_at})
         return apply_pagination(query, limit, offset).all()
 
@@ -190,10 +174,6 @@ class SurveyResponses(ListResponseMixin):
     def create(db: Session, payload: SurveyResponseCreate):
         if not db.get(Survey, payload.survey_id):
             raise HTTPException(status_code=404, detail="Survey not found")
-        if payload.work_order_id:
-            _ensure_work_order(db, str(payload.work_order_id))
-        if payload.ticket_id:
-            _ensure_ticket(db, str(payload.ticket_id))
         response = SurveyResponse(**payload.model_dump())
         db.add(response)
         db.commit()
@@ -210,21 +190,15 @@ class SurveyResponses(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        survey_id: str | None,
-        work_order_id: str | None,
-        ticket_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        survey_id: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(SurveyResponse)
         if survey_id:
             query = query.filter(SurveyResponse.survey_id == survey_id)
-        if work_order_id:
-            query = query.filter(SurveyResponse.work_order_id == work_order_id)
-        if ticket_id:
-            query = query.filter(SurveyResponse.ticket_id == ticket_id)
         query = apply_ordering(query, order_by, order_dir, {"created_at": SurveyResponse.created_at})
         return apply_pagination(query, limit, offset).all()
 
