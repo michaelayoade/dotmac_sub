@@ -273,6 +273,7 @@ def get_cpe_device(device_id: str, db: Session = Depends(get_db)):
 
 @router.get("/cpe-devices", response_model=ListResponse[CPEDeviceRead], tags=["network"])
 def list_cpe_devices(
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     subscription_id: str | None = None,
     order_by: str = Query(default="created_at"),
@@ -281,8 +282,10 @@ def list_cpe_devices(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return network_service.cpe_devices.list_response(
-        db, account_id, subscription_id, order_by, order_dir, limit, offset
+        db, subscriber_id, subscription_id, order_by, order_dir, limit, offset
     )
 
 
@@ -437,6 +440,7 @@ def get_ip_assignment(assignment_id: str, db: Session = Depends(get_db)):
     "/ip-assignments", response_model=ListResponse[IPAssignmentRead], tags=["network"]
 )
 def list_ip_assignments(
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     subscription_id: str | None = None,
     ip_version: IPVersion | None = None,
@@ -446,8 +450,10 @@ def list_ip_assignments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return network_service.ip_assignments.list_response(
-        db, account_id, subscription_id, ip_version, order_by, order_dir, limit, offset
+        db, subscriber_id, subscription_id, ip_version, order_by, order_dir, limit, offset
     )
 
 
@@ -1143,6 +1149,7 @@ def get_ont_assignment(assignment_id: str, db: Session = Depends(get_db)):
 )
 def list_ont_assignments(
     pon_port_id: str | None = None,
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     subscription_id: str | None = None,
     active: bool | None = None,
@@ -1152,10 +1159,12 @@ def list_ont_assignments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return network_service.ont_assignments.list_response(
         db,
         pon_port_id,
-        account_id,
+        subscriber_id,
         subscription_id,
         active,
         order_by,
@@ -1376,6 +1385,7 @@ def get_splitter_port_assignment(
 )
 def list_splitter_port_assignments(
     splitter_port_id: str | None = None,
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     subscription_id: str | None = None,
     active: bool | None = None,
@@ -1385,10 +1395,12 @@ def list_splitter_port_assignments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return network_service.splitter_port_assignments.list_response(
         db,
         splitter_port_id,
-        account_id,
+        subscriber_id,
         subscription_id,
         active,
         order_by,
@@ -2176,6 +2188,7 @@ def list_alert_events(
 
 @router.get("/service-orders", response_model=ListResponse[ServiceOrderRead], tags=["provisioning"])
 def list_service_orders(
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     subscription_id: str | None = None,
     status: str | None = None,
@@ -2185,8 +2198,10 @@ def list_service_orders(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return provisioning_service.service_orders.list_response(
-        db, account_id, subscription_id, status, order_by, order_dir, limit, offset
+        db, subscriber_id, subscription_id, status, order_by, order_dir, limit, offset
     )
 
 
@@ -2685,6 +2700,7 @@ def get_usage_record(record_id: str, db: Session = Depends(get_db)):
 @router.get("/usage-charges", response_model=ListResponse[UsageChargeRead], tags=["usage"])
 def list_usage_charges(
     subscription_id: str | None = None,
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     status: str | None = None,
     order_by: str = Query(default="period_start"),
@@ -2693,8 +2709,10 @@ def list_usage_charges(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return usage_service.usage_charges.list_response(
-        db, subscription_id, account_id, status, order_by, order_dir, limit, offset
+        db, subscription_id, subscriber_id, status, order_by, order_dir, limit, offset
     )
 
 

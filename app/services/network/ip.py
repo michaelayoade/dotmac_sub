@@ -40,7 +40,7 @@ class IPAssignments(ListResponseMixin):
     def create(db: Session, payload: IPAssignmentCreate):
         network_validators.validate_ip_assignment_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.subscription_add_on_id) if payload.subscription_add_on_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
@@ -61,7 +61,7 @@ class IPAssignments(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         is_active: bool | None,
         order_by: str,
@@ -70,8 +70,8 @@ class IPAssignments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IPAssignment)
-        if account_id:
-            query = query.filter(IPAssignment.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(IPAssignment.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(IPAssignment.subscription_id == subscription_id)
         if is_active is None:
@@ -92,7 +92,7 @@ class IPAssignments(ListResponseMixin):
         if not assignment:
             raise HTTPException(status_code=404, detail="IP assignment not found")
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", assignment.account_id))
+        subscriber_id = str(data.get("subscriber_id", assignment.subscriber_id))
         subscription_id = data.get("subscription_id", assignment.subscription_id)
         subscription_add_on_id = data.get(
             "subscription_add_on_id", assignment.subscription_add_on_id
@@ -102,7 +102,7 @@ class IPAssignments(ListResponseMixin):
         )
         network_validators.validate_ip_assignment_links(
             db,
-            account_id,
+            subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(subscription_add_on_id) if subscription_add_on_id else None,
             str(service_address_id) if service_address_id else None,

@@ -25,7 +25,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import Address, SubscriberAccount, AccountStatus
+from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services.billing import _recalculate_invoice_totals
 from app.services.common import round_money
 from app.models.domain_settings import SettingDomain
@@ -102,9 +102,9 @@ def _resolve_tax_rate_id(db: Session, subscription: Subscription):
         address = db.get(Address, subscription.service_address_id)
         if address and address.tax_rate_id:
             return address.tax_rate_id
-    account = db.get(SubscriberAccount, subscription.account_id)
-    if account and account.tax_rate_id:
-        return account.tax_rate_id
+    subscriber = db.get(Subscriber, subscription.subscriber_id)
+    if subscriber and subscriber.tax_rate_id:
+        return subscriber.tax_rate_id
     return None
 
 
@@ -156,7 +156,7 @@ def _activate_pending_subscription(
             "auto_activated": True,  # Indicates billing already handled invoicing
         },
         subscription_id=subscription.id,
-        account_id=subscription.account_id,
+        account_id=subscription.subscriber_id,
     )
 
 
@@ -280,9 +280,9 @@ def run_invoice_cycle(
     # Query active subscriptions
     active_subscriptions = (
         db.query(Subscription)
-        .join(SubscriberAccount, SubscriberAccount.id == Subscription.account_id)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .filter(SubscriberAccount.status == AccountStatus.active)
+        .filter(Subscriber.status == SubscriberStatus.active)
         .all()
     )
 
@@ -291,9 +291,9 @@ def run_invoice_cycle(
     if include_pending:
         pending_subscriptions = (
             db.query(Subscription)
-            .join(SubscriberAccount, SubscriberAccount.id == Subscription.account_id)
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .filter(Subscription.status == SubscriptionStatus.pending)
-            .filter(SubscriberAccount.status == AccountStatus.active)
+            .filter(Subscriber.status == SubscriberStatus.active)
             .all()
         )
 
@@ -378,12 +378,12 @@ def run_invoice_cycle(
             _activate_pending_subscription(db, subscription, run_at)
             summary["pending_activated"] += 1
 
-        account_id = str(subscription.account_id)
+        account_id = str(subscription.subscriber_id)
         invoice = invoices.get(account_id)
         if not invoice:
             invoice = (
                 db.query(Invoice)
-                .filter(Invoice.account_id == subscription.account_id)
+                .filter(Invoice.account_id == subscription.subscriber_id)
                 .filter(Invoice.billing_period_start == period_start)
                 .filter(Invoice.billing_period_end == period_end)
                 .filter(Invoice.is_active.is_(True))
@@ -391,7 +391,7 @@ def run_invoice_cycle(
             )
         if not invoice:
             invoice = Invoice(
-                account_id=subscription.account_id,
+                account_id=subscription.subscriber_id,
                 status=InvoiceStatus.issued,
                 currency=currency or "NGN",
                 billing_period_start=period_start,
@@ -580,7 +580,7 @@ def generate_prorated_invoice(
 
     # Create prorated invoice
     invoice = Invoice(
-        account_id=subscription.account_id,
+        account_id=subscription.subscriber_id,
         status=InvoiceStatus.issued,
         currency=currency or "NGN",
         billing_period_start=activation_date,

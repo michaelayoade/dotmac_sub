@@ -21,7 +21,9 @@ from app.models.network import (
 
 
 class CPEDeviceBase(BaseModel):
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.ont
@@ -39,7 +41,9 @@ class CPEDeviceCreate(CPEDeviceBase):
 
 
 class CPEDeviceUpdate(BaseModel):
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType | None = None
@@ -150,7 +154,9 @@ class PortVlanRead(PortVlanBase):
 
 
 class IPAssignmentBase(BaseModel):
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     subscription_add_on_id: UUID | None = None
     service_address_id: UUID | None = None
@@ -177,7 +183,9 @@ class IPAssignmentCreate(IPAssignmentBase):
 
 
 class IPAssignmentUpdate(BaseModel):
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     subscription_add_on_id: UUID | None = None
     service_address_id: UUID | None = None
@@ -434,7 +442,9 @@ class OntUnitRead(OntUnitBase):
 class OntAssignmentBase(BaseModel):
     ont_unit_id: UUID
     pon_port_id: UUID
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
@@ -449,7 +459,9 @@ class OntAssignmentCreate(OntAssignmentBase):
 class OntAssignmentUpdate(BaseModel):
     ont_unit_id: UUID | None = None
     pon_port_id: UUID | None = None
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
@@ -643,7 +655,9 @@ class SplitterPortRead(SplitterPortBase):
 
 class SplitterPortAssignmentBase(BaseModel):
     splitter_port_id: UUID
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
@@ -657,7 +671,9 @@ class SplitterPortAssignmentCreate(SplitterPortAssignmentBase):
 
 class SplitterPortAssignmentUpdate(BaseModel):
     splitter_port_id: UUID | None = None
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None

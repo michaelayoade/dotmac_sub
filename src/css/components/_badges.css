@@ -1,0 +1,119 @@
+/* ============================================================================
+   STATUS BADGES
+   Color-coded status indicators
+   ============================================================================ */
+
+@layer components {
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        font-size: 12px;
+        font-weight: 600;
+        border-radius: var(--radius-badge);
+        white-space: nowrap;
+    }
+    .badge-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .badge-draft {
+        background: var(--parchment-dark);
+        color: var(--ink-muted);
+    }
+    .badge-draft .badge-dot { background: var(--ink-faint); }
+
+    .badge-pending {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #92400e;
+    }
+    .badge-pending .badge-dot { background: #d97706; }
+    .dark .badge-pending { background: rgba(217, 119, 6, 0.2); color: #fbbf24; }
+
+    .badge-approved {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #065f46;
+    }
+    .badge-approved .badge-dot { background: #059669; }
+    .dark .badge-approved { background: rgba(5, 150, 105, 0.2); color: #34d399; }
+
+    .badge-posted {
+        background: linear-gradient(135deg, #ccfbf1 0%, #99f6e4 100%);
+        color: #115e59;
+    }
+    .badge-posted .badge-dot { background: #0d9488; }
+    .dark .badge-posted { background: rgba(13, 148, 136, 0.2); color: #2dd4bf; }
+
+    .badge-rejected {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #991b1b;
+    }
+    .badge-rejected .badge-dot { background: #dc2626; }
+    .dark .badge-rejected { background: rgba(220, 38, 38, 0.2); color: #f87171; }
+
+    .badge-overdue {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #991b1b;
+        animation: badgePulse 2s ease-in-out infinite;
+    }
+    @keyframes badgePulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.3); }
+        50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0); }
+    }
+
+    .badge-paid {
+        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        color: #1e40af;
+    }
+    .badge-paid .badge-dot { background: #2563eb; }
+    .dark .badge-paid { background: rgba(37, 99, 235, 0.2); color: #60a5fa; }
+
+    /* ISP-specific: Provisioning/network status */
+    .badge-provisioning {
+        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        color: #1e40af;
+        animation: badgePulse 2s ease-in-out infinite;
+    }
+    .badge-provisioning .badge-dot { background: #3b82f6; }
+    .dark .badge-provisioning { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+
+    .badge-online {
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #065f46;
+    }
+    .badge-online .badge-dot { background: #059669; }
+    .dark .badge-online { background: rgba(5, 150, 105, 0.2); color: #34d399; }
+
+    .badge-offline {
+        background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+        color: #991b1b;
+    }
+    .badge-offline .badge-dot { background: #dc2626; }
+    .dark .badge-offline { background: rgba(220, 38, 38, 0.2); color: #f87171; }
+
+    .badge-degraded {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #92400e;
+    }
+    .badge-degraded .badge-dot { background: #d97706; }
+    .dark .badge-degraded { background: rgba(217, 119, 6, 0.2); color: #fbbf24; }
+
+    .badge-throttled {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        color: #92400e;
+        border: 1px dashed rgba(217, 119, 6, 0.4);
+    }
+    .dark .badge-throttled { background: rgba(217, 119, 6, 0.15); color: #fbbf24; }
+
+    /* Reduced motion for pulsing badges */
+    @media (prefers-reduced-motion: reduce) {
+        .badge-overdue,
+        .badge-provisioning {
+            animation: none;
+        }
+    }
+}

@@ -1,0 +1,87 @@
+/* ============================================================================
+   BULK SELECTION
+   Table row selection and action bar
+   ============================================================================ */
+
+@layer components {
+    /* Higher specificity for table cell overrides */
+    .table td.bulk-select-cell,
+    .table th.bulk-select-cell {
+        width: 48px;
+        padding-left: var(--spacing-lg);
+        padding-right: var(--spacing-sm);
+    }
+
+    .bulk-checkbox {
+        width: 18px;
+        height: 18px;
+        border-radius: var(--radius-sm);
+        border: 2px solid var(--ink-faint);
+        cursor: pointer;
+        accent-color: var(--teal);
+        transition: all 0.15s ease;
+        appearance: none;
+        -webkit-appearance: none;
+        background-color: var(--card-bg);
+        position: relative;
+    }
+    .bulk-checkbox:hover { border-color: var(--teal); }
+    .bulk-checkbox:checked { background-color: var(--teal); border-color: var(--teal); }
+    .bulk-checkbox:checked::after {
+        content: '';
+        position: absolute;
+        left: 5px;
+        top: 2px;
+        width: 5px;
+        height: 9px;
+        border: solid white;
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+    }
+    .bulk-checkbox:indeterminate { background-color: var(--teal); border-color: var(--teal); }
+    .bulk-checkbox:indeterminate::after {
+        content: '';
+        position: absolute;
+        left: 3px;
+        top: 7px;
+        width: 10px;
+        height: 2px;
+        background: white;
+        border-radius: 1px;
+    }
+    .bulk-checkbox:focus { outline: none; box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.2); }
+
+    /* Higher specificity for selected row highlights */
+    .table tbody tr.bulk-selected,
+    .table tbody tr:has(.bulk-checkbox:checked) {
+        background-color: rgba(13, 148, 136, 0.08);
+    }
+    .dark .table tbody tr.bulk-selected,
+    .dark .table tbody tr:has(.bulk-checkbox:checked) {
+        background-color: rgba(13, 148, 136, 0.15);
+    }
+
+    .bulk-action-bar { position: fixed; bottom: var(--spacing-2xl); left: 50%; transform: translateX(-50%); z-index: 50; }
+    .bulk-action-bar-content {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-lg);
+        padding: var(--spacing-md) var(--spacing-xl);
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-xl);
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+    }
+    .dark .bulk-action-bar-content { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
+    .bulk-selection-count { font-weight: 500; font-size: 14px; color: var(--ink); white-space: nowrap; }
+    .bulk-actions-group { display: flex; gap: var(--spacing-sm); }
+    .btn-bulk-danger {
+        color: white;
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25);
+    }
+    .btn-bulk-danger:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+    }
+}

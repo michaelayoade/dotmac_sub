@@ -1,0 +1,130 @@
+/* ============================================================================
+   ANIMATIONS
+   Page transitions, loading effects, and micro-interactions
+   ============================================================================ */
+
+/* Page entrance animations */
+.page-enter {
+    animation: pageEnter 0.4s ease-out;
+}
+@keyframes pageEnter {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Staggered entrance for grid items */
+.stagger-in {
+    opacity: 0;
+    transform: translateY(16px);
+    animation: fadeUp 0.5s ease forwards;
+}
+.stagger-in:nth-child(1) { animation-delay: 0ms; }
+.stagger-in:nth-child(2) { animation-delay: 60ms; }
+.stagger-in:nth-child(3) { animation-delay: 120ms; }
+.stagger-in:nth-child(4) { animation-delay: 180ms; }
+.stagger-in:nth-child(5) { animation-delay: 240ms; }
+.stagger-in:nth-child(6) { animation-delay: 300ms; }
+.stagger-in:nth-child(7) { animation-delay: 360ms; }
+.stagger-in:nth-child(8) { animation-delay: 420ms; }
+
+/* Slide-in from left for sidebar items */
+.slide-in-left {
+    opacity: 0;
+    transform: translateX(-12px);
+    animation: slideInLeft 0.3s ease forwards;
+}
+@keyframes slideInLeft {
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Scale-in for modals and cards */
+.scale-in {
+    opacity: 0;
+    transform: scale(0.95);
+    animation: scaleIn 0.3s ease forwards;
+}
+@keyframes scaleIn {
+    to { opacity: 1; transform: scale(1); }
+}
+
+.fade-up { opacity: 0; transform: translateY(20px); animation: fadeUp 0.5s ease forwards; }
+.delay-1 { animation-delay: 0.1s; }
+.delay-2 { animation-delay: 0.2s; }
+.delay-3 { animation-delay: 0.3s; }
+.delay-4 { animation-delay: 0.4s; }
+.delay-5 { animation-delay: 0.5s; }
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseSoft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Shimmer loading effect */
+.shimmer {
+    background: linear-gradient(90deg, var(--parchment) 25%, var(--parchment-dark) 50%, var(--parchment) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+/* Skeleton loading */
+.skeleton {
+    background: var(--parchment-dark);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+}
+.skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes bulkBarSlideUp {
+    from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.bulk-action-bar[x-show] { animation: bulkBarSlideUp 0.2s ease-out; }
+
+/* Hover lift effect */
+.hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* Reduced motion: respect user accessibility preferences */
+@media (prefers-reduced-motion: reduce) {
+    .page-enter,
+    .stagger-in,
+    .slide-in-left,
+    .scale-in,
+    .fade-up {
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+    .shimmer,
+    .skeleton::after {
+        animation: none;
+    }
+    .hover-lift {
+        transition: none;
+    }
+    .bulk-action-bar[x-show] {
+        animation: none;
+    }
+}

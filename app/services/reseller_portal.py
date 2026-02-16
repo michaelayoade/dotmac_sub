@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.auth import Session as AuthSession, SessionStatus
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Reseller, ResellerUser, Subscriber, SubscriberAccount
+from app.models.subscriber import Reseller, ResellerUser, Subscriber
 import app.services.auth_flow as auth_flow_service
 from app.services import customer_portal
 from app.services import catalog as catalog_service
@@ -216,14 +216,10 @@ def list_accounts(
     offset: int,
 ) -> list[dict]:
     accounts = (
-        db.query(SubscriberAccount)
-        .options(
-            selectinload(SubscriberAccount.subscriber)
-            .selectinload(Subscriber.subscriber)
-            .selectinload(Subscriber.organization),
-        )
-        .filter(SubscriberAccount.reseller_id == coerce_uuid(reseller_id))
-        .order_by(SubscriberAccount.created_at.desc())
+        db.query(Subscriber)
+        .options(selectinload(Subscriber.organization))
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .order_by(Subscriber.created_at.desc())
         .limit(limit)
         .offset(offset)
         .all()
@@ -291,8 +287,8 @@ def get_dashboard_summary(
     accounts = list_accounts(db, reseller_id, limit, offset)
 
     total_accounts = (
-        db.query(func.count(SubscriberAccount.id))
-        .filter(SubscriberAccount.reseller_id == coerce_uuid(reseller_id))
+        db.query(func.count(Subscriber.id))
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
         .scalar()
         or 0
     )
@@ -306,8 +302,8 @@ def get_dashboard_summary(
             func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
             func.count(Invoice.id).label("open_invoices"),
         )
-        .join(SubscriberAccount, Invoice.account_id == SubscriberAccount.id)
-        .filter(SubscriberAccount.reseller_id == coerce_uuid(reseller_id))
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
         .filter(Invoice.status.in_(open_statuses))
         .first()
     )
@@ -330,14 +326,14 @@ def create_customer_imsubscriberation_session(
     account_id: str,
     return_to: str,
 ) -> str:
-    account = db.get(SubscriberAccount, coerce_uuid(account_id))
+    account = db.get(Subscriber, coerce_uuid(account_id))
     if not account or str(account.reseller_id) != str(reseller_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found")
 
     selected_subscription_id = None
     active_subs = catalog_service.subscriptions.list(
         db=db,
-        account_id=str(account.id),
+        subscriber_id=str(account.id),
         offer_id=None,
         status="active",
         order_by="created_at",
@@ -350,7 +346,7 @@ def create_customer_imsubscriberation_session(
     else:
         any_subs = catalog_service.subscriptions.list(
             db=db,
-            account_id=str(account.id),
+            subscriber_id=str(account.id),
             offer_id=None,
             status=None,
             order_by="created_at",
@@ -364,7 +360,7 @@ def create_customer_imsubscriberation_session(
     session_token = customer_portal.create_customer_session(
         username=f"imsubscriberate:reseller:{reseller_id}:{account.id}",
         account_id=account.id,
-        subscriber_id=account.subscriber_id,
+        subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         return_to=return_to,
     )

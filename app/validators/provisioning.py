@@ -9,47 +9,36 @@ from app.models.provisioning import (
     ServiceStateTransition,
 )
 from app.models.subscriber import Subscriber
-from app.models.subscriber import AccountRole, SubscriberAccount
 
 
-def _validate_account(db: Session, account_id: str) -> SubscriberAccount:
-    account = db.get(SubscriberAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Subscriber account not found")
-    return account
+def _validate_subscriber(db: Session, subscriber_id: str) -> Subscriber:
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+    return subscriber
 
 
 def validate_service_order_links(
     db: Session,
-    account_id: str,
+    subscriber_id: str,
     subscription_id: str | None,
     requested_by_contact_id: str | None,
 ):
-    _validate_account(db, account_id)
+    _validate_subscriber(db, subscriber_id)
 
     if subscription_id:
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
-        if str(subscription.account_id) != account_id:
+        if str(subscription.subscriber_id) != subscriber_id:
             raise HTTPException(
-                status_code=400, detail="Subscription does not belong to account"
+                status_code=400, detail="Subscription does not belong to subscriber"
             )
 
     if requested_by_contact_id:
-        subscriber = db.get(Subscriber, requested_by_contact_id)
-        if not subscriber:
+        contact = db.get(Subscriber, requested_by_contact_id)
+        if not contact:
             raise HTTPException(status_code=404, detail="Contact not found")
-        linked = (
-            db.query(AccountRole)
-            .filter(AccountRole.account_id == account_id)
-            .filter(AccountRole.subscriber_id == subscriber.id)
-            .first()
-        )
-        if not linked:
-            raise HTTPException(
-                status_code=400, detail="Contact does not belong to account"
-            )
 
 
 def validate_service_order_exists(db: Session, service_order_id: str) -> ServiceOrder:

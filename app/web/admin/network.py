@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy import and_, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.db import SessionLocal
 from app.schemas.catalog import (
@@ -51,7 +51,7 @@ from app.services.audit_helpers import (
 )
 from app.services import network as network_service
 from app.services import radius as radius_service
-from app.services import vendor as vendor_service
+# vendor_service removed during CRM cleanup
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
@@ -770,6 +770,8 @@ def olt_detail(request: Request, olt_id: str, db: Session = Depends(get_db)):
         port_assignments = network_service.ont_assignments.list(
             db=db,
             pon_port_id=str(port.id),
+            subscriber_id=None,
+            subscription_id=None,
             active=True,
             order_by="created_at",
             order_dir="desc",
@@ -820,7 +822,7 @@ def onts_list(request: Request, status: str | None = None, db: Session = Depends
 
     cpes = network_service.cpe_devices.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         subscription_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -962,6 +964,9 @@ def ont_detail(request: Request, ont_id: str, db: Session = Depends(get_db)):
         db=db,
         ont_unit_id=ont_id,
         pon_port_id=None,
+        subscriber_id=None,
+        subscription_id=None,
+        active=None,
         order_by="created_at",
         order_dir="desc",
         limit=10,
@@ -1015,7 +1020,7 @@ def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db))
 
     subscriptions = catalog_service.subscriptions.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         offer_id=None,
         status=None,
         order_by="created_at",
@@ -1080,6 +1085,9 @@ async def ont_assign_create(request: Request, ont_id: str, db: Session = Depends
         db=db,
         ont_unit_id=ont_id,
         pon_port_id=None,
+        subscriber_id=None,
+        subscription_id=None,
+        active=None,
         order_by="created_at",
         order_dir="desc",
         limit=20,
@@ -1109,7 +1117,7 @@ async def ont_assign_create(request: Request, ont_id: str, db: Session = Depends
         )
         subscriptions = catalog_service.subscriptions.list(
             db=db,
-            account_id=None,
+            subscriber_id=None,
             offer_id=None,
             status=None,
             order_by="created_at",
@@ -1298,7 +1306,7 @@ def _collect_devices(db: Session) -> list[dict]:
         })
 
     cpes = network_service.cpe_devices.list(
-        db=db, account_id=None, subscription_id=None, order_by="created_at", order_dir="desc", limit=500, offset=0
+        db=db, subscriber_id=None, subscription_id=None, order_by="created_at", order_dir="desc", limit=500, offset=0
     )
     for cpe in cpes:
         devices.append({
@@ -1512,7 +1520,7 @@ def ip_management(request: Request, db: Session = Depends(get_db)):
     )
 
     assignments = network_service.ip_assignments.list(
-        db=db, account_id=None, subscription_id=None, is_active=True, order_by="created_at", order_dir="desc", limit=100, offset=0
+        db=db, subscriber_id=None, subscription_id=None, is_active=True, order_by="created_at", order_dir="desc", limit=100, offset=0
     )
 
     # Get IPv4 and IPv6 addresses for the Addresses tab
@@ -1909,7 +1917,7 @@ def ip_calculator(request: Request, db: Session = Depends(get_db)):
 def ip_assignments_list(request: Request, db: Session = Depends(get_db)):
     """List all IP assignments."""
     assignments = network_service.ip_assignments.list(
-        db=db, is_active=True, order_by="created_at", order_dir="desc", limit=100, offset=0
+        db=db, subscriber_id=None, subscription_id=None, is_active=True, order_by="created_at", order_dir="desc", limit=100, offset=0
     )
 
     stats = {
@@ -2946,6 +2954,163 @@ def alarms_page(
         "status": status,
     })
     return templates.TemplateResponse("admin/network/monitoring/alarms.html", context)
+
+
+@router.get("/alarms/rules/new", response_class=HTMLResponse)
+def alarms_rules_new(request: Request, db: Session = Depends(get_db)):
+    from app.models.network_monitoring import (
+        AlertOperator,
+        AlertSeverity,
+        DeviceInterface,
+        MetricType,
+        NetworkDevice,
+    )
+
+    devices = (
+        db.query(NetworkDevice)
+        .filter(NetworkDevice.is_active.is_(True))
+        .order_by(NetworkDevice.name)
+        .all()
+    )
+    interfaces = (
+        db.query(DeviceInterface)
+        .options(selectinload(DeviceInterface.device))
+        .order_by(DeviceInterface.name)
+        .all()
+    )
+
+    context = _base_context(request, db, active_page="monitoring")
+    context.update(
+        {
+            "rule": None,
+            "action_url": "/admin/network/alarms/rules/new",
+            "devices": devices,
+            "interfaces": interfaces,
+            "metric_types": list(MetricType),
+            "operators": list(AlertOperator),
+            "severities": list(AlertSeverity),
+        }
+    )
+    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+
+
+@router.post("/alarms/rules/new", response_class=HTMLResponse)
+async def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
+    from uuid import UUID
+
+    from app.models.network_monitoring import (
+        AlertOperator,
+        AlertSeverity,
+        DeviceInterface,
+        MetricType,
+        NetworkDevice,
+    )
+    from app.schemas.network_monitoring import AlertRuleCreate
+    from app.services import network_monitoring as monitoring_service
+
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    metric_type = form.get("metric_type") or MetricType.custom.value
+    operator = form.get("operator") or AlertOperator.gt.value
+    threshold_raw = (form.get("threshold") or "").strip()
+    duration_raw = (form.get("duration_seconds") or "").strip()
+    severity = form.get("severity") or AlertSeverity.warning.value
+    device_id_raw = (form.get("device_id") or "").strip()
+    interface_id_raw = (form.get("interface_id") or "").strip()
+    notes = (form.get("notes") or "").strip() or None
+    is_active = form.get("is_active") == "true"
+
+    error = None
+    try:
+        threshold = float(threshold_raw)
+    except ValueError:
+        threshold = None
+        error = "Threshold must be a number."
+
+    duration_seconds = None
+    if duration_raw:
+        try:
+            duration_seconds = int(duration_raw)
+        except ValueError:
+            error = "Duration must be a whole number of seconds."
+
+    device_id = None
+    if device_id_raw:
+        try:
+            device_id = UUID(device_id_raw)
+        except ValueError:
+            error = "Invalid device selection."
+
+    interface_id = None
+    if interface_id_raw:
+        try:
+            interface_id = UUID(interface_id_raw)
+        except ValueError:
+            error = "Invalid interface selection."
+
+    if not name:
+        error = "Rule name is required."
+
+    if error is None:
+        try:
+            payload = AlertRuleCreate(
+                name=name,
+                metric_type=MetricType(metric_type),
+                operator=AlertOperator(operator),
+                threshold=threshold,
+                duration_seconds=duration_seconds,
+                severity=AlertSeverity(severity),
+                device_id=device_id,
+                interface_id=interface_id,
+                is_active=is_active,
+                notes=notes,
+            )
+            monitoring_service.alert_rules.create(db=db, payload=payload)
+            return RedirectResponse(url="/admin/network/alarms", status_code=303)
+        except ValidationError as exc:
+            error = exc.errors()[0].get("msg") or "Please correct the highlighted fields."
+        except Exception as exc:
+            error = str(exc)
+
+    devices = (
+        db.query(NetworkDevice)
+        .filter(NetworkDevice.is_active.is_(True))
+        .order_by(NetworkDevice.name)
+        .all()
+    )
+    interfaces = (
+        db.query(DeviceInterface)
+        .options(selectinload(DeviceInterface.device))
+        .order_by(DeviceInterface.name)
+        .all()
+    )
+    rule = {
+        "name": name,
+        "metric_type": metric_type,
+        "operator": operator,
+        "threshold": threshold_raw,
+        "duration_seconds": duration_raw,
+        "severity": severity,
+        "device_id": device_id_raw,
+        "interface_id": interface_id_raw,
+        "is_active": is_active,
+        "notes": notes or "",
+    }
+
+    context = _base_context(request, db, active_page="monitoring")
+    context.update(
+        {
+            "rule": rule,
+            "action_url": "/admin/network/alarms/rules/new",
+            "devices": devices,
+            "interfaces": interfaces,
+            "metric_types": list(MetricType),
+            "operators": list(AlertOperator),
+            "severities": list(AlertSeverity),
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
+    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
 
 
 # ==================== POP Sites ====================
@@ -4777,22 +4942,8 @@ async def fiber_change_requests_bulk_approve(request: Request, db: Session = Dep
 @router.post("/fiber-map/save-plan")
 async def fiber_map_save_plan(request: Request, db: Session = Depends(get_db)):
     """Persist a planned route to a project quote."""
-    data = await request.json()
-    quote_id = data.get("quote_id")
-    geojson = data.get("geojson")
-    length_meters = data.get("length_meters")
-    if not quote_id or not geojson:
-        return JSONResponse({"error": "quote_id and geojson are required"}, status_code=400)
-    revision = vendor_service.proposed_route_revisions.create_for_admin(
-        db, quote_id=quote_id, geojson=geojson, length_meters=length_meters
-    )
-    return JSONResponse(
-        {
-            "success": True,
-            "revision_id": str(revision.id),
-            "revision_number": revision.revision_number,
-        }
-    )
+    # vendor_service removed during CRM cleanup - this endpoint is disabled
+    return JSONResponse({"error": "Route revision feature not available"}, status_code=501)
 
 
 @router.post("/fiber-map/update-position")

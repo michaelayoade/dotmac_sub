@@ -105,12 +105,11 @@ class NotificationHandler:
         """Resolve the notification recipient from event context."""
         # Try to get email from account
         if event.account_id:
-            from app.models.subscriber import SubscriberAccount
+            from app.models.subscriber import Subscriber
 
-            account = db.get(SubscriberAccount, event.account_id)
-            if account and account.subscriber and account.subscriber.person:
-                if account.subscriber.person.email:
-                    return account.subscriber.person.email
+            account = db.get(Subscriber, event.account_id)
+            if account and account.email:
+                return account.email
 
         # Check if email is in payload
         if "email" in event.payload:

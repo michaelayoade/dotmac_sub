@@ -1,0 +1,47 @@
+/* ============================================================================
+   CARDS
+   Card components with subtle gradients and gold accents
+   ============================================================================ */
+
+@layer components {
+    .card {
+        background: linear-gradient(135deg, var(--card-bg) 0%, rgba(250, 249, 247, 0.5) 100%);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .dark .card {
+        background: linear-gradient(135deg, var(--card-bg) 0%, rgba(30, 41, 59, 0.8) 100%);
+        box-shadow: var(--card-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+
+    .card-hover:hover {
+        box-shadow: var(--card-shadow-hover), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+        transform: translateY(-2px);
+    }
+
+    .card-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        padding-bottom: var(--spacing-lg);
+        margin-bottom: var(--spacing-xl);
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    /* Card with gold accent - for important/featured content */
+    .card-featured {
+        position: relative;
+        border-left: 3px solid var(--gold);
+    }
+    .card-featured::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -3px;
+        bottom: 0;
+        width: 3px;
+        background: linear-gradient(180deg, var(--gold) 0%, var(--teal) 100%);
+    }
+}

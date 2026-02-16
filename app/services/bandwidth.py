@@ -203,7 +203,7 @@ class BandwidthSamples(ListResponseMixin):
 
         # Check if user owns the subscription (customer portal)
         user_account_id = user.get("account_id")
-        if user_account_id and str(subscription.account_id) == str(user_account_id):
+        if user_account_id and str(subscription.subscriber_id) == str(user_account_id):
             return subscription
 
         raise HTTPException(status_code=403, detail="Access denied to this subscription")
@@ -442,8 +442,8 @@ class BandwidthSamples(ListResponseMixin):
 
                 if sub_id:
                     subscription = db.get(Subscription, UUID(sub_id))
-                    if subscription and subscription.account:
-                        account = subscription.account
+                    if subscription and subscription.subscriber:
+                        account = subscription.subscriber
                         if account.subscriber and account.subscriber.person:
                             account_name = f"{account.subscriber.person.first_name} {account.subscriber.person.last_name}"
                         elif account.subscriber and account.subscriber.organization:
@@ -482,7 +482,7 @@ class BandwidthSamples(ListResponseMixin):
         subscription = (
             db.query(Subscription)
             .filter(
-                Subscription.account_id == UUID(account_id),
+                Subscription.subscriber_id == UUID(account_id),
                 Subscription.status.in_(["active", "pending"]),
             )
             .first()

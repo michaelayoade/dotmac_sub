@@ -1,0 +1,82 @@
+/* ============================================================================
+   EMPTY STATES
+   Enhanced with animations for visual interest
+   ============================================================================ */
+
+@layer components {
+    .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 64px var(--spacing-2xl);
+        text-align: center;
+    }
+
+    .empty-state-icon {
+        width: 88px;
+        height: 88px;
+        border-radius: var(--radius-2xl);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, var(--teal-light) 0%, var(--gold-light) 100%);
+        margin-bottom: var(--spacing-2xl);
+        animation: emptyIconFloat 3s ease-in-out infinite;
+    }
+    .dark .empty-state-icon {
+        background: linear-gradient(135deg, rgba(13, 148, 136, 0.2) 0%, rgba(217, 119, 6, 0.15) 100%);
+    }
+    .empty-state-icon svg { width: 40px; height: 40px; color: var(--teal); }
+
+    @keyframes emptyIconFloat {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-8px); }
+    }
+
+    .empty-state-title {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 22px;
+        font-weight: 500;
+        color: var(--ink);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .empty-state-description {
+        font-size: 15px;
+        color: var(--ink-muted);
+        max-width: 360px;
+        line-height: 1.6;
+        margin-bottom: var(--spacing-2xl);
+    }
+
+    /* Decorative dots around empty state */
+    .empty-state-decorated {
+        position: relative;
+    }
+    .empty-state-decorated::before,
+    .empty-state-decorated::after {
+        content: '';
+        position: absolute;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--gold);
+        opacity: 0.4;
+    }
+    .empty-state-decorated::before {
+        top: 20%;
+        left: 15%;
+        animation: dotPulse 2s ease-in-out infinite;
+    }
+    .empty-state-decorated::after {
+        bottom: 25%;
+        right: 15%;
+        animation: dotPulse 2s ease-in-out infinite 0.5s;
+    }
+
+    @keyframes dotPulse {
+        0%, 100% { transform: scale(1); opacity: 0.4; }
+        50% { transform: scale(1.5); opacity: 0.8; }
+    }
+}

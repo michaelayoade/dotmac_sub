@@ -13,7 +13,7 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
-from app.models.subscriber import AccountStatus, Subscriber, SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.services import customer_portal
 from app.services import radius_auth
 from app.services.auth_flow import verify_password
@@ -98,13 +98,7 @@ def customer_login_submit(
             )
             if subscriber:
                 subscriber_id = subscriber.id
-                active_account = next(
-                    (account for account in subscriber.accounts if account.status == AccountStatus.active),
-                    None,
-                )
-                account = active_account or (subscriber.accounts[0] if subscriber.accounts else None)
-                if account:
-                    account_id = account.id
+                account_id = subscriber.id
 
         if not authenticated_locally:
             radius_auth.authenticate(db=db, username=normalized_username, password=password)
@@ -122,12 +116,12 @@ def customer_login_submit(
                 if radius_user.subscription_id:
                     from app.models.catalog import Subscription
                     subscription = db.get(Subscription, radius_user.subscription_id)
-                    if subscription and subscription.account:
-                        subscriber_id = subscription.account.subscriber_id
+                    if subscription and subscription.subscriber_id:
+                        subscriber_id = subscription.subscriber_id
                 if account_id and not subscriber_id:
-                    account = db.get(SubscriberAccount, account_id)
+                    account = db.get(Subscriber, account_id)
                     if account:
-                        subscriber_id = account.subscriber_id
+                        subscriber_id = account.id
             else:
                 credential = (
                     db.query(AccessCredential)
@@ -136,13 +130,12 @@ def customer_login_submit(
                     .first()
                 )
                 if credential:
-                    account_id = credential.account_id
-                    if credential.account:
-                        subscriber_id = credential.account.subscriber_id
+                    account_id = credential.subscriber_id
+                    subscriber_id = credential.subscriber_id
                 if account_id and not subscriber_id:
-                    account = db.get(SubscriberAccount, account_id)
+                    account = db.get(Subscriber, account_id)
                     if account:
-                        subscriber_id = account.subscriber_id
+                        subscriber_id = account.id
 
         if not account_id or not subscriber_id:
             raise ValueError("Customer account not found. Please contact support.")

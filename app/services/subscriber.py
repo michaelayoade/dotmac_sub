@@ -3,24 +3,19 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.subscriber import (
-    AccountRole,
-    AccountRoleType,
-    AccountStatus,
     Address,
     AddressType,
     Organization,
     Reseller,
     Subscriber,
-    SubscriberAccount,
     SubscriberCustomField,
+    SubscriberStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.services.response import ListResponseMixin
 from app.models.billing import TaxRate
 from app.schemas.subscriber import (
-    AccountRoleCreate,
-    AccountRoleUpdate,
     AddressCreate,
     AddressUpdate,
     OrganizationCreate,
@@ -198,12 +193,6 @@ class Subscribers(ListResponseMixin):
             Subscriber,
             subscriber_id,
             options=[
-                selectinload(Subscriber.accounts)
-                .selectinload(SubscriberAccount.account_roles)
-                .selectinload(AccountRole.subscriber),
-                selectinload(Subscriber.accounts)
-                .selectinload(SubscriberAccount.account_roles)
-                .selectinload(AccountRole.subscriber),
                 selectinload(Subscriber.addresses),
             ],
         )
@@ -222,12 +211,6 @@ class Subscribers(ListResponseMixin):
         offset: int,
     ):
         query = db.query(Subscriber).options(
-            selectinload(Subscriber.accounts)
-            .selectinload(SubscriberAccount.account_roles)
-            .selectinload(AccountRole.subscriber),
-            selectinload(Subscriber.accounts)
-            .selectinload(SubscriberAccount.account_roles)
-            .selectinload(AccountRole.subscriber),
             selectinload(Subscriber.addresses),
         )
         if organization_id:
@@ -315,57 +298,23 @@ class Subscribers(ListResponseMixin):
 
 
 class Accounts(ListResponseMixin):
+    """Compatibility layer: accounts are now subscribers."""
+
     @staticmethod
     def create(db: Session, payload: SubscriberAccountCreate):
+        if not payload.subscriber_id:
+            raise HTTPException(status_code=400, detail="subscriber_id is required")
         subscriber = db.get(Subscriber, payload.subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
-        if payload.reseller_id:
-            reseller = db.get(Reseller, payload.reseller_id)
-            if not reseller:
-                raise HTTPException(status_code=404, detail="Reseller not found")
-        if payload.tax_rate_id:
-            _validate_tax_rate(db, str(payload.tax_rate_id))
-        data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "status" not in fields_set:
-            default_status = settings_spec.resolve_value(
-                db, SettingDomain.subscriber, "default_account_status"
-            )
-            if default_status:
-                data["status"] = _validate_enum(
-                    default_status, AccountStatus, "status"
-                )
-        if not data.get("account_number"):
-            generated = numbering.generate_number(
-                db,
-                SettingDomain.subscriber,
-                "account_number",
-                "account_number_enabled",
-                "account_number_prefix",
-                "account_number_padding",
-                "account_number_start",
-            )
-            if generated:
-                data["account_number"] = generated
-        account = SubscriberAccount(**data)
-        db.add(account)
-        db.commit()
-        db.refresh(account)
-        return account
+        return subscriber
 
     @staticmethod
     def get(db: Session, account_id: str):
-        account = db.get(
-            SubscriberAccount,
-            account_id,
-            options=[
-                selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.subscriber),
-            ],
-        )
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
-        return account
+        subscriber = db.get(Subscriber, account_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+        return subscriber
 
     @staticmethod
     def list(
@@ -377,139 +326,60 @@ class Accounts(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(SubscriberAccount).options(
-            selectinload(SubscriberAccount.account_roles).selectinload(AccountRole.subscriber),
-        )
+        query = db.query(Subscriber)
         if subscriber_id:
-            query = query.filter(SubscriberAccount.subscriber_id == subscriber_id)
+            query = query.filter(Subscriber.id == coerce_uuid(subscriber_id))
         if reseller_id:
-            query = query.filter(SubscriberAccount.reseller_id == reseller_id)
+            query = query.filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
         query = apply_ordering(
             query,
             order_by,
             order_dir,
             {
-                "created_at": SubscriberAccount.created_at,
-                "updated_at": SubscriberAccount.updated_at,
+                "created_at": Subscriber.created_at,
+                "updated_at": Subscriber.updated_at,
             },
         )
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
     def update(db: Session, account_id: str, payload: SubscriberAccountUpdate):
-        account = db.get(SubscriberAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data and data["subscriber_id"]:
-            subscriber = db.get(Subscriber, data["subscriber_id"])
-            if not subscriber:
-                raise HTTPException(status_code=404, detail="Subscriber not found")
-        if "reseller_id" in data and data["reseller_id"]:
-            reseller = db.get(Reseller, data["reseller_id"])
-            if not reseller:
-                raise HTTPException(status_code=404, detail="Reseller not found")
-        if "tax_rate_id" in data and data["tax_rate_id"]:
-            _validate_tax_rate(db, str(data["tax_rate_id"]))
-        for key, value in data.items():
-            setattr(account, key, value)
-        db.commit()
-        db.refresh(account)
-        return account
+        subscriber = db.get(Subscriber, account_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+        return subscriber
 
     @staticmethod
     def delete(db: Session, account_id: str):
-        account = db.get(SubscriberAccount, account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
-        db.delete(account)
+        subscriber = db.get(Subscriber, account_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+        db.delete(subscriber)
         db.commit()
 
 
 class AccountRoles(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: AccountRoleCreate):
-        account = db.get(SubscriberAccount, payload.account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
-        subscriber = db.get(Subscriber, payload.subscriber_id)
-        if not subscriber:
-            raise HTTPException(status_code=404, detail="Subscriber not found")
-        if payload.is_primary:
-            db.query(AccountRole).filter(
-                AccountRole.account_id == payload.account_id,
-                AccountRole.is_primary.is_(True),
-            ).update({"is_primary": False})
-        role = AccountRole(**payload.model_dump())
-        db.add(role)
-        db.commit()
-        db.refresh(role)
-        return role
+    """Deprecated compatibility layer - account roles removed."""
 
     @staticmethod
-    def get(db: Session, role_id: str):
-        role = db.get(AccountRole, role_id)
-        if not role:
-            raise HTTPException(status_code=404, detail="Account role not found")
-        return role
+    def create(*_args, **_kwargs):
+        return None
 
     @staticmethod
-    def list(
-        db: Session,
-        account_id: str | None,
-        subscriber_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
-    ):
-        query = db.query(AccountRole).options(selectinload(AccountRole.subscriber))
-        if account_id:
-            query = query.filter(AccountRole.account_id == account_id)
-        if subscriber_id:
-            query = query.filter(AccountRole.subscriber_id == subscriber_id)
-        query = apply_ordering(
-            query,
-            order_by,
-            order_dir,
-            {"created_at": AccountRole.created_at, "updated_at": AccountRole.updated_at},
-        )
-        return apply_pagination(query, limit, offset).all()
+    def get(*_args, **_kwargs):
+        return None
 
     @staticmethod
-    def update(db: Session, role_id: str, payload: AccountRoleUpdate):
-        role = db.get(AccountRole, role_id)
-        if not role:
-            raise HTTPException(status_code=404, detail="Account role not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "account_id" in data and data["account_id"]:
-            account = db.get(SubscriberAccount, data["account_id"])
-            if not account:
-                raise HTTPException(status_code=404, detail="Subscriber account not found")
-        if "subscriber_id" in data and data["subscriber_id"]:
-            subscriber = db.get(Subscriber, data["subscriber_id"])
-            if not subscriber:
-                raise HTTPException(status_code=404, detail="Subscriber not found")
-        if data.get("is_primary"):
-            account_id = data.get("account_id", role.account_id)
-            db.query(AccountRole).filter(
-                AccountRole.account_id == account_id,
-                AccountRole.id != role.id,
-                AccountRole.is_primary.is_(True),
-            ).update({"is_primary": False})
-        for key, value in data.items():
-            setattr(role, key, value)
-        db.commit()
-        db.refresh(role)
-        return role
+    def list(*_args, **_kwargs):
+        return []
 
     @staticmethod
-    def delete(db: Session, role_id: str):
-        role = db.get(AccountRole, role_id)
-        if not role:
-            raise HTTPException(status_code=404, detail="Account role not found")
-        db.delete(role)
-        db.commit()
+    def update(*_args, **_kwargs):
+        return None
+
+    @staticmethod
+    def delete(*_args, **_kwargs):
+        return None
 
 
 class Addresses(ListResponseMixin):
@@ -518,12 +388,6 @@ class Addresses(ListResponseMixin):
         subscriber = db.get(Subscriber, payload.subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
-        if payload.account_id:
-            account = db.get(SubscriberAccount, payload.account_id)
-            if not account:
-                raise HTTPException(status_code=404, detail="Subscriber account not found")
-            if account.subscriber_id != payload.subscriber_id:
-                raise HTTPException(status_code=400, detail="Account does not belong to subscriber")
         if payload.tax_rate_id:
             _validate_tax_rate(db, str(payload.tax_rate_id))
         data = payload.model_dump()
@@ -539,7 +403,6 @@ class Addresses(ListResponseMixin):
         if data.get("is_primary"):
             db.query(Address).filter(
                 Address.subscriber_id == data["subscriber_id"],
-                Address.account_id == data.get("account_id"),
                 Address.address_type == data["address_type"],
                 Address.is_primary.is_(True),
             ).update({"is_primary": False})
@@ -561,7 +424,6 @@ class Addresses(ListResponseMixin):
     def list(
         db: Session,
         subscriber_id: str | None,
-        account_id: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
@@ -570,8 +432,6 @@ class Addresses(ListResponseMixin):
         query = db.query(Address)
         if subscriber_id:
             query = query.filter(Address.subscriber_id == subscriber_id)
-        if account_id:
-            query = query.filter(Address.account_id == account_id)
         query = apply_ordering(
             query,
             order_by,
@@ -590,22 +450,13 @@ class Addresses(ListResponseMixin):
             subscriber = db.get(Subscriber, data["subscriber_id"])
             if not subscriber:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
-        if "account_id" in data and data["account_id"]:
-            subscriber_id = data.get("subscriber_id", address.subscriber_id)
-            account = db.get(SubscriberAccount, data["account_id"])
-            if not account:
-                raise HTTPException(status_code=404, detail="Subscriber account not found")
-            if account.subscriber_id != subscriber_id:
-                raise HTTPException(status_code=400, detail="Account does not belong to subscriber")
         if "tax_rate_id" in data and data["tax_rate_id"]:
             _validate_tax_rate(db, str(data["tax_rate_id"]))
         if data.get("is_primary"):
             subscriber_id = data.get("subscriber_id", address.subscriber_id)
-            account_id = data.get("account_id", address.account_id)
             address_type = data.get("address_type", address.address_type)
             db.query(Address).filter(
                 Address.subscriber_id == subscriber_id,
-                Address.account_id == account_id,
                 Address.address_type == address_type,
                 Address.id != address.id,
                 Address.is_primary.is_(True),

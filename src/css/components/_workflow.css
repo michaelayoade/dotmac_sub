@@ -1,0 +1,124 @@
+/* ============================================================================
+   WORKFLOW STEPPER
+   Visual progress indicator for document workflows
+   ============================================================================ */
+
+@layer components {
+    .workflow-stepper {
+        display: flex;
+        align-items: center;
+        padding: var(--spacing-lg) 0;
+        margin-bottom: var(--spacing-xl);
+    }
+
+    .workflow-step {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        flex: 1;
+    }
+    .workflow-step:last-child { flex: none; }
+
+    .workflow-step-number {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 600;
+        background: var(--parchment-dark);
+        color: var(--ink-faint);
+        border: 2px solid var(--card-border);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        flex-shrink: 0;
+    }
+
+    .workflow-step-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--ink-muted);
+        white-space: nowrap;
+        transition: all 0.2s ease;
+    }
+
+    .workflow-step-connector {
+        flex: 1;
+        height: 2px;
+        background: var(--card-border);
+        margin: 0 var(--spacing-md);
+        position: relative;
+        overflow: hidden;
+    }
+    .workflow-step-connector::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 0;
+        background: var(--teal);
+        transition: width 0.5s ease;
+    }
+
+    /* Completed step */
+    .workflow-step-complete .workflow-step-number {
+        background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+        color: white;
+        border-color: var(--teal);
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
+    }
+    .workflow-step-complete .workflow-step-label {
+        color: var(--teal-dark);
+        font-weight: 600;
+    }
+    .dark .workflow-step-complete .workflow-step-label { color: var(--teal); }
+    .workflow-step-complete .workflow-step-connector::after { width: 100%; }
+
+    /* Current step */
+    .workflow-step-current .workflow-step-number {
+        background: var(--parchment);
+        color: var(--teal);
+        border-color: var(--teal);
+        box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.15);
+        animation: currentStepPulse 2s ease-in-out infinite;
+    }
+    @keyframes currentStepPulse {
+        0%, 100% { box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.15); }
+        50% { box-shadow: 0 0 0 8px rgba(13, 148, 136, 0.08); }
+    }
+    .workflow-step-current .workflow-step-label {
+        color: var(--ink);
+        font-weight: 600;
+    }
+
+    /* Compact variant for tight spaces */
+    .workflow-stepper-compact .workflow-step-number {
+        width: 24px;
+        height: 24px;
+        font-size: 11px;
+    }
+    .workflow-stepper-compact .workflow-step-label { font-size: 12px; }
+
+    /* Vertical variant */
+    .workflow-stepper-vertical {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0;
+    }
+    .workflow-stepper-vertical .workflow-step {
+        flex-direction: row;
+        flex: none;
+        width: 100%;
+        padding: var(--spacing-md) 0;
+    }
+    .workflow-stepper-vertical .workflow-step-connector {
+        position: absolute;
+        left: 15px;
+        top: 44px;
+        width: 2px;
+        height: calc(100% - 32px);
+        margin: 0;
+    }
+}

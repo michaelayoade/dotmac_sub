@@ -48,18 +48,9 @@ def _base_context(request: Request, db: Session, active_page: str, heading: str,
 
 
 def _derive_subscriber_status(subscriber) -> AccountStatus:
-    accounts = [account for account in subscriber.accounts if account.status]
-    if not accounts:
-        return AccountStatus.active if subscriber.is_active else AccountStatus.canceled
-    for status in (
-        AccountStatus.active,
-        AccountStatus.suspended,
-        AccountStatus.delinquent,
-        AccountStatus.canceled,
-    ):
-        if any(account.status == status for account in accounts):
-            return status
-    return accounts[0].status
+    if subscriber.status:
+        return subscriber.status
+    return AccountStatus.active if subscriber.is_active else AccountStatus.canceled
 
 
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
@@ -229,7 +220,6 @@ def reports_subscribers(request: Request, db: Session = Depends(get_db)):
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -296,7 +286,6 @@ def reports_subscribers_export(days: int | None = None, db: Session = Depends(ge
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -351,7 +340,6 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -417,7 +405,6 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -533,7 +520,7 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
     )
     assignments = network_service.ip_assignments.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         subscription_id=None,
         is_active=None,
         order_by="created_at",
@@ -682,7 +669,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
     )
     assignments = network_service.ip_assignments.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         subscription_id=None,
         is_active=None,
         order_by="created_at",

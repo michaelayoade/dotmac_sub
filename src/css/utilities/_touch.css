@@ -1,0 +1,196 @@
+/* ============================================================================
+   TOUCH & MOBILE OPTIMIZATIONS
+   Enhanced touch handling, safe areas, and accessibility
+   ============================================================================ */
+
+/* --------------------------------------------------------------------------
+   Safe Area Insets (for notched devices like iPhone X+)
+   -------------------------------------------------------------------------- */
+@supports (padding: env(safe-area-inset-bottom)) {
+    .app-sidebar {
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .app-page {
+        padding-left: max(var(--content-gutter), env(safe-area-inset-left));
+        padding-right: max(var(--content-gutter), env(safe-area-inset-right));
+        padding-bottom: max(var(--content-gutter), env(safe-area-inset-bottom));
+    }
+
+    .bulk-action-bar {
+        padding-bottom: calc(var(--spacing-lg) + env(safe-area-inset-bottom));
+    }
+
+    .toast-container {
+        bottom: max(var(--spacing-xl), env(safe-area-inset-bottom));
+        right: max(var(--spacing-xl), env(safe-area-inset-right));
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Touch Optimizations
+   -------------------------------------------------------------------------- */
+.app-sidebar nav,
+.table-responsive,
+.command-palette-results,
+.dropdown-menu,
+.notifications-dropdown {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+}
+
+.btn,
+.nav-module,
+button,
+[role="button"] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+[role="button"],
+[tabindex]:not([tabindex="-1"]) {
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch device minimum targets (48px Material Design, 44px Apple) */
+@media (hover: none) and (pointer: coarse) {
+    .btn {
+        min-height: 48px;
+        min-width: 48px;
+    }
+
+    .btn-sm {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .nav-module {
+        min-height: 48px;
+        padding: var(--spacing-md) var(--spacing-lg);
+    }
+
+    .dropdown-item,
+    [role="menuitem"] {
+        min-height: 48px;
+        padding: var(--spacing-md) var(--spacing-lg);
+    }
+
+    .table-action-btn {
+        min-height: 44px;
+        min-width: 44px;
+        padding: var(--spacing-md);
+    }
+
+    .form-input,
+    .form-select {
+        min-height: 48px;
+    }
+
+    input[type="checkbox"],
+    input[type="radio"] {
+        min-height: 24px;
+        min-width: 24px;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Hover vs Touch Detection
+   -------------------------------------------------------------------------- */
+@media (hover: hover) and (pointer: fine) {
+    .card-hover:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--card-shadow-hover);
+    }
+
+    .btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+    }
+
+    .table tbody tr:hover {
+        background: rgba(13, 148, 136, 0.04);
+    }
+
+    .nav-module:hover {
+        background: var(--parchment-dark);
+    }
+}
+
+@media (hover: none) {
+    .card-hover:active {
+        transform: scale(0.98);
+        box-shadow: var(--card-shadow);
+    }
+
+    .btn:active:not(:disabled) {
+        transform: scale(0.96);
+    }
+
+    .table tbody tr:active {
+        background: rgba(13, 148, 136, 0.08);
+    }
+
+    .nav-module:active {
+        background: var(--parchment-dark);
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Reduced Motion Preferences (Accessibility)
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+        animation: none !important;
+    }
+
+    .app-sidebar {
+        transition: none !important;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   High Contrast Mode Support
+   -------------------------------------------------------------------------- */
+@media (prefers-contrast: high) {
+    .card {
+        border-width: 2px;
+    }
+
+    .btn {
+        border: 2px solid currentColor;
+    }
+
+    .form-input,
+    .form-select {
+        border-width: 2px;
+    }
+
+    .nav-module.active::before {
+        width: 4px;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Dark Mode + System Preference
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+    html:not(.dark):not(.light) {
+        color-scheme: dark;
+    }
+}

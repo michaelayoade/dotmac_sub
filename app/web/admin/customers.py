@@ -21,8 +21,6 @@ from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.subscriber import Subscriber
 # TODO: person schemas no longer exist - need to use subscriber schemas
 # from app.schemas.person import ChannelTypeEnum, PersonChannelCreate, PersonCreate
-from app.schemas.subscriber import AccountRoleCreate
-from app.models.subscriber import AccountRoleType
 from app.models.subscriber import Organization, Subscriber
 from app.services.auth_dependencies import require_permission
 from app.services import subscriber as subscriber_service
@@ -61,7 +59,7 @@ def _list_subscriptions_for_accounts(db: Session, accounts):
         try:
             account_subs = catalog_service.subscriptions.list(
                 db=db,
-                account_id=str(account.id),
+                subscriber_id=str(account.id),
                 offer_id=None,
                 status=None,
                 order_by="created_at",
@@ -154,24 +152,10 @@ def _create_account_roles_from_rows(
     contact_rows: list[dict],
     organization_id: str | None = None,
 ) -> None:
-    role_map = {
-        "primary": AccountRoleType.primary,
-        "billing": AccountRoleType.billing,
-        "technical": AccountRoleType.technical,
-        "support": AccountRoleType.support,
-    }
-    for row in contact_rows:
-        subscriber = _ensure_subscriber_for_contact_row(db, row, organization_id=organization_id)
-        subscriber_service.account_roles.create(
-            db=db,
-            payload=AccountRoleCreate(
-                account_id=account_id,
-                subscriber_id=subscriber.id,  # Changed from person_id
-                role=role_map.get(row.get("role"), AccountRoleType.primary),
-                is_primary=row.get("is_primary", False),
-                title=row.get("title") or None,
-            ),
-        )
+    """Stub function - account roles no longer exist after model consolidation."""
+    # Account roles were removed during Person + SubscriberAccount consolidation
+    # This function is kept as a stub to prevent breaking existing code
+    pass
         # TODO: Channel functions commented out - person schemas/services removed
         # if row.get("email"):
         #     _ensure_subscriber_channel(
@@ -420,24 +404,7 @@ def contacts_convert_to_subscriber(
             payload=SubscriberCreate(person_id=person.id),
         )
 
-    existing_account = (
-        db.query(SubscriberAccount)
-        .filter(SubscriberAccount.subscriber_id == subscriber.id)
-        .first()
-    )
-    if not existing_account:
-        status_value = account_status or "active"
-        try:
-            status_enum = validate_enum(status_value, AccountStatus, "status")
-        except Exception:
-            status_enum = AccountStatus.active
-        subscriber_service.accounts.create(
-            db=db,
-            payload=SubscriberAccountCreate(
-                subscriber_id=subscriber.id,
-                status=status_enum,
-            ),
-        )
+    # Accounts consolidated into subscribers; no separate account creation needed.
 
     # Final status: subscriber if possible
     if person.party_status != PartyStatus.subscriber:
@@ -476,10 +443,10 @@ def customers_list(
     total = 0
 
     if customer_type != "organization":
-        # Only show people that are linked to a subscriber record.
+        # Show individual people (subscribers without an organization)
         people_query = (
             db.query(Subscriber)
-            .join(Subscriber, Subscriber.person_id == Subscriber.id)
+            .filter(Subscriber.organization_id.is_(None))
         )
         if search:
             people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
@@ -535,7 +502,7 @@ def customers_list(
         people_query = (
             db.query(func.count(Subscriber.id))
             .select_from(Subscriber)
-            .join(Subscriber, Subscriber.person_id == Subscriber.id)
+            .filter(Subscriber.organization_id.is_(None))
         )
         if search:
             people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
@@ -1129,57 +1096,10 @@ def person_detail(
         except Exception:
             pass
 
-        # Get accounts and contacts for this subscriber
-        try:
-            sub_accounts = subscriber_service.accounts.list(
-                db=db,
-                subscriber_id=str(sub.id),
-                reseller_id=None,
-                order_by="created_at",
-                order_dir="desc",
-                limit=10,
-                offset=0,
-            )
-            accounts.extend(sub_accounts)
-            for account in sub_accounts:
-                # Get contacts for this account
-                try:
-                    acc_contacts = subscriber_service.account_roles.list(
-                        db=db,
-                        account_id=str(account.id),
-                        person_id=None,
-                        order_by="created_at",
-                        order_dir="desc",
-                        limit=50,
-                        offset=0,
-                    )
-                    contacts.extend(acc_contacts)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Accounts consolidated into subscribers; treat subscriber as account.
+        accounts.append(sub)
 
-    # Include accounts linked via account roles (e.g., contact/primary roles)
-    try:
-        role_links = subscriber_service.account_roles.list(
-            db=db,
-            account_id=None,
-            person_id=str(customer_id),
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-        for role in role_links:
-            try:
-                account = subscriber_service.accounts.get(db=db, account_id=str(role.account_id))
-                accounts.append(account)
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    contacts = [_format_account_role(role) for role in contacts]
+    contacts = []
 
     accounts = _dedupe_accounts(accounts)
     if accounts:
@@ -1964,7 +1884,7 @@ def _impersonate_customer(
     selected_subscription_id = None
     if subscription_id:
         subscription = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
-        if str(getattr(subscription, "account_id", "")) != str(selected_account.id):
+        if str(getattr(subscription, "subscriber_id", "")) != str(selected_account.id):
             return templates.TemplateResponse(
                 "admin/errors/404.html",
                 {"request": request, "message": "Subscription not found"},
@@ -1974,7 +1894,7 @@ def _impersonate_customer(
     else:
         active_subs = catalog_service.subscriptions.list(
             db=db,
-            account_id=str(selected_account.id),
+            subscriber_id=str(selected_account.id),
             offer_id=None,
             status="active",
             order_by="created_at",
@@ -1987,7 +1907,7 @@ def _impersonate_customer(
         else:
             any_subs = catalog_service.subscriptions.list(
                 db=db,
-                account_id=str(selected_account.id),
+                subscriber_id=str(selected_account.id),
                 offer_id=None,
                 status=None,
                 order_by="created_at",
@@ -2001,7 +1921,7 @@ def _impersonate_customer(
     session_token = customer_portal.create_customer_session(
         username=f"impersonate:{customer_type}:{customer_id}:{selected_account.id}",
         account_id=selected_account.id,
-        subscriber_id=selected_account.subscriber_id,
+        subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
         return_to=f"/admin/customers/{customer_type}/{customer_id}",
     )
@@ -2860,7 +2780,7 @@ def export_customers(
         if customer_type != "organization":
             people_query = (
                 db.query(Subscriber)
-                .join(Subscriber, Subscriber.person_id == Subscriber.id)
+                .filter(Subscriber.organization_id.is_(None))
             )
             if search:
                 people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))

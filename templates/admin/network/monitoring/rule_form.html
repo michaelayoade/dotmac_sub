@@ -1,0 +1,194 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}New Alert Rule - Admin{% endblock %}
+
+{% block content %}
+{% set r = rule or {} %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/alarms" class="hover:text-primary-600">Network Alarms</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">New Rule</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Create Alert Rule</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define thresholds to raise network alarms.</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Rule Details</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Rule Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="160"
+                            value="{{ r.name if r.name is defined else '' }}"
+                            placeholder="High CPU Usage"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="metric_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Metric Type</label>
+                        <select name="metric_type" id="metric_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for mt in metric_types %}
+                                {% set mt_value = mt.value %}
+                                <option value="{{ mt_value }}" {% if r.metric_type is defined and r.metric_type == mt_value %}selected{% endif %}>
+                                    {{ mt_value.replace('_', ' ') | title }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {% set operator_labels = {'gt': '>', 'gte': '≥', 'lt': '<', 'lte': '≤', 'eq': '='} %}
+                    <div>
+                        <label for="operator" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Operator</label>
+                        <select name="operator" id="operator"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for op in operators %}
+                                {% set op_value = op.value %}
+                                <option value="{{ op_value }}" {% if r.operator is defined and r.operator == op_value %}selected{% endif %}>
+                                    {{ operator_labels.get(op_value, op_value) }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="threshold" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Threshold <span class="text-red-500">*</span></label>
+                        <input type="number" name="threshold" id="threshold" required step="0.01"
+                            value="{{ r.threshold if r.threshold is defined else '' }}"
+                            placeholder="90"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="duration_seconds" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Duration (seconds)</label>
+                        <input type="number" name="duration_seconds" id="duration_seconds" min="0"
+                            value="{{ r.duration_seconds if r.duration_seconds is defined else '' }}"
+                            placeholder="300"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional: condition must persist for this long.</p>
+                    </div>
+
+                    <div>
+                        <label for="severity" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Severity</label>
+                        <select name="severity" id="severity"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for sev in severities %}
+                                {% set sev_value = sev.value %}
+                                <option value="{{ sev_value }}" {% if r.severity is defined and r.severity == sev_value %}selected{% endif %}>
+                                    {{ sev_value | title }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2 mt-7">
+                            <input type="checkbox" name="is_active" value="true" {% if r.is_active is not defined or r.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Scope</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Device (optional)</label>
+                        <select name="device_id" id="device_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">All devices</option>
+                            {% for device in devices %}
+                                <option value="{{ device.id }}" {% if r.device_id is defined and r.device_id == device.id|string %}selected{% endif %}>
+                                    {{ device.name }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="interface_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Interface (optional)</label>
+                        <select name="interface_id" id="interface_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Any interface</option>
+                            {% for interface in interfaces %}
+                                <option value="{{ interface.id }}"
+                                    data-device-id="{{ interface.device_id }}"
+                                    {% if r.interface_id is defined and r.interface_id == interface.id|string %}selected{% endif %}>
+                                    {{ interface.name }}{% if interface.device %} · {{ interface.device.name }}{% endif %}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Filtered by device when selected.</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3"
+                            placeholder="Optional notes for this rule..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ r.notes if r.notes is defined else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/alarms" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Cancel
+            </a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Create Rule
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const deviceSelect = document.getElementById('device_id');
+    const interfaceSelect = document.getElementById('interface_id');
+    if (!deviceSelect || !interfaceSelect) return;
+
+    const allOptions = Array.from(interfaceSelect.querySelectorAll('option'));
+    const placeholder = allOptions.shift();
+
+    function filterInterfaces() {
+        const deviceId = deviceSelect.value;
+        interfaceSelect.innerHTML = '';
+        interfaceSelect.appendChild(placeholder);
+
+        allOptions.forEach((option) => {
+            const optionDeviceId = option.dataset.deviceId;
+            if (!deviceId || optionDeviceId === deviceId) {
+                interfaceSelect.appendChild(option);
+            }
+        });
+    }
+
+    deviceSelect.addEventListener('change', filterInterfaces);
+    filterInterfaces();
+})();
+</script>
+{% endblock %}

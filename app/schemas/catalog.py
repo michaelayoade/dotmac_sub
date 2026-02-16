@@ -382,7 +382,9 @@ class SubscriptionAddOnUpdate(BaseModel):
 
 
 class SubscriptionBase(BaseModel):
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     offer_id: UUID
     offer_version_id: UUID | None = None
     service_address_id: UUID | None = None
@@ -417,7 +419,9 @@ class SubscriptionCreate(SubscriptionBase):
 
 
 class SubscriptionUpdate(BaseModel):
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     offer_id: UUID | None = None
     offer_version_id: UUID | None = None
     service_address_id: UUID | None = None
@@ -824,7 +828,9 @@ class NasDeviceRead(NasDeviceBase):
 
 
 class AccessCredentialBase(BaseModel):
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     username: str = Field(min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
     is_active: bool = True
@@ -837,7 +843,9 @@ class AccessCredentialCreate(AccessCredentialBase):
 
 
 class AccessCredentialUpdate(BaseModel):
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     username: str | None = Field(default=None, min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None

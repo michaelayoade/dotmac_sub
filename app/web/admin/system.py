@@ -24,7 +24,7 @@ from app.models.rbac import (
     Role,
     RolePermission,
 )
-from app.models.subscriber import ResellerUser, Subscriber
+from app.models.subscriber import Subscriber
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookSubscription
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.settings import DomainSettingUpdate
@@ -137,16 +137,11 @@ def _form_bool(value: str | None) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _linked_user_labels(db: Session, person_id) -> list[str]:
+def _linked_user_labels(db: Session, subscriber_id) -> list[str]:
     """Check for linked data that would prevent user deletion."""
-    checks = [
-        ("Subscribers", db.query(Subscriber.id).filter(Subscriber.person_id == person_id)),
-    ]
-    linked = []
-    for label, query in checks:
-        if query.first():
-            linked.append(label)
-    return linked
+    # Since Person and Subscriber are now unified, users ARE subscribers
+    # No additional linked data checks needed
+    return []
 
 
 def _blocked_delete_response(request: Request, linked: list[str], detail: str | None = None):
@@ -379,7 +374,7 @@ def _user_stats(db: Session) -> dict:
     )
     if admin_role:
         admins = (
-            db.query(PersonRole.person_id)
+            db.query(PersonRole.subscriber_id)
             .filter(PersonRole.role_id == admin_role.id)
             .distinct()
             .count()
@@ -389,13 +384,13 @@ def _user_stats(db: Session) -> dict:
 
     active_credential = (
         db.query(UserCredential.id)
-        .filter(UserCredential.person_id == Subscriber.id)
+        .filter(UserCredential.subscriber_id == Subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .exists()
     )
     pending_credential = (
         db.query(UserCredential.id)
-        .filter(UserCredential.person_id == Subscriber.id)
+        .filter(UserCredential.subscriber_id == Subscriber.id)
         .filter(UserCredential.is_active.is_(True))
         .filter(UserCredential.must_change_password.is_(True))
         .exists()
@@ -437,13 +432,13 @@ def _build_users(
         elif status == "pending":
             active_credential = (
                 db.query(UserCredential.id)
-                .filter(UserCredential.person_id == Subscriber.id)
+                .filter(UserCredential.subscriber_id == Subscriber.id)
                 .filter(UserCredential.is_active.is_(True))
                 .exists()
             )
             pending_credential = (
                 db.query(UserCredential.id)
-                .filter(UserCredential.person_id == Subscriber.id)
+                .filter(UserCredential.subscriber_id == Subscriber.id)
                 .filter(UserCredential.is_active.is_(True))
                 .filter(UserCredential.must_change_password.is_(True))
                 .exists()
@@ -464,13 +459,13 @@ def _build_users(
 
     credentials = (
         db.query(UserCredential)
-        .filter(UserCredential.person_id.in_(person_ids))
+        .filter(UserCredential.subscriber_id.in_(person_ids))
         .all()
     )
     credential_info: dict = {}
     for credential in credentials:
         info = credential_info.setdefault(
-            credential.person_id,
+            credential.subscriber_id,
             {"last_login": None, "has_active": False, "must_change_password": False},
         )
         if credential.is_active:
@@ -482,9 +477,9 @@ def _build_users(
                 info["last_login"] = credential.last_login_at
 
     mfa_enabled = {
-        method.person_id
+        method.subscriber_id
         for method in db.query(MFAMethod)
-        .filter(MFAMethod.person_id.in_(person_ids))
+        .filter(MFAMethod.subscriber_id.in_(person_ids))
         .filter(MFAMethod.enabled.is_(True))
         .filter(MFAMethod.is_active.is_(True))
         .all()
@@ -493,15 +488,15 @@ def _build_users(
     roles_query = (
         db.query(PersonRole, Role)
         .join(Role, Role.id == PersonRole.role_id)
-        .filter(PersonRole.person_id.in_(person_ids))
+        .filter(PersonRole.subscriber_id.in_(person_ids))
         .order_by(PersonRole.assigned_at.desc())
         .all()
     )
     role_map: dict = {}
     for person_role, role in roles_query:
-        if person_role.person_id not in role_map:
-            role_map[person_role.person_id] = []
-        role_map[person_role.person_id].append({
+        if person_role.subscriber_id not in role_map:
+            role_map[person_role.subscriber_id] = []
+        role_map[person_role.subscriber_id].append({
             "id": str(role.id),
             "name": role.name,
             "is_active": role.is_active,
@@ -669,18 +664,18 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         if person:
             # Get credential
             credential = db.query(UserCredential).filter(
-                UserCredential.person_id == person.id,
+                UserCredential.subscriber_id == person.id,
                 UserCredential.is_active.is_(True)
             ).first()
             # Check MFA
             mfa_method = db.query(MFAMethod).filter(
-                MFAMethod.person_id == person.id,
+                MFAMethod.subscriber_id == person.id,
                 MFAMethod.enabled.is_(True)
             ).first()
             mfa_enabled = mfa_method is not None
             # Count API keys
             api_key_count = db.query(ApiKey).filter(
-                ApiKey.person_id == person.id,
+                ApiKey.subscriber_id == person.id,
                 ApiKey.is_active.is_(True),
                 ApiKey.revoked_at.is_(None)
             ).count()
@@ -749,16 +744,16 @@ def user_profile_update(
     api_key_count = 0
     if person:
         credential = db.query(UserCredential).filter(
-            UserCredential.person_id == person.id,
+            UserCredential.subscriber_id == person.id,
             UserCredential.is_active.is_(True)
         ).first()
         mfa_method = db.query(MFAMethod).filter(
-            MFAMethod.person_id == person.id,
+            MFAMethod.subscriber_id == person.id,
             MFAMethod.enabled.is_(True)
         ).first()
         mfa_enabled = mfa_method is not None
         api_key_count = db.query(ApiKey).filter(
-            ApiKey.person_id == person.id,
+            ApiKey.subscriber_id == person.id,
             ApiKey.is_active.is_(True),
             ApiKey.revoked_at.is_(None)
         ).count()
@@ -795,7 +790,7 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     # Get user's roles
     person_roles = (
         db.query(PersonRole)
-        .filter(PersonRole.person_id == subscriber.id)
+        .filter(PersonRole.subscriber_id == subscriber.id)
         .all()
     )
     roles = []
@@ -807,7 +802,7 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     # Get user's credential
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.person_id == person.id)
+        .filter(UserCredential.subscriber_id == person.id)
         .filter(UserCredential.is_active.is_(True))
         .first()
     )
@@ -815,7 +810,7 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     # Get MFA methods
     mfa_methods = (
         db.query(MFAMethod)
-        .filter(MFAMethod.person_id == person.id)
+        .filter(MFAMethod.subscriber_id == person.id)
         .all()
     )
 
@@ -860,7 +855,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     # Get all roles assigned to this user
     current_roles = (
         db.query(PersonRole)
-        .filter(PersonRole.person_id == person.id)
+        .filter(PersonRole.subscriber_id == person.id)
         .all()
     )
     current_role_ids = {str(pr.role_id) for pr in current_roles}
@@ -958,13 +953,13 @@ async def user_edit_submit(
         subscriber.status = "active" if _form_bool(is_active) else "inactive"
 
         db.query(UserCredential).filter(
-            UserCredential.person_id == subscriber.id,
+            UserCredential.subscriber_id == subscriber.id,
             UserCredential.is_active.is_(True),
         ).update({"username": email.strip()})
 
         # Sync roles - add new, remove deselected, keep existing
         desired_role_ids = set(role_ids)
-        existing_roles = db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).all()
+        existing_roles = db.query(PersonRole).filter(PersonRole.subscriber_id == subscriber.id).all()
         existing_role_map = {str(pr.role_id): pr for pr in existing_roles}
 
         # Remove roles not in desired set
@@ -975,7 +970,7 @@ async def user_edit_submit(
         # Add new roles
         for role_id_str in desired_role_ids:
             if role_id_str not in existing_role_map:
-                db.add(PersonRole(person_id=subscriber.id, role_id=UUID(role_id_str)))
+                db.add(PersonRole(subscriber_id=subscriber.id, role_id=UUID(role_id_str)))
 
         # Sync direct permissions
         rbac_service.person_permissions.sync_for_person(
@@ -994,7 +989,7 @@ async def user_edit_submit(
                 raise ValueError("Passwords do not match.")
             must_change = _form_bool(require_password_change)
             updated = db.query(UserCredential).filter(
-                UserCredential.person_id == subscriber.id,
+                UserCredential.subscriber_id == subscriber.id,
                 UserCredential.is_active.is_(True),
             ).update(
                 {
@@ -1007,7 +1002,7 @@ async def user_edit_submit(
                 auth_service.user_credentials.create(
                     db,
                     UserCredentialCreate(
-                        person_id=subscriber.id,
+                        subscriber_id=subscriber.id,
                         username=email.strip(),
                         password_hash=hash_password(new_password),
                         must_change_password=must_change,
@@ -1016,7 +1011,7 @@ async def user_edit_submit(
         db.commit()
     except Exception as exc:
         db.rollback()
-        current_roles = db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).all()
+        current_roles = db.query(PersonRole).filter(PersonRole.subscriber_id == subscriber.id).all()
         current_role_ids = {str(pr.role_id) for pr in current_roles}
         direct_permissions = rbac_service.person_permissions.list_for_person(db, str(subscriber.id))
         direct_permission_ids_set = {str(pp.permission_id) for pp in direct_permissions}
@@ -1048,7 +1043,7 @@ def user_activate(request: Request, user_id: str, db: Session = Depends(get_db))
     subscriber.is_active = True
     subscriber.status = "active"
     db.query(UserCredential).filter(
-        UserCredential.person_id == subscriber.id
+        UserCredential.subscriber_id == subscriber.id
     ).update({"is_active": True})
     db.commit()
     if request.headers.get("HX-Request"):
@@ -1063,7 +1058,7 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     subscriber.is_active = False
     subscriber.status = "inactive"
     db.query(UserCredential).filter(
-        UserCredential.person_id == subscriber.id
+        UserCredential.subscriber_id == subscriber.id
     ).update({"is_active": False})
     db.commit()
     if request.headers.get("HX-Request"):
@@ -1074,7 +1069,7 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
 @router.post("/users/{user_id}/disable-mfa", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
     subscriber = db.get(Subscriber, coerce_uuid(user_id))
-    db.query(MFAMethod).filter(MFAMethod.person_id == subscriber.id).update(
+    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).update(
         {"enabled": False, "is_active": False}
     )
     db.commit()
@@ -1086,7 +1081,7 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
     subscriber = db.get(Subscriber, coerce_uuid(user_id))
     temp_password = secrets.token_urlsafe(16)
     db.query(UserCredential).filter(
-        UserCredential.person_id == subscriber.id,
+        UserCredential.subscriber_id == subscriber.id,
         UserCredential.is_active.is_(True),
     ).update(
         {
@@ -1132,14 +1127,14 @@ def user_create(
 
         rbac_service.person_roles.create(
             db,
-            PersonRoleCreate(person_id=subscriber.id, role_id=role.id),
+            PersonRoleCreate(subscriber_id=subscriber.id, role_id=role.id),
         )
 
         temp_password = secrets.token_urlsafe(16)
         auth_service.user_credentials.create(
             db,
             UserCredentialCreate(
-                person_id=subscriber.id,
+                subscriber_id=subscriber.id,
                 username=email,
                 password_hash=hash_password(temp_password),
                 must_change_password=True,
@@ -1182,13 +1177,13 @@ def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
     if linked:
         return _blocked_delete_response(request, linked)
     try:
-        db.query(UserCredential).filter(UserCredential.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(MFAMethod).filter(MFAMethod.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(AuthSession).filter(AuthSession.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(ApiKey).filter(ApiKey.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(PersonRole).filter(PersonRole.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(PersonPermission).filter(PersonPermission.person_id == subscriber.id).delete(synchronize_session=False)
-        db.query(ResellerUser).filter(ResellerUser.person_id == subscriber.id).delete(synchronize_session=False)
+        db.query(UserCredential).filter(UserCredential.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        db.query(AuthSession).filter(AuthSession.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        db.query(PersonRole).filter(PersonRole.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        db.query(PersonPermission).filter(PersonPermission.subscriber_id == subscriber.id).delete(synchronize_session=False)
+        # ResellerUser was removed during model consolidation
         db.delete(subscriber)
         db.commit()
     except IntegrityError:
@@ -1234,7 +1229,7 @@ def roles_list(
 
     # Get user counts per role
     user_counts_query = (
-        db.query(PersonRole.role_id, func.count(PersonRole.person_id.distinct()))
+        db.query(PersonRole.role_id, func.count(PersonRole.subscriber_id.distinct()))
         .group_by(PersonRole.role_id)
         .all()
     )
@@ -1669,7 +1664,7 @@ def api_keys_list(request: Request, new_key: str = None, db: Session = Depends(g
     if current_user and current_user.get("subscriber_id"):
         person_id = current_user["person_id"]
         api_keys = db.query(ApiKey).filter(
-            ApiKey.person_id == coerce_uuid(person_id)
+            ApiKey.subscriber_id == coerce_uuid(person_id)
         ).order_by(ApiKey.created_at.desc()).all()
 
     context = {
@@ -1728,7 +1723,7 @@ def api_key_create(
 
         # Create the API key
         api_key = ApiKey(
-            person_id=coerce_uuid(current_user["person_id"]),
+            subscriber_id=coerce_uuid(current_user["person_id"]),
             label=label,
             key_hash=key_hash,
             is_active=True,

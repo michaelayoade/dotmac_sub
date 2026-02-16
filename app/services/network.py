@@ -45,7 +45,7 @@ from app.models.network import (
     Vlan,
 )
 import uuid
-from app.models.subscriber import Subscriber, SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.models.domain_settings import SettingDomain
 from app.services.response import ListResponseMixin
 from app.services import settings_spec
@@ -118,7 +118,7 @@ class CPEDevices(ListResponseMixin):
     def create(db: Session, payload: CPEDeviceCreate):
         network_validators.validate_cpe_device_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
         )
@@ -156,7 +156,7 @@ class CPEDevices(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         order_by: str,
         order_dir: str,
@@ -164,8 +164,8 @@ class CPEDevices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(CPEDevice)
-        if account_id:
-            query = query.filter(CPEDevice.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(CPEDevice.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(CPEDevice.subscription_id == subscription_id)
         query = apply_ordering(
@@ -182,12 +182,12 @@ class CPEDevices(ListResponseMixin):
         if not device:
             raise HTTPException(status_code=404, detail="CPE device not found")
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", device.account_id))
+        subscriber_id = str(data.get("subscriber_id", device.subscriber_id))
         subscription_id = data.get("subscription_id", device.subscription_id)
         service_address_id = data.get("service_address_id", device.service_address_id)
         network_validators.validate_cpe_device_links(
             db,
-            account_id,
+            subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(service_address_id) if service_address_id else None,
         )
@@ -220,12 +220,9 @@ class Ports(ListResponseMixin):
             )
             db.add(subscriber)
             db.flush()
-            account = SubscriberAccount(subscriber_id=subscriber.id)
-            db.add(account)
-            db.flush()
             device = CPEDevice(
                 id=data["device_id"],
-                account_id=account.id,
+                subscriber_id=subscriber.id,
                 device_type=DeviceType.ont,
             )
             db.add(device)
@@ -445,7 +442,7 @@ class IPAssignments(ListResponseMixin):
     def create(db: Session, payload: IPAssignmentCreate):
         network_validators.validate_ip_assignment_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.subscription_add_on_id) if payload.subscription_add_on_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
@@ -466,7 +463,7 @@ class IPAssignments(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         is_active: bool | None,
         order_by: str,
@@ -475,8 +472,8 @@ class IPAssignments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IPAssignment)
-        if account_id:
-            query = query.filter(IPAssignment.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(IPAssignment.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(IPAssignment.subscription_id == subscription_id)
         if is_active is None:
@@ -497,7 +494,7 @@ class IPAssignments(ListResponseMixin):
         if not assignment:
             raise HTTPException(status_code=404, detail="IP assignment not found")
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", assignment.account_id))
+        subscriber_id = str(data.get("subscriber_id", assignment.subscriber_id))
         subscription_id = data.get("subscription_id", assignment.subscription_id)
         subscription_add_on_id = data.get(
             "subscription_add_on_id", assignment.subscription_add_on_id
@@ -507,7 +504,7 @@ class IPAssignments(ListResponseMixin):
         )
         network_validators.validate_ip_assignment_links(
             db,
-            account_id,
+            subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(subscription_add_on_id) if subscription_add_on_id else None,
             str(service_address_id) if service_address_id else None,
@@ -1043,18 +1040,29 @@ class OntAssignments(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        ont_unit_id: str | None,
         pon_port_id: str | None,
+        subscriber_id: str | None,
+        subscription_id: str | None,
+        active: bool | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
+        ont_unit_id: str | None = None,
     ):
         query = db.query(OntAssignment)
         if ont_unit_id:
             query = query.filter(OntAssignment.ont_unit_id == ont_unit_id)
         if pon_port_id:
             query = query.filter(OntAssignment.pon_port_id == pon_port_id)
+        if subscriber_id:
+            query = query.filter(OntAssignment.subscriber_id == subscriber_id)
+        if subscription_id:
+            query = query.filter(OntAssignment.subscription_id == subscription_id)
+        if active is None:
+            query = query.filter(OntAssignment.active.is_(True))
+        else:
+            query = query.filter(OntAssignment.active == active)
         query = apply_ordering(
             query,
             order_by,
@@ -1909,7 +1917,7 @@ class SplitterPortAssignments(ListResponseMixin):
     def list(
         db: Session,
         splitter_port_id: str | None,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         active: bool | None,
         order_by: str,
@@ -1920,8 +1928,8 @@ class SplitterPortAssignments(ListResponseMixin):
         query = db.query(SplitterPortAssignment)
         if splitter_port_id:
             query = query.filter(SplitterPortAssignment.splitter_port_id == splitter_port_id)
-        if account_id:
-            query = query.filter(SplitterPortAssignment.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(SplitterPortAssignment.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(SplitterPortAssignment.subscription_id == subscription_id)
         if active is None:

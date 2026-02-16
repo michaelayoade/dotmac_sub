@@ -23,12 +23,12 @@
         <!-- Logo -->
         <div class="flex h-16 items-center justify-between px-4 border-b border-slate-200 dark:border-slate-800">
             <a href="/admin/dashboard" class="flex items-center gap-3">
-                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600">
+                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-600">
                     <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                     </svg>
                 </div>
-                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">Dotmac SM</span>
+                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">DotMac <span class="text-primary-600 dark:text-primary-400">Subs</span></span>
             </a>
             <button x-on:click="sidebarCollapsed = !sidebarCollapsed"
                     aria-label="Toggle sidebar collapse"

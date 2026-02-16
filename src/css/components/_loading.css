@@ -1,0 +1,72 @@
+/* ============================================================================
+   LOADING STATES
+   Button loading and HTMX integration
+   ============================================================================ */
+
+@layer components {
+    .btn-loading {
+        pointer-events: none;
+        position: relative;
+    }
+    .btn-loading .btn-text { opacity: 0; }
+    .btn-loading::after {
+        content: '';
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        border: 2px solid transparent;
+        border-top-color: currentColor;
+        border-right-color: currentColor;
+        border-radius: 50%;
+        animation: btnSpin 0.6s linear infinite;
+    }
+    @keyframes btnSpin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* HTMX automatic loading states */
+    .htmx-request.btn,
+    form.htmx-request .btn[type="submit"],
+    .htmx-request .btn-submit {
+        pointer-events: none;
+        position: relative;
+    }
+    .htmx-request.btn .btn-text,
+    form.htmx-request .btn[type="submit"] .btn-text,
+    .htmx-request .btn-submit .btn-text {
+        opacity: 0;
+    }
+    .htmx-request.btn::after,
+    form.htmx-request .btn[type="submit"]::after,
+    .htmx-request .btn-submit::after {
+        content: '';
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        border: 2px solid transparent;
+        border-top-color: currentColor;
+        border-right-color: currentColor;
+        border-radius: 50%;
+        animation: btnSpin 0.6s linear infinite;
+    }
+
+    /* Loading indicator element (alternative approach) */
+    .btn .btn-spinner {
+        display: none;
+        width: 18px;
+        height: 18px;
+        border: 2px solid transparent;
+        border-top-color: currentColor;
+        border-right-color: currentColor;
+        border-radius: 50%;
+        animation: btnSpin 0.6s linear infinite;
+    }
+    .htmx-request .btn-spinner,
+    .btn-loading .btn-spinner {
+        display: block;
+    }
+    .htmx-request .btn-hide-on-load,
+    .btn-loading .btn-hide-on-load {
+        display: none;
+    }
+}

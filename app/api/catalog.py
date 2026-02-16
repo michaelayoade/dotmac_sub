@@ -569,6 +569,7 @@ def get_subscription(subscription_id: str, db: Session = Depends(get_db)):
     tags=["subscriptions"],
 )
 def list_subscriptions(
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     offer_id: str | None = None,
     status: str | None = None,
@@ -578,8 +579,10 @@ def list_subscriptions(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return catalog_service.subscriptions.list_response(
-        db, account_id, offer_id, status, order_by, order_dir, limit, offset
+        db, subscriber_id, offer_id, status, order_by, order_dir, limit, offset
     )
 
 
@@ -1110,6 +1113,7 @@ def get_access_credential(credential_id: str, db: Session = Depends(get_db)):
     tags=["access-credentials"],
 )
 def list_access_credentials(
+    subscriber_id: str | None = None,
     account_id: str | None = None,
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
@@ -1118,8 +1122,10 @@ def list_access_credentials(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
+    if not subscriber_id and account_id:
+        subscriber_id = account_id
     return catalog_service.access_credentials.list_response(
-        db, account_id, is_active, order_by, order_dir, limit, offset
+        db, subscriber_id, is_active, order_by, order_dir, limit, offset
     )
 
 

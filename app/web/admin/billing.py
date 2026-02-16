@@ -647,12 +647,16 @@ def invoice_new(
         invoice_config["accountId"] = str(selected_account.id)
 
     # Get smart defaults from settings
-    invoice_due_days = settings_spec.get_setting_value(
-        db, SettingDomain.billing, "invoice_due_days", default=14
+    invoice_due_days = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_due_days"
     )
-    default_currency = settings_spec.get_setting_value(
-        db, SettingDomain.billing, "default_currency", default="NGN"
+    if invoice_due_days is None:
+        invoice_due_days = 14
+    default_currency = settings_spec.resolve_value(
+        db, SettingDomain.billing, "default_currency"
     )
+    if default_currency is None:
+        default_currency = "NGN"
     today = datetime.now(timezone.utc).date()
     default_issue_date = today.strftime("%Y-%m-%d")
     default_due_date = (today + timedelta(days=invoice_due_days)).strftime("%Y-%m-%d")
@@ -2442,9 +2446,11 @@ async def payment_import_submit(request: Request, db: Session = Depends(get_db))
             return JSONResponse({"message": "No payments to import"}, status_code=400)
 
         # Get default currency from settings
-        default_currency = settings_spec.get_setting_value(
-            db, SettingDomain.billing, "default_currency", default="NGN"
+        default_currency = settings_spec.resolve_value(
+            db, SettingDomain.billing, "default_currency"
         )
+        if default_currency is None:
+            default_currency = "NGN"
 
         imported_count = 0
         errors = []
@@ -2585,19 +2591,13 @@ def accounts_list(
     accounts = []
     total = 0
     if customer_ref:
-        from app.models.subscriber import Subscriber, SubscriberAccount
-        from sqlalchemy.orm import selectinload
+        from app.models.subscriber import Subscriber
         subscriber_ids = _subscriber_ids_for_customer(db, customer_ref)
         if subscriber_ids:
             query = (
-                db.query(SubscriberAccount)
-                .options(
-                    selectinload(SubscriberAccount.subscriber).selectinload(
-                        Subscriber.person
-                    )
-                )
-                .filter(SubscriberAccount.subscriber_id.in_(subscriber_ids))
-                .order_by(SubscriberAccount.created_at.desc())
+                db.query(Subscriber)
+                .filter(Subscriber.id.in_(subscriber_ids))
+                .order_by(Subscriber.created_at.desc())
             )
             total = query.count()
             accounts = query.offset(offset).limit(per_page).all()

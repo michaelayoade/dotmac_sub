@@ -351,7 +351,7 @@ def customer_services(
 
     services = catalog_service.subscriptions.list(
         db=db,
-        account_id=account_id_str,
+        subscriber_id=account_id_str,
         offer_id=None,
         status=status if status else None,
         order_by="created_at",
@@ -362,7 +362,7 @@ def customer_services(
 
     all_services = catalog_service.subscriptions.list(
         db=db,
-        account_id=account_id_str,
+        subscriber_id=account_id_str,
         offer_id=None,
         status=status if status else None,
         order_by="created_at",
@@ -411,7 +411,7 @@ def customer_service_detail(
         )
 
     account_id = customer.get("account_id")
-    if account_id and str(subscription.account_id) != str(account_id):
+    if account_id and str(subscription.subscriber_id) != str(account_id):
         return templates.TemplateResponse(
             "customer/errors/404.html",
             {"request": request, "message": "Subscription not found"},
@@ -724,7 +724,7 @@ def customer_change_plan(
 
     # Verify subscription belongs to customer
     account_id = customer.get("account_id")
-    if account_id and str(subscription.account_id) != str(account_id):
+    if account_id and str(subscription.subscriber_id) != str(account_id):
         return templates.TemplateResponse(
             "customer/errors/404.html",
             {"request": request, "message": "Subscription not found"},

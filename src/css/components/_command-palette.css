@@ -1,0 +1,53 @@
+/* ============================================================================
+   COMMAND PALETTE
+   Quick action search overlay
+   ============================================================================ */
+
+@layer components {
+    .command-palette-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(4px);
+        z-index: 100;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 15vh;
+    }
+    .command-palette {
+        width: 100%;
+        max-width: 560px;
+        background: var(--card-bg);
+        border-radius: var(--radius-card);
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.25);
+        overflow: hidden;
+        animation: commandPaletteIn 0.2s ease-out;
+    }
+    @keyframes commandPaletteIn {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .command-palette-input {
+        width: 100%;
+        padding: var(--spacing-xl) var(--spacing-2xl);
+        font-size: 18px;
+        border: none;
+        outline: none;
+        background: transparent;
+        color: var(--ink);
+        border-bottom: 1px solid var(--card-border);
+    }
+    .command-palette-input::placeholder { color: var(--ink-faint); }
+    .command-palette-results { max-height: 400px; overflow-y: auto; padding: var(--spacing-sm); }
+    .command-palette-item {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        padding: var(--spacing-md) var(--spacing-lg);
+        border-radius: var(--radius-lg);
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+    .command-palette-item:hover, .command-palette-item.active { background: var(--parchment-dark); }
+}

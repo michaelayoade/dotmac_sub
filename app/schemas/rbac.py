@@ -150,3 +150,12 @@ class SubscriberPermissionRead(SubscriberPermissionBase):
     id: UUID
     granted_at: datetime
     granted_by_subscriber_id: UUID | None = None
+
+
+# --- Deprecated aliases for backwards compatibility ---
+PersonRoleCreate = SubscriberRoleCreate
+PersonRoleUpdate = SubscriberRoleUpdate
+PersonRoleRead = SubscriberRoleRead
+PersonPermissionCreate = SubscriberPermissionCreate
+PersonPermissionUpdate = SubscriberPermissionUpdate
+PersonPermissionRead = SubscriberPermissionRead

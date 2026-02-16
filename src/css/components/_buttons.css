@@ -1,0 +1,108 @@
+/* ============================================================================
+   BUTTONS
+   Enhanced hover states with variants
+   ============================================================================ */
+
+@layer components {
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--spacing-sm);
+        padding: var(--spacing-input-y) var(--spacing-xl);
+        font-size: 14px;
+        font-weight: 600;
+        font-family: 'DM Sans', system-ui, sans-serif;
+        border-radius: var(--radius-btn);
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        outline: none;
+        border: none;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .btn:focus-visible { box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.4); }
+    .btn:active:not(:disabled) { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+        color: white;
+        background: linear-gradient(135deg, var(--ink) 0%, #2d3450 100%);
+        box-shadow: var(--btn-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+    .btn-primary:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: var(--btn-shadow-hover), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        filter: brightness(1.1);
+    }
+
+    .btn-teal {
+        color: white;
+        background: linear-gradient(135deg, var(--teal) 0%, var(--teal-dark) 100%);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+    .btn-teal:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(13, 148, 136, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        filter: brightness(1.1);
+    }
+
+    /* Gold button - for important CTAs */
+    .btn-gold {
+        color: white;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+    .btn-gold:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(217, 119, 6, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        filter: brightness(1.1);
+    }
+
+    .btn-secondary {
+        color: var(--ink-light);
+        background: transparent;
+        border: 1.5px solid var(--card-border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+        border-color: var(--ink-muted);
+        background: var(--parchment);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .btn-ghost {
+        color: var(--ink-muted);
+        background: transparent;
+        padding: 8px 12px;
+    }
+    .btn-ghost:hover:not(:disabled) {
+        color: var(--ink);
+        background: var(--parchment-dark);
+    }
+
+    .btn-sm { padding: 8px 14px; font-size: 13px; }
+    .btn-lg { padding: 16px 28px; font-size: 16px; }
+
+    .btn-hover:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Button press ripple effect */
+    .btn::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+        opacity: 0;
+        transform: scale(0);
+        transition: all 0.3s ease;
+    }
+    .btn:active::after {
+        opacity: 1;
+        transform: scale(2);
+        transition: all 0s;
+    }
+}

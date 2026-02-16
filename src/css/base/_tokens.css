@@ -1,0 +1,130 @@
+/* ============================================================================
+   DESIGN TOKENS
+   Central source of truth for colors, spacing, typography, and other values.
+   ============================================================================ */
+:root {
+    /* Primary palette - warmer tones */
+    --ink: #0f172a;
+    --ink-light: #334155;
+    --ink-muted: #64748b;
+    --ink-faint: #94a3b8;
+
+    /* Backgrounds - subtle warmth */
+    --parchment: #faf9f7;
+    --parchment-dark: #f5f3f0;
+
+    /* Accent colors */
+    --gold: #d97706;
+    --gold-light: #fef3c7;
+    --gold-dark: #92400e;
+    --teal: #0d9488;
+    --teal-light: #ccfbf1;
+    --teal-dark: #115e59;
+
+    /* ISP module accent colors */
+    --module-subscribers: #0d9488;
+    --module-subscribers-light: #ccfbf1;
+    --module-subscribers-dark: #115e59;
+    --module-billing: #d97706;
+    --module-billing-light: #fef3c7;
+    --module-billing-dark: #92400e;
+    --module-network: #3b82f6;
+    --module-network-light: #dbeafe;
+    --module-network-dark: #1d4ed8;
+    --module-catalog: #8b5cf6;
+    --module-catalog-light: #ede9fe;
+    --module-catalog-dark: #5b21b6;
+    --module-provisioning: #059669;
+    --module-provisioning-light: #d1fae5;
+    --module-provisioning-dark: #065f46;
+    --module-monitoring: #6366f1;
+    --module-monitoring-light: #e0e7ff;
+    --module-monitoring-dark: #4338ca;
+    --module-reports: #6366f1;
+    --module-admin: #6366f1;
+    --module-admin-light: #e0e7ff;
+    --module-admin-dark: #4338ca;
+
+    /* ISP status colors */
+    --status-active: #059669;
+    --status-active-light: #d1fae5;
+    --status-suspended: #d97706;
+    --status-suspended-light: #fef3c7;
+    --status-terminated: #dc2626;
+    --status-terminated-light: #fee2e2;
+    --status-pending: #6366f1;
+    --status-pending-light: #e0e7ff;
+    --status-provisioning: #3b82f6;
+    --status-provisioning-light: #dbeafe;
+
+    /* Spacing tokens */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 20px;
+    --spacing-2xl: 24px;
+    --spacing-3xl: 32px;
+    --spacing-input-x: 16px;
+    --spacing-input-y: 12px;
+    --spacing-card: 24px;
+    --spacing-card-sm: 16px;
+    --spacing-card-lg: 32px;
+    --content-gutter: var(--spacing-2xl);
+
+    /* Border radius tokens */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+    --radius-card: 16px;
+    --radius-btn: 10px;
+    --radius-input: 10px;
+    --radius-badge: 6px;
+    --radius-icon: 12px;
+
+    /* Component tokens */
+    --card-bg: #ffffff;
+    --card-border: rgba(15, 23, 42, 0.08);
+    --card-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.06);
+    --card-shadow-hover: 0 8px 24px rgba(15, 23, 42, 0.12);
+    --input-border: rgba(15, 23, 42, 0.15);
+    --input-focus: #0d9488;
+
+    /* Button shadows */
+    --btn-shadow: 0 4px 12px rgba(26, 31, 54, 0.25);
+    --btn-shadow-hover: 0 8px 20px rgba(26, 31, 54, 0.35);
+
+    /* Organization branding (overridable) */
+    --brand-primary: var(--teal);
+    --brand-primary-light: var(--teal-light);
+    --brand-accent: var(--gold);
+
+    /* Icon system - SVG data URIs */
+    --icon-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+    --icon-error: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23ef4444'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/%3E%3C/svg%3E");
+    --icon-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23059669'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M5 13l4 4L19 7'/%3E%3C/svg%3E");
+    --icon-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'/%3E%3C/svg%3E");
+}
+
+/* Dark mode tokens */
+.dark {
+    color-scheme: dark;
+    --ink: #f8fafc;
+    --ink-light: #e2e8f0;
+    --ink-muted: #94a3b8;
+    --ink-faint: #64748b;
+    --parchment: #0f172a;
+    --parchment-dark: #1e293b;
+    --card-bg: #1e293b;
+    --card-border: rgba(255, 255, 255, 0.08);
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.4);
+    --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --input-border: rgba(255, 255, 255, 0.15);
+    --btn-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --btn-shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
+
+    /* Dark mode icon variants */
+    --icon-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+}

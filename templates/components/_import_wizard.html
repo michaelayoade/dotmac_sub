@@ -1,0 +1,368 @@
+{#
+  Shared 3-step import wizard component.
+
+  Required context variables:
+    entity_name    — display name (e.g. "Chart of Accounts")
+    entity_type    — slug (e.g. "accounts")
+    columns        — { required: [...], optional: [...] }
+    preview_url    — POST endpoint for preview (e.g. "/import/accounts/preview")
+    import_url     — POST endpoint for execute (e.g. "/import/accounts")
+    cancel_url     — back link (e.g. "/import")
+    alias_map      — dict for client-side header matching
+    target_fields  — list of { source_field, target_field, required }
+    accent_color   — module accent (teal, blue, amber, indigo)
+#}
+
+{% set accent = accent_color | default('teal') %}
+{% set color_map = {
+    'teal':   {'ring': 'ring-teal-500', 'bg': 'bg-teal-600', 'bg_light': 'bg-teal-50 dark:bg-teal-900/20', 'text': 'text-teal-600 dark:text-teal-400', 'check': 'text-teal-600', 'border': 'border-teal-200 dark:border-teal-800', 'btn': 'from-teal-600 to-teal-500 shadow-teal-500/25'},
+    'blue':   {'ring': 'ring-blue-500', 'bg': 'bg-blue-600', 'bg_light': 'bg-blue-50 dark:bg-blue-900/20', 'text': 'text-blue-600 dark:text-blue-400', 'check': 'text-blue-600', 'border': 'border-blue-200 dark:border-blue-800', 'btn': 'from-blue-600 to-blue-500 shadow-blue-500/25'},
+    'amber':  {'ring': 'ring-amber-500', 'bg': 'bg-amber-600', 'bg_light': 'bg-amber-50 dark:bg-amber-900/20', 'text': 'text-amber-600 dark:text-amber-400', 'check': 'text-amber-600', 'border': 'border-amber-200 dark:border-amber-800', 'btn': 'from-amber-600 to-amber-500 shadow-amber-500/25'},
+    'indigo': {'ring': 'ring-indigo-500', 'bg': 'bg-indigo-600', 'bg_light': 'bg-indigo-50 dark:bg-indigo-900/20', 'text': 'text-indigo-600 dark:text-indigo-400', 'check': 'text-indigo-600', 'border': 'border-indigo-200 dark:border-indigo-800', 'btn': 'from-indigo-600 to-indigo-500 shadow-indigo-500/25'},
+} %}
+{% set c = color_map.get(accent, color_map.teal) %}
+
+<script src="/static/js/csv-parser.js"></script>
+<script src="/static/js/import-wizard.js"></script>
+
+<div class="mx-auto max-w-4xl space-y-6"
+     x-data='importWizard({{ {
+         "previewUrl": preview_url,
+         "importUrl": import_url,
+         "cancelUrl": cancel_url,
+         "aliasMap": alias_map,
+         "targetFields": target_fields,
+         "entityName": entity_name,
+         "columns": columns
+     } | tojson }})'>
+
+    <!-- ═══ Step Indicator ═══ -->
+    <div class="flex items-center justify-center gap-2 py-2">
+        <template x-for="(label, idx) in stepLabels" :key="idx">
+            <div class="flex items-center">
+                <!-- Step circle -->
+                <button type="button"
+                        @click="goBack(idx + 1)"
+                        :disabled="idx + 1 > step"
+                        class="flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
+                        :class="idx + 1 === step
+                            ? '{{ c.bg_light }} {{ c.text }} {{ c.border }} border'
+                            : idx + 1 < step
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400 cursor-pointer'
+                                : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed'">
+                    <span x-show="idx + 1 < step" class="text-emerald-500">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    </span>
+                    <span x-show="idx + 1 >= step" x-text="idx + 1"></span>
+                    <span x-text="label" class="hidden sm:inline"></span>
+                </button>
+                <!-- Connector -->
+                <template x-if="idx < stepLabels.length - 1">
+                    <div class="mx-2 h-px w-8 bg-slate-300 dark:bg-slate-600"></div>
+                </template>
+            </div>
+        </template>
+    </div>
+
+    <!-- ═══ STEP 1: Upload & Options ═══ -->
+    <div x-show="step === 1" x-transition>
+        <!-- Column Requirements -->
+        <div class="card p-6 mb-6">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">
+                Column Requirements for <span x-text="config.entityName"></span>
+            </h3>
+            <div class="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                <div>
+                    <h4 class="text-sm font-medium text-rose-600 dark:text-rose-400 mb-2">Required Columns</h4>
+                    <ul class="space-y-1">
+                        {% for col in columns.required %}
+                        <li class="flex items-center text-sm text-slate-600 dark:text-slate-300">
+                            <svg class="mr-2 h-4 w-4 text-rose-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                            </svg>
+                            {{ col }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-sm font-medium text-slate-600 dark:text-slate-400 mb-2">Optional Columns</h4>
+                    <ul class="space-y-1">
+                        {% for col in columns.optional %}
+                        <li class="flex items-center text-sm text-slate-500 dark:text-slate-400">
+                            <svg class="mr-2 h-4 w-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            </svg>
+                            {{ col }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Upload -->
+        <div class="card p-6 mb-6">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Select File</h3>
+
+            <div class="relative"
+                 @dragover.prevent="dragOver = true"
+                 @dragleave.prevent="dragOver = false"
+                 @drop.prevent="handleDrop($event)">
+                <label :class="dragOver ? 'border-{{ accent }}-400 bg-{{ accent }}-50/50 dark:bg-{{ accent }}-900/10' : 'border-slate-300 dark:border-slate-600'"
+                       class="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors">
+                    <div x-show="!fileName" class="flex flex-col items-center justify-center py-5">
+                        <svg class="w-10 h-10 mb-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <p class="mb-2 text-sm text-slate-500"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                        <p class="text-xs text-slate-400">CSV, XLS, XLSX, or XLSM (max 50MB)</p>
+                    </div>
+                    <div x-show="fileName" x-cloak class="flex flex-col items-center justify-center py-5">
+                        <svg class="w-10 h-10 mb-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-slate-700 dark:text-slate-300" x-text="fileName"></p>
+                        <p class="text-xs text-slate-400" x-text="fileSize"></p>
+                    </div>
+                    <input x-ref="fileInput" type="file" class="hidden" accept=".csv,.xls,.xlsx,.xlsm" @change="handleFileInput($event)" />
+                </label>
+            </div>
+
+            <div x-show="fileName" x-cloak class="mt-3 flex justify-end">
+                <button type="button" @click="removeFile()" class="text-sm text-slate-500 hover:text-rose-600 transition-colors">
+                    Remove file
+                </button>
+            </div>
+
+            <div x-show="parseError" x-cloak class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-200">
+                <span x-text="parseError"></span>
+            </div>
+        </div>
+
+        <!-- Options -->
+        <div class="card p-6 mb-6">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Import Options</h3>
+            <div class="space-y-4">
+                <label class="flex items-center">
+                    <input type="checkbox" x-model="skipDuplicates"
+                           class="h-4 w-4 rounded border-slate-300 {{ c.check }} focus:{{ c.ring }} dark:border-slate-600 dark:bg-slate-800">
+                    <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">Skip duplicate entries</span>
+                </label>
+                <label class="flex items-center">
+                    <input type="checkbox" x-model="dryRun"
+                           class="h-4 w-4 rounded border-slate-300 {{ c.check }} focus:{{ c.ring }} dark:border-slate-600 dark:bg-slate-800">
+                    <span class="ml-2 text-sm text-slate-700 dark:text-slate-300">Dry run (validate without saving)</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Step 1 Actions -->
+        <div class="flex items-center justify-between">
+            <a href="{{ cancel_url }}" class="btn btn-secondary">Cancel</a>
+            <button type="button" @click="goToStep2()" :disabled="!canProceedStep1 || previewing"
+                    class="btn bg-gradient-to-r {{ c.btn }} text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                <span x-show="!previewing">Next: Column Mapping</span>
+                <span x-show="previewing" x-cloak>Parsing file...</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══ STEP 2: Column Mapping ═══ -->
+    <div x-show="step === 2" x-transition>
+        <!-- Raw data preview -->
+        <div class="card mb-6 overflow-hidden" x-show="csvRows.length > 0">
+            <div class="p-4 border-b border-slate-200 dark:border-slate-700">
+                <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300">Raw Data Preview (first rows)</h4>
+            </div>
+            <div class="table-container">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-700">
+                        <tr>
+                            <template x-for="h in csvHeaders.slice(0, 8)" :key="h">
+                                <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate max-w-[150px]" x-text="h"></th>
+                            </template>
+                            <th x-show="csvHeaders.length > 8" scope="col" class="px-3 py-2 text-left text-xs text-slate-400">...</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        <template x-for="(row, idx) in csvRows.slice(0, 3)" :key="idx">
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <template x-for="h in csvHeaders.slice(0, 8)" :key="h">
+                                    <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300 truncate max-w-[150px]" x-text="row[h] || '-'"></td>
+                                </template>
+                                <td x-show="csvHeaders.length > 8" class="px-3 py-2 text-sm text-slate-400">...</td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Column Mapping Grid -->
+        <div class="card p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Map Columns</h3>
+                <div class="flex items-center gap-3 text-sm">
+                    <span class="{{ c.text }} font-medium" x-text="mappedCount + ' mapped'"></span>
+                    <span x-show="missingRequired.length > 0" x-cloak class="text-rose-600 dark:text-rose-400 font-medium"
+                          x-text="missingRequired.length + ' required missing'"></span>
+                </div>
+            </div>
+
+            <div class="grid gap-3 grid-cols-1 sm:grid-cols-2">
+                <template x-for="header in csvHeaders" :key="header">
+                    <div class="flex items-center gap-2 p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate" x-text="header" :title="header"></div>
+                            <div class="text-xs text-slate-400 truncate" x-text="csvRows[0] ? (csvRows[0][header] || '') : ''"></div>
+                        </div>
+                        <svg class="h-4 w-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                        </svg>
+                        <select class="form-select text-sm min-w-[160px]"
+                                x-model="mapping[header]">
+                            <option value="">-- Skip --</option>
+                            <template x-for="tf in availableTargets(header)" :key="tf.name">
+                                <option :value="tf.name" x-text="tf.label + (tf.required ? ' *' : '')"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Missing required warning -->
+            <div x-show="missingRequired.length > 0" x-cloak
+                 class="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800">
+                <div class="flex items-start">
+                    <svg class="h-5 w-5 text-amber-500 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    <div>
+                        <p class="text-sm font-medium text-amber-700 dark:text-amber-300">Missing Required Fields</p>
+                        <p class="text-sm text-amber-600 dark:text-amber-400 mt-1">
+                            <template x-for="(mf, i) in missingRequired" :key="mf.name">
+                                <span>
+                                    <span x-text="mf.label"></span><span x-show="i < missingRequired.length - 1">, </span>
+                                </span>
+                            </template>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2 Actions -->
+        <div class="flex items-center justify-between">
+            <button type="button" @click="goBack(1)" class="btn btn-secondary">Back</button>
+            <button type="button" @click="goToStep3()" :disabled="!canProceedStep2"
+                    class="btn bg-gradient-to-r {{ c.btn }} text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                Next: Preview & Import
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══ STEP 3: Preview & Import ═══ -->
+    <div x-show="step === 3" x-transition>
+        <!-- Summary -->
+        <div class="card p-6 mb-6">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Import Summary</h3>
+            <div class="grid gap-4 grid-cols-1 sm:grid-cols-4">
+                <div class="text-center p-3 rounded-lg bg-slate-50 dark:bg-slate-800">
+                    <div class="text-xl font-bold text-slate-900 dark:text-white font-mono" x-text="csvRows.length + (csvRows.length >= 5 ? '+' : '')"></div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Data Rows</div>
+                </div>
+                <div class="text-center p-3 rounded-lg {{ c.bg_light }}">
+                    <div class="text-xl font-bold {{ c.text }} font-mono" x-text="mappedCount"></div>
+                    <div class="text-xs {{ c.text }}">Mapped Columns</div>
+                </div>
+                <div class="text-center p-3 rounded-lg bg-slate-50 dark:bg-slate-800">
+                    <div class="text-xl font-bold text-slate-900 dark:text-white font-mono" x-text="csvHeaders.length"></div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Total Columns</div>
+                </div>
+                <div class="text-center p-3 rounded-lg" :class="dryRun ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-emerald-50 dark:bg-emerald-900/30'">
+                    <div class="text-xl font-bold font-mono" :class="dryRun ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'"
+                         x-text="dryRun ? 'Dry Run' : 'Live'"></div>
+                    <div class="text-xs" :class="dryRun ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'">Mode</div>
+                </div>
+            </div>
+
+            <!-- Mapping preview table -->
+            <div class="mt-6">
+                <h4 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Column Mapping</h4>
+                <div class="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+                    <template x-for="header in csvHeaders.filter(h => mapping[h])" :key="header">
+                        <div class="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-700">
+                            <div class="flex items-center gap-2 min-w-0">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate" x-text="header"></span>
+                                <svg class="h-4 w-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                                </svg>
+                                <span class="text-sm {{ c.text }} truncate" x-text="mapping[header]"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Import button -->
+        <div x-show="!importResult" class="flex items-center justify-between mb-6">
+            <button type="button" @click="goBack(2)" class="btn btn-secondary">Back</button>
+            <button type="button" @click="executeImport()" :disabled="importing"
+                    class="btn bg-gradient-to-r {{ c.btn }} text-white disabled:opacity-50 disabled:cursor-not-allowed">
+                <span x-show="!importing" x-text="dryRun ? 'Run Dry Import' : 'Import Data'"></span>
+                <span x-show="importing" x-cloak>Importing...</span>
+            </button>
+        </div>
+
+        <!-- Import Results -->
+        <div x-show="importResult" x-cloak>
+            <div class="card p-6 mb-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Import Results</h3>
+                    <span class="px-3 py-1 rounded-full text-sm font-medium"
+                          :class="statusClass(importResult.status)"
+                          x-text="statusLabel(importResult.status)"></span>
+                </div>
+
+                <div class="grid gap-4 grid-cols-1 sm:grid-cols-4">
+                    <div class="text-center p-3 rounded-lg bg-slate-50 dark:bg-slate-800">
+                        <div class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums" x-text="importResult.total_rows"></div>
+                        <div class="text-xs text-slate-500">Total Rows</div>
+                    </div>
+                    <div class="text-center p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/30">
+                        <div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400 font-mono tabular-nums" x-text="importResult.imported_count"></div>
+                        <div class="text-xs text-emerald-600 dark:text-emerald-400">Imported</div>
+                    </div>
+                    <div class="text-center p-3 rounded-lg bg-amber-50 dark:bg-amber-900/30">
+                        <div class="text-2xl font-bold text-amber-600 dark:text-amber-400 font-mono tabular-nums" x-text="importResult.skipped_count"></div>
+                        <div class="text-xs text-amber-600 dark:text-amber-400">Skipped</div>
+                    </div>
+                    <div class="text-center p-3 rounded-lg bg-rose-50 dark:bg-rose-900/30">
+                        <div class="text-2xl font-bold text-rose-600 dark:text-rose-400 font-mono tabular-nums" x-text="importResult.error_count"></div>
+                        <div class="text-xs text-rose-600 dark:text-rose-400">Errors</div>
+                    </div>
+                </div>
+
+                <!-- Error list -->
+                <div x-show="importResult.errors && importResult.errors.length > 0" x-cloak class="mt-4">
+                    <h4 class="text-sm font-medium text-rose-600 dark:text-rose-400 mb-2">Errors:</h4>
+                    <ul class="space-y-1 text-sm text-rose-500 dark:text-rose-400 max-h-40 overflow-y-auto">
+                        <template x-for="(err, i) in importResult.errors.slice(0, 20)" :key="i">
+                            <li x-text="'- ' + err"></li>
+                        </template>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Post-import actions -->
+            <div class="flex items-center justify-between">
+                <a :href="config.cancelUrl" class="btn btn-secondary">Back to Import Dashboard</a>
+                <button type="button" @click="importResult = null; step = 1; removeFile()" class="btn btn-ghost">
+                    Import Another File
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

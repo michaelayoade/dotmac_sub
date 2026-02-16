@@ -1,0 +1,79 @@
+/* ============================================================================
+   PRINT STYLES
+   Optimized for printing documents, invoices, and reports
+   ============================================================================ */
+
+@media print {
+    /* Hide navigation and non-essential UI */
+    aside,
+    header,
+    .nav-module,
+    .btn,
+    .bulk-action-bar,
+    .command-palette-overlay,
+    .app-sidebar,
+    .app-header {
+        display: none !important;
+    }
+
+    /* Full width content */
+    main,
+    .app-content,
+    .app-main {
+        margin-left: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+    }
+
+    /* Ensure tables print correctly */
+    .table-responsive {
+        overflow: visible;
+    }
+    .table {
+        min-width: auto;
+    }
+
+    /* Document cards print styling */
+    .document-card {
+        box-shadow: none;
+        border: 1px solid #000;
+        page-break-inside: avoid;
+    }
+    .document-card::before {
+        background: #000;
+    }
+    .document-card::after {
+        display: none;
+    }
+
+    /* Ensure proper page breaks */
+    .card,
+    .table-container {
+        page-break-inside: avoid;
+    }
+
+    /* Remove backgrounds for ink saving */
+    .bg-dashboard,
+    .bg-mesh,
+    .bg-main-gradient {
+        background: white !important;
+    }
+
+    /* Force black text for readability */
+    body {
+        color: #000 !important;
+    }
+
+    /* Links should show URL */
+    a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 0.8em;
+        color: #666;
+    }
+
+    /* Remove shadows */
+    * {
+        box-shadow: none !important;
+        text-shadow: none !important;
+    }
+}

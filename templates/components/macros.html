@@ -1,0 +1,1799 @@
+{#
+  Reusable UI Components
+  Import with: {% from "components/macros.html" import component_name %}
+#}
+
+{# ============================================
+   STATUS BADGE
+   Usage: {{ status_badge("PAID") }}
+          {{ status_badge("OVERDUE", size="sm") }}
+   Uses enhanced gradient badge classes from input.css
+   ============================================ #}
+{% macro status_badge(status, size="md") %}
+{% set status_upper = status|upper %}
+{% set status_clean = status_upper|replace('_', ' ') %}
+{% set badge_classes = {
+  'URGENT': 'badge-overdue',
+  'WARNING': 'badge-overdue',
+  'ATTENTION': 'badge-pending',
+  'INFO': 'badge-approved',
+  'DRAFT': 'badge-draft',
+  'PENDING': 'badge-pending',
+  'PENDING REVIEW': 'badge-pending',
+  'PENDING_REVIEW': 'badge-pending',
+  'PENDING APPROVAL': 'badge-pending',
+  'PENDING_APPROVAL': 'badge-pending',
+  'POSTED': 'badge-posted',
+  'APPROVED': 'badge-approved',
+  'PAID': 'badge-paid',
+  'IMPORTED': 'badge-pending',
+  'COMPLETED': 'badge-paid',
+  'RECONCILED': 'badge-approved',
+  'RECEIVED': 'badge-paid',
+  'PARTIALLY_RECEIVED': 'badge-pending',
+  'PARTIALLY RECEIVED': 'badge-pending',
+  'INSPECTING': 'badge-pending',
+  'ACCEPTED': 'badge-approved',
+  'PARTIAL': 'badge-pending',
+  'DISPOSED': 'badge-rejected',
+  'FULLY_DEPRECIATED': 'badge-draft',
+  'FULLY DEPRECIATED': 'badge-draft',
+  'ACTIVE': 'badge-approved',
+  'PARTIALLY_PAID': 'badge-pending',
+  'OVERDUE': 'badge-overdue',
+  'PAST DUE': 'badge-overdue',
+  'CANCELLED': 'badge-rejected',
+  'REJECTED': 'badge-rejected',
+  'REVERSED': 'badge-rejected',
+  'VOIDED': 'badge-draft',
+  'INACTIVE': 'badge-draft',
+  'CLOSED': 'badge-draft',
+  'QUARANTINED': 'badge-overdue',
+  'EXPIRED': 'badge-rejected',
+  'DEPLETED': 'badge-draft',
+  'AVAILABLE': 'badge-approved',
+  'IN_PROGRESS': 'badge-pending',
+  'IN PROGRESS': 'badge-pending',
+  'OPEN': 'badge-approved',
+  'SUBMITTED': 'badge-pending',
+  'PROCESSING': 'badge-pending',
+  'VALID': 'badge-approved',
+  'EXPIRING SOON': 'badge-overdue',
+  'EXPIRING_SOON': 'badge-overdue',
+  'SLIPS CREATED': 'badge-pending',
+  'SLIPS_CREATED': 'badge-pending',
+  'ENABLED': 'badge-approved',
+  'DISABLED': 'badge-draft',
+  'FILED': 'badge-paid',
+  'REVIEWED': 'badge-approved',
+  'PREPARED': 'badge-pending',
+  'SUSPENDED': 'badge-overdue',
+  'TERMINATED': 'badge-rejected',
+  'PROVISIONING': 'badge-pending',
+  'PROVISIONED': 'badge-approved',
+  'DEPROVISIONING': 'badge-overdue',
+  'DEPROVISIONED': 'badge-draft',
+  'ONLINE': 'badge-approved',
+  'OFFLINE': 'badge-rejected',
+  'DEGRADED': 'badge-overdue',
+  'CONNECTED': 'badge-approved',
+  'DISCONNECTED': 'badge-rejected',
+  'THROTTLED': 'badge-overdue',
+  'BLOCKED': 'badge-rejected',
+  'GRACE_PERIOD': 'badge-overdue',
+  'GRACE PERIOD': 'badge-overdue',
+  'PAST_DUE': 'badge-overdue',
+  'COLLECTION': 'badge-rejected',
+  'TRIAL': 'badge-pending',
+  'MIGRATING': 'badge-pending',
+  'ASSIGNED': 'badge-approved',
+  'UNASSIGNED': 'badge-draft',
+  'RESERVED': 'badge-pending',
+  'ALLOCATED': 'badge-approved'
+} %}
+{% set badge_class = badge_classes.get(status_upper, badge_classes.get(status_clean, 'badge-draft')) %}
+<span class="{{ badge_class }}">{{ status|replace('_', ' ')|title }}</span>
+{% endmacro %}
+
+
+{# ============================================
+   STATS CARD
+   Usage: {{ stats_card("Total Revenue", "$125,000", icon="trending-up", color="emerald", href="/reports") }}
+          {{ stats_card("Revenue", "$125,000", variant="revenue", sparkline=true) }}
+   Supports variants: revenue, expenses, receivables, payables (adds top border accent)
+   ============================================ #}
+{% macro stats_card(label, value, icon="chart", color="slate", href=none, subtitle=none, trend=none, variant=none, sparkline=false) %}
+{% set colors = {
+  'emerald': {'bg': 'bg-emerald-100 dark:bg-emerald-900/30', 'text': 'text-emerald-600 dark:text-emerald-400'},
+  'rose': {'bg': 'bg-rose-100 dark:bg-rose-900/30', 'text': 'text-rose-600 dark:text-rose-400'},
+  'blue': {'bg': 'bg-blue-100 dark:bg-blue-900/30', 'text': 'text-blue-600 dark:text-blue-400'},
+  'amber': {'bg': 'bg-amber-100 dark:bg-amber-900/30', 'text': 'text-amber-600 dark:text-amber-400'},
+  'teal': {'bg': 'bg-teal-100 dark:bg-teal-900/30', 'text': 'text-teal-600 dark:text-teal-400'},
+  'violet': {'bg': 'bg-violet-100 dark:bg-violet-900/30', 'text': 'text-violet-600 dark:text-violet-400'},
+  'slate': {'bg': 'bg-slate-100 dark:bg-slate-800', 'text': 'text-slate-600 dark:text-slate-400'}
+} %}
+{% set variant_classes = {
+  'revenue': 'stat-card-revenue',
+  'expenses': 'stat-card-expenses',
+  'receivables': 'stat-card-receivables',
+  'payables': 'stat-card-payables'
+} %}
+{% set c = colors.get(color, colors.slate) %}
+{% set tag = 'a' if href else 'div' %}
+{% set card_class = 'stat-card' if variant else 'card' %}
+{% set variant_class = variant_classes.get(variant, '') %}
+{% set sparkline_class = 'stat-card-sparkline' if sparkline else '' %}
+<{{ tag }} {% if href %}href="{{ href }}"{% endif %} class="{{ card_class }} {{ variant_class }} {{ sparkline_class }} p-5 {{ 'card-hover group hover-lift' if href else '' }}">
+  <div class="flex items-center justify-between mb-3">
+    <span class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ label }}</span>
+    <div class="flex h-9 w-9 items-center justify-center rounded-lg {{ c.bg }} {{ c.text }}">
+      {{ icon_svg(icon) }}
+    </div>
+  </div>
+  <p class="text-lg sm:text-2xl font-bold text-slate-900 dark:text-white font-mono truncate" title="{{ value }}">{{ value }}</p>
+  {% if subtitle %}
+  <p class="text-xs text-slate-400 dark:text-slate-500 mt-1 {{ 'group-hover:text-teal-500 transition-colors' if href else '' }}">{{ subtitle }}</p>
+  {% endif %}
+  {% if trend %}
+  <div class="flex items-center gap-1 mt-2 text-xs {{ 'text-emerald-600 dark:text-emerald-400' if trend > 0 else 'text-rose-600 dark:text-rose-400' }}">
+    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {% if trend > 0 %}
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
+      {% else %}
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+      {% endif %}
+    </svg>
+    <span>{{ trend|abs }}%</span>
+  </div>
+  {% endif %}
+</{{ tag }}>
+{% endmacro %}
+
+
+{# ============================================
+   EMPTY STATE
+   Usage: {{ empty_state("No invoices", "Create your first invoice to get started", icon="document", cta_text="New Invoice", cta_href="/invoices/new") }}
+   Uses enhanced empty state styling with floating animation
+   ============================================ #}
+{% macro empty_state(title, description=none, icon="document", cta_text=none, cta_href=none, action_text=none, action_url=none, action_label=none) %}
+{% set resolved_text = cta_text or action_text or action_label %}
+{% set resolved_href = cta_href or action_url %}
+<div class="empty-state">
+  <div class="empty-state-icon">
+    <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {{ icon_path(icon) }}
+    </svg>
+  </div>
+  <p class="empty-state-title">{{ title }}</p>
+  {% if description %}
+  <p class="empty-state-description">{{ description }}</p>
+  {% endif %}
+  {% if resolved_text and resolved_href %}
+  <a href="{{ resolved_href }}" class="btn btn-teal">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+    </svg>
+    {{ resolved_text }}
+  </a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   AGING BAR (stacked horizontal)
+   Usage: {{ aging_bar(current=60, days30=20, days60=15, days90=5) }}
+   ============================================ #}
+{% macro aging_bar(current=0, days30=0, days60=0, days90=0, height="h-3", show_legend=false) %}
+{% set total = current + days30 + days60 + days90 %}
+{% if total > 0 %}
+{% set pct_current = (current / total * 100)|round(1) %}
+{% set pct_30 = (days30 / total * 100)|round(1) %}
+{% set pct_60 = (days60 / total * 100)|round(1) %}
+{% set pct_90 = (days90 / total * 100)|round(1) %}
+<div class="space-y-1.5">
+  <div class="{{ height }} bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden flex">
+    {% if pct_current > 0 %}<div class="h-full bg-emerald-500" style="width: {{ pct_current }}%" title="Current: {{ pct_current }}%"></div>{% endif %}
+    {% if pct_30 > 0 %}<div class="h-full bg-amber-500" style="width: {{ pct_30 }}%" title="1-30 Days: {{ pct_30 }}%"></div>{% endif %}
+    {% if pct_60 > 0 %}<div class="h-full bg-orange-500" style="width: {{ pct_60 }}%" title="31-60 Days: {{ pct_60 }}%"></div>{% endif %}
+    {% if pct_90 > 0 %}<div class="h-full bg-rose-500" style="width: {{ pct_90 }}%" title="60+ Days: {{ pct_90 }}%"></div>{% endif %}
+  </div>
+  {% if show_legend %}
+  <div class="flex flex-wrap gap-3 text-xs">
+    <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span><span class="text-slate-500">Current</span></div>
+    <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span><span class="text-slate-500">1-30</span></div>
+    <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-orange-500"></span><span class="text-slate-500">31-60</span></div>
+    <div class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-rose-500"></span><span class="text-slate-500">60+</span></div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{# ============================================
+   PROGRESS BAR
+   Usage: {{ progress_bar("Revenue", "$50,000", 75, color="emerald") }}
+   ============================================ #}
+{% macro progress_bar(label, value, percentage, color="teal", height="h-2") %}
+{% set colors = {
+  'emerald': 'from-emerald-500 to-teal-500',
+  'rose': 'from-rose-500 to-pink-500',
+  'blue': 'from-blue-500 to-indigo-500',
+  'amber': 'from-amber-500 to-yellow-500',
+  'teal': 'from-teal-500 to-cyan-500'
+} %}
+{% set pct = [percentage|float, 100]|min %}
+<div class="space-y-1">
+  <div class="flex items-center justify-between text-sm">
+    <span class="text-slate-600 dark:text-slate-400">{{ label }}</span>
+    <span class="font-mono font-medium text-slate-900 dark:text-white">{{ value }}</span>
+  </div>
+  <div class="{{ height }} bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+    <div class="h-full bg-gradient-to-r {{ colors.get(color, colors.teal) }} rounded-full transition-all" style="width: {{ pct }}%"></div>
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   SECTION CARD (with header and content)
+   Usage: {% call section_card("Recent Activity", href="/activity") %}content here{% endcall %}
+   ============================================ #}
+{% macro section_card(title, subtitle=none, href=none, href_text="View All") %}
+<div class="card p-6">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h3 class="font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+      {% if subtitle %}<p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if href %}
+    <a href="{{ href }}" class="text-sm text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300">{{ href_text }}</a>
+    {% endif %}
+  </div>
+  {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   SPARKLINE (inline SVG)
+   Usage: {{ sparkline([10, 25, 15, 30, 22, 35, 28], color="emerald") }}
+   ============================================ #}
+{% macro sparkline(data, color="teal", width=80, height=24) %}
+{% set colors = {'emerald': '#10b981', 'rose': '#f43f5e', 'teal': '#14b8a6', 'blue': '#3b82f6', 'amber': '#f59e0b'} %}
+{% set stroke = colors.get(color, colors.teal) %}
+{% if data and data|length > 1 %}
+{% set max_val = data|max %}
+{% set min_val = data|min %}
+{% set range = max_val - min_val if max_val != min_val else 1 %}
+{% set points = [] %}
+{% for val in data %}
+{% set x = (loop.index0 / (data|length - 1)) * width %}
+{% set y = height - ((val - min_val) / range * (height - 4)) - 2 %}
+{% set _ = points.append(x|string ~ ',' ~ y|string) %}
+{% endfor %}
+<svg width="{{ width }}" height="{{ height }}" class="inline-block">
+  <polyline fill="none" stroke="{{ stroke }}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="{{ points|join(' ') }}"/>
+</svg>
+{% endif %}
+{% endmacro %}
+
+
+{# ============================================
+   ICON HELPERS
+   ============================================ #}
+{% macro icon_svg(name, size="h-5 w-5") %}
+<svg class="{{ size }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">{{ icon_path(name) }}</svg>
+{% endmacro %}
+
+{% macro icon_path(name) %}
+{% if name == "trending-up" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+{% elif name == "trending-down" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"/>
+{% elif name == "document" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+{% elif name == "chart" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+{% elif name == "users" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+{% elif name == "currency" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+{% elif name == "receipt" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/>
+{% elif name == "credit-card" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+{% elif name == "folder" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+{% elif name == "clock" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+{% elif name == "check-circle" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+{% elif name == "warning" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+{% elif name == "box" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+{% elif name == "plus" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/>
+{% elif name == "eye" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+{% elif name == "edit" %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+{% else %}<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+{% endif %}
+{% endmacro %}
+
+
+{# ============================================
+   CHART CANVAS (data-attribute based)
+   Usage: {{ chart_canvas("donut", {"labels": labels, "data": values}, id="myChart") }}
+   ============================================ #}
+{% macro chart_canvas(type, config, id=none, height="h-64") %}
+<div class="{{ height }}">
+  <canvas {% if id %}id="{{ id }}"{% endif %} data-chart="{{ type }}" data-chart-config='{{ config|tojson }}'></canvas>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   DEPRECATED: Use live_search with entity_type parameter instead.
+   SEARCH WITH AUTO-SUGGEST
+   Enhanced search component with autocomplete suggestions
+   Usage: {{ search_autosuggest(
+            search=search,
+            entity_type="customers",
+            filters=[],
+            base_url="/finance/ar/customers",
+            placeholder="Search customers..."
+          ) }}
+   ============================================ #}
+{% macro search_autosuggest(search="", entity_type="", filters=[], base_url="", placeholder="Search...", show_clear=true, debounce_ms=300) %}
+<div class="card p-4">
+  <form method="get" action="{{ base_url }}"
+        x-data="searchAutosuggest('{{ entity_type }}', {{ debounce_ms }})"
+        @submit="handleSubmit($event)"
+        class="flex flex-wrap items-center gap-4">
+
+    {# Search Input with Auto-suggest #}
+    <div class="relative flex-1 min-w-[200px]" @click.away="showSuggestions = false">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+
+      {# Loading indicator #}
+      <svg x-show="loading" class="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+
+      <input type="text" name="search"
+             x-model="query"
+             x-ref="searchInput"
+             @input.debounce.{{ debounce_ms }}ms="fetchSuggestions()"
+             @focus="if (suggestions.length) showSuggestions = true"
+             @keydown.down.prevent="navigateDown()"
+             @keydown.up.prevent="navigateUp()"
+             @keydown.enter.prevent="selectCurrent($event)"
+             @keydown.escape="showSuggestions = false"
+             placeholder="{{ placeholder }}"
+             autocomplete="off"
+             class="form-input pl-10 w-full">
+
+      {# Suggestions Dropdown #}
+      <div x-show="showSuggestions && suggestions.length > 0"
+           x-transition:enter="transition ease-out duration-150"
+           x-transition:enter-start="opacity-0 translate-y-1"
+           x-transition:enter-end="opacity-100 translate-y-0"
+           x-transition:leave="transition ease-in duration-100"
+           x-transition:leave-start="opacity-100 translate-y-0"
+           x-transition:leave-end="opacity-0 translate-y-1"
+           class="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800 overflow-hidden max-h-64 overflow-y-auto">
+
+        <template x-for="(suggestion, index) in suggestions" :key="suggestion.id">
+          <button type="button"
+                  @click="selectSuggestion(suggestion)"
+                  @mouseenter="selectedIndex = index"
+                  :class="{ 'bg-teal-50 dark:bg-teal-900/30': selectedIndex === index }"
+                  class="w-full px-4 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center gap-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
+
+            {# Category icon #}
+            <div class="flex-shrink-0 h-8 w-8 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+              <template x-if="suggestion.category === 'customer'">
+                <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                </svg>
+              </template>
+              <template x-if="suggestion.category === 'supplier'">
+                <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                </svg>
+              </template>
+              <template x-if="suggestion.category === 'account'">
+                <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                </svg>
+              </template>
+              <template x-if="suggestion.category === 'item'">
+                <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+              </template>
+              <template x-if="!['customer', 'supplier', 'account', 'item'].includes(suggestion.category)">
+                <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+              </template>
+            </div>
+
+            {# Label and subtitle #}
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-slate-900 dark:text-white truncate" x-text="suggestion.label"></p>
+              <p x-show="suggestion.subtitle" class="text-xs text-slate-500 dark:text-slate-400 truncate" x-text="suggestion.subtitle"></p>
+            </div>
+
+            {# Selection indicator #}
+            <svg x-show="selectedIndex === index" class="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </template>
+
+        {# Has more indicator #}
+        <div x-show="hasMore" class="px-4 py-2 text-xs text-center text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-900/50">
+          Type more to refine results...
+        </div>
+      </div>
+
+      {# No results message #}
+      <div x-show="showSuggestions && suggestions.length === 0 && query.length >= 2 && !loading"
+           class="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800 px-4 py-3 text-sm text-slate-500 dark:text-slate-400 text-center">
+        <p>No results found for "<span x-text="query" class="font-medium"></span>"</p>
+        {% if entity_type == "customers" %}
+        <div class="mt-3">
+          <a href="/finance/ar/customers/new" class="btn btn-secondary btn-sm">Add Customer</a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Filter Dropdowns #}
+    {% for filter in filters %}
+    <select name="{{ filter.name }}" class="form-select">
+      <option value="">{{ filter.label }}</option>
+      {% for option in filter.options %}
+      <option value="{{ option.value }}" {{ 'selected' if filter.value == option.value else '' }}>
+        {{ option.label }}
+      </option>
+      {% endfor %}
+    </select>
+    {% endfor %}
+
+    {# Search Button #}
+    <button type="submit" class="btn btn-primary">
+      <svg class="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      Search
+    </button>
+
+    {# Clear Filters Link #}
+    {% if show_clear and (search or filters|selectattr('value')|list) %}
+    <a href="{{ base_url }}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 transition-colors">
+      Clear
+    </a>
+    {% endif %}
+  </form>
+</div>
+
+{# Alpine.js Component Definition - only include once per page #}
+<script>
+if (typeof window.searchAutosuggest === 'undefined') {
+  window.searchAutosuggest = function(entityType, debounceMs = 300) {
+    return {
+      query: '{{ search if search else '' }}',
+      entityType: entityType,
+      suggestions: [],
+      selectedIndex: -1,
+      showSuggestions: false,
+      loading: false,
+      hasMore: false,
+
+      async fetchSuggestions() {
+        if (this.query.length < 2) {
+          this.suggestions = [];
+          this.showSuggestions = false;
+          return;
+        }
+
+        this.loading = true;
+        try {
+          const params = new URLSearchParams({
+            entity_type: this.entityType,
+            q: this.query,
+            limit: 10
+          });
+
+          const response = await fetch(`/api/v1/search/suggestions?${params}`);
+          if (response.ok) {
+            const data = await response.json();
+            this.suggestions = data.suggestions || [];
+            this.hasMore = data.has_more || false;
+            this.selectedIndex = -1;
+            this.showSuggestions = true;
+          }
+        } catch (error) {
+          console.error('Search suggestions error:', error);
+          this.suggestions = [];
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      navigateDown() {
+        if (!this.showSuggestions) {
+          this.showSuggestions = true;
+          return;
+        }
+        this.selectedIndex = Math.min(this.selectedIndex + 1, this.suggestions.length - 1);
+      },
+
+      navigateUp() {
+        this.selectedIndex = Math.max(this.selectedIndex - 1, -1);
+      },
+
+      selectCurrent(event) {
+        if (this.selectedIndex >= 0 && this.suggestions[this.selectedIndex]) {
+          this.selectSuggestion(this.suggestions[this.selectedIndex]);
+        } else {
+          // Submit the form with current query
+          this.showSuggestions = false;
+          event.target.closest('form').submit();
+        }
+      },
+
+      selectSuggestion(suggestion) {
+        this.query = suggestion.label;
+        this.showSuggestions = false;
+        this.selectedIndex = -1;
+        // Submit form after selection
+        this.$nextTick(() => {
+          this.$refs.searchInput.closest('form').submit();
+        });
+      },
+
+      handleSubmit(event) {
+        this.showSuggestions = false;
+      }
+    };
+  };
+}
+</script>
+{% endmacro %}
+
+
+{# ============================================
+   DEPRECATED: Use live_search instead.
+   SEARCH FILTER BAR (Basic - no auto-suggest)
+   Reusable search and filter component for list pages
+   Usage: {{ search_filter_bar(search=search, filters=filters, base_url="/ap/suppliers") }}
+   ============================================ #}
+{% macro search_filter_bar(search="", filters=[], base_url="", placeholder="Search...", show_clear=true) %}
+<div class="card p-4">
+  <form method="get" action="{{ base_url }}" class="flex flex-wrap items-center gap-4">
+    {# Search Input #}
+    <div class="relative flex-1 min-w-[200px]">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <input type="text" name="search" value="{{ search if search else '' }}"
+             placeholder="{{ placeholder }}"
+             class="form-input pl-10 w-full">
+    </div>
+
+    {# Filter Dropdowns #}
+    {% for filter in filters %}
+    <select name="{{ filter.name }}" class="form-select">
+      <option value="">{{ filter.label }}</option>
+      {% for option in filter.options %}
+      <option value="{{ option.value }}" {{ 'selected' if filter.value == option.value else '' }}>
+        {{ option.label }}
+      </option>
+      {% endfor %}
+    </select>
+    {% endfor %}
+
+    {# Filter Button #}
+    <button type="submit" class="btn btn-secondary">
+      <svg class="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+      </svg>
+      Filter
+    </button>
+
+    {# Clear Filters Link #}
+    {% if show_clear and (search or filters|selectattr('value')|list) %}
+    <a href="{{ base_url }}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 transition-colors">
+      Clear filters
+    </a>
+    {% endif %}
+  </form>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   LIVE SEARCH (HTMX-powered, replaces search_filter_bar + search_autosuggest)
+   Debounced server-side search with live table filtering, optional autosuggest dropdown.
+   Supports {% call %} blocks for custom filters (date inputs, dynamic selects).
+
+   Usage (simple):
+     {{ live_search(search=search, base_url="/inventory/items", placeholder="Search items...") }}
+
+   Usage (with dropdown filters):
+     {{ live_search(search=search, base_url="/finance/ar/invoices",
+                    filters=[{"name": "status", "label": "All Status", "value": status,
+                              "options": [{"value": "DRAFT", "label": "Draft"}]}]) }}
+
+   Usage (with call block for complex filters):
+     {% call(search_attrs) live_search(search=search, base_url="/finance/ar/invoices") %}
+       <select name="customer_id" class="form-select" {{ search_attrs }}>...</select>
+       <input type="date" name="start_date" class="form-input" {{ search_attrs }}>
+     {% endcall %}
+
+   Usage (with entity autosuggest):
+     {{ live_search(search=search, base_url="/finance/ar/customers",
+                    entity_type="customers", placeholder="Search customers...") }}
+
+   Results container: Wrap table + pagination in <div id="results-container">
+   ============================================ #}
+{% macro live_search(search="", filters=[], base_url="", target_id="results-container",
+                     placeholder="Search...", show_clear=true, debounce_ms=300,
+                     entity_type="") %}
+<div class="card p-4" data-live-search>
+  <form method="get" action="{{ base_url }}" class="flex flex-wrap items-center gap-3"
+        {% if entity_type %}x-data="liveSearch('{{ entity_type }}')" @submit="showSuggestions = false"{% endif %}>
+
+    {# Search Input #}
+    <div class="relative flex-1 min-w-[200px]"
+         {% if entity_type %}@click.away="showSuggestions = false"{% endif %}>
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+
+      {# HTMX loading spinner #}
+      <svg data-live-search-spinner class="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 animate-spin hidden" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+
+      <input type="text" name="search" value="{{ search if search else '' }}"
+             placeholder="{{ placeholder }}"
+             autocomplete="off"
+             class="form-input pl-10 w-full"
+             hx-get="{{ base_url }}"
+             hx-trigger="input changed delay:{{ debounce_ms }}ms, search"
+             hx-target="#{{ target_id }}"
+             hx-select="#{{ target_id }}"
+             hx-push-url="true"
+             hx-include="closest form"
+             hx-indicator="closest [data-live-search]"
+             {% if entity_type %}
+             x-model="query"
+             x-ref="searchInput"
+             @input.debounce.{{ debounce_ms }}ms="fetchSuggestions()"
+             @focus="if (suggestions.length) showSuggestions = true"
+             @keydown.down.prevent="navigateDown()"
+             @keydown.up.prevent="navigateUp()"
+             @keydown.enter="selectCurrent($event)"
+             @keydown.escape="showSuggestions = false"
+             {% endif %}>
+
+      {% if entity_type %}
+      {# Autosuggest Dropdown #}
+      <div x-show="showSuggestions && suggestions.length > 0" x-cloak
+           x-transition:enter="transition ease-out duration-150"
+           x-transition:enter-start="opacity-0 translate-y-1"
+           x-transition:enter-end="opacity-100 translate-y-0"
+           x-transition:leave="transition ease-in duration-100"
+           x-transition:leave-start="opacity-100 translate-y-0"
+           x-transition:leave-end="opacity-0 translate-y-1"
+           class="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800 overflow-hidden max-h-64 overflow-y-auto">
+
+        <template x-for="(s, idx) in suggestions" :key="s.id || idx">
+          <button type="button"
+                  @click="selectSuggestion(s)"
+                  @mouseenter="selectedIndex = idx"
+                  :class="{ 'bg-teal-50 dark:bg-teal-900/30': selectedIndex === idx }"
+                  class="w-full px-4 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center gap-3 border-b border-slate-100 dark:border-slate-700 last:border-0">
+            <div class="flex-shrink-0 h-8 w-8 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+              <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-slate-900 dark:text-white truncate" x-text="s.label"></p>
+              <p x-show="s.subtitle" class="text-xs text-slate-500 dark:text-slate-400 truncate" x-text="s.subtitle"></p>
+            </div>
+            <svg x-show="selectedIndex === idx" class="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+          </button>
+        </template>
+
+        <div x-show="hasMore" class="px-4 py-2 text-xs text-center text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-900/50">
+          Type more to refine results...
+        </div>
+      </div>
+
+      {# No results message #}
+      <div x-show="showSuggestions && suggestions.length === 0 && query.length >= 2 && !suggestLoading" x-cloak
+           class="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800 px-4 py-3 text-sm text-slate-500 dark:text-slate-400 text-center">
+        No results found for "<span x-text="query" class="font-medium"></span>"
+      </div>
+      {% endif %}
+    </div>
+
+    {# Filter Dropdowns (from filters parameter) #}
+    {% for filter in filters %}
+    <select name="{{ filter.name }}" class="form-select"
+            hx-get="{{ base_url }}"
+            hx-trigger="change"
+            hx-target="#{{ target_id }}"
+            hx-select="#{{ target_id }}"
+            hx-push-url="true"
+            hx-include="closest form">
+      <option value="">{{ filter.label }}</option>
+      {% for option in filter.options %}
+      <option value="{{ option.value }}" {{ 'selected' if filter.value == option.value|string else '' }}>
+        {{ option.label }}
+      </option>
+      {% endfor %}
+    </select>
+    {% endfor %}
+
+    {# Caller block for custom filters (date inputs, dynamic selects, etc.) #}
+    {% if caller %}
+    {{ caller(
+        'hx-get="' ~ base_url ~ '" hx-trigger="change" hx-target="#' ~ target_id ~ '" hx-select="#' ~ target_id ~ '" hx-push-url="true" hx-include="closest form"'
+    ) }}
+    {% endif %}
+
+    {# Filter button — visible when filters or caller block present #}
+    {% set has_filters = filters|length > 0 or caller %}
+    {% if has_filters %}
+    <button type="submit" class="btn btn-secondary"
+            hx-get="{{ base_url }}"
+            hx-trigger="click"
+            hx-target="#{{ target_id }}"
+            hx-select="#{{ target_id }}"
+            hx-push-url="true"
+            hx-include="closest form">
+      <svg class="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+      </svg>
+      Filter
+    </button>
+    {% endif %}
+    <noscript>
+      <button type="submit" class="btn btn-secondary">
+        <svg class="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        Search
+      </button>
+    </noscript>
+
+    {# Clear Filters Link #}
+    {% set has_active_filters = search or filters|selectattr('value')|list %}
+    {% if show_clear and has_active_filters %}
+    <a href="{{ base_url }}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 transition-colors">
+      <svg class="inline h-3.5 w-3.5 mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+      Clear
+    </a>
+    {% endif %}
+  </form>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   COMPACT FILTERS (Collapsible filter bar with active chips)
+   Filter-first component for structured-data pages (banking, reports).
+   Uses HTMX for live filtering and Alpine.js for expand/collapse.
+
+   Usage (with call block for custom filter inputs):
+     {% call(filter_attrs) compact_filters(
+         base_url="/finance/banking/statements",
+         active_filters=active_filters,
+         date_range=true, start_date=start_date, end_date=end_date
+     ) %}
+       <div>
+         <label class="form-label text-xs">Account</label>
+         <select name="account_id" class="form-select" {{ filter_attrs }}>
+           <option value="">All Accounts</option>
+         </select>
+       </div>
+       <div>
+         <label class="form-label text-xs">Status</label>
+         <select name="status" class="form-select" {{ filter_attrs }}>
+           <option value="">All Status</option>
+         </select>
+       </div>
+     {% endcall %}
+
+   active_filters: list of {name, value, display_value} dicts
+   Results container: Wrap table + pagination in <div id="results-container">
+   ============================================ #}
+{% macro compact_filters(
+    base_url, target_id="results-container", active_filters=[],
+    show_search=false, search="", search_name="search", search_placeholder="Search...",
+    date_range=false, start_date="", end_date="", debounce_ms=300
+) %}
+{% set filter_count = active_filters | length %}
+<div class="card" data-compact-filters data-live-search
+     x-data='{ open: {{ "true" if filter_count > 0 else "false" }} }'>
+
+  {# ── Top bar: toggle + count badge + clear ── #}
+  <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700"
+       :class="{ 'border-b-0': !open && {{ filter_count }} === 0 }">
+    <div class="flex items-center gap-3">
+      {# Toggle button #}
+      <button type="button" @click="open = !open"
+              class="inline-flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:text-teal-600 dark:hover:text-teal-400 transition-colors">
+        <svg class="h-4 w-4 transition-transform duration-200" :class="{ 'rotate-90': open }"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+        </svg>
+        Filters
+        {% if filter_count > 0 %}
+        <span class="inline-flex items-center justify-center h-5 min-w-[20px] px-1.5 text-xs font-semibold text-white bg-teal-600 dark:bg-teal-500 rounded-full">
+          {{ filter_count }}
+        </span>
+        {% endif %}
+      </button>
+
+      {# HTMX loading spinner #}
+      <svg data-live-search-spinner class="h-4 w-4 text-slate-400 animate-spin hidden" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+    </div>
+
+    {# Clear all link #}
+    {% if filter_count > 0 %}
+    <a href="{{ base_url }}"
+       class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300 transition-colors">
+      <svg class="inline h-3.5 w-3.5 mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+      Clear all
+    </a>
+    {% endif %}
+  </div>
+
+  {# ── Active filter chips ── #}
+  {% if filter_count > 0 %}
+  <div class="flex flex-wrap items-center gap-2 px-4 py-2 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
+    {% for f in active_filters %}
+    <span class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-900/30 border border-teal-200 dark:border-teal-800 rounded-md">
+      {{ f.display_value }}
+      <button type="button" data-chip-remove="{{ f.name }}" data-chip-value="{{ f.value }}"
+              aria-label="Remove {{ f.display_value }} filter"
+              class="ml-0.5 p-0.5 rounded hover:bg-teal-200 dark:hover:bg-teal-800 transition-colors">
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# ── Collapsible filter panel ── #}
+  <div x-show="open" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0 -translate-y-2"
+       x-transition:enter-end="opacity-100 translate-y-0"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100 translate-y-0"
+       x-transition:leave-end="opacity-0 -translate-y-2"
+       class="px-4 py-4">
+
+    <form method="get" action="{{ base_url }}"
+          class="space-y-4">
+
+      {# Optional search input #}
+      {% if show_search %}
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" name="{{ search_name }}" value="{{ search if search else '' }}"
+               placeholder="{{ search_placeholder }}"
+               autocomplete="off"
+               class="form-input pl-10 w-full"
+               hx-get="{{ base_url }}"
+               hx-trigger="input changed delay:{{ debounce_ms }}ms, search"
+               hx-target="#{{ target_id }}"
+               hx-select="#{{ target_id }}"
+               hx-push-url="true"
+               hx-include="closest form">
+      </div>
+      {% endif %}
+
+      {# Filter grid: caller block + optional date range #}
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {# Caller block for custom filter inputs #}
+        {% if caller %}
+        {{ caller(
+            'hx-get="' ~ base_url ~ '" hx-trigger="change" hx-target="#' ~ target_id ~ '" hx-select="#' ~ target_id ~ '" hx-push-url="true" hx-include="closest form"'
+        ) }}
+        {% endif %}
+
+        {# Built-in date range inputs #}
+        {% if date_range %}
+        <div>
+          <label class="form-label text-xs">From</label>
+          <input type="date" name="start_date" value="{{ start_date if start_date else '' }}"
+                 class="form-input w-full"
+                 hx-get="{{ base_url }}"
+                 hx-trigger="change"
+                 hx-target="#{{ target_id }}"
+                 hx-select="#{{ target_id }}"
+                 hx-push-url="true"
+                 hx-include="closest form">
+        </div>
+        <div>
+          <label class="form-label text-xs">To</label>
+          <input type="date" name="end_date" value="{{ end_date if end_date else '' }}"
+                 class="form-input w-full"
+                 hx-get="{{ base_url }}"
+                 hx-trigger="change"
+                 hx-target="#{{ target_id }}"
+                 hx-select="#{{ target_id }}"
+                 hx-push-url="true"
+                 hx-include="closest form">
+        </div>
+        {% endif %}
+      </div>
+
+      {# Submit fallback for no-JS #}
+      <noscript>
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="btn btn-primary">Apply Filters</button>
+          {% if filter_count > 0 %}
+          <a href="{{ base_url }}" class="btn btn-secondary">Clear</a>
+          {% endif %}
+        </div>
+      </noscript>
+    </form>
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   FILTER FIELD HELPERS
+   Reusable select fields for compact filter call blocks.
+   ============================================ #}
+{% macro filter_select_field(name, label, value="", options=[], attrs="", placeholder=none, titleize_strings=false) %}
+<div>
+  <label class="form-label text-xs">{{ label }}</label>
+  <select name="{{ name }}" class="form-select w-full" {{ attrs | safe }}>
+    <option value="">{{ placeholder if placeholder is not none else ("All " ~ label) }}</option>
+    {% for option in options %}
+    {% if option is mapping %}
+    {% set option_value = option.get("value", "") %}
+    {% set option_label = option.get("label", option_value) %}
+    {% else %}
+    {% set option_value = option %}
+    {% if titleize_strings %}
+    {% set option_label = option|string|replace("_", " ")|title %}
+    {% else %}
+    {% set option_label = option %}
+    {% endif %}
+    {% endif %}
+    <option value="{{ option_value }}" {{ "selected" if value|string == option_value|string else "" }}>
+      {{ option_label }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+{% endmacro %}
+
+
+{% macro filter_entity_select_field(name, label, value="", items=[], value_key="id", label_key="name", attrs="", placeholder=none) %}
+<div>
+  <label class="form-label text-xs">{{ label }}</label>
+  <select name="{{ name }}" class="form-select w-full" {{ attrs | safe }}>
+    <option value="">{{ placeholder if placeholder is not none else ("All " ~ label) }}</option>
+    {% for item in items %}
+    {% if item is mapping %}
+    {% set option_value = item.get(value_key) %}
+    {% set option_label = item.get(label_key) %}
+    {% else %}
+    {% set option_value = item | attr(value_key) %}
+    {% set option_label = item | attr(label_key) %}
+    {% endif %}
+    <option value="{{ option_value }}" {{ "selected" if value|string == option_value|string else "" }}>
+      {{ option_label }}
+    </option>
+    {% endfor %}
+  </select>
+</div>
+{% endmacro %}
+
+{% macro filter_custom_select_field(name, label, attrs="", placeholder=none) %}
+<div>
+  <label class="form-label text-xs">{{ label }}</label>
+  <select name="{{ name }}" class="form-select w-full" {{ attrs | safe }}>
+    <option value="">{{ placeholder if placeholder is not none else ("All " ~ label) }}</option>
+    {% if caller %}
+    {{ caller() }}
+    {% endif %}
+  </select>
+</div>
+{% endmacro %}
+
+{% macro filter_date_field(name, label, value="", attrs="") %}
+<div>
+  <label class="form-label text-xs">{{ label }}</label>
+  <input type="date" name="{{ name }}" value="{{ value if value else '' }}" class="form-input w-full" {{ attrs | safe }}>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   SORTABLE TABLE HEADER
+   Clickable <th> that integrates with compact_filters / live_search.
+   Renders a column header with sort-direction arrows.
+
+   Usage:
+     {{ sortable_th("Invoice Date", "invoice_date", sort, sort_dir) }}
+     {{ sortable_th("Amount", "total_amount", sort, sort_dir, class="text-right") }}
+
+   sort / sort_dir come from the template context (set by the route handler).
+   JS in table-sort.js handles click → hidden-input update → HTMX trigger.
+   ============================================ #}
+{% macro sortable_th(label, column, current_sort="", current_dir="desc", class="", extra_attrs="") %}
+{% set is_active = (current_sort == column) %}
+{% set arrow_up   = "opacity-100" if (is_active and current_dir == "asc") else "opacity-30" %}
+{% set arrow_down = "opacity-100" if (is_active and current_dir == "desc") else "opacity-30" %}
+{% set aria_sort_val = ("ascending" if current_dir == "asc" else "descending") if is_active else "none" %}
+<th scope="col" data-sort-column="{{ column }}" aria-sort="{{ aria_sort_val }}"
+    class="cursor-pointer select-none hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors {{ class }}" {{ extra_attrs }}>
+  <span class="inline-flex items-center gap-1">
+    {{ label }}
+    <span class="inline-flex flex-col -space-y-1 text-xs leading-none text-slate-400 dark:text-slate-500" aria-hidden="true">
+      <span class="{{ arrow_up }}">▲</span>
+      <span class="{{ arrow_down }}">▼</span>
+    </span>
+  </span>
+</th>
+{% endmacro %}
+
+
+{# ============================================
+   PAGINATION
+   Reusable pagination component with page size selector
+   Usage: {{ pagination(page=1, total_pages=10, total_count=250, limit=50, search=search, filters=filters) }}
+   ============================================ #}
+{% macro pagination(page, total_pages, total_count, limit=50, search="", filters={}, show_size_selector=true) %}
+{% set current_page = page | default(1) | int %}
+{% set page_count = total_pages | default(1) | int %}
+{% set result_count = total_count | default(0) | int %}
+{% set page_limit = limit | default(50) | int %}
+{% set search_term = search | default("") %}
+{% set encoded_search = search_term|string|urlencode %}
+{% set active_filters = filters | default({}) %}
+{% if result_count > 0 %}
+<div class="border-t border-slate-200 dark:border-slate-700 px-6 py-4">
+  <div class="flex flex-col sm:flex-row items-center justify-between gap-4">
+    {# Results Info #}
+    <div class="flex items-center gap-4">
+      <p class="text-sm text-slate-600 dark:text-slate-400">
+        Showing <span class="font-medium text-slate-900 dark:text-white">{{ ((current_page - 1) * page_limit + 1) }}</span>
+        to <span class="font-medium text-slate-900 dark:text-white">{{ [current_page * page_limit, result_count]|min }}</span>
+        of <span class="font-medium text-slate-900 dark:text-white">{{ result_count }}</span> results
+      </p>
+
+      {# Page Size Selector #}
+      {% if show_size_selector %}
+      <div class="flex items-center gap-2">
+        <label class="text-sm text-slate-500 dark:text-slate-400">Show:</label>
+        <select onchange="window.location.href=this.value" class="form-select py-1 text-sm">
+          {% for size in [25, 50, 100, 200] %}
+          {% set ns = namespace(params="page=1" ~ ("&search=" ~ encoded_search if search_term else "")) %}
+          {% for key, val in active_filters.items() if val %}
+          {% set ns.params = ns.params ~ "&" ~ (key|string|urlencode) ~ "=" ~ (val|string|urlencode) %}
+          {% endfor %}
+          <option value="?{{ ns.params }}&limit={{ size }}" {{ 'selected' if page_limit == size else '' }}>{{ size }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+    </div>
+
+    {# Page Navigation #}
+    {% if page_count > 1 %}
+    <nav class="flex items-center gap-1">
+      {# Previous Button #}
+      {% if current_page > 1 %}
+      {% set prev_ns = namespace(params="page=" ~ (current_page - 1) ~ ("&search=" ~ encoded_search if search_term else "") ~ ("&limit=" ~ page_limit if page_limit != 50 else "")) %}
+      {% for key, val in active_filters.items() if val %}{% set prev_ns.params = prev_ns.params ~ "&" ~ (key|string|urlencode) ~ "=" ~ (val|string|urlencode) %}{% endfor %}
+      <a href="?{{ prev_ns.params }}"
+         class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300 transition-colors">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+      </a>
+      {% endif %}
+
+      {# Page Numbers #}
+      {% for p in range(1, page_count + 1) %}
+        {% if p == current_page %}
+        <span class="rounded-lg bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-700 dark:bg-teal-900/30 dark:text-teal-300">{{ p }}</span>
+        {% elif p == 1 or p == page_count or (p >= current_page - 1 and p <= current_page + 1) %}
+        {% set page_ns = namespace(params="page=" ~ p ~ ("&search=" ~ encoded_search if search_term else "") ~ ("&limit=" ~ page_limit if page_limit != 50 else "")) %}
+        {% for key, val in active_filters.items() if val %}{% set page_ns.params = page_ns.params ~ "&" ~ (key|string|urlencode) ~ "=" ~ (val|string|urlencode) %}{% endfor %}
+        <a href="?{{ page_ns.params }}"
+           class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition-colors">{{ p }}</a>
+        {% elif p == current_page - 2 or p == current_page + 2 %}
+        <span class="px-1 text-slate-400">...</span>
+        {% endif %}
+      {% endfor %}
+
+      {# Next Button #}
+      {% if current_page < page_count %}
+      {% set next_ns = namespace(params="page=" ~ (current_page + 1) ~ ("&search=" ~ encoded_search if search_term else "") ~ ("&limit=" ~ page_limit if page_limit != 50 else "")) %}
+      {% for key, val in active_filters.items() if val %}{% set next_ns.params = next_ns.params ~ "&" ~ (key|string|urlencode) ~ "=" ~ (val|string|urlencode) %}{% endfor %}
+      <a href="?{{ next_ns.params }}"
+         class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300 transition-colors">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+      </a>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{# ============================================
+   DATA TABLE WRAPPER
+   Consistent table styling with optional empty state
+   Usage: {% call data_table(headers=["Code", "Name", "Status"]) %}rows here{% endcall %}
+   ============================================ #}
+{% macro data_table(headers, empty_title="No data", empty_description="", empty_cta_text=none, empty_cta_href=none) %}
+<div class="card">
+  <div class="table-container">
+    <table class="table">
+      <thead>
+        <tr>
+          {% for header in headers %}
+          {% if header is mapping %}
+          {% set header_class = header.get("class", "") %}
+          {% set header_label = header.get("label", header) %}
+          {% else %}
+          {% set header_class = header.class | default("", true) %}
+          {% set header_label = header.label | default(header, true) %}
+          {% endif %}
+          <th scope="col" class="{{ header_class }}">{{ header_label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {{ caller() }}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   CURRENCY DISPLAY
+   Consistent currency formatting using org default
+   Usage: {{ currency(amount) }} or {{ currency(amount, "USD") }}
+   ============================================ #}
+{% macro currency(amount, symbol="") %}
+{% if amount is none %}—{% else %}{{ symbol }}{{ "{:,.2f}".format(amount|float) }}{% endif %}
+{% endmacro %}
+
+{# ============================================
+   LIST HEADER ACTIONS
+   Standardized Export + New action buttons for list pages
+   ============================================ #}
+{% macro list_header_actions(export_url=none, new_url=none, new_label="New", new_icon="plus", export_label="Export") %}
+<div class="flex items-center gap-2">
+  {% if export_url %}
+  <button onclick="exportAll('{{ export_url }}')" class="btn btn-secondary">
+    <svg class="h-4 w-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+    </svg>
+    {{ export_label }}
+  </button>
+  {% endif %}
+  {% if new_url %}
+  <a href="{{ new_url }}" class="btn btn-primary">
+    {{ icon_svg(new_icon, "h-4 w-4 mr-1.5") }}
+    {{ new_label }}
+  </a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   ACTION BUTTONS (for table rows)
+   Usage: {{ action_buttons(view_href="/items/123", edit_href="/items/123/edit") }}
+   ============================================ #}
+{% macro action_buttons(view_href=none, edit_href=none, delete_action=none, extra_actions=[], container_class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity") %}
+<div class="{{ container_class }}">
+  {% if view_href %}
+  <a href="{{ view_href }}" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300 transition-colors" title="View" aria-label="View">
+    {{ icon_svg("eye", "h-4 w-4") }}
+  </a>
+  {% endif %}
+  {% if edit_href %}
+  <a href="{{ edit_href }}" class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300 transition-colors" title="Edit" aria-label="Edit">
+    {{ icon_svg("edit", "h-4 w-4") }}
+  </a>
+  {% endif %}
+  {% for action in extra_actions %}
+  {% set action_href = action.href | default('', true) %}
+  {% set action_class = action.class | default('rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300 transition-colors', true) %}
+  {% set action_title = action.title | default('', true) %}
+  {% set action_aria_label = action.aria_label | default(action_title if action_title else 'Action', true) %}
+  {% set action_svg = action.svg | default('', true) %}
+  {% set action_icon = action.icon | default('document', true) %}
+  {% if action_href %}
+  <a href="{{ action_href }}" class="{{ action_class }}" title="{{ action_title }}" aria-label="{{ action_aria_label }}">
+    {% if action_svg %}
+    {{ action_svg | safe }}
+    {% else %}
+    {{ icon_svg(action_icon, "h-4 w-4") }}
+    {% endif %}
+  </a>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   BULK SELECT HEADER
+   Checkbox header cell for "select all" functionality
+   Usage: {{ bulk_select_header() }}
+   ============================================ #}
+{% macro bulk_select_header() %}
+<th class="bulk-select-cell w-12">
+  <input type="checkbox"
+         class="bulk-checkbox"
+         :checked="isAllSelected"
+         :indeterminate="isIndeterminate"
+         @click="toggleAll()"
+         aria-label="Select all rows">
+</th>
+{% endmacro %}
+
+
+{# ============================================
+   BULK SELECT CELL
+   Row checkbox for individual row selection
+   Usage: {{ bulk_select_cell(item.id) }}
+   ============================================ #}
+{% macro bulk_select_cell(id) %}
+<td class="bulk-select-cell" data-bulk-id="{{ id }}">
+  <input type="checkbox"
+         class="bulk-checkbox"
+         :checked="isSelected('{{ id }}')"
+         @click.stop="toggleRow('{{ id }}')"
+         aria-label="Select row">
+</td>
+{% endmacro %}
+
+
+{# ============================================
+   BULK ACTION BAR
+   Floating action bar that appears when items are selected
+   Usage: {{ bulk_action_bar(actions=[
+              {"name": "delete", "label": "Delete", "endpoint": "/api/delete", "class": "btn-bulk-danger", "confirm": "Delete selected?"},
+              {"name": "export", "label": "Export", "endpoint": "/api/export"}
+            ], entity_name="customers") }}
+   ============================================ #}
+{% macro bulk_action_bar(actions, entity_name="items") %}
+<div x-show="hasSelection"
+     x-cloak
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0 translate-y-4"
+     x-transition:enter-end="opacity-100 translate-y-0"
+     x-transition:leave="transition ease-in duration-150"
+     x-transition:leave-start="opacity-100 translate-y-0"
+     x-transition:leave-end="opacity-0 translate-y-4"
+     class="bulk-action-bar"
+     :class="{ 'bulk-action-bar-loading': loading }">
+  <div class="bulk-action-bar-content">
+    {# Selection count #}
+    <span class="bulk-selection-count">
+      <span x-text="selectedCount"></span> {{ entity_name }} selected
+    </span>
+
+    {# Action buttons #}
+    <div class="bulk-actions-group">
+      {% for action in actions %}
+      {% set action_name = action.name | default("", true) %}
+      {% set action_label = action.label | default(action_name, true) %}
+      {% set action_endpoint = action.endpoint | default("", true) %}
+      {% set action_class = action.class | default("btn-secondary", true) %}
+      {% set action_confirm = action.confirm | default("", true) %}
+      {% set action_title = action.title | default("", true) %}
+      {% set action_icon = action.icon | default("", true) %}
+      {% if action_name and action_endpoint %}
+      <button type="button"
+              class="btn btn-sm {{ action_class }}"
+              @click="performAction('{{ action_name }}', '{{ action_endpoint }}', { {% if action_confirm %}confirm: '{{ action_confirm }}'{% endif %} })"
+              :disabled="loading"
+              {% if action_title %}title="{{ action_title }}"{% endif %}>
+        {% if action_icon %}
+        {{ action_icon|safe }}
+        {% endif %}
+        <span>{{ action_label }}</span>
+        {# Loading spinner for this specific action #}
+        <svg x-show="actionInProgress === '{{ action_name }}'" class="ml-1 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+      </button>
+      {% endif %}
+      {% endfor %}
+
+      {# Clear selection button #}
+      <button type="button"
+              class="btn btn-sm btn-ghost"
+              @click="clearSelection()"
+              :disabled="loading"
+              title="Clear selection">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+        <span class="hidden sm:inline ml-1">Clear</span>
+      </button>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   BULK SELECT TABLE WRAPPER
+   Wraps a table with bulk selection functionality
+   Usage: {% call bulk_select_table(entity_name="customers", actions=[...]) %}
+            <table>...</table>
+          {% endcall %}
+   ============================================ #}
+{% macro bulk_select_table(entity_name="items", actions=[]) %}
+<div x-data="bulkActions({ entityName: '{{ entity_name }}' })">
+  {{ caller() }}
+  {{ bulk_action_bar(actions, entity_name) }}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   COMMON BULK ACTION ICONS
+   Pre-defined SVG icons for common bulk actions
+   ============================================ #}
+{% macro bulk_icon_delete() %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+</svg>
+{% endmacro %}
+
+{% macro bulk_icon_export() %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+</svg>
+{% endmacro %}
+
+{% macro bulk_icon_activate() %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+</svg>
+{% endmacro %}
+
+{% macro bulk_icon_deactivate() %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+</svg>
+{% endmacro %}
+
+{% macro bulk_icon_archive() %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+</svg>
+{% endmacro %}
+
+{# ============================================
+   TOP BAR (APP SHELL)
+   Usage:
+   {% from "components/macros.html" import topbar %}
+   {{ topbar(page_title_html, breadcrumbs_html, header_actions_html, accent="teal") }}
+   ============================================ #}
+{% macro topbar(page_title_html, breadcrumbs_html="", header_actions_html="", accent="teal", back_fallback="/dashboard") %}
+{% set accent_map = {
+  'teal': {'hover': 'hover:border-teal-400', 'hover_dark': 'dark:hover:border-teal-500'},
+  'violet': {'hover': 'hover:border-violet-400', 'hover_dark': 'dark:hover:border-violet-500'},
+  'amber': {'hover': 'hover:border-amber-400', 'hover_dark': 'dark:hover:border-amber-500'},
+  'blue': {'hover': 'hover:border-blue-400', 'hover_dark': 'dark:hover:border-blue-500'}
+} %}
+{% set a = accent_map.get(accent, accent_map.teal) %}
+{% set has_back_button = (back_fallback | default('', true) | trim) != '' %}
+<header class="sticky top-0 z-20 border-b border-slate-200 bg-white/80 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
+  <div class="app-header flex h-16 items-center justify-between">
+    <div class="flex items-center gap-4">
+      <button @click="toggleSidebar()"
+              x-show="!isDesktop || sidebarCollapsed"
+              x-cloak
+              class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300 transition-colors"
+              aria-label="Open sidebar">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      {% if has_back_button %}
+      <button type="button"
+              @click="
+                if (document.referrer && document.referrer.startsWith(window.location.origin)) {
+                  window.history.back();
+                } else {
+                  window.location.href='{{ back_fallback | trim }}';
+                }
+              "
+              class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white/60 px-2 py-1.5 text-sm font-medium text-slate-600 transition-all {{ a.hover }} hover:bg-white dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300 {{ a.hover_dark }} dark:hover:bg-slate-800"
+              aria-label="Go back">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        <span class="hidden sm:inline">Back</span>
+      </button>
+      {% endif %}
+      <div>
+        <h1 class="text-xl font-semibold text-slate-900 dark:text-white font-display" data-testid="page-title">
+          {{ page_title_html | safe }}
+        </h1>
+        {{ breadcrumbs_html | safe }}
+      </div>
+      <button @click="window.dispatchEvent(new CustomEvent('open-command-palette'))"
+              class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white/60 px-3 py-2 text-sm text-slate-500 transition-all {{ a.hover }} hover:bg-white dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400 {{ a.hover_dark }} dark:hover:bg-slate-800">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <span class="hidden sm:inline-flex flex-1 text-left">Search...</span>
+        <kbd class="hidden xl:inline-flex h-5 items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 font-mono text-xs font-medium text-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400">
+          <span class="text-xs">⌘</span>K
+        </kbd>
+      </button>
+    </div>
+    <div class="flex items-center gap-3">
+      {{ header_actions_html | safe }}
+      <button @click="darkMode = !darkMode"
+              class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300 transition-colors"
+              :title="darkMode ? 'Switch to light mode' : 'Switch to dark mode'"
+              aria-label="Toggle theme">
+        <template x-if="!darkMode">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+        </template>
+        <template x-if="darkMode">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+        </template>
+      </button>
+      <div x-data='{ open: false, notifications: {{ notifications | default([]) | tojson }} }' class="relative">
+        <button @click="open = !open"
+                class="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300 transition-colors"
+                aria-label="Notifications">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+          </svg>
+          <span x-show="notifications.length > 0" class="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900"></span>
+        </button>
+        <div x-show="open"
+             @click.away="open = false"
+             x-transition:enter="transition ease-out duration-100"
+             x-transition:enter-start="opacity-0 scale-95"
+             x-transition:enter-end="opacity-100 scale-100"
+             x-transition:leave="transition ease-in duration-75"
+             x-transition:leave-start="opacity-100 scale-100"
+             x-transition:leave-end="opacity-0 scale-95"
+             class="absolute right-0 mt-2 w-80 rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800 overflow-hidden"
+             x-cloak>
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+            <h4 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Notifications</h4>
+            <button @click="open = false" class="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300">Close</button>
+          </div>
+          <div class="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-700">
+            <template x-if="notifications.length === 0">
+              <div class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No new notifications</div>
+            </template>
+            <template x-for="n in notifications" :key="n.id">
+              <a :href="n.url" class="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors border-b border-slate-100 dark:border-slate-700 last:border-0">
+                <div class="mt-1 h-2.5 w-2.5 rounded-full" :class="n.read ? 'bg-slate-300 dark:bg-slate-600' : 'bg-rose-500'"></div>
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-slate-700 dark:text-slate-200" x-text="n.title"></p>
+                  <p class="text-xs text-slate-500 dark:text-slate-400" x-text="n.message"></p>
+                </div>
+                <span class="text-xs text-slate-400" x-text="n.time"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+{% endmacro %}
+
+
+{# ============================================
+   SUCCESS BANNER
+   Usage: {% if saved %}{{ success_banner("Record saved successfully.") }}{% endif %}
+   Auto-dismisses after 5 seconds. Includes close button.
+   ============================================ #}
+{% macro success_banner(message="Record saved successfully.") %}
+<div class="p-4 rounded-lg bg-emerald-50 border border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800"
+     x-data="{ show: true }" x-show="show" x-cloak
+     x-init="setTimeout(() => show = false, 5000)"
+     x-transition:leave="transition ease-in duration-200"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm font-medium">{{ message }}</span>
+        </div>
+        <button @click="show = false" class="text-emerald-500 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300" aria-label="Dismiss">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   ERROR BANNER
+   Usage: {% if error %}{{ error_banner(error) }}{% endif %}
+   Persistent — no auto-dismiss. Includes close button.
+   ============================================ #}
+{% macro error_banner(message) %}
+<div class="p-4 rounded-lg bg-rose-50 border border-rose-200 dark:bg-rose-900/20 dark:border-rose-800"
+     x-data="{ show: true }" x-show="show" x-cloak>
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 text-rose-700 dark:text-rose-400">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm font-medium">{{ message }}</span>
+        </div>
+        <button @click="show = false" class="text-rose-500 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300" aria-label="Dismiss">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   BREADCRUMB
+   Usage: {{ breadcrumb([
+     {"label": "Dashboard", "url": "/admin/dashboard"},
+     {"label": "Subscribers", "url": "/admin/subscribers"},
+     {"label": "John Doe"}
+   ]) }}
+   ============================================ #}
+{% macro breadcrumb(items) %}
+<nav aria-label="Breadcrumb" class="flex items-center gap-1.5 text-sm text-[var(--ink-muted)]">
+    {% for item in items %}
+    {% if not loop.last %}
+    <a href="{{ item.url }}" class="hover:text-[var(--ink)] transition-colors">{{ item.label }}</a>
+    <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+    </svg>
+    {% else %}
+    <span class="text-[var(--ink)] font-medium">{{ item.label }}</span>
+    {% endif %}
+    {% endfor %}
+</nav>
+{% endmacro %}
+
+
+{# ============================================
+   CONFIRM DIALOG
+   Usage: {{ confirm_dialog(
+     id="delete-subscriber",
+     title="Delete Subscriber?",
+     message="This action cannot be undone. All subscriptions and billing records will be permanently removed.",
+     confirm_text="Delete",
+     confirm_class="bg-rose-600 hover:bg-rose-700 text-white",
+     action_url="/admin/subscribers/" ~ subscriber.id ~ "/delete",
+     method="POST"
+   ) }}
+   Trigger: <button @click="$dispatch('open-confirm', {id: 'delete-subscriber'})">Delete</button>
+   ============================================ #}
+{% macro confirm_dialog(id, title, message, confirm_text="Confirm", confirm_class="bg-rose-600 hover:bg-rose-700 text-white", cancel_text="Cancel", action_url="", method="POST") %}
+<div x-data="{ open: false }"
+     x-on:open-confirm.window="if ($event.detail.id === '{{ id }}') open = true"
+     x-show="open"
+     x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center"
+     role="dialog" aria-modal="true" aria-labelledby="confirm-title-{{ id }}">
+    <!-- Backdrop -->
+    <div class="fixed inset-0 bg-black/50 transition-opacity" @click="open = false"></div>
+    <!-- Dialog -->
+    <div class="relative bg-[var(--card-bg)] rounded-xl shadow-xl p-6 max-w-md w-full mx-4 scale-in"
+         @keydown.escape.window="open = false">
+        <h3 id="confirm-title-{{ id }}" class="text-lg font-semibold text-[var(--ink)]">{{ title }}</h3>
+        <p class="mt-2 text-sm text-[var(--ink-muted)]">{{ message }}</p>
+        <div class="mt-6 flex items-center justify-end gap-3">
+            <button @click="open = false"
+                    class="px-4 py-2 text-sm font-medium text-[var(--ink-muted)] hover:text-[var(--ink)] rounded-lg border border-[var(--card-border)] hover:bg-[var(--parchment-dark)] transition-colors">
+                {{ cancel_text }}
+            </button>
+            {% if action_url %}
+            <form method="{{ method }}" action="{{ action_url }}">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors {{ confirm_class }}">
+                    {{ confirm_text }}
+                </button>
+            </form>
+            {% else %}
+            <button @click="open = false; $dispatch('confirmed', {id: '{{ id }}'})"
+                    class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors {{ confirm_class }}">
+                {{ confirm_text }}
+            </button>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   TIMELINE / ACTIVITY LOG
+   Usage: {{ timeline([
+     {"timestamp": "2024-01-15 10:30", "title": "Service Activated", "description": "Fiber 100Mbps plan activated", "icon": "check", "color": "emerald"},
+     {"timestamp": "2024-01-14 14:00", "title": "Provisioning Complete", "description": "ONT configured and synced", "icon": "cog", "color": "blue"},
+     {"timestamp": "2024-01-13 09:00", "title": "Order Created", "description": "New service order submitted", "icon": "plus", "color": "violet"}
+   ]) }}
+   ============================================ #}
+{% macro timeline(events) %}
+{% set icon_colors = {
+    'emerald': 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400',
+    'blue': 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400',
+    'amber': 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+    'rose': 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400',
+    'violet': 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
+    'slate': 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+} %}
+{% set icon_paths = {
+    'check': 'M5 13l4 4L19 7',
+    'plus': 'M12 4v16m8-8H4',
+    'cog': 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z',
+    'arrow-up': 'M5 10l7-7m0 0l7 7m-7-7v18',
+    'arrow-down': 'M19 14l-7 7m0 0l-7-7m7 7V3',
+    'x': 'M6 18L18 6M6 6l12 12',
+    'refresh': 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+    'mail': 'M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z',
+    'user': 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z',
+    'dollar': 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+    'wifi': 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0'
+} %}
+<div class="space-y-0">
+    {% for event in events %}
+    <div class="relative flex gap-4 pb-6 {{ 'last:pb-0' if loop.last else '' }}">
+        {# Connector line #}
+        {% if not loop.last %}
+        <div class="absolute left-[17px] top-9 bottom-0 w-px bg-[var(--card-border)]"></div>
+        {% endif %}
+        {# Icon #}
+        <div class="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center {{ icon_colors.get(event.color|default('slate'), icon_colors.slate) }}">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ icon_paths.get(event.icon|default('check'), icon_paths.check) }}"/>
+            </svg>
+        </div>
+        {# Content #}
+        <div class="flex-1 min-w-0 pt-0.5">
+            <p class="text-sm font-medium text-[var(--ink)]">{{ event.title }}</p>
+            {% if event.description %}
+            <p class="text-sm text-[var(--ink-muted)] mt-0.5">{{ event.description }}</p>
+            {% endif %}
+            <p class="text-xs text-[var(--ink-faint)] mt-1">{{ event.timestamp }}</p>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   SUBSCRIBER STATUS INDICATOR
+   Usage: {{ subscriber_status("active") }}
+          {{ subscriber_status("suspended", show_label=true) }}
+   Compact dot + label for inline use
+   ============================================ #}
+{% macro subscriber_status(status, show_label=true) %}
+{% set dot_colors = {
+    'active': 'bg-emerald-500',
+    'suspended': 'bg-amber-500',
+    'terminated': 'bg-rose-500',
+    'pending': 'bg-indigo-500',
+    'provisioning': 'bg-blue-500',
+    'grace_period': 'bg-amber-500',
+    'collection': 'bg-rose-500',
+    'trial': 'bg-violet-500'
+} %}
+{% set dot_class = dot_colors.get(status|lower, 'bg-slate-400') %}
+<span class="inline-flex items-center gap-1.5">
+    <span class="w-2 h-2 rounded-full {{ dot_class }}"></span>
+    {% if show_label %}
+    <span class="text-sm text-[var(--ink-muted)]">{{ status|replace('_', ' ')|title }}</span>
+    {% endif %}
+</span>
+{% endmacro %}
+
+
+{# ============================================
+   NETWORK STATUS INDICATOR
+   Usage: {{ network_status("online") }}
+          {{ network_status("offline", pulse=true) }}
+   For NAS/OLT/ONT device status display
+   ============================================ #}
+{% macro network_status(status, pulse=false) %}
+{% set status_map = {
+    'online': {'color': 'bg-emerald-500', 'label': 'Online'},
+    'offline': {'color': 'bg-rose-500', 'label': 'Offline'},
+    'degraded': {'color': 'bg-amber-500', 'label': 'Degraded'},
+    'maintenance': {'color': 'bg-blue-500', 'label': 'Maintenance'},
+    'unknown': {'color': 'bg-slate-400', 'label': 'Unknown'}
+} %}
+{% set info = status_map.get(status|lower, status_map.unknown) %}
+<span class="inline-flex items-center gap-1.5">
+    <span class="relative flex h-2.5 w-2.5">
+        {% if pulse and status|lower == 'online' %}
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full {{ info.color }} opacity-75"></span>
+        {% endif %}
+        <span class="relative inline-flex rounded-full h-2.5 w-2.5 {{ info.color }}"></span>
+    </span>
+    <span class="text-sm font-medium text-[var(--ink)]">{{ info.label }}</span>
+</span>
+{% endmacro %}
+
+
+{# ============================================
+   BANDWIDTH METER
+   Usage: {{ bandwidth_meter(used_gb=75, total_gb=100) }}
+          {{ bandwidth_meter(used_gb=150, total_gb=100, show_label=true) }}
+   Visual bandwidth usage bar
+   ============================================ #}
+{% macro bandwidth_meter(used_gb, total_gb, show_label=true) %}
+{% set pct = ((used_gb / total_gb) * 100) if total_gb > 0 else 0 %}
+{% set pct_clamped = [pct, 100] | min %}
+{% set bar_color = 'bg-emerald-500' if pct < 75 else ('bg-amber-500' if pct < 90 else 'bg-rose-500') %}
+<div class="w-full">
+    {% if show_label %}
+    <div class="flex justify-between text-xs text-[var(--ink-muted)] mb-1">
+        <span>{{ "%.1f"|format(used_gb) }} GB used</span>
+        <span>{{ "%.1f"|format(total_gb) }} GB</span>
+    </div>
+    {% endif %}
+    <div class="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+        <div class="{{ bar_color }} h-full rounded-full transition-all duration-300" style="width: {{ pct_clamped }}%"></div>
+    </div>
+    {% if pct > 100 %}
+    <p class="text-xs text-rose-600 dark:text-rose-400 mt-0.5 font-medium">{{ "%.0f"|format(pct) }}% - Over limit</p>
+    {% endif %}
+</div>
+{% endmacro %}

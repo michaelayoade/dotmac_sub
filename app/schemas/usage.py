@@ -118,7 +118,9 @@ class UsageRecordRead(UsageRecordBase):
 
 class UsageChargeBase(BaseModel):
     subscription_id: UUID
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     invoice_line_id: UUID | None = None
     period_start: datetime
     period_end: datetime

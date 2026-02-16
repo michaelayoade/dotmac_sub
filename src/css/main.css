@@ -1,0 +1,34 @@
+/*
+ * DotMac Sub - Main CSS Entry Point
+ * =================================
+ * ALL @import statements must come first (before @tailwind)
+ */
+
+/* Import all CSS modules first */
+@import 'base/_tokens.css';
+@import 'base/_base.css';
+@import 'base/_backgrounds.css';
+@import 'layout/_app-shell.css';
+@import 'layout/_responsive.css';
+@import 'components/_cards.css';
+@import 'components/_navigation.css';
+@import 'components/_buttons.css';
+@import 'components/_forms.css';
+@import 'components/_tables.css';
+@import 'components/_empty-states.css';
+@import 'components/_badges.css';
+@import 'components/_workflow.css';
+@import 'components/_loading.css';
+@import 'components/_bulk-selection.css';
+@import 'components/_command-palette.css';
+@import 'components/_dashboard.css';
+@import 'components/_documents.css';
+@import 'utilities/_animations.css';
+@import 'utilities/_helpers.css';
+@import 'utilities/_touch.css';
+@import 'utilities/_print.css';
+
+/* Tailwind CSS - must come after imports */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

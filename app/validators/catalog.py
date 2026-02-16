@@ -12,19 +12,19 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.subscriber import Address, SubscriberAccount
+from app.models.subscriber import Address, Subscriber
 
 
 def validate_subscription_links(
     db: Session,
-    account_id: str,
+    subscriber_id: str,
     offer_id: str,
     offer_version_id: str | None,
     service_address_id: str | None,
 ):
-    account = db.get(SubscriberAccount, account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Subscriber account not found")
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
 
     offer = db.get(CatalogOffer, offer_id)
     if not offer:
@@ -43,15 +43,10 @@ def validate_subscription_links(
         address = db.get(Address, service_address_id)
         if not address:
             raise HTTPException(status_code=404, detail="Address not found")
-        if address.subscriber_id != account.subscriber_id:
+        if str(address.subscriber_id) != subscriber_id:
             raise HTTPException(
                 status_code=400,
                 detail="Service address does not belong to subscriber",
-            )
-        if address.account_id and address.account_id != account.id:
-            raise HTTPException(
-                status_code=400,
-                detail="Service address does not belong to account",
             )
 
 
@@ -105,7 +100,7 @@ def validate_subscription_dates(
 
 def enforce_single_active_subscription(
     db: Session,
-    account_id: str,
+    subscriber_id: str,
     status: SubscriptionStatus,
     exclude_id: str | None = None,
 ):
@@ -116,7 +111,7 @@ def enforce_single_active_subscription(
     }
     if status not in active_statuses:
         return
-    query = db.query(Subscription).filter(Subscription.account_id == account_id)
+    query = db.query(Subscription).filter(Subscription.subscriber_id == subscriber_id)
     if exclude_id:
         query = query.filter(Subscription.id != exclude_id)
     query = query.filter(Subscription.status.in_(active_statuses))

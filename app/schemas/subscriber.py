@@ -322,3 +322,46 @@ class SubscriberCustomFieldRead(SubscriberCustomFieldBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+# --- Deprecated stubs for backwards compatibility ---
+# These models were removed during Person + SubscriberAccount consolidation
+# but are kept as empty stubs to prevent import errors in legacy code
+
+class SubscriberAccountCreate(BaseModel):
+    """Deprecated stub - accounts consolidated into Subscriber."""
+    subscriber_id: UUID | None = None
+    reseller_id: UUID | None = None
+    account_number: str | None = None
+    notes: str | None = None
+
+
+class SubscriberAccountUpdate(BaseModel):
+    """Deprecated stub - accounts consolidated into Subscriber."""
+    pass
+
+
+class SubscriberAccountRead(BaseModel):
+    """Deprecated stub - accounts consolidated into Subscriber."""
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID | None = None
+
+
+class AccountRoleCreate(BaseModel):
+    """Deprecated stub - account roles removed."""
+    account_id: UUID | None = None
+    subscriber_id: UUID | None = None
+    role: str | None = None
+    is_primary: bool = False
+    title: str | None = None
+
+
+class AccountRoleUpdate(BaseModel):
+    """Deprecated stub - account roles removed."""
+    pass
+
+
+class AccountRoleRead(BaseModel):
+    """Deprecated stub - account roles removed."""
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID | None = None

@@ -26,6 +26,7 @@ from app.models.radius import (
     RadiusUser,
 )
 from app.models.domain_settings import SettingDomain
+from app.services.credential_crypto import decrypt_credential
 from app.services.secrets import resolve_secret
 from app.schemas.radius import (
     RadiusClientCreate,
@@ -232,7 +233,7 @@ def _external_sync_users(
         for credential in credentials:
             subscription = (
                 db.query(Subscription)
-                .filter(Subscription.account_id == credential.account_id)
+                .filter(Subscription.subscriber_id == credential.subscriber_id)
                 .filter(Subscription.status == SubscriptionStatus.active)
                 .order_by(
                     Subscription.start_at.desc().nullslast(),
@@ -329,7 +330,9 @@ def _external_sync_nas(
         for device in nas_devices:
             if not device.ip_address:
                 continue
-            secret = resolve_secret(device.shared_secret)
+            # Decrypt the stored credential, then resolve any OpenBao references
+            decrypted_secret = decrypt_credential(device.shared_secret)
+            secret = resolve_secret(decrypted_secret)
             if not secret:
                 continue
             conn.execute(
@@ -511,7 +514,9 @@ class RadiusSyncJobs(ListResponseMixin):
                     .all()
                 )
                 for device in nas_devices:
-                    raw_secret = resolve_secret(device.shared_secret)
+                    # Decrypt the stored credential, then resolve any OpenBao references
+                    decrypted_secret = decrypt_credential(device.shared_secret)
+                    raw_secret = resolve_secret(decrypted_secret)
                     if not raw_secret:
                         continue
                     existing = (
@@ -552,7 +557,7 @@ class RadiusSyncJobs(ListResponseMixin):
                 for credential in credentials:
                     subscription = (
                         db.query(Subscription)
-                        .filter(Subscription.account_id == credential.account_id)
+                        .filter(Subscription.subscriber_id == credential.subscriber_id)
                         .filter(Subscription.status == SubscriptionStatus.active)
                         .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
                         .first()
@@ -566,7 +571,7 @@ class RadiusSyncJobs(ListResponseMixin):
                     )
                     if existing:
                         existing.subscription_id = subscription.id
-                        existing.account_id = subscription.account_id
+                        existing.account_id = subscription.subscriber_id
                         existing.username = credential.username
                         existing.secret_hash = credential.secret_hash
                         existing.radius_profile_id = credential.radius_profile_id
@@ -575,7 +580,7 @@ class RadiusSyncJobs(ListResponseMixin):
                         users_updated += 1
                     else:
                         user = RadiusUser(
-                            account_id=subscription.account_id,
+                            account_id=subscription.subscriber_id,
                             subscription_id=subscription.id,
                             access_credential_id=credential.id,
                             username=credential.username,
@@ -667,7 +672,7 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
     # Check if credential has an active subscription
     subscription = (
         db.query(Subscription)
-        .filter(Subscription.account_id == credential.account_id)
+        .filter(Subscription.subscriber_id == credential.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
         .first()
@@ -720,7 +725,7 @@ def sync_account_credentials_to_radius(db: Session, account_id) -> int:
     account_uuid = coerce_uuid(account_id)
     credentials = (
         db.query(AccessCredential)
-        .filter(AccessCredential.account_id == account_uuid)
+        .filter(AccessCredential.subscriber_id == account_uuid)
         .filter(AccessCredential.is_active.is_(True))
         .all()
     )

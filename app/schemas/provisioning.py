@@ -20,7 +20,9 @@ ProjectType = str  # Fallback type alias
 
 
 class ServiceOrderBase(BaseModel):
-    account_id: UUID
+    subscriber_id: UUID = Field(
+        validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus = ServiceOrderStatus.draft
@@ -33,7 +35,9 @@ class ServiceOrderCreate(ServiceOrderBase):
 
 
 class ServiceOrderUpdate(BaseModel):
-    account_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias="account_id", serialization_alias="account_id"
+    )
     subscription_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus | None = None

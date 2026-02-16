@@ -49,6 +49,18 @@ class SubscriberStatus(enum.Enum):
     delinquent = "delinquent"
 
 
+# --- Deprecated aliases for backwards compatibility ---
+AccountStatus = SubscriberStatus  # Alias for legacy code
+
+
+class AccountRoleType(enum.Enum):
+    """Deprecated - account roles removed during consolidation."""
+    primary = "primary"
+    billing = "billing"
+    technical = "technical"
+    support = "support"
+
+
 class AddressType(enum.Enum):
     service = "service"
     billing = "billing"
@@ -345,3 +357,44 @@ class Address(Base):
 
     subscriber = relationship("Subscriber", back_populates="addresses")
     tax_rate = relationship("TaxRate")
+
+
+# --- Deprecated aliases for backwards compatibility ---
+# SubscriberAccount was consolidated into Subscriber
+SubscriberAccount = Subscriber  # Alias for legacy code that references SubscriberAccount
+
+
+class ResellerUser(Base):
+    """Deprecated stub - reseller users functionality removed during consolidation."""
+    __tablename__ = "reseller_users_deprecated"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+# AccountRole stub class for backwards compatibility
+class AccountRole(Base):
+    """Deprecated stub - account roles removed during consolidation."""
+    __tablename__ = "account_roles_deprecated"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )

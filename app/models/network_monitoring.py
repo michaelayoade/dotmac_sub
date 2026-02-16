@@ -113,7 +113,6 @@ class PopSite(Base):
     )
 
     devices = relationship("NetworkDevice", back_populates="pop_site")
-    masts = relationship("WirelessMast", back_populates="pop_site")
     nas_devices = relationship("NasDevice", back_populates="pop_site")
 
 

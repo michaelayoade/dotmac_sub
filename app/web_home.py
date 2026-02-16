@@ -24,6 +24,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     subscribers = subscriber_service.subscribers.list(
         db=db,
         organization_id=None,
+        subscriber_type=None,
         order_by="created_at",
         order_dir="desc",
         limit=25,
@@ -31,5 +32,5 @@ def home(request: Request, db: Session = Depends(get_db)):
     )
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "title": "Dotmac SM", "subscribers": subscribers},
+        {"request": request, "title": "DotMac Subs - Subscription Management Platform", "subscribers": subscribers},
     )

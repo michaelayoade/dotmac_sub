@@ -22,7 +22,7 @@ from app.models.snmp import SnmpAuthProtocol, SnmpPrivProtocol, SnmpVersion
 from app.models.subscription_engine import SettingValueType
 from app.models.tr069 import Tr069Event, Tr069JobStatus
 from app.models.usage import AccountingStatus, UsageSource
-from app.models.subscriber import AccountStatus
+from app.models.subscriber import SubscriberStatus
 
 
 class CSVRowModel(BaseModel):
@@ -54,7 +54,7 @@ class SubscriberAccountImportRow(CSVRowModel):
     subscriber_id: UUID
     reseller_id: UUID | None = None
     account_number: str | None = Field(default=None, max_length=80)
-    status: AccountStatus = AccountStatus.active
+    status: SubscriberStatus = SubscriberStatus.active
     notes: str | None = None
 
 

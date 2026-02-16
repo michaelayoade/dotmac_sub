@@ -118,9 +118,8 @@ def get_current_customer(session_token: str | None, db: Session) -> Optional[dic
                 .first()
             )
             if credential:
-                session["account_id"] = str(credential.account_id)
-                if credential.account:
-                    session["subscriber_id"] = str(credential.account.subscriber_id)
+                session["account_id"] = str(credential.subscriber_id)
+                session["subscriber_id"] = str(credential.subscriber_id)
             else:
                 local_credential = (
                     db.query(UserCredential)
@@ -138,20 +137,14 @@ def get_current_customer(session_token: str | None, db: Session) -> Optional[dic
                     )
                     if subscriber:
                         session["subscriber_id"] = str(subscriber.id)
-                        active_account = next(
-                            (account for account in subscriber.accounts if account.status == AccountStatus.active),
-                            None,
-                        )
-                        account = active_account or (subscriber.accounts[0] if subscriber.accounts else None)
-                        if account:
-                            session["account_id"] = str(account.id)
+                        session["account_id"] = str(subscriber.id)
 
     subscription_id = session.get("subscription_id")
     if subscription_id and session.get("account_id") is None:
         subscription = db.get(Subscription, subscription_id)
-        if subscription and subscription.account:
-            session["account_id"] = str(subscription.account_id)
-            session["subscriber_id"] = str(subscription.account.subscriber_id)
+        if subscription and subscription.subscriber_id:
+            session["account_id"] = str(subscription.subscriber_id)
+            session["subscriber_id"] = str(subscription.subscriber_id)
 
     session["current_user"] = _build_current_user(db, session)
     return session
@@ -265,7 +258,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     if account_id:
         subscriptions = catalog_service.subscriptions.list(
             db=db,
-            account_id=account_id,
+            subscriber_id=account_id,
             offer_id=None,
             status=None,
             order_by="created_at",
@@ -393,7 +386,7 @@ def get_allowed_account_ids(customer: dict, db: Session) -> list[str]:
 
     allowed_account_ids = []
     if subscriber:
-        allowed_account_ids = [str(account.id) for account in subscriber.accounts or []]
+        allowed_account_ids = [str(subscriber.id)]
     if account_id_str and account_id_str not in allowed_account_ids:
         allowed_account_ids.append(account_id_str)
 

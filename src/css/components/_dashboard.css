@@ -1,0 +1,552 @@
+/* ============================================================================
+   DASHBOARD COMPONENTS
+   Stat cards, KPIs, and module-specific styles
+   ============================================================================ */
+
+@layer components {
+    /* --------------------------------------------------------------------------
+       Stat Hero Cards
+       -------------------------------------------------------------------------- */
+    .stat-hero { display: flex; flex-direction: column; gap: var(--spacing-xs); min-width: 0; }
+    .stat-hero-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--ink-muted);
+    }
+    .stat-hero-value {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 1.75rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums lining-nums;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+        line-height: 1.1;
+    }
+
+    /* Gradient text for important metrics */
+    .stat-hero-value-highlight {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--teal) 50%, var(--gold) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .stat-hero-trend { display: inline-flex; align-items: center; gap: var(--spacing-xs); font-size: 12px; font-weight: 500; margin-top: var(--spacing-xs); }
+    .stat-hero-trend-up { color: #059669; }
+    .stat-hero-trend-down { color: #dc2626; }
+
+    /* Stat cards with gradient border effect */
+    .stat-card {
+        position: relative;
+        background: var(--card-bg);
+        border-radius: var(--radius-card);
+        padding: var(--spacing-card);
+        overflow: hidden;
+        box-shadow: var(--card-shadow);
+    }
+    .stat-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--teal) 0%, var(--gold) 100%);
+        opacity: 0.8;
+    }
+
+    /* Stat card with sparkline background */
+    .stat-card-sparkline {
+        position: relative;
+    }
+    .stat-card-sparkline::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 60'%3E%3Cpath d='M0,50 Q25,45 50,35 T100,30 T150,25 T200,20' fill='none' stroke='%230d9488' stroke-width='2' opacity='0.1'/%3E%3Cpath d='M0,55 Q25,50 50,45 T100,40 T150,30 T200,25' fill='none' stroke='%230d9488' stroke-width='1' opacity='0.05'/%3E%3C/svg%3E") no-repeat bottom center;
+        background-size: cover;
+        pointer-events: none;
+    }
+
+    /* Variant stat cards by type */
+    .stat-card-revenue::before { background: linear-gradient(90deg, #059669 0%, #10b981 100%); }
+    .stat-card-subscribers::before { background: linear-gradient(90deg, #0d9488 0%, #2dd4bf 100%); }
+    .stat-card-network::before { background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%); }
+    .stat-card-billing::before { background: linear-gradient(90deg, #d97706 0%, #fbbf24 100%); }
+    .stat-card-provisioning::before { background: linear-gradient(90deg, #059669 0%, #34d399 100%); }
+    .stat-card-churn::before { background: linear-gradient(90deg, #dc2626 0%, #f87171 100%); }
+
+    /* --------------------------------------------------------------------------
+       Command Actions
+       -------------------------------------------------------------------------- */
+    .cmd-action {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        padding: var(--spacing-md) var(--spacing-lg);
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-lg);
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .cmd-action:hover {
+        border-color: var(--teal);
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.1);
+        transform: translateY(-1px);
+    }
+    .cmd-action-key {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        background: var(--parchment);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-md);
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--ink-muted);
+    }
+    .cmd-action-label { flex: 1; font-size: 14px; font-weight: 500; color: var(--ink); }
+    .cmd-action-hint { font-size: 12px; color: var(--ink-faint); }
+
+    /* --------------------------------------------------------------------------
+       Section Labels & Metrics
+       -------------------------------------------------------------------------- */
+    .section-label { display: flex; align-items: center; gap: var(--spacing-lg); margin-bottom: var(--spacing-xl); }
+    .section-label::after { content: ''; flex: 1; height: 1px; background: var(--card-border); }
+    .section-label-text {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--ink-faint);
+    }
+
+    .metric-mini {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: var(--spacing-md) var(--spacing-lg);
+        background: var(--parchment);
+        border-radius: var(--radius-sm);
+        border-left: 3px solid transparent;
+        transition: all 0.2s ease;
+    }
+    .metric-mini:hover {
+        border-left-color: var(--teal);
+    }
+    .metric-mini-label { font-size: 13px; color: var(--ink-muted); }
+    .metric-mini-value {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 14px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums lining-nums;
+        color: var(--ink);
+    }
+    .metric-mini-danger { color: #dc2626; border-left-color: #dc2626; }
+    .metric-mini-danger .metric-mini-value { color: #dc2626; }
+
+    /* --------------------------------------------------------------------------
+       KPI Cards
+       -------------------------------------------------------------------------- */
+    .kpi-card {
+        padding: var(--spacing-xl);
+        background: var(--card-bg);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--card-border);
+    }
+    .kpi-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: var(--spacing-md);
+    }
+    .kpi-label {
+        font-size: 13px;
+        color: var(--ink-muted);
+        font-weight: 500;
+    }
+    .kpi-badge {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px var(--spacing-sm);
+        border-radius: var(--radius-lg);
+    }
+    .kpi-badge-up {
+        background: #dcfce7;
+        color: #059669;
+    }
+    .kpi-badge-down {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+    .kpi-value {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 28px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--ink);
+        margin-bottom: 12px;
+    }
+    .kpi-progress {
+        height: 6px;
+        background: var(--parchment-dark);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+    .kpi-progress-bar {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.5s ease;
+    }
+    .kpi-progress-bar-teal { background: linear-gradient(90deg, var(--teal) 0%, var(--teal-light) 100%); }
+    .kpi-progress-bar-gold { background: linear-gradient(90deg, var(--gold) 0%, var(--gold-light) 100%); }
+
+    /* --------------------------------------------------------------------------
+       Module-Specific Dashboard Styles (ISP)
+       -------------------------------------------------------------------------- */
+
+    /* Subscribers Module - Teal accent */
+    .dashboard-subscribers .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-subscribers) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-subscribers .cmd-action:hover {
+        border-color: var(--module-subscribers);
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.15);
+    }
+    .dashboard-subscribers .section-label-text { color: var(--module-subscribers); }
+    .dashboard-subscribers .card-hover:hover { border-color: rgba(13, 148, 136, 0.3); }
+
+    .subscribers-stat-grid {
+        position: relative;
+        padding: var(--content-gutter);
+        margin: 0;
+        background: linear-gradient(135deg, rgba(13, 148, 136, 0.03) 0%, rgba(17, 94, 89, 0.06) 50%, rgba(13, 148, 136, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .subscribers-stat-grid {
+        background: linear-gradient(135deg, rgba(13, 148, 136, 0.08) 0%, rgba(17, 94, 89, 0.12) 50%, rgba(13, 148, 136, 0.05) 100%);
+    }
+    .subscribers-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-subscribers) 0%, #2dd4bf 50%, var(--module-subscribers-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* Billing Module - Amber accent */
+    .dashboard-billing .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-billing) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-billing .cmd-action:hover {
+        border-color: var(--module-billing);
+        box-shadow: 0 2px 8px rgba(217, 119, 6, 0.15);
+    }
+    .dashboard-billing .section-label-text { color: var(--module-billing); }
+    .dashboard-billing .card-hover:hover { border-color: rgba(217, 119, 6, 0.3); }
+
+    .billing-stat-grid {
+        position: relative;
+        padding: var(--content-gutter);
+        margin: 0;
+        background: linear-gradient(135deg, rgba(217, 119, 6, 0.03) 0%, rgba(146, 64, 14, 0.06) 50%, rgba(217, 119, 6, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .billing-stat-grid {
+        background: linear-gradient(135deg, rgba(217, 119, 6, 0.08) 0%, rgba(146, 64, 14, 0.12) 50%, rgba(217, 119, 6, 0.05) 100%);
+    }
+    .billing-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-billing) 0%, #fbbf24 50%, var(--module-billing-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* Network Module - Blue accent */
+    .dashboard-network .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-network) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-network .cmd-action:hover {
+        border-color: var(--module-network);
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+    }
+    .dashboard-network .section-label-text { color: var(--module-network); }
+    .dashboard-network .card-hover:hover { border-color: rgba(59, 130, 246, 0.3); }
+
+    .network-stat-grid {
+        position: relative;
+        padding: var(--content-gutter);
+        margin: 0;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.03) 0%, rgba(29, 78, 216, 0.06) 50%, rgba(59, 130, 246, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .network-stat-grid {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(29, 78, 216, 0.12) 50%, rgba(59, 130, 246, 0.05) 100%);
+    }
+    .network-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-network) 0%, #60a5fa 50%, var(--module-network-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* Catalog Module - Violet accent */
+    .dashboard-catalog .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-catalog) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-catalog .cmd-action:hover {
+        border-color: var(--module-catalog);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.15);
+    }
+    .dashboard-catalog .section-label-text { color: var(--module-catalog); }
+    .dashboard-catalog .card-hover:hover { border-color: rgba(139, 92, 246, 0.3); }
+
+    .catalog-stat-grid {
+        position: relative;
+        padding: var(--content-gutter);
+        margin: 0;
+        background: linear-gradient(135deg, rgba(139, 92, 246, 0.03) 0%, rgba(91, 33, 182, 0.06) 50%, rgba(139, 92, 246, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .catalog-stat-grid {
+        background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(91, 33, 182, 0.12) 50%, rgba(139, 92, 246, 0.05) 100%);
+    }
+    .catalog-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-catalog) 0%, #a78bfa 50%, var(--module-catalog-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* Provisioning Module - Green accent */
+    .dashboard-provisioning .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-provisioning) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-provisioning .cmd-action:hover {
+        border-color: var(--module-provisioning);
+        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.15);
+    }
+    .dashboard-provisioning .section-label-text { color: var(--module-provisioning); }
+    .dashboard-provisioning .card-hover:hover { border-color: rgba(5, 150, 105, 0.3); }
+
+    .provisioning-stat-grid {
+        position: relative;
+        padding: var(--content-gutter);
+        margin: 0;
+        background: linear-gradient(135deg, rgba(5, 150, 105, 0.03) 0%, rgba(6, 95, 70, 0.06) 50%, rgba(5, 150, 105, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .provisioning-stat-grid {
+        background: linear-gradient(135deg, rgba(5, 150, 105, 0.08) 0%, rgba(6, 95, 70, 0.12) 50%, rgba(5, 150, 105, 0.05) 100%);
+    }
+    .provisioning-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-provisioning) 0%, #34d399 50%, var(--module-provisioning-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* Admin Module - Indigo accent */
+    .dashboard-admin .stat-hero-value {
+        background: linear-gradient(135deg, var(--ink) 0%, var(--module-admin) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .dashboard-admin .cmd-action:hover {
+        border-color: var(--module-admin);
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+    }
+    .dashboard-admin .section-label-text { color: var(--module-admin); }
+    .dashboard-admin .card-hover:hover { border-color: rgba(99, 102, 241, 0.3); }
+
+    .admin-stat-grid {
+        position: relative;
+        padding: var(--spacing-3xl);
+        margin: calc(-1 * var(--spacing-3xl)) calc(-1 * var(--spacing-3xl)) 0;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, rgba(67, 56, 202, 0.06) 50%, rgba(99, 102, 241, 0.02) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+    .dark .admin-stat-grid {
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(67, 56, 202, 0.12) 50%, rgba(99, 102, 241, 0.05) 100%);
+    }
+    .admin-stat-grid::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--module-admin) 0%, #818cf8 50%, var(--module-admin-dark) 100%);
+        border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    /* --------------------------------------------------------------------------
+       Dashboard Stat Icons
+       -------------------------------------------------------------------------- */
+    .stat-hero-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border-radius: var(--radius-icon);
+        margin-bottom: var(--spacing-md);
+    }
+    .stat-hero-icon svg { width: 20px; height: 20px; }
+
+    /* Subscribers module icon */
+    .stat-hero-icon-subscribers {
+        background: linear-gradient(135deg, var(--module-subscribers-light) 0%, rgba(13, 148, 136, 0.2) 100%);
+        color: var(--module-subscribers);
+    }
+    .dark .stat-hero-icon-subscribers {
+        background: linear-gradient(135deg, rgba(13, 148, 136, 0.2) 0%, rgba(13, 148, 136, 0.3) 100%);
+    }
+
+    /* Billing module icon */
+    .stat-hero-icon-billing {
+        background: linear-gradient(135deg, var(--module-billing-light) 0%, rgba(217, 119, 6, 0.2) 100%);
+        color: var(--module-billing);
+    }
+    .dark .stat-hero-icon-billing {
+        background: linear-gradient(135deg, rgba(217, 119, 6, 0.2) 0%, rgba(217, 119, 6, 0.3) 100%);
+    }
+
+    /* Network module icon */
+    .stat-hero-icon-network {
+        background: linear-gradient(135deg, var(--module-network-light) 0%, rgba(59, 130, 246, 0.2) 100%);
+        color: var(--module-network);
+    }
+    .dark .stat-hero-icon-network {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(59, 130, 246, 0.3) 100%);
+    }
+
+    /* Catalog module icon */
+    .stat-hero-icon-catalog {
+        background: linear-gradient(135deg, var(--module-catalog-light) 0%, rgba(139, 92, 246, 0.2) 100%);
+        color: var(--module-catalog);
+    }
+    .dark .stat-hero-icon-catalog {
+        background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(139, 92, 246, 0.3) 100%);
+    }
+
+    /* Provisioning module icon */
+    .stat-hero-icon-provisioning {
+        background: linear-gradient(135deg, var(--module-provisioning-light) 0%, rgba(5, 150, 105, 0.2) 100%);
+        color: var(--module-provisioning);
+    }
+    .dark .stat-hero-icon-provisioning {
+        background: linear-gradient(135deg, rgba(5, 150, 105, 0.2) 0%, rgba(5, 150, 105, 0.3) 100%);
+    }
+
+    /* Admin module icon */
+    .stat-hero-icon-admin {
+        background: linear-gradient(135deg, var(--module-admin-light) 0%, rgba(99, 102, 241, 0.2) 100%);
+        color: var(--module-admin);
+    }
+    .dark .stat-hero-icon-admin {
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(99, 102, 241, 0.3) 100%);
+    }
+
+    /* --------------------------------------------------------------------------
+       Per-Metric Stat Icons (ISP Dashboard)
+       -------------------------------------------------------------------------- */
+    .stat-hero-icon-revenue {
+        background: linear-gradient(135deg, #dcfce7 0%, rgba(5, 150, 105, 0.2) 100%);
+        color: #059669;
+    }
+    .dark .stat-hero-icon-revenue {
+        background: linear-gradient(135deg, rgba(5, 150, 105, 0.2) 0%, rgba(5, 150, 105, 0.3) 100%);
+        color: #34d399;
+    }
+    .stat-hero-icon-churn {
+        background: linear-gradient(135deg, #fee2e2 0%, rgba(220, 38, 38, 0.15) 100%);
+        color: #dc2626;
+    }
+    .dark .stat-hero-icon-churn {
+        background: linear-gradient(135deg, rgba(220, 38, 38, 0.2) 0%, rgba(220, 38, 38, 0.3) 100%);
+        color: #f87171;
+    }
+    .stat-hero-icon-bandwidth {
+        background: linear-gradient(135deg, #dbeafe 0%, rgba(37, 99, 235, 0.15) 100%);
+        color: #2563eb;
+    }
+    .dark .stat-hero-icon-bandwidth {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.2) 0%, rgba(37, 99, 235, 0.3) 100%);
+        color: #60a5fa;
+    }
+    .stat-hero-icon-arpu {
+        background: linear-gradient(135deg, var(--module-billing-light) 0%, rgba(217, 119, 6, 0.2) 100%);
+        color: var(--module-billing);
+    }
+    .dark .stat-hero-icon-arpu {
+        background: linear-gradient(135deg, rgba(217, 119, 6, 0.2) 0%, rgba(217, 119, 6, 0.3) 100%);
+        color: #fbbf24;
+    }
+
+    /* --------------------------------------------------------------------------
+       Module Dividers
+       -------------------------------------------------------------------------- */
+    .divider-subscribers {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-subscribers) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+    .divider-billing {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-billing) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+    .divider-network {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-network) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+    .divider-catalog {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-catalog) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+    .divider-provisioning {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-provisioning) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+    .divider-admin {
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--module-admin) 50%, transparent 100%);
+        opacity: 0.3;
+    }
+}

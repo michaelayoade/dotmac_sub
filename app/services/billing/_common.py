@@ -32,13 +32,13 @@ from app.models.billing import (
     TaxApplication,
     TaxRate,
 )
-from app.models.subscriber import SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.services.common import get_by_id, round_money
 
 
 def _validate_account(db: Session, account_id: str):
-    """Validate that a subscriber account exists."""
-    account = get_by_id(db, SubscriberAccount, account_id)
+    """Validate that a subscriber exists."""
+    account = get_by_id(db, Subscriber, account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Subscriber account not found")
     return account

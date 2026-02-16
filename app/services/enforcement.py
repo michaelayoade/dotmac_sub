@@ -23,6 +23,7 @@ from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
 from app.services.common import coerce_uuid
+from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
 from app.services.radius import sync_credential_to_radius
 
@@ -133,9 +134,11 @@ def _send_coa_disconnect(
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
+    # Decrypt the shared secret before use
+    decrypted_secret = decrypt_credential(nas_device.shared_secret)
     client = Client(
         server=host,
-        secret=nas_device.shared_secret.encode("utf-8"),
+        secret=decrypted_secret.encode("utf-8"),
         dict=dictionary,
         coaport=int(nas_device.coa_port or 3799),
     )
@@ -253,7 +256,7 @@ def disconnect_account_sessions(
 ) -> int:
     subscriptions = (
         db.query(Subscription)
-        .filter(Subscription.account_id == coerce_uuid(account_id))
+        .filter(Subscription.subscriber_id == coerce_uuid(account_id))
         .all()
     )
     count = 0
@@ -267,7 +270,7 @@ def apply_radius_profile_to_account(
 ) -> int:
     credentials = (
         db.query(AccessCredential)
-        .filter(AccessCredential.account_id == coerce_uuid(account_id))
+        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
         .filter(AccessCredential.is_active.is_(True))
         .all()
     )

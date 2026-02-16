@@ -275,7 +275,7 @@ def _ensure_ip_assignment_for_version(
         assignment = address.assignment
     else:
         assignment_payload = IPAssignmentCreate(
-            account_id=subscription.account_id,
+            subscriber_id=subscription.subscriber_id,
             subscription_id=subscription.id,
             service_address_id=subscription.service_address_id,
             ip_version=ip_version,
@@ -427,7 +427,7 @@ class ServiceOrders(ListResponseMixin):
     def create(db: Session, payload: ServiceOrderCreate):
         provisioning_validators.validate_service_order_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.requested_by_contact_id)
             if payload.requested_by_contact_id
@@ -458,7 +458,7 @@ class ServiceOrders(ListResponseMixin):
                 "subscription_id": str(order.subscription_id) if order.subscription_id else None,
             },
             service_order_id=order.id,
-            account_id=order.account_id,
+            subscriber_id=order.subscriber_id,
             subscription_id=order.subscription_id,
         )
 
@@ -474,7 +474,7 @@ class ServiceOrders(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         status: str | None,
         order_by: str,
@@ -483,8 +483,8 @@ class ServiceOrders(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ServiceOrder)
-        if account_id:
-            query = query.filter(ServiceOrder.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(ServiceOrder.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(ServiceOrder.subscription_id == subscription_id)
         if status:
@@ -507,14 +507,14 @@ class ServiceOrders(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Service order not found")
         previous_status = order.status
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", order.account_id))
+        subscriber_id = str(data.get("subscriber_id", order.subscriber_id))
         subscription_id = data.get("subscription_id", order.subscription_id)
         requested_by_contact_id = data.get(
             "requested_by_contact_id", order.requested_by_contact_id
         )
         provisioning_validators.validate_service_order_links(
             db,
-            account_id,
+            subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(requested_by_contact_id) if requested_by_contact_id else None,
         )
@@ -534,7 +534,7 @@ class ServiceOrders(ListResponseMixin):
             }
             context = {
                 "service_order_id": order.id,
-                "account_id": order.account_id,
+                "account_id": order.subscriber_id,
                 "subscription_id": order.subscription_id,
             }
             if new_status == ServiceOrderStatus.active:

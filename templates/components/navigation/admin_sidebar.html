@@ -1,18 +1,15 @@
 <!-- Admin Sidebar Navigation -->
 {# Determine which section should be open based on active_page/active_menu #}
 {% set section_for_page = {
-    'contacts': 'customers', 'subscribers': 'customers',
+    'subscribers': 'customers',
     'catalog': 'services',
     'catalog-usage': 'system', 'catalog-calculator': 'system',
     'billing': 'billing', 'invoices': 'billing', 'payments': 'billing', 'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing',
     'network-map': 'network', 'network-devices': 'network', 'core-devices': 'network', 'olts': 'network', 'onts': 'network', 'devices': 'network',
     'pop-sites': 'system', 'configuration': 'system',
     'fiber-plant': 'network', 'fiber-map': 'network', 'fiber-change-requests': 'network', 'fdh-cabinets': 'network', 'splitters': 'network', 'fiber-strands': 'network', 'splice-closures': 'network', 'fiber-reports': 'network',
-    'ip-management': 'network', 'vlans': 'network', 'monitoring': 'network',
-    'sales-orders': 'operations', 'service-orders': 'operations', 'installations': 'operations', 'technicians': 'operations',
-    'dispatch': 'operations'
+    'ip-management': 'network', 'vlans': 'network', 'monitoring': 'network'
 } %}
-{% set field_service_pages = ['installations', 'technicians', 'dispatch'] %}
 {% set section_for_menu = {
     'catalog': 'services',
     'billing': 'billing',
@@ -20,9 +17,6 @@
 } %}
 {% set initial_section = section_for_page.get(active_page, section_for_menu.get(active_menu, '')) %}
 {% set initial_menu = active_menu | default('') %}
-{% if not initial_menu and active_page in field_service_pages %}
-{% set initial_menu = 'field-service' %}
-{% endif %}
 
 <div class="space-y-1" x-data="{ openMenu: '{{ initial_menu }}', openSection: '{{ initial_section }}' }">
 
@@ -46,16 +40,6 @@
     </button>
 
     <div x-show="openSection === 'customers' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
-        <!-- Contacts (People & Organizations - unified view) -->
-        <a href="/admin/contacts"
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'contacts' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
-            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-            </svg>
-            <span>Contacts</span>
-        </a>
-
         <!-- Subscribers -->
         <a href="/admin/subscribers"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -231,65 +215,6 @@
         </a>
     </div>
 
-    <!-- 6. OPERATIONS (Collapsible Section) -->
-    <button x-on:click="openSection = openSection === 'operations' ? '' : 'operations'" x-show="!sidebarCollapsed"
-            class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
-        <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Operations</p>
-        <svg class="h-3.5 w-3.5 text-slate-400 transition-transform" :class="{ 'rotate-180': openSection === 'operations' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-        </svg>
-    </button>
-
-    <div x-show="openSection === 'operations' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
-        <!-- Sales Orders -->
-        <a href="/admin/operations/sales-orders"
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'sales-orders' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
-            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7h6m-6 4h6"/>
-            </svg>
-            <span>Sales Orders</span>
-        </a>
-
-        <!-- Service Orders -->
-        <a href="/admin/operations/service-orders"
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'service-orders' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
-            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
-            </svg>
-            <span>Service Orders</span>
-            {% if sidebar_stats is defined and sidebar_stats.service_orders is defined and sidebar_stats.service_orders > 0 %}
-            <span class="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-400">{{ sidebar_stats.service_orders }}</span>
-            {% endif %}
-        </a>
-
-        <!-- Field Service (Group) -->
-        <button x-on:click="openMenu = openMenu === 'field-service' ? '' : 'field-service'" x-show="!sidebarCollapsed"
-                class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                       {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page in field_service_pages else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
-            <span class="flex items-center gap-3">
-                <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
-                </svg>
-                <span>Field Service</span>
-            </span>
-            <svg x-show="!sidebarCollapsed" class="h-4 w-4 transition-transform" :class="{ 'rotate-180': openMenu === 'field-service' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-        </button>
-        <div x-show="openMenu === 'field-service' && !sidebarCollapsed" x-collapse x-cloak class="mt-1 space-y-1 pl-11">
-            <a href="/admin/operations/installations" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'installations' else '' }}">Installations</a>
-            <a href="/admin/operations/technicians" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'technicians' else '' }}">Technicians</a>
-            <a href="/admin/operations/dispatch" class="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'dispatch' else '' }}">
-                <span>Dispatch</span>
-                {% if sidebar_stats is defined and sidebar_stats.dispatch_jobs is defined and sidebar_stats.dispatch_jobs > 0 %}
-                <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-500/20 dark:text-green-400">{{ sidebar_stats.dispatch_jobs }}</span>
-                {% endif %}
-            </a>
-        </div>
-    </div>
-
     <!-- Divider -->
     <div class="my-4 border-t border-slate-200 dark:border-slate-700/50"></div>
 
@@ -314,7 +239,6 @@
             <a href="/admin/reports/subscribers" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">Subscriber Growth</a>
             <a href="/admin/reports/churn" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">Churn Analysis</a>
             <a href="/admin/reports/network" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">Network Usage</a>
-            <a href="/admin/reports/technician" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">Technician Performance</a>
         </div>
     </div>
 

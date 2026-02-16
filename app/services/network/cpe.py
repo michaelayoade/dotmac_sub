@@ -103,7 +103,7 @@ class CPEDevices(ListResponseMixin):
     def create(db: Session, payload: CPEDeviceCreate):
         network_validators.validate_cpe_device_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
         )
@@ -142,7 +142,7 @@ class CPEDevices(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         subscription_id: str | None,
         order_by: str,
         order_dir: str,
@@ -150,8 +150,8 @@ class CPEDevices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(CPEDevice)
-        if account_id:
-            query = query.filter(CPEDevice.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(CPEDevice.subscriber_id == subscriber_id)
         if subscription_id:
             query = query.filter(CPEDevice.subscription_id == subscription_id)
         query = _apply_ordering(
@@ -168,12 +168,12 @@ class CPEDevices(ListResponseMixin):
         if not device:
             raise HTTPException(status_code=404, detail="CPE device not found")
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", device.account_id))
+        subscriber_id = str(data.get("subscriber_id", device.subscriber_id))
         subscription_id = data.get("subscription_id", device.subscription_id)
         service_address_id = data.get("service_address_id", device.service_address_id)
         network_validators.validate_cpe_device_links(
             db,
-            account_id,
+            subscriber_id,
             str(subscription_id) if subscription_id else None,
             str(service_address_id) if service_address_id else None,
         )

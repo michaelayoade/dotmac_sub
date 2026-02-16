@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Sign In - DotMac SM{% endblock %}
+{% block title %}Sign In - DotMac Subs{% endblock %}
 
 {% block body %}
 <div class="min-h-screen flex bg-slate-900" x-data="{ loading: false }">
@@ -26,10 +26,10 @@
                 <a href="/" class="flex items-center gap-3">
                     <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm">
                         <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                         </svg>
                     </div>
-                    <span class="text-2xl font-bold font-display">DotMac<span class="text-primary-200">SM</span></span>
+                    <span class="text-2xl font-bold font-display">DotMac <span class="text-primary-200">Subs</span></span>
                 </a>
             </div>
 
@@ -37,17 +37,25 @@
             <div class="space-y-8">
                 <div>
                     <h1 class="text-4xl font-bold font-display leading-tight">
-                        Subscriber Management
+                        Subscription Management
                         <br/>
-                        <span class="text-primary-200">Made Simple.</span>
+                        <span class="text-primary-200">Platform</span>
                     </h1>
                     <p class="mt-4 text-lg text-primary-100 max-w-md">
-                        Manage billing, network provisioning, and customer relationships from one powerful platform.
+                        Complete subscription lifecycle management with automated billing, network provisioning, and analytics.
                     </p>
                 </div>
 
                 <!-- Feature List -->
                 <div class="space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
+                            <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <span class="text-primary-100">Subscription & plan management</span>
+                    </div>
                     <div class="flex items-center gap-3">
                         <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
                             <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -64,20 +72,12 @@
                         </div>
                         <span class="text-primary-100">Network device provisioning</span>
                     </div>
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 backdrop-blur-sm">
-                            <svg class="h-5 w-5 text-primary-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
-                        </div>
-                        <span class="text-primary-100">Real-time analytics & reports</span>
-                    </div>
                 </div>
             </div>
 
             <!-- Footer -->
             <div class="text-sm text-primary-200">
-                &copy; 2026 DotMac Subscriber Management
+                &copy; 2026 DotMac Subscription Platform
             </div>
         </div>
     </div>
@@ -90,10 +90,10 @@
                 <a href="/" class="inline-flex items-center gap-3">
                     <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/25">
                         <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                         </svg>
                     </div>
-                    <span class="text-2xl font-bold text-slate-900 dark:text-white font-display">DotMac<span class="text-primary-600">SM</span></span>
+                    <span class="text-2xl font-bold text-slate-900 dark:text-white font-display">DotMac <span class="text-primary-600">Subs</span></span>
                 </a>
             </div>
 

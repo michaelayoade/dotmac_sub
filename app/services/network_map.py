@@ -9,9 +9,8 @@ from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.network import FiberAccessPoint, FiberSegment, FiberSpliceClosure, FdhCabinet, Splitter
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.models.subscriber import Address, Subscriber, SubscriberAccount
+from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.models.wireless_survey import SurveyPoint, WirelessSiteSurvey
 from app.services import settings_spec
 
 
@@ -164,39 +163,11 @@ def build_network_map_context(db: Session) -> dict:
             }
         )
 
-    # Survey points
-    survey_points = (
-        db.query(SurveyPoint, WirelessSiteSurvey.name)
-        .join(WirelessSiteSurvey, SurveyPoint.survey_id == WirelessSiteSurvey.id)
-        .filter(SurveyPoint.latitude.isnot(None))
-        .filter(SurveyPoint.longitude.isnot(None))
-        .all()
-    )
-    for point, survey_name in survey_points:
-        total_height = None
-        if point.ground_elevation_m is not None:
-            total_height = point.ground_elevation_m + point.antenna_height_m
-        features.append(
-            {
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [point.longitude, point.latitude]},
-                "properties": {
-                    "id": str(point.id),
-                    "type": "survey_point",
-                    "name": point.name,
-                    "point_type": point.point_type.value if point.point_type else "custom",
-                    "survey_id": str(point.survey_id),
-                    "survey_name": survey_name,
-                    "ground_elevation_m": point.ground_elevation_m,
-                    "total_height_m": total_height,
-                },
-            }
-        )
+    survey_points = []
 
     # Customers with addresses that have coordinates, including online status
     active_sessions_subq = (
-        db.query(SubscriberAccount.subscriber_id)
-        .join(Subscription, Subscription.account_id == SubscriberAccount.id)
+        db.query(Subscription.subscriber_id)
         .join(
             RadiusAccountingSession,
             RadiusAccountingSession.subscription_id == Subscription.id,
@@ -307,7 +278,7 @@ def build_network_map_context(db: Session) -> dict:
         "customers": customer_total,
         "customers_online": online_count,
         "customers_offline": offline_count,
-        "survey_points": len(survey_points),
+        "survey_points": 0,
     }
 
     return {

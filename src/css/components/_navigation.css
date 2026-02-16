@@ -1,0 +1,97 @@
+/* ============================================================================
+   SIDEBAR NAVIGATION
+   Enhanced with module colors and badges
+   ============================================================================ */
+
+@layer components {
+    .nav-module {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        padding: var(--spacing-sm) var(--spacing-md);
+        border-radius: var(--radius-lg);
+        font-weight: 500;
+        font-size: 14px;
+        color: var(--ink-muted);
+        transition: all 0.2s ease;
+    }
+    .nav-module:hover {
+        color: var(--ink);
+        background: var(--parchment-dark);
+    }
+    .nav-module.active {
+        color: var(--ink);
+        background: var(--parchment-dark);
+        font-weight: 600;
+    }
+    .nav-module.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 24px;
+        background: var(--brand-primary);
+        border-radius: 0 2px 2px 0;
+    }
+
+    /* Module icon colors (Finance sub-modules) */
+    .nav-icon-gl { color: var(--module-gl); }
+    .nav-icon-ap { color: var(--module-ap); }
+    .nav-icon-ar { color: var(--module-ar); }
+    .nav-icon-inv { color: var(--module-inv); }
+    .nav-icon-fa { color: var(--module-fa); }
+    .nav-icon-tax { color: var(--module-tax); }
+    .nav-icon-banking { color: var(--module-banking); }
+    .nav-icon-reports { color: var(--module-reports); }
+    .nav-icon-automation { color: var(--module-automation); }
+
+    /* Application module icon colors */
+    .nav-icon-finance { color: var(--module-finance); }
+    .nav-icon-people { color: var(--module-people); }
+    .nav-icon-expense { color: var(--module-expense); }
+    .nav-icon-operations { color: var(--module-operations); }
+    .nav-icon-admin { color: var(--module-admin); }
+
+    /* Navigation badge for counts/alerts */
+    .nav-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 var(--spacing-md);
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: var(--radius-lg);
+        background: var(--parchment-dark);
+        color: var(--ink-muted);
+    }
+    .nav-badge-alert {
+        background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        color: #dc2626;
+    }
+    .dark .nav-badge-alert {
+        background: rgba(220, 38, 38, 0.2);
+    }
+    .nav-badge-new {
+        background: linear-gradient(135deg, var(--gold-light) 0%, #fde68a 100%);
+        color: var(--gold-dark);
+    }
+    .dark .nav-badge-new {
+        background: rgba(217, 119, 6, 0.2);
+        color: var(--gold);
+    }
+
+    /* Section divider in sidebar */
+    .nav-section {
+        padding: var(--spacing-lg) var(--spacing-md) var(--spacing-sm);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--ink-faint);
+    }
+}

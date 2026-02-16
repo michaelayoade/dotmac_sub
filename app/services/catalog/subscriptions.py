@@ -130,15 +130,15 @@ def _generate_proration_if_enabled(
         )
 
 
-def _sync_credentials_to_radius(db: Session, account_id) -> None:
-    """Sync all account credentials to RADIUS on subscription activation."""
+def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
+    """Sync all subscriber credentials to RADIUS on subscription activation."""
     try:
         from app.services.radius import sync_account_credentials_to_radius
-        sync_account_credentials_to_radius(db, account_id)
+        sync_account_credentials_to_radius(db, subscriber_id)
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning(
-            f"Failed to sync credentials to RADIUS for account {account_id}: {exc}"
+            f"Failed to sync credentials to RADIUS for subscriber {subscriber_id}: {exc}"
         )
 
 
@@ -164,7 +164,7 @@ def _emit_subscription_status_event(
     }
     context = {
         "subscription_id": subscription.id,
-        "account_id": subscription.account_id,
+        "account_id": subscription.subscriber_id,
     }
 
     # Map status transitions to event types
@@ -177,7 +177,7 @@ def _emit_subscription_status_event(
             _generate_proration_if_enabled(db, subscription, from_status)
 
         # Sync credentials to RADIUS immediately on activation/resume
-        _sync_credentials_to_radius(db, subscription.account_id)
+        _sync_credentials_to_radius(db, subscription.subscriber_id)
 
     elif to_status == SubscriptionStatus.suspended:
         emit_event(db, EventType.subscription_suspended, payload, **context)
@@ -191,22 +191,12 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
     from app.schemas.provisioning import ServiceOrderCreate
     from app.models.provisioning import ServiceOrderStatus
 
-    # Get the subscriber account to find the contact
-    account = subscription.account
-    if not account:
-        return
-
-    # Find a contact from the account roles
+    # Account roles removed during consolidation; no contact linkage available here.
     requested_by_contact_id = None
-    if account.account_roles:
-        for role in account.account_roles:
-            if role.person_id:
-                requested_by_contact_id = role.person_id
-                break
 
     try:
         payload = ServiceOrderCreate(
-            account_id=subscription.account_id,
+            subscriber_id=subscription.subscriber_id,
             subscription_id=subscription.id,
             requested_by_contact_id=requested_by_contact_id,
             status=ServiceOrderStatus.submitted,
@@ -223,7 +213,7 @@ class Subscriptions(ListResponseMixin):
     def create(db: Session, payload: SubscriptionCreate):
         catalog_validators.validate_subscription_links(
             db,
-            str(payload.account_id),
+            str(payload.subscriber_id),
             str(payload.offer_id),
             str(payload.offer_version_id) if payload.offer_version_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
@@ -245,7 +235,7 @@ class Subscriptions(ListResponseMixin):
             payload.canceled_at,
         )
         catalog_validators.enforce_single_active_subscription(
-            db, str(payload.account_id), payload.status
+            db, str(payload.subscriber_id), payload.status
         )
         data = payload.model_dump()
         fields_set = payload.model_fields_set
@@ -303,7 +293,7 @@ class Subscriptions(ListResponseMixin):
                 "status": subscription.status.value if subscription.status else None,
             },
             subscription_id=subscription.id,
-            account_id=subscription.account_id,
+            account_id=subscription.subscriber_id,
         )
 
         # If created as active, also emit activation event
@@ -318,7 +308,7 @@ class Subscriptions(ListResponseMixin):
                     "to_status": "active",
                 },
                 subscription_id=subscription.id,
-                account_id=subscription.account_id,
+                account_id=subscription.subscriber_id,
             )
 
         return subscription
@@ -340,7 +330,7 @@ class Subscriptions(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         offer_id: str | None,
         status: str | None,
         order_by: str,
@@ -352,8 +342,8 @@ class Subscriptions(ListResponseMixin):
             selectinload(Subscription.offer),
             selectinload(Subscription.add_ons).selectinload(SubscriptionAddOn.add_on),
         )
-        if account_id:
-            query = query.filter(Subscription.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(Subscription.subscriber_id == subscriber_id)
         if offer_id:
             query = query.filter(Subscription.offer_id == offer_id)
         if status:
@@ -381,7 +371,7 @@ class Subscriptions(ListResponseMixin):
         # Track status before update for event emission
         previous_status = subscription.status
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", subscription.account_id))
+        subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
         offer_version_id = data.get("offer_version_id", subscription.offer_version_id)
         service_address_id = data.get(
@@ -389,7 +379,7 @@ class Subscriptions(ListResponseMixin):
         )
         catalog_validators.validate_subscription_links(
             db,
-            account_id,
+            subscriber_id,
             offer_id,
             str(offer_version_id) if offer_version_id else None,
             str(service_address_id) if service_address_id else None,
@@ -416,7 +406,7 @@ class Subscriptions(ListResponseMixin):
             canceled_at,
         )
         catalog_validators.enforce_single_active_subscription(
-            db, account_id, status, subscription_id
+            db, subscriber_id, status, subscription_id
         )
         if status == SubscriptionStatus.active and not start_at:
             start_at = datetime.now(timezone.utc)
@@ -507,8 +497,8 @@ class Subscriptions(ListResponseMixin):
                         "end_at": subscription.end_at.isoformat() if subscription.end_at else None,
                     },
                     subscription_id=subscription.id,
-                    account_id=subscription.account_id,
-                )
+            account_id=subscription.subscriber_id,
+        )
 
             expired_count += 1
 

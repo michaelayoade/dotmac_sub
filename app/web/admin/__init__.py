@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.services import web_admin as web_admin_service
 
 from app.web.auth.dependencies import require_web_auth
@@ -28,18 +27,11 @@ from app.web.admin.usage import router as usage_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.admin_hub import router as admin_hub_router
 
-def _get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 router = APIRouter(
     prefix="/admin",
     tags=["web-admin"],
-    dependencies=[Depends(lambda request, db=Depends(_get_db): require_web_auth(request, db))],
+    dependencies=[Depends(require_web_auth)],
 )
 
 

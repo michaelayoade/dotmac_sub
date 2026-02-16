@@ -1,0 +1,271 @@
+/* ============================================================================
+   DOCUMENT CARD
+   Premium styling for official documents (Payslips, Invoices, Receipts)
+   ============================================================================ */
+
+@layer components {
+    .document-card {
+        background: linear-gradient(180deg, #ffffff 0%, var(--parchment) 100%);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--card-shadow);
+        position: relative;
+        overflow: hidden;
+    }
+    .dark .document-card {
+        background: linear-gradient(180deg, var(--card-bg) 0%, var(--parchment) 100%);
+    }
+
+    /* Gradient accent bar at top */
+    .document-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--teal) 0%, var(--gold) 50%, var(--teal) 100%);
+    }
+
+    /* Subtle watermark pattern */
+    .document-card::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image: repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 10px,
+            rgba(13, 148, 136, 0.01) 10px,
+            rgba(13, 148, 136, 0.01) 20px
+        );
+        pointer-events: none;
+    }
+
+    .document-header {
+        position: relative;
+        padding: var(--spacing-card);
+        border-bottom: 1px dashed var(--card-border);
+        background: linear-gradient(180deg, var(--parchment) 0%, transparent 100%);
+    }
+
+    .document-header-block {
+        position: relative;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--spacing-lg);
+        padding: var(--spacing-card);
+        border-bottom: 1px solid var(--card-border);
+        background: linear-gradient(180deg, var(--parchment) 0%, transparent 100%);
+    }
+
+    .document-brand {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-md);
+        min-width: 0;
+    }
+
+    .document-brand-logo {
+        height: 44px;
+        width: 44px;
+        border-radius: 10px;
+        object-fit: cover;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.15);
+    }
+
+    .document-brand-mark {
+        height: 44px;
+        width: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #fff;
+        background: linear-gradient(135deg, var(--teal) 0%, var(--gold) 100%);
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.15);
+    }
+
+    .document-org {
+        min-width: 0;
+    }
+
+    .document-org-name {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--ink);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .document-org-meta {
+        font-size: 12px;
+        color: var(--ink-muted);
+        margin-top: 2px;
+    }
+
+    .document-org-divider {
+        margin: 0 6px;
+        opacity: 0.6;
+    }
+
+    .document-meta {
+        text-align: right;
+    }
+
+    .document-meta-title {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: var(--ink);
+    }
+
+    .document-meta-number {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--teal);
+        letter-spacing: 0.05em;
+        margin-top: 4px;
+    }
+
+    .document-meta-status {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border: 1px solid var(--card-border);
+        color: var(--ink);
+        background: rgba(15, 23, 42, 0.04);
+    }
+
+    .document-title {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: var(--ink);
+        margin-bottom: var(--spacing-xs);
+    }
+
+    .document-subtitle {
+        font-size: 14px;
+        color: var(--ink-muted);
+    }
+
+    .document-number {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--teal);
+        letter-spacing: 0.05em;
+    }
+
+    .document-body {
+        position: relative;
+        padding: var(--spacing-card);
+    }
+
+    .document-section {
+        margin-bottom: var(--spacing-xl);
+    }
+    .document-section:last-child { margin-bottom: 0; }
+
+    .document-section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--ink-faint);
+        margin-bottom: var(--spacing-md);
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    /* Two-column layout for line items */
+    .document-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: var(--spacing-sm) 0;
+        border-bottom: 1px dotted var(--card-border);
+    }
+    .document-row:last-child { border-bottom: none; }
+
+    .document-row-label {
+        font-size: 14px;
+        color: var(--ink-light);
+    }
+
+    .document-row-value {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 14px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums lining-nums;
+        color: var(--ink);
+    }
+    .document-row-value-positive { color: #059669; }
+    .document-row-value-negative { color: #dc2626; }
+
+    /* Footer with totals */
+    .document-footer {
+        position: relative;
+        padding: var(--spacing-lg) var(--spacing-card);
+        background: var(--parchment);
+        border-top: 2px solid var(--ink);
+    }
+
+    .document-total-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: var(--spacing-sm);
+    }
+    .document-total-row:last-child { margin-bottom: 0; }
+
+    .document-total-label {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ink-muted);
+    }
+
+    .document-total-value {
+        font-family: 'Fraunces', Georgia, serif;
+        font-size: 1.75rem;
+        font-weight: 600;
+        color: var(--ink);
+    }
+    .document-total-value-large {
+        font-size: 2.25rem;
+        background: linear-gradient(135deg, var(--ink) 0%, var(--teal) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* Compact variant for lists */
+    .document-card-compact .document-header,
+    .document-card-compact .document-body,
+    .document-card-compact .document-footer {
+        padding: var(--spacing-card-sm);
+    }
+    .document-card-compact .document-title { font-size: 1.25rem; }
+    .document-card-compact .document-total-value { font-size: 1.5rem; }
+}

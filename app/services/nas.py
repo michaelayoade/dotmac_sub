@@ -40,6 +40,7 @@ from app.schemas.catalog import (
     ProvisioningTemplateUpdate,
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
+from app.services.credential_crypto import decrypt_credential, encrypt_nas_credentials
 from app.services.response import ListResponseMixin
 
 
@@ -95,6 +96,9 @@ class NasDevices(ListResponseMixin):
             pop_site = db.get(PopSite, data["pop_site_id"])
             if not pop_site:
                 raise HTTPException(status_code=404, detail="POP site not found")
+
+        # Encrypt credential fields before storage
+        data = encrypt_nas_credentials(data)
 
         device = NasDevice(**data)
         db.add(device)
@@ -175,6 +179,9 @@ class NasDevices(ListResponseMixin):
             pop_site = db.get(PopSite, data["pop_site_id"])
             if not pop_site:
                 raise HTTPException(status_code=404, detail="POP site not found")
+
+        # Encrypt credential fields before storage
+        data = encrypt_nas_credentials(data)
 
         for key, value in data.items():
             setattr(device, key, value)
@@ -984,19 +991,21 @@ class DeviceProvisioner:
 
         try:
             if device.ssh_key:
-                # Use SSH key authentication
+                # Use SSH key authentication - decrypt key before use
                 import io
-                key = paramiko.RSAKey.from_private_key(io.StringIO(device.ssh_key))
+                decrypted_key = decrypt_credential(device.ssh_key)
+                key = paramiko.RSAKey.from_private_key(io.StringIO(decrypted_key))
                 client.connect(
                     host, port=port, username=device.ssh_username, pkey=key, timeout=30
                 )
             else:
-                # Use password authentication
+                # Use password authentication - decrypt password before use
+                decrypted_password = decrypt_credential(device.ssh_password)
                 client.connect(
                     host,
                     port=port,
                     username=device.ssh_username,
-                    password=device.ssh_password,
+                    password=decrypted_password,
                     timeout=30,
                 )
 
@@ -1020,14 +1029,16 @@ class DeviceProvisioner:
         if not device.api_url:
             raise HTTPException(status_code=400, detail="Device has no API URL configured")
 
-        # Build authentication
+        # Build authentication - decrypt credentials before use
         auth = None
         headers = {}
 
         if device.api_token:
-            headers["Authorization"] = f"Bearer {device.api_token}"
+            decrypted_token = decrypt_credential(device.api_token)
+            headers["Authorization"] = f"Bearer {decrypted_token}"
         elif device.api_username and device.api_password:
-            auth = (device.api_username, device.api_password)
+            decrypted_password = decrypt_credential(device.api_password)
+            auth = (device.api_username, decrypted_password)
 
         # For MikroTik REST API, the command is the API path
         url = f"{device.api_url.rstrip('/')}/{command.lstrip('/')}"

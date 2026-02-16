@@ -129,7 +129,7 @@ class EnforcementHandler:
                         "reason": "fup_exhausted",
                     },
                     subscription_id=subscription.id,
-                    account_id=subscription.account_id,
+                    account_id=subscription.subscriber_id,
                 )
             return
         throttle_profile_id = settings_spec.resolve_value(

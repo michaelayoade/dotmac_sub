@@ -20,7 +20,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscriber import AccountStatus, SubscriberAccount
+from app.models.subscriber import SubscriberStatus, Subscriber
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningActionLogUpdate,
@@ -113,7 +113,7 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
 def _resolve_policy_set_for_account(db: Session, account_id: str):
     subscriptions = (
         db.query(Subscription)
-        .filter(Subscription.account_id == account_id)
+        .filter(Subscription.subscriber_id == account_id)
         .filter(
             Subscription.status.in_(
                 [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
@@ -158,7 +158,7 @@ def _resolve_dunning_steps(db: Session, policy_set_id: str):
 def _resolve_overdue_days(
     invoice: Invoice,
     run_at: datetime,
-    account: SubscriberAccount | None = None,
+    account: Subscriber | None = None,
 ) -> int:
     """Calculate days overdue, accounting for account grace period.
 
@@ -209,27 +209,27 @@ def _suspend_account(db: Session, account_id: str) -> bool:
 
     Returns True if account was suspended, False if already suspended/canceled.
     """
-    account = db.get(SubscriberAccount, coerce_uuid(account_id))
+    account = db.get(Subscriber, coerce_uuid(account_id))
     if not account:
         logger.warning(f"Cannot suspend account {account_id}: account not found")
         return False
 
-    if account.status == AccountStatus.suspended:
+    if account.status == SubscriberStatus.suspended:
         logger.info(f"Account {account_id} already suspended")
         return False
 
-    if account.status == AccountStatus.canceled:
+    if account.status == SubscriberStatus.canceled:
         logger.info(f"Account {account_id} is canceled, skipping suspension")
         return False
 
-    account.status = AccountStatus.suspended
+    account.status = SubscriberStatus.suspended
     suspended_count = 0
 
     # Suspend all active subscriptions
     subscriptions = (
         db.query(Subscription)
         .options(selectinload(Subscription.offer))
-        .filter(Subscription.account_id == account.id)
+        .filter(Subscription.subscriber_id == account.id)
         .filter(Subscription.status == SubscriptionStatus.active)
         .all()
     )
@@ -248,7 +248,7 @@ def _suspend_account(db: Session, account_id: str) -> bool:
                 "reason": "dunning",
             },
             subscription_id=sub.id,
-            account_id=sub.account_id,
+            account_id=sub.subscriber_id,
         )
 
     # Emit subscriber.suspended event
@@ -257,11 +257,11 @@ def _suspend_account(db: Session, account_id: str) -> bool:
         EventType.subscriber_suspended,
         {
             "account_id": str(account.id),
-            "subscriber_id": str(account.subscriber_id) if account.subscriber_id else None,
+            "subscriber_id": str(account.id),
             "suspended_subscriptions": suspended_count,
         },
         account_id=account.id,
-        subscriber_id=account.subscriber_id,
+        subscriber_id=account.id,
     )
 
     logger.info(f"Suspended account {account_id} with {suspended_count} subscriptions")
@@ -270,22 +270,22 @@ def _suspend_account(db: Session, account_id: str) -> bool:
 
 def _restore_account(db: Session, account_id: str) -> int:
     """Restore account and suspended subscriptions after payment."""
-    account = db.get(SubscriberAccount, coerce_uuid(account_id))
+    account = db.get(Subscriber, coerce_uuid(account_id))
     if not account:
         logger.warning(f"Cannot restore account {account_id}: account not found")
         return 0
-    if account.status == AccountStatus.canceled:
+    if account.status == SubscriberStatus.canceled:
         logger.info(f"Account {account_id} is canceled, skipping restore")
         return 0
-    was_suspended = account.status in {AccountStatus.suspended, AccountStatus.delinquent}
+    was_suspended = account.status in {SubscriberStatus.suspended, SubscriberStatus.delinquent}
     if was_suspended:
-        account.status = AccountStatus.active
+        account.status = SubscriberStatus.active
     restored_count = 0
     now = datetime.now(timezone.utc)
     subscriptions = (
         db.query(Subscription)
         .options(selectinload(Subscription.offer))
-        .filter(Subscription.account_id == account.id)
+        .filter(Subscription.subscriber_id == account.id)
         .filter(Subscription.status == SubscriptionStatus.suspended)
         .all()
     )
@@ -306,29 +306,29 @@ def _restore_account(db: Session, account_id: str) -> int:
                 "reason": "payment_received",
             },
             subscription_id=sub.id,
-            account_id=sub.account_id,
+            account_id=sub.subscriber_id,
         )
 
     if restored_count and was_suspended:
         # Emit subscriber.reactivated event
         emit_event(
             db,
-            EventType.subscriber_reactivated,
-            {
-                "account_id": str(account.id),
-                "subscriber_id": str(account.subscriber_id) if account.subscriber_id else None,
-                "restored_subscriptions": restored_count,
-            },
-            account_id=account.id,
-            subscriber_id=account.subscriber_id,
-        )
+        EventType.subscriber_reactivated,
+        {
+            "account_id": str(account.id),
+            "subscriber_id": str(account.id),
+            "restored_subscriptions": restored_count,
+        },
+        account_id=account.id,
+        subscriber_id=account.id,
+    )
         logger.info(f"Restored {restored_count} subscriptions for account {account_id}")
     return restored_count
 
 
 def _get_account_email(db: Session, account_id: str) -> str | None:
     """Get the billing email for an account."""
-    account = db.get(SubscriberAccount, coerce_uuid(account_id))
+    account = db.get(Subscriber, coerce_uuid(account_id))
     if not account or not account.subscriber:
         return None
     # Get billing email from subscriber's person
@@ -371,7 +371,7 @@ def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
     # Get all active access credentials for the account
     credentials = (
         db.query(AccessCredential)
-        .filter(AccessCredential.account_id == coerce_uuid(account_id))
+        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
         .filter(AccessCredential.is_active.is_(True))
         .all()
     )
@@ -434,7 +434,7 @@ def _restore_throttle(db: Session, account_id: str) -> int:
     # Get credentials with throttle profile
     credentials = (
         db.query(AccessCredential)
-        .filter(AccessCredential.account_id == coerce_uuid(account_id))
+        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
         .filter(AccessCredential.radius_profile_id == coerce_uuid(throttle_profile_id))
         .filter(AccessCredential.is_active.is_(True))
         .all()
@@ -448,7 +448,7 @@ def _restore_throttle(db: Session, account_id: str) -> int:
         # Get default profile from subscription's offer
         subscription = (
             db.query(Subscription)
-            .filter(Subscription.account_id == coerce_uuid(account_id))
+            .filter(Subscription.subscriber_id == coerce_uuid(account_id))
             .filter(Subscription.status.in_([SubscriptionStatus.active, SubscriptionStatus.suspended]))
             .first()
         )
@@ -660,7 +660,7 @@ def _deactivate_prepaid_subscriptions(
 ) -> int:
     subscriptions = (
         db.query(Subscription)
-        .filter(Subscription.account_id == coerce_uuid(account_id))
+        .filter(Subscription.subscriber_id == coerce_uuid(account_id))
         .filter(
             Subscription.status.in_(
                 [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
@@ -692,9 +692,9 @@ def _deactivate_prepaid_subscriptions(
         )
         canceled_count += 1
 
-    account = db.get(SubscriberAccount, coerce_uuid(account_id))
-    if account and account.status != AccountStatus.canceled:
-        account.status = AccountStatus.canceled
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account and account.status != SubscriberStatus.canceled:
+        account.status = SubscriberStatus.canceled
 
     _create_prepaid_deactivation_notification(db, account_id)
     return canceled_count
@@ -1093,7 +1093,7 @@ class DunningWorkflow(ListResponseMixin):
         postpaid_account_ids = {
             row[0]
             for row in (
-                db.query(Subscription.account_id)
+                db.query(Subscription.subscriber_id)
                 .filter(Subscription.billing_mode == BillingMode.postpaid)
                 .filter(
                     Subscription.status.in_(
@@ -1109,7 +1109,7 @@ class DunningWorkflow(ListResponseMixin):
         skipped = 0
         for account_id, account_invoices in overdue_accounts.items():
             # Fetch account to get grace_period
-            account = db.get(SubscriberAccount, account_id)
+            account = db.get(Subscriber, account_id)
             if not account:
                 skipped += 1
                 continue
@@ -1344,7 +1344,7 @@ class PrepaidEnforcement(ListResponseMixin):
             )
 
         prepaid_accounts = (
-            db.query(Subscription.account_id)
+            db.query(Subscription.subscriber_id)
             .filter(Subscription.billing_mode == BillingMode.prepaid)
             .filter(
                 Subscription.status.in_(
@@ -1357,7 +1357,7 @@ class PrepaidEnforcement(ListResponseMixin):
         postpaid_account_ids = {
             row[0]
             for row in (
-                db.query(Subscription.account_id)
+                db.query(Subscription.subscriber_id)
                 .filter(Subscription.billing_mode == BillingMode.postpaid)
                 .filter(
                     Subscription.status.in_(
@@ -1380,7 +1380,7 @@ class PrepaidEnforcement(ListResponseMixin):
             if account_id in postpaid_account_ids:
                 skipped += 1
                 continue
-            account = db.get(SubscriberAccount, account_id)
+            account = db.get(Subscriber, account_id)
             if not account:
                 skipped += 1
                 continue

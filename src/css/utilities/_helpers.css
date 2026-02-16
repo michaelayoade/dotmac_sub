@@ -1,0 +1,85 @@
+/* ============================================================================
+   UTILITIES & HELPERS
+   Scrollbar, focus states, tooltips, and misc utilities
+   ============================================================================ */
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.dark ::-webkit-scrollbar-thumb { background: #475569; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* Focus states */
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 4px; }
+
+/* Tooltip */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-4px);
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    background: var(--ink);
+    color: white;
+    border-radius: 6px;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s ease;
+    z-index: 100;
+}
+[data-tooltip]:hover::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(-8px);
+}
+
+/* Financial value highlighting */
+.financial-positive { color: #059669; }
+.financial-negative { color: #dc2626; }
+.financial-value {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums lining-nums;
+    font-weight: 500;
+}
+
+/* Gold accent text */
+.text-gold {
+    color: var(--gold);
+}
+.text-gold-gradient {
+    background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Divider with gold accent */
+.divider-gold {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    opacity: 0.3;
+}
+
+/* Highlight row on hover */
+.row-highlight {
+    transition: all 0.15s ease;
+}
+.row-highlight:hover {
+    background: linear-gradient(90deg, rgba(13, 148, 136, 0.04) 0%, transparent 50%);
+    border-left: 3px solid var(--teal);
+    margin-left: -3px;
+}
+
+/* Organization branding overrides */
+.org-primary { color: var(--brand-primary); }
+.org-primary-bg { background-color: var(--brand-primary); }
+.org-accent { color: var(--brand-accent); }
+.org-accent-bg { background-color: var(--brand-accent); }

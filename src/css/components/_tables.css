@@ -1,0 +1,178 @@
+/* ============================================================================
+   TABLES
+   Enhanced with ledger styling
+   ============================================================================ */
+
+@layer components {
+    .table-container {
+        overflow-x: auto;
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--card-border);
+        background: var(--card-bg);
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .table thead {
+        background: linear-gradient(180deg, var(--parchment) 0%, var(--parchment-dark) 100%);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .dark .table thead { background: linear-gradient(180deg, var(--parchment-dark) 0%, #1a2332 100%); }
+
+    .table th {
+        padding: var(--spacing-md) var(--spacing-xl);
+        text-align: left;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-muted);
+        border-bottom: 2px solid var(--card-border);
+        white-space: nowrap;
+    }
+
+    .table th.sortable { cursor: pointer; user-select: none; }
+    .table th.sortable:hover { color: var(--ink); }
+    .table th .sort-icon { display: inline-block; margin-left: var(--spacing-md); opacity: 0.4; }
+    .table th.sorted .sort-icon { opacity: 1; color: var(--teal); }
+
+    .table td {
+        padding: var(--spacing-lg) var(--spacing-xl);
+        font-size: 14px;
+        color: var(--ink);
+        border-bottom: 1px solid var(--card-border);
+        vertical-align: middle;
+    }
+
+    .table tbody tr { transition: background 0.15s ease; }
+    .table tbody tr:hover { background: rgba(13, 148, 136, 0.04); }
+    .dark .table tbody tr:hover { background: rgba(13, 148, 136, 0.08); }
+    .table tbody tr:last-child td { border-bottom: none; }
+
+    /* Ledger-style table with alternating backgrounds and guide lines */
+    .table-ledger tbody tr:nth-child(odd) {
+        background: linear-gradient(90deg, rgba(13, 148, 136, 0.02) 0%, transparent 10%, transparent 90%, rgba(13, 148, 136, 0.02) 100%);
+    }
+    .table-ledger tbody tr:nth-child(even) {
+        background: linear-gradient(90deg, rgba(217, 119, 6, 0.01) 0%, transparent 10%, transparent 90%, rgba(217, 119, 6, 0.01) 100%);
+    }
+    .dark .table-ledger tbody tr:nth-child(odd) {
+        background: linear-gradient(90deg, rgba(13, 148, 136, 0.05) 0%, transparent 10%, transparent 90%, rgba(13, 148, 136, 0.05) 100%);
+    }
+
+    .table-cell-mono {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    /* Amount cells with ledger-style highlighting */
+    .table-cell-amount {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums lining-nums;
+        text-align: right;
+        font-weight: 500;
+        position: relative;
+    }
+    .table-cell-amount::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        background: linear-gradient(90deg, transparent 0%, rgba(13, 148, 136, 0.03) 100%);
+        pointer-events: none;
+    }
+
+    /* Debit/Credit columns */
+    .table-cell-debit {
+        background: linear-gradient(90deg, transparent 0%, rgba(217, 119, 6, 0.04) 100%);
+        border-left: 2px solid rgba(217, 119, 6, 0.2);
+    }
+    .table-cell-credit {
+        background: linear-gradient(90deg, transparent 0%, rgba(13, 148, 136, 0.04) 100%);
+        border-left: 2px solid rgba(13, 148, 136, 0.2);
+    }
+
+    /* Total row - uses higher specificity to override zebra stripes */
+    .table tbody tr.table-row-total,
+    .table-ledger tbody tr.table-row-total {
+        font-weight: 600;
+        background: linear-gradient(90deg, var(--parchment) 0%, var(--parchment-dark) 100%);
+        border-top: 2px solid var(--card-border);
+    }
+    .table-row-total td {
+        border-bottom: none;
+        padding-top: var(--spacing-md);
+        padding-bottom: var(--spacing-md);
+    }
+
+    .table-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--spacing-xs); }
+    .table-action-btn {
+        padding: var(--spacing-md);
+        border-radius: var(--radius-md);
+        color: var(--ink-faint);
+        transition: all 0.2s ease;
+    }
+    .table-action-btn:hover { color: var(--ink); background: var(--parchment-dark); }
+
+    /* Compact table variant */
+    .table-compact th { padding: var(--spacing-sm) var(--spacing-md); font-size: 10px; }
+    .table-compact td { padding: var(--spacing-sm) var(--spacing-md); font-size: 13px; }
+
+    /* Sticky first column for wide tables */
+    .table-sticky-col th:first-child,
+    .table-sticky-col td:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 5;
+        background: var(--card-bg);
+    }
+    .table-sticky-col th:first-child { background: var(--parchment); }
+    .dark .table-sticky-col th:first-child { background: var(--parchment-dark); }
+}
+
+/* Mobile card-based table layout */
+@media (max-width: 639px) {
+    .table-cards thead { display: none; }
+    .table-cards tbody { display: flex; flex-direction: column; gap: var(--spacing-md); }
+    .table-cards tbody tr {
+        display: block;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-lg);
+    }
+    .table-cards tbody tr:hover { background: var(--card-bg); }
+    .table-cards td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: var(--spacing-xs) 0;
+        border-bottom: 1px solid var(--card-border);
+        font-size: 14px;
+    }
+    .table-cards td:last-child { border-bottom: none; }
+    .table-cards td::before {
+        content: attr(data-label);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ink-muted);
+        flex-shrink: 0;
+        margin-right: var(--spacing-md);
+    }
+    .table-cards td:has(.table-actions) {
+        justify-content: flex-end;
+        padding-top: var(--spacing-sm);
+    }
+    .table-cards td:has(.table-actions)::before { display: none; }
+}

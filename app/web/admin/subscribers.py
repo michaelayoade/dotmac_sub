@@ -20,7 +20,7 @@ from app.services import notification as notification_service
 from app.models.auth import AuthProvider
 from app.models.catalog import ContractTerm, OfferStatus, SubscriptionStatus
 from app.schemas.auth import UserCredentialCreate
-from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
+from app.schemas.subscriber import SubscriberUpdate
 from app.services.auth_flow import hash_password
 from app.services import catalog as catalog_service
 
@@ -111,7 +111,6 @@ def subscribers_list(
     subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=subscriber_type if subscriber_type else None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -123,7 +122,6 @@ def subscribers_list(
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=subscriber_type if subscriber_type else None,
-        person_id=None,
         organization_id=None,
         order_by="created_at",
         order_dir="desc",
@@ -227,10 +225,8 @@ def subscriber_new(request: Request, db: Session = Depends(get_db)):
     people = subscriber_service.subscribers.list(
         db=db,
         organization_id=None,
-        reseller_id=None,
-        status=None,
-        is_active=True,
-        order_by="last_name",
+        subscriber_type="person",
+        order_by="created_at",
         order_dir="asc",
         limit=500,
         offset=0,
@@ -322,10 +318,6 @@ def subscriber_create(
             is_active=is_active == "true",
         )
         subscriber = subscriber_service.subscribers.create(db=db, payload=data)
-        subscriber_service.accounts.create(
-            db=db,
-            payload=SubscriberAccountCreate(subscriber_id=subscriber.id),
-        )
         if create_user == "true":
             credential = UserCredentialCreate(
                 person_id=person_uuid,
@@ -353,10 +345,8 @@ def subscriber_create(
         people = subscriber_service.subscribers.list(
             db=db,
             organization_id=None,
-            reseller_id=None,
-            status=None,
-            is_active=True,
-            order_by="last_name",
+            subscriber_type="person",
+            order_by="created_at",
             order_dir="asc",
             limit=500,
             offset=0,
@@ -420,13 +410,12 @@ def subscriber_detail(
     online_status = {}  # subscription_id -> is_online
     try:
         # Get all account IDs for this subscriber
-        account_ids = [str(acc.id) for acc in (subscriber.accounts or [])]
-        if account_ids:
-            # Fetch subscriptions for all subscriber's accounts
-            for account_id in account_ids:
-                acct_subs = catalog_service.subscriptions.list(
-                    db=db,
-                    account_id=account_id,
+        account_ids = [str(subscriber.id)]
+        # Fetch subscriptions for subscriber (account consolidated)
+        for account_id in account_ids:
+            acct_subs = catalog_service.subscriptions.list(
+                db=db,
+                subscriber_id=account_id,
                     offer_id=None,
                     status=None,
                     order_by="created_at",
@@ -434,7 +423,7 @@ def subscriber_detail(
                     limit=10,
                     offset=0,
                 )
-                subscriptions.extend(acct_subs)
+            subscriptions.extend(acct_subs)
             # Sort by created_at desc and limit
             subscriptions = sorted(subscriptions, key=lambda s: s.created_at or s.id, reverse=True)[:10]
 
@@ -954,8 +943,6 @@ def subscriber_delete(
         subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
         if subscriber.is_active:
             raise HTTPException(status_code=409, detail="Deactivate subscriber before deleting.")
-        if db.query(SubscriberAccount.id).filter(SubscriberAccount.subscriber_id == subscriber.id).first():
-            raise HTTPException(status_code=409, detail="Delete subscriber accounts before deleting subscriber.")
         subscriber_service.subscribers.delete(db=db, subscriber_id=str(subscriber_id))
         from app.web.admin import get_current_user
         current_user = get_current_user(request)
@@ -1062,16 +1049,12 @@ async def bulk_delete(
 
         deleted_count = 0
         skipped_active = 0
-        skipped_has_accounts = 0
 
         for subscriber_id in ids:
             try:
                 subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
                 if subscriber.is_active:
                     skipped_active += 1
-                    continue
-                if db.query(SubscriberAccount.id).filter(SubscriberAccount.subscriber_id == subscriber.id).first():
-                    skipped_has_accounts += 1
                     continue
                 subscriber_service.subscribers.delete(db=db, subscriber_id=str(subscriber_id))
                 deleted_count += 1
@@ -1081,8 +1064,6 @@ async def bulk_delete(
         message_parts = [f"{deleted_count} subscriber(s) deleted"]
         if skipped_active > 0:
             message_parts.append(f"{skipped_active} active (skipped)")
-        if skipped_has_accounts > 0:
-            message_parts.append(f"{skipped_has_accounts} have accounts (skipped)")
 
         trigger = {
             "showToast": {

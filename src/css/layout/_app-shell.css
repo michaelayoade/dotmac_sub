@@ -1,0 +1,137 @@
+/* ============================================================================
+   APP LAYOUT (RESPONSIVE, SHARED)
+   The core shell structure: sidebar + main content area
+   ============================================================================ */
+
+/* Ensure flex layout cannot be overridden */
+.app-shell {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: stretch;
+    min-height: 100vh;
+    position: relative;
+    overscroll-behavior-y: contain;
+}
+
+.app-sidebar {
+    width: 16rem;
+    flex-shrink: 0;
+    flex-grow: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    max-height: 100vh;
+    z-index: 40;
+    overflow: hidden;
+    transform: translateX(0);
+    transition: width 0.3s ease, transform 0.3s ease;
+}
+
+.app-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    overscroll-behavior-y: auto;
+}
+
+.app-main > main {
+    flex: 1;
+}
+
+.app-header {
+    padding-left: var(--content-gutter);
+    padding-right: var(--content-gutter);
+    width: 100%;
+}
+
+.app-page {
+    padding: var(--content-gutter);
+    width: 100%;
+}
+
+.app-footer {
+    margin-top: auto;
+    padding: var(--spacing-xl) var(--content-gutter);
+    border-top: 1px solid var(--card-border);
+}
+
+/* Sidebar collapsed state */
+.app-shell.app-sidebar-collapsed .app-sidebar {
+    width: 4rem;
+}
+
+/* Mobile sidebar behavior */
+@media (max-width: 1023px) {
+    .app-sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        height: auto;
+        transform: translateX(-100%);
+        z-index: 50;
+        box-shadow: 8px 0 32px rgba(0, 0, 0, 0.15);
+    }
+
+    .app-shell.app-sidebar-open .app-sidebar {
+        transform: translateX(0);
+    }
+
+    .app-main {
+        width: 100%;
+    }
+
+    .app-page {
+        padding: var(--spacing-lg);
+    }
+
+    .app-header {
+        padding-left: var(--spacing-lg);
+        padding-right: var(--spacing-lg);
+    }
+}
+
+/* Very small screens */
+@media (max-width: 374px) {
+    .app-page {
+        padding: var(--spacing-md);
+    }
+
+    .app-header {
+        padding-left: var(--spacing-md);
+        padding-right: var(--spacing-md);
+    }
+
+    .app-sidebar {
+        width: 280px;
+    }
+}
+
+/* Overlay for mobile sidebar */
+.app-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+@media (min-width: 1024px) {
+    .app-overlay {
+        display: none !important;
+    }
+}
+
+/* Landscape mobile optimizations */
+@media (max-height: 500px) and (orientation: landscape) {
+    .app-header {
+        height: 48px;
+    }
+
+    .app-header h1 {
+        font-size: 1rem;
+    }
+}

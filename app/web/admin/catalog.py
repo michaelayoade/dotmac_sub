@@ -686,7 +686,7 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
     )
     subscriptions = catalog_service.subscriptions.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         offer_id=offer_id,
         status=None,
         order_by="created_at",
@@ -1019,7 +1019,7 @@ def catalog_subscriptions(
     offset = (page - 1) * per_page
     subscriptions = catalog_service.subscriptions.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         offer_id=None,
         status=status if status else None,
         order_by="created_at",
@@ -1029,7 +1029,7 @@ def catalog_subscriptions(
     )
     all_subscriptions = catalog_service.subscriptions.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         offer_id=None,
         status=status if status else None,
         order_by="created_at",

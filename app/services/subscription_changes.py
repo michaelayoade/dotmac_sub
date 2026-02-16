@@ -122,7 +122,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if account_id:
             # Join to get requests for all subscriptions under this account
             query = query.join(Subscription).filter(
-                Subscription.account_id == coerce_uuid(account_id)
+                Subscription.subscriber_id == coerce_uuid(account_id)
             )
 
         if status:

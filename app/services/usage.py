@@ -9,7 +9,7 @@ from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplicati
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.catalog import CatalogOffer, OfferVersion, Subscription, UsageAllowance
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.models.usage import (
     QuotaBucket,
     RadiusAccountingSession,
@@ -152,13 +152,13 @@ def _emit_usage_events(
                     EventType.usage_warning,
                     {
                         "subscription_id": str(subscription.id),
-                        "account_id": str(subscription.account_id),
+                        "account_id": str(subscription.subscriber_id),
                         "used_gb": str(_round_gb(new_used)),
                         "included_gb": str(_round_gb(included)),
                         "threshold": str(threshold),
                     },
                     subscription_id=subscription.id,
-                    account_id=subscription.account_id,
+                    account_id=subscription.subscriber_id,
                 )
     if previous_used < included <= new_used:
         emit_event(
@@ -166,12 +166,12 @@ def _emit_usage_events(
             EventType.usage_exhausted,
             {
                 "subscription_id": str(subscription.id),
-                "account_id": str(subscription.account_id),
+                "account_id": str(subscription.subscriber_id),
                 "used_gb": str(_round_gb(new_used)),
                 "included_gb": str(_round_gb(included)),
             },
             subscription_id=subscription.id,
-            account_id=subscription.account_id,
+            account_id=subscription.subscriber_id,
         )
 
 
@@ -451,7 +451,7 @@ class UsageCharges(ListResponseMixin):
     def list(
         db: Session,
         subscription_id: str | None,
-        account_id: str | None,
+        subscriber_id: str | None,
         status: str | None,
         order_by: str,
         order_dir: str,
@@ -461,8 +461,8 @@ class UsageCharges(ListResponseMixin):
         query = db.query(UsageCharge)
         if subscription_id:
             query = query.filter(UsageCharge.subscription_id == subscription_id)
-        if account_id:
-            query = query.filter(UsageCharge.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(UsageCharge.subscriber_id == subscriber_id)
         if status:
             query = query.filter(
                 UsageCharge.status
@@ -490,19 +490,19 @@ class UsageCharges(ListResponseMixin):
             return charge
         if charge.status == UsageChargeStatus.needs_review:
             raise HTTPException(status_code=400, detail="Charge requires review")
-        account = db.get(SubscriberAccount, charge.account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
+        subscriber = db.get(Subscriber, charge.subscriber_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
         if payload.invoice_id:
             invoice = db.get(Invoice, payload.invoice_id)
             if not invoice:
                 raise HTTPException(status_code=404, detail="Invoice not found")
-            if str(invoice.account_id) != str(charge.account_id):
+            if str(invoice.account_id) != str(charge.subscriber_id):
                 raise HTTPException(status_code=400, detail="Invoice not for account")
         else:
             invoice = _resolve_or_create_invoice(
                 db,
-                str(charge.account_id),
+                str(charge.subscriber_id),
                 charge.period_start,
                 charge.period_end,
                 charge.currency,
@@ -538,7 +538,7 @@ class UsageCharges(ListResponseMixin):
             .filter(UsageCharge.status == UsageChargeStatus.staged)
         )
         if payload.account_id:
-            query = query.filter(UsageCharge.account_id == payload.account_id)
+            query = query.filter(UsageCharge.subscriber_id == payload.account_id)
         charges = query.all()
         posted = 0
         for charge in charges:
@@ -672,12 +672,12 @@ class UsageRatingRuns(ListResponseMixin):
                 if billable_gb == 0:
                     amount = Decimal("0.00")
                     status = UsageChargeStatus.skipped
-                if not subscription.account_id:
+                if not subscription.subscriber_id:
                     status = UsageChargeStatus.needs_review
                     notes = "Subscription missing account"
                 charge = UsageCharge(
                     subscription_id=subscription.id,
-                    account_id=subscription.account_id,
+                    subscriber_id=subscription.subscriber_id,
                     period_start=period_start,
                     period_end=period_end,
                     total_gb=total_gb,

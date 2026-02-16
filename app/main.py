@@ -194,18 +194,32 @@ async def csrf_middleware(request: Request, call_next):
                 from urllib.parse import parse_qs
                 try:
                     if "multipart/form-data" in content_type:
-                        # For multipart, we need to handle it differently
-                        # The form data will include _csrf_token field
-                        # Since we can't easily parse multipart here, we'll trust
-                        # that the middleware before us handled it
-                        # For now, we'll check if the field exists in the raw body
+                        # Parse multipart form data properly using email.parser
                         form_token = None
-                        if b"_csrf_token" in body:
-                            # Extract token from multipart body (simplified)
-                            import re
-                            match = re.search(rb'name="_csrf_token"\r\n\r\n([^\r\n-]+)', body)
-                            if match:
-                                form_token = match.group(1).decode('utf-8')
+                        from email.parser import BytesParser
+                        from email.policy import HTTP
+
+                        # Extract boundary from content-type header
+                        import re
+                        boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
+                        if boundary_match:
+                            boundary = boundary_match.group(1).strip('"')
+                            # Construct a valid MIME message for parsing
+                            mime_header = f"Content-Type: multipart/form-data; boundary={boundary}\r\n\r\n"
+                            mime_message = mime_header.encode('utf-8') + body
+
+                            parser = BytesParser(policy=HTTP)
+                            msg = parser.parsebytes(mime_message)
+
+                            # Walk through all parts to find _csrf_token
+                            if msg.is_multipart():
+                                for part in msg.iter_parts():
+                                    content_disp = part.get("Content-Disposition", "")
+                                    if 'name="_csrf_token"' in content_disp or "name=_csrf_token" in content_disp:
+                                        payload = part.get_payload(decode=True)
+                                        if payload:
+                                            form_token = payload.decode('utf-8').strip()
+                                            break
                     else:
                         form_data = parse_qs(body.decode('utf-8'))
                         form_token = form_data.get("_csrf_token", [None])[0]

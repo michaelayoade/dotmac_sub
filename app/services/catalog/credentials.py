@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessCredential, RadiusProfile
-from app.models.subscriber import SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 from app.schemas.catalog import AccessCredentialCreate, AccessCredentialUpdate
@@ -27,9 +27,9 @@ def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> Non
 class AccessCredentials(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: AccessCredentialCreate):
-        account = db.get(SubscriberAccount, payload.account_id)
-        if not account:
-            raise HTTPException(status_code=404, detail="Subscriber account not found")
+        subscriber = db.get(Subscriber, payload.subscriber_id)
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
         if payload.radius_profile_id:
             profile = db.get(RadiusProfile, payload.radius_profile_id)
             if not profile:
@@ -54,7 +54,7 @@ class AccessCredentials(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        account_id: str | None,
+        subscriber_id: str | None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
@@ -62,8 +62,8 @@ class AccessCredentials(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AccessCredential)
-        if account_id:
-            query = query.filter(AccessCredential.account_id == account_id)
+        if subscriber_id:
+            query = query.filter(AccessCredential.subscriber_id == subscriber_id)
         if is_active is None:
             query = query.filter(AccessCredential.is_active.is_(True))
         else:
@@ -82,10 +82,10 @@ class AccessCredentials(ListResponseMixin):
         if not credential:
             raise HTTPException(status_code=404, detail="Access credential not found")
         data = payload.model_dump(exclude_unset=True)
-        if "account_id" in data:
-            account = db.get(SubscriberAccount, data["account_id"])
-            if not account:
-                raise HTTPException(status_code=404, detail="Subscriber account not found")
+        if "subscriber_id" in data:
+            subscriber = db.get(Subscriber, data["subscriber_id"])
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
         if "radius_profile_id" in data and data["radius_profile_id"]:
             profile = db.get(RadiusProfile, data["radius_profile_id"])
             if not profile:

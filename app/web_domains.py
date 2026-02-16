@@ -56,7 +56,7 @@ def _render(request: Request, title: str, items):
 def network_home(request: Request, db: Session = Depends(get_db)):
     items = network_service.cpe_devices.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         subscription_id=None,
         order_by="created_at",
         order_dir="desc",

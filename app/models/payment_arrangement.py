@@ -85,7 +85,7 @@ class PaymentArrangement(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    subscriber = relationship("Subscriber")
+    subscriber = relationship("Subscriber", foreign_keys=[subscriber_id])
     invoice = relationship("Invoice")
     requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
     approved_by = relationship("Subscriber", foreign_keys=[approved_by_subscriber_id])
