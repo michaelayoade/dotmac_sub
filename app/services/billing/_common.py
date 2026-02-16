@@ -220,28 +220,14 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         invoice.tax_total = tax_total
         invoice.total = round_money(subtotal + tax_total)
 
-    allocation_count = (
-        db.query(func.count(PaymentAllocation.id))
+    paid_amount = (
+        db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
         .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(Payment.is_active.is_(True))
+        .filter(Payment.status == PaymentStatus.succeeded)
         .scalar()
     )
-    if allocation_count:
-        paid_amount = (
-            db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
-            .join(Payment, Payment.id == PaymentAllocation.payment_id)
-            .filter(PaymentAllocation.invoice_id == invoice.id)
-            .filter(Payment.is_active.is_(True))
-            .filter(Payment.status == PaymentStatus.succeeded)
-            .scalar()
-        )
-    else:
-        paid_amount = (
-            db.query(func.coalesce(func.sum(Payment.amount), 0))
-            .filter(Payment.invoice_id == invoice.id)
-            .filter(Payment.is_active.is_(True))
-            .filter(Payment.status == PaymentStatus.succeeded)
-            .scalar()
-        )
     paid_amount = round_money(Decimal(str(paid_amount)))
     credit_amount = (
         db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))

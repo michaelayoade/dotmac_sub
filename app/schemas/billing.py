@@ -286,7 +286,6 @@ class BankAccountRead(BankAccountBase):
 
 class PaymentBase(BaseModel):
     account_id: UUID
-    invoice_id: UUID | None = None
     payment_method_id: UUID | None = None
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
@@ -306,7 +305,6 @@ class PaymentCreate(PaymentBase):
 
 class PaymentUpdate(BaseModel):
     account_id: UUID | None = None
-    invoice_id: UUID | None = None
     payment_method_id: UUID | None = None
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None

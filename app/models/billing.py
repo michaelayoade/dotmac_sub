@@ -146,7 +146,6 @@ class Invoice(Base):
 
     account = relationship("Subscriber")
     lines = relationship("InvoiceLine", back_populates="invoice")
-    payments = relationship("Payment", back_populates="invoice")
     payment_allocations = relationship("PaymentAllocation", back_populates="invoice")
     ledger_entries = relationship("LedgerEntry", back_populates="invoice")
     dunning_actions = relationship("DunningActionLog", back_populates="invoice")
@@ -376,9 +375,6 @@ class Payment(Base):
     account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
-    invoice_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("invoices.id")
-    )
     payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_methods.id")
     )
@@ -409,7 +405,6 @@ class Payment(Base):
     )
 
     account = relationship("Subscriber")
-    invoice = relationship("Invoice", back_populates="payments")
     payment_method = relationship("PaymentMethod", back_populates="payments")
     payment_channel = relationship("PaymentChannel", back_populates="payments")
     collection_account = relationship("CollectionAccount", back_populates="payments")

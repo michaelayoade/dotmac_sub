@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -479,7 +479,7 @@ class Payments(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: PaymentCreate):
-        data = payload.model_dump(exclude={"allocations", "invoice_id"})
+        data = payload.model_dump(exclude={"allocations"})
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:
             default_currency = settings_spec.resolve_value(
@@ -498,7 +498,7 @@ class Payments(ListResponseMixin):
         _validate_payment_linkages(
             db,
             str(payload.account_id),
-            str(payload.invoice_id) if payload.invoice_id else None,
+            None,
             str(payload.payment_method_id) if payload.payment_method_id else None,
         )
         _validate_payment_provider(db, str(payload.provider_id) if payload.provider_id else None)
@@ -522,10 +522,12 @@ class Payments(ListResponseMixin):
             _validate_collection_account(
                 db, str(payload.collection_account_id), data.get("currency")
             )
-        if payload.invoice_id:
-            invoice = get_by_id(db, Invoice, payload.invoice_id)
-            if invoice:
-                _validate_invoice_currency(invoice, data.get("currency"))
+        # Validate allocation invoices against payment currency
+        if payload.allocations:
+            for alloc in payload.allocations:
+                invoice = get_by_id(db, Invoice, alloc.invoice_id)
+                if invoice:
+                    _validate_invoice_currency(invoice, data.get("currency"))
         payment = Payment(**data)
         db.add(payment)
         db.flush()
@@ -539,15 +541,6 @@ class Payments(ListResponseMixin):
                     memo=allocation.memo,
                 )
                 for allocation in payload.allocations
-            ]
-        elif payload.invoice_id:
-            allocations = [
-                PaymentAllocationCreate(
-                    payment_id=payment.id,
-                    invoice_id=payload.invoice_id,
-                    amount=payment.amount,
-                    memo=payload.memo,
-                )
             ]
         if allocations:
             Payments._create_allocations(db, payment, allocations)
@@ -608,13 +601,8 @@ class Payments(ListResponseMixin):
             query = query.filter(Payment.account_id == account_id)
         if invoice_id:
             query = (
-                query.outerjoin(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
-                .filter(
-                    or_(
-                        PaymentAllocation.invoice_id == invoice_id,
-                        Payment.invoice_id == invoice_id,
-                    )
-                )
+                query.join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
+                .filter(PaymentAllocation.invoice_id == invoice_id)
             )
         if status:
             query = query.filter(
@@ -638,8 +626,6 @@ class Payments(ListResponseMixin):
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         data = payload.model_dump(exclude_unset=True)
-        explicit_invoice_id = "invoice_id" in data
-        requested_invoice_id = data.pop("invoice_id", None) if explicit_invoice_id else None
         account_id = str(data.get("account_id", payment.account_id))
         payment_method_id = data.get("payment_method_id", payment.payment_method_id)
         explicit_channel = "payment_channel_id" in data
@@ -649,7 +635,7 @@ class Payments(ListResponseMixin):
         _validate_payment_linkages(
             db,
             account_id,
-            str(requested_invoice_id) if requested_invoice_id else None,
+            None,
             str(payment_method_id) if payment_method_id else None,
         )
         _validate_payment_provider(db, str(provider_id) if provider_id else None)
@@ -673,44 +659,8 @@ class Payments(ListResponseMixin):
             _validate_collection_account(
                 db, str(collection_account_id), data.get("currency", payment.currency)
             )
-        if requested_invoice_id:
-            invoice = get_by_id(db, Invoice, requested_invoice_id)
-            if invoice:
-                _validate_invoice_currency(invoice, data.get("currency"))
         for key, value in data.items():
             setattr(payment, key, value)
-        if explicit_invoice_id:
-            if requested_invoice_id is None:
-                if payment.allocations:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Cannot clear invoice on an allocated payment; "
-                            "remove allocations first"
-                        ),
-                    )
-            elif payment.allocations:
-                if len(payment.allocations) == 1 and str(payment.allocations[0].invoice_id) == str(requested_invoice_id):
-                    requested_invoice_id = None
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Payment has multiple allocations; update allocations instead"
-                        ),
-                    )
-            if requested_invoice_id:
-                invoice = get_by_id(db, Invoice, requested_invoice_id)
-                allocation = PaymentAllocation(
-                    payment_id=payment.id,
-                    invoice_id=requested_invoice_id,
-                    amount=payment.amount,
-                )
-                db.add(allocation)
-                db.flush()
-                payment.invoice_id = None
-                if invoice:
-                    _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         invoice_ids = [
             alloc.invoice_id for alloc in payment.allocations
         ]

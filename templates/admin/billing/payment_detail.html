@@ -79,6 +79,47 @@
 
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Invoice Allocations</h3>
+                </div>
+                {% if payment.allocations %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice</th>
+                                <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                                <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Allocated</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                            {% for alloc in payment.allocations %}
+                            <tr>
+                                <td class="px-6 py-4 text-sm">
+                                    <a href="/admin/billing/invoices/{{ alloc.invoice_id }}" class="font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ alloc.invoice_id | string | truncate(8, True, '') }}</a>
+                                </td>
+                                <td class="px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(alloc.amount or 0) }}</td>
+                                <td class="px-6 py-4 text-right text-sm text-slate-500 dark:text-slate-400">{{ alloc.created_at.strftime('%b %d, %Y') if alloc.created_at else '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        {% if payment.allocations | length > 1 %}
+                        <tfoot class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <td class="px-6 py-3 text-sm font-semibold text-slate-900 dark:text-white">Total</td>
+                                <td class="px-6 py-3 text-right text-sm font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(payment.allocations | sum(attribute='amount') or 0) }}</td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                        {% endif %}
+                    </table>
+                </div>
+                {% else %}
+                <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No invoice allocations. This payment is unallocated.</div>
+                {% endif %}
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <h3 class="font-semibold text-slate-900 dark:text-white">Ledger Entries</h3>
                 </div>
                 {% if payment.ledger_entries %}

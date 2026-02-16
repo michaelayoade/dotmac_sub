@@ -245,7 +245,6 @@ class PaymentProviderEvents(ListResponseMixin):
                 amount=payment.amount,
             )
             db.add(allocation)
-            payment.invoice_id = None
         allocation_invoice_id = (
             payload.invoice_id
             or (str(payment.allocations[0].invoice_id) if payment and payment.allocations else None)

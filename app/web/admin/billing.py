@@ -2107,16 +2107,24 @@ def payment_create(
         parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
         if resolved_invoice and resolved_invoice.currency:
             currency = resolved_invoice.currency
+        parsed_amount = _parse_decimal(amount, "amount")
+        allocations = None
+        if invoice_id:
+            from app.schemas.billing import PaymentAllocationApply
+            allocations = [PaymentAllocationApply(
+                invoice_id=UUID(invoice_id),
+                amount=parsed_amount,
+            )]
         payload = PaymentCreate(
             account_id=parsed_account_id,
-            invoice_id=UUID(invoice_id) if invoice_id else None,
             collection_account_id=UUID(collection_account_id)
             if collection_account_id
             else None,
-            amount=_parse_decimal(amount, "amount"),
+            amount=parsed_amount,
             currency=currency.strip().upper(),
             status=status or "pending",
             memo=memo.strip() if memo else None,
+            allocations=allocations,
         )
         payment = billing_service.payments.create(db, payload)
         from app.web.admin import get_current_user
@@ -2331,22 +2339,34 @@ def payment_update(
         if resolved_invoice and resolved_invoice.currency:
             currency = resolved_invoice.currency
         requested_invoice_id = str(resolved_invoice.id) if resolved_invoice else None
-        if requested_invoice_id == current_invoice_id:
-            requested_invoice_id = None
-        payload_kwargs = {
-            "account_id": parsed_account_id,
-            "payment_method_id": _resolve_payment_method_id(
+        invoice_changed = requested_invoice_id and requested_invoice_id != current_invoice_id
+        payload = PaymentUpdate(
+            account_id=parsed_account_id,
+            payment_method_id=_resolve_payment_method_id(
                 db, parsed_account_id, payment_method_id
             ),
-            "amount": _parse_decimal(amount, "amount"),
-            "currency": currency.strip().upper(),
-            "status": status or "pending",
-            "memo": memo.strip() if memo else None,
-        }
-        if requested_invoice_id:
-            payload_kwargs["invoice_id"] = UUID(requested_invoice_id)
-        payload = PaymentUpdate(**payload_kwargs)
+            amount=_parse_decimal(amount, "amount"),
+            currency=currency.strip().upper(),
+            status=status or "pending",
+            memo=memo.strip() if memo else None,
+        )
         billing_service.payments.update(db, str(payment_id), payload)
+        # If the invoice changed, update allocations
+        if invoice_changed and requested_invoice_id:
+            payment_obj = billing_service.payments.get(db=db, payment_id=str(payment_id))
+            # Remove existing allocations and create new one
+            for alloc in list(payment_obj.allocations):
+                db.delete(alloc)
+            db.flush()
+            from app.models.billing import PaymentAllocation
+            new_alloc = PaymentAllocation(
+                payment_id=payment_obj.id,
+                invoice_id=UUID(requested_invoice_id),
+                amount=payment_obj.amount,
+            )
+            db.add(new_alloc)
+            db.commit()
+            db.refresh(payment_obj)
         after = billing_service.payments.get(db=db, payment_id=str(payment_id))
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
