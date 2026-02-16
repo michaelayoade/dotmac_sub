@@ -144,6 +144,16 @@ def _account_label(account) -> str:
     return "Account"
 
 
+def _payment_primary_invoice_id(payment: Payment | None) -> str | None:
+    if not payment or not payment.allocations:
+        return None
+    allocation = min(
+        payment.allocations,
+        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return str(allocation.invoice_id)
+
+
 def _parse_customer_ref(value: str | None) -> tuple[str | None, str | None]:
     if not value:
         return None, None
@@ -2118,7 +2128,10 @@ def payment_create(
             entity_type="payment",
             entity_id=str(payment.id),
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"amount": str(payment.amount), "invoice_id": str(payment.invoice_id) if payment.invoice_id else None},
+            metadata={
+                "amount": str(payment.amount),
+                "invoice_id": _payment_primary_invoice_id(payment),
+            },
         )
     except Exception as exc:
         selected_account = None
@@ -2201,6 +2214,7 @@ def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get
         {
             "request": request,
             "payment": payment,
+            "primary_invoice_id": _payment_primary_invoice_id(payment),
             "active_page": "payments",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -2219,6 +2233,7 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
             status_code=404,
         )
     selected_account = payment.account
+    primary_invoice_id = _payment_primary_invoice_id(payment)
     if not selected_account and payment.account_id:
         try:
             selected_account = subscriber_service.accounts.get(db=db, account_id=str(payment.account_id))
@@ -2251,14 +2266,15 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
         offset=0,
     )
     invoices = _filter_open_invoices(invoices)
-    if payment.invoice_id:
+    invoice_obj = None
+    if primary_invoice_id:
         try:
-            invoice_obj = billing_service.invoices.get(db=db, invoice_id=str(payment.invoice_id))
+            invoice_obj = billing_service.invoices.get(db=db, invoice_id=primary_invoice_id)
             if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
                 invoices = [invoice_obj, *invoices]
         except Exception:
-            pass
-    balance_value, balance_display = _invoice_balance_info(payment.invoice if payment else None)
+            invoice_obj = None
+    balance_value, balance_display = _invoice_balance_info(invoice_obj)
     from app.web.admin import get_sidebar_stats, get_current_user
     return templates.TemplateResponse(
         "admin/billing/payment_form.html",
@@ -2280,9 +2296,9 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
             "account_label": _account_label(selected_account),
             "account_number": selected_account.account_number if selected_account else None,
             "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id),
-            "currency_locked": bool(payment.invoice_id),
+            "currency_locked": bool(primary_invoice_id),
             "show_invoice_typeahead": False,
-            "selected_invoice_id": str(payment.invoice_id) if payment and payment.invoice_id else None,
+            "selected_invoice_id": primary_invoice_id,
             "balance_value": balance_value,
             "balance_display": balance_display,
         },
@@ -2304,6 +2320,7 @@ def payment_update(
 ):
     try:
         before = billing_service.payments.get(db=db, payment_id=str(payment_id))
+        current_invoice_id = _payment_primary_invoice_id(before)
         resolved_invoice = _resolve_invoice(db, invoice_id)
         resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
         if not resolved_account_id:
@@ -2313,15 +2330,22 @@ def payment_update(
         parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
         if resolved_invoice and resolved_invoice.currency:
             currency = resolved_invoice.currency
-        payload = PaymentUpdate(
-            account_id=parsed_account_id,
-            invoice_id=UUID(invoice_id) if invoice_id else None,
-            payment_method_id=_resolve_payment_method_id(db, parsed_account_id, payment_method_id),
-            amount=_parse_decimal(amount, "amount"),
-            currency=currency.strip().upper(),
-            status=status or "pending",
-            memo=memo.strip() if memo else None,
-        )
+        requested_invoice_id = str(resolved_invoice.id) if resolved_invoice else None
+        if requested_invoice_id == current_invoice_id:
+            requested_invoice_id = None
+        payload_kwargs = {
+            "account_id": parsed_account_id,
+            "payment_method_id": _resolve_payment_method_id(
+                db, parsed_account_id, payment_method_id
+            ),
+            "amount": _parse_decimal(amount, "amount"),
+            "currency": currency.strip().upper(),
+            "status": status or "pending",
+            "memo": memo.strip() if memo else None,
+        }
+        if requested_invoice_id:
+            payload_kwargs["invoice_id"] = UUID(requested_invoice_id)
+        payload = PaymentUpdate(**payload_kwargs)
         billing_service.payments.update(db, str(payment_id), payload)
         after = billing_service.payments.get(db=db, payment_id=str(payment_id))
         metadata_payload = build_changes_metadata(before, after)
@@ -2373,16 +2397,18 @@ def payment_update(
             offset=0,
         )
         invoices = _filter_open_invoices(invoices)
-        if payment and payment.invoice_id:
+        primary_invoice_id = _payment_primary_invoice_id(payment)
+        invoice_obj = None
+        if primary_invoice_id:
             try:
                 invoice_obj = billing_service.invoices.get(
-                    db=db, invoice_id=str(payment.invoice_id)
+                    db=db, invoice_id=primary_invoice_id
                 )
                 if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
                     invoices = [invoice_obj, *invoices]
             except Exception:
-                pass
-        balance_value, balance_display = _invoice_balance_info(payment.invoice if payment else None)
+                invoice_obj = None
+        balance_value, balance_display = _invoice_balance_info(invoice_obj)
         from app.web.admin import get_sidebar_stats, get_current_user
         return templates.TemplateResponse(
             "admin/billing/payment_form.html",
@@ -2405,9 +2431,9 @@ def payment_update(
                 "account_label": _account_label(selected_account),
                 "account_number": selected_account.account_number if selected_account else None,
                 "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id) if payment else None,
-                "currency_locked": bool(payment.invoice_id) if payment else False,
+                "currency_locked": bool(primary_invoice_id) if payment else False,
                 "show_invoice_typeahead": False,
-                "selected_invoice_id": str(payment.invoice_id) if payment and payment.invoice_id else None,
+                "selected_invoice_id": primary_invoice_id,
                 "balance_value": balance_value,
                 "balance_display": balance_display,
             },

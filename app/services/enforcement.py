@@ -187,6 +187,15 @@ def _apply_mikrotik_address_list(
 ) -> bool:
     if nas_device.vendor != NasVendor.mikrotik:
         return False
+    try:
+        DeviceProvisioner._execute_ssh(
+            nas_device,
+            f'/ip firewall address-list add list="{list_name}" address="{address}"',
+        )
+        return True
+    except Exception as exc:
+        logger.warning("MikroTik address-list update failed: %s", exc)
+        return False
 
 
 def _remove_mikrotik_address_list(
@@ -202,15 +211,6 @@ def _remove_mikrotik_address_list(
         return True
     except Exception as exc:
         logger.warning("MikroTik address-list removal failed: %s", exc)
-        return False
-    try:
-        DeviceProvisioner._execute_ssh(
-            nas_device,
-            f'/ip firewall address-list add list="{list_name}" address="{address}"',
-        )
-        return True
-    except Exception as exc:
-        logger.warning("MikroTik address-list update failed: %s", exc)
         return False
 
 

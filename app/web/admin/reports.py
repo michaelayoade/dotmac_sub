@@ -158,6 +158,16 @@ def _account_display_name(account) -> str:
     return getattr(account, "account_number", "") or str(getattr(account, "id", ""))
 
 
+def _payment_primary_invoice_id(payment) -> str | None:
+    if not payment or not payment.allocations:
+        return None
+    allocation = min(
+        payment.allocations,
+        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return str(allocation.invoice_id)
+
+
 @router.get("/revenue/export")
 def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
     payments = billing_service.payments.list(
@@ -194,7 +204,7 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
             payment.paid_at.isoformat() if payment.paid_at else "",
             _account_display_name(payment.account),
             str(payment.account_id) if payment.account_id else "",
-            str(payment.invoice_id) if payment.invoice_id else "",
+            _payment_primary_invoice_id(payment) or "",
             str(payment.amount or ""),
             payment.currency or "",
             payment.status.value if payment.status else "",

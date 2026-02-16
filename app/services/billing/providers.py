@@ -221,7 +221,6 @@ class PaymentProviderEvents(ListResponseMixin):
             collection_account = _resolve_collection_account(db, channel, currency, None)
             payment = Payment(
                 account_id=account_id,
-                invoice_id=payload.invoice_id,
                 amount=payload.amount,
                 currency=currency,
                 provider_id=provider.id,
@@ -246,10 +245,15 @@ class PaymentProviderEvents(ListResponseMixin):
                 amount=payment.amount,
             )
             db.add(allocation)
+            payment.invoice_id = None
+        allocation_invoice_id = (
+            payload.invoice_id
+            or (str(payment.allocations[0].invoice_id) if payment and payment.allocations else None)
+        )
         event = PaymentProviderEvent(
             provider_id=provider.id,
             payment_id=payment.id if payment else None,
-            invoice_id=payload.invoice_id or (payment.invoice_id if payment else None),
+            invoice_id=allocation_invoice_id,
             event_type=payload.event_type,
             external_id=payload.external_id,
             idempotency_key=payload.idempotency_key,

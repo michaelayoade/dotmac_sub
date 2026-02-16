@@ -124,8 +124,8 @@
                     </div>
                     <div>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Invoice</p>
-                        {% if payment.invoice_id %}
-                        <a href="/admin/billing/invoices/{{ payment.invoice_id }}" class="font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ payment.invoice_id | string | truncate(8, True, '') }}</a>
+                        {% if primary_invoice_id %}
+                        <a href="/admin/billing/invoices/{{ primary_invoice_id }}" class="font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ primary_invoice_id | string | truncate(8, True, '') }}</a>
                         {% else %}
                         <p class="text-slate-600 dark:text-slate-300">—</p>
                         {% endif %}

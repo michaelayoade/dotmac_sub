@@ -330,3 +330,25 @@ def require_any_permission(*permission_keys: str):
         return auth
 
     return _require_any_permission
+
+
+def require_method_permission(
+    read_permission_key: str,
+    write_permission_key: str,
+    read_methods: tuple[str, ...] = ("GET", "HEAD", "OPTIONS"),
+):
+    """Require read permission for read methods, write permission otherwise."""
+    normalized_read_methods = {method.upper() for method in read_methods}
+    require_read = require_permission(read_permission_key)
+    require_write = require_permission(write_permission_key)
+
+    def _require_method_permission(
+        request: Request,
+        auth=Depends(require_user_auth),
+        db: Session = Depends(_get_db),
+    ):
+        if request.method.upper() in normalized_read_methods:
+            return require_read(auth=auth, db=db)
+        return require_write(auth=auth, db=db)
+
+    return _require_method_permission

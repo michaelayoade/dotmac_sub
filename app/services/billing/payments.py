@@ -337,6 +337,16 @@ def _create_refund_ledger_entry(
     return entry
 
 
+def _primary_allocation_invoice_id(payment: Payment) -> str | None:
+    if not payment.allocations:
+        return None
+    allocation = min(
+        payment.allocations,
+        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return str(allocation.invoice_id)
+
+
 class Payments(ListResponseMixin):
     @staticmethod
     def _auto_allocate(db: Session, payment: Payment) -> list[PaymentAllocation]:
@@ -469,7 +479,7 @@ class Payments(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: PaymentCreate):
-        data = payload.model_dump(exclude={"allocations"})
+        data = payload.model_dump(exclude={"allocations", "invoice_id"})
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:
             default_currency = settings_spec.resolve_value(
@@ -557,11 +567,7 @@ class Payments(ListResponseMixin):
         db.refresh(payment)
 
         # Emit payment.received event
-        allocation_invoice_id = (
-            str(payment.allocations[0].invoice_id)
-            if payment.allocations
-            else (str(payment.invoice_id) if payment.invoice_id else None)
-        )
+        allocation_invoice_id = _primary_allocation_invoice_id(payment)
         emit_event(
             db,
             EventType.payment_received,
@@ -632,8 +638,9 @@ class Payments(ListResponseMixin):
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         data = payload.model_dump(exclude_unset=True)
+        explicit_invoice_id = "invoice_id" in data
+        requested_invoice_id = data.pop("invoice_id", None) if explicit_invoice_id else None
         account_id = str(data.get("account_id", payment.account_id))
-        invoice_id = data.get("invoice_id", payment.invoice_id)
         payment_method_id = data.get("payment_method_id", payment.payment_method_id)
         explicit_channel = "payment_channel_id" in data
         payment_channel_id = data.get("payment_channel_id") if explicit_channel else None
@@ -642,7 +649,7 @@ class Payments(ListResponseMixin):
         _validate_payment_linkages(
             db,
             account_id,
-            str(invoice_id) if invoice_id else None,
+            str(requested_invoice_id) if requested_invoice_id else None,
             str(payment_method_id) if payment_method_id else None,
         )
         _validate_payment_provider(db, str(provider_id) if provider_id else None)
@@ -666,12 +673,44 @@ class Payments(ListResponseMixin):
             _validate_collection_account(
                 db, str(collection_account_id), data.get("currency", payment.currency)
             )
-        if invoice_id:
-            invoice = get_by_id(db, Invoice, invoice_id)
+        if requested_invoice_id:
+            invoice = get_by_id(db, Invoice, requested_invoice_id)
             if invoice:
                 _validate_invoice_currency(invoice, data.get("currency"))
         for key, value in data.items():
             setattr(payment, key, value)
+        if explicit_invoice_id:
+            if requested_invoice_id is None:
+                if payment.allocations:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Cannot clear invoice on an allocated payment; "
+                            "remove allocations first"
+                        ),
+                    )
+            elif payment.allocations:
+                if len(payment.allocations) == 1 and str(payment.allocations[0].invoice_id) == str(requested_invoice_id):
+                    requested_invoice_id = None
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Payment has multiple allocations; update allocations instead"
+                        ),
+                    )
+            if requested_invoice_id:
+                invoice = get_by_id(db, Invoice, requested_invoice_id)
+                allocation = PaymentAllocation(
+                    payment_id=payment.id,
+                    invoice_id=requested_invoice_id,
+                    amount=payment.amount,
+                )
+                db.add(allocation)
+                db.flush()
+                payment.invoice_id = None
+                if invoice:
+                    _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         invoice_ids = [
             alloc.invoice_id for alloc in payment.allocations
         ]
@@ -726,7 +765,7 @@ class Payments(ListResponseMixin):
             collections_service.dunning_workflow.resolve_cases_for_account(
                 db,
                 str(payment.account_id),
-                str(payment.allocations[0].invoice_id) if payment.allocations else None,
+                _primary_allocation_invoice_id(payment),
                 commit=False,
             )
         db.commit()
@@ -734,11 +773,7 @@ class Payments(ListResponseMixin):
 
         # Emit payment event based on status transition
         if previous_status != normalized:
-            allocation_invoice_id = (
-                str(payment.allocations[0].invoice_id)
-                if payment.allocations
-                else (str(payment.invoice_id) if payment.invoice_id else None)
-            )
+            allocation_invoice_id = _primary_allocation_invoice_id(payment)
             payload = {
                 "payment_id": str(payment.id),
                 "amount": str(payment.amount) if payment.amount else None,

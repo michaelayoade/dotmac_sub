@@ -62,8 +62,11 @@ from app.schemas.catalog import (
 )
 from app.schemas.common import ListResponse
 from app.services import catalog as catalog_service
+from app.services.auth_dependencies import require_method_permission
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_method_permission("catalog:read", "catalog:write"))]
+)
 
 
 def get_db():

@@ -329,12 +329,9 @@ def _restore_account(db: Session, account_id: str) -> int:
 def _get_account_email(db: Session, account_id: str) -> str | None:
     """Get the billing email for an account."""
     account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account or not account.subscriber:
+    if not account:
         return None
-    # Get billing email from subscriber's person
-    if account.subscriber.person and account.subscriber.person.email:
-        return account.subscriber.person.email
-    return None
+    return account.email
 
 
 def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
