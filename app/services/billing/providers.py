@@ -35,6 +35,7 @@ from app.services.billing._common import (
     _validate_invoice_currency,
     _resolve_collection_account,
     _resolve_payment_channel,
+    _recalculate_invoice_totals,
 )
 
 
@@ -238,6 +239,9 @@ class PaymentProviderEvents(ListResponseMixin):
                     amount=payment.amount,
                 )
                 db.add(allocation)
+                db.flush()
+                from app.services.billing.payments import _create_payment_ledger_entry
+                _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         elif payment and payload.invoice_id and not payment.allocations:
             allocation = PaymentAllocation(
                 payment_id=payment.id,
@@ -245,6 +249,9 @@ class PaymentProviderEvents(ListResponseMixin):
                 amount=payment.amount,
             )
             db.add(allocation)
+            db.flush()
+            from app.services.billing.payments import _create_payment_ledger_entry
+            _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         allocation_invoice_id = (
             payload.invoice_id
             or (str(payment.allocations[0].invoice_id) if payment and payment.allocations else None)

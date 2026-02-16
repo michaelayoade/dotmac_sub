@@ -313,15 +313,15 @@ def _restore_account(db: Session, account_id: str) -> int:
         # Emit subscriber.reactivated event
         emit_event(
             db,
-        EventType.subscriber_reactivated,
-        {
-            "account_id": str(account.id),
-            "subscriber_id": str(account.id),
-            "restored_subscriptions": restored_count,
-        },
-        account_id=account.id,
-        subscriber_id=account.id,
-    )
+            EventType.subscriber_reactivated,
+            {
+                "account_id": str(account.id),
+                "subscriber_id": str(account.id),
+                "restored_subscriptions": restored_count,
+            },
+            account_id=account.id,
+            subscriber_id=account.id,
+        )
         logger.info(f"Restored {restored_count} subscriptions for account {account_id}")
     return restored_count
 
@@ -685,7 +685,7 @@ def _deactivate_prepaid_subscriptions(
                 "reason": "prepaid_deactivation",
             },
             subscription_id=sub.id,
-            account_id=sub.account_id,
+            account_id=sub.subscriber_id,
         )
         canceled_count += 1
 
@@ -1404,8 +1404,8 @@ class PrepaidEnforcement(ListResponseMixin):
                 if deactivation_days_default:
                     account.prepaid_deactivation_at = run_at + timedelta(days=deactivation_days_default)
             grace_days = account.grace_period if account.grace_period is not None else grace_days_default
-            grace_until = low_balance_at + timedelta(days=grace_days) if grace_days else low_balance_at
-            if grace_days and run_at < grace_until:
+            grace_until = low_balance_at + timedelta(days=grace_days) if grace_days > 0 else low_balance_at
+            if run_at < grace_until:
                 if not payload.dry_run:
                     _create_prepaid_warning_notification(
                         db, str(account_id), str(balance), str(threshold)

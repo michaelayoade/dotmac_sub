@@ -235,7 +235,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         .scalar()
     )
     credit_amount = round_money(Decimal(str(credit_amount)))
-    invoice.balance_due = round_money(invoice.total - paid_amount - credit_amount)
+    invoice.balance_due = max(Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount))
     if invoice.balance_due <= 0:
         invoice.status = InvoiceStatus.paid
         if not invoice.paid_at:

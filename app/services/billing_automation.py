@@ -537,11 +537,11 @@ def generate_prorated_invoice(
 
     # For monthly billing, check if we should align to month boundaries
     # If activation is on the 1st, no proration needed (full month)
-    if effective_cycle == BillingCycle.monthly and activation_date.day == 1:
+    if effective_cycle == BillingCycle.monthly and period_start.day == 1:
         return None
 
     # For annual billing, if activation is on Jan 1st, no proration needed
-    if effective_cycle == BillingCycle.annual and activation_date.month == 1 and activation_date.day == 1:
+    if effective_cycle == BillingCycle.annual and period_start.month == 1 and period_start.day == 1:
         return None
 
     # Calculate prorated amount

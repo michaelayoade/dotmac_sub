@@ -576,17 +576,14 @@ def invoices_list(
             count_query = count_query.filter(Invoice.status == validate_enum(status, InvoiceStatus, "status"))
         total = count_query.count()
     elif not customer_filtered:
-        all_invoices = billing_service.invoices.list(
-            db=db,
-            account_id=UUID(account_id) if account_id else None,
-            status=status if status else None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
-        )
-        total = len(all_invoices)
+        total_query = db.query(Invoice).filter(Invoice.is_active.is_(True))
+        if account_id:
+            total_query = total_query.filter(Invoice.account_id == UUID(account_id))
+        if status:
+            total_query = total_query.filter(
+                Invoice.status == validate_enum(status, InvoiceStatus, "status")
+            )
+        total = total_query.count()
     else:
         total = 0
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
@@ -1757,18 +1754,7 @@ def payments_list(
             limit=per_page,
             offset=offset,
         )
-        all_payments = billing_service.payments.list(
-            db=db,
-            account_id=None,
-            invoice_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
-        )
-        total = len(all_payments)
+        total = db.query(Payment).filter(Payment.is_active.is_(True)).count()
     else:
         total = 0
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
@@ -2480,7 +2466,7 @@ def payment_import_page(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/payments/import", dependencies=[Depends(require_permission("billing:write"))])
 async def payment_import_submit(request: Request, db: Session = Depends(get_db)):
-    """Process bulk payment import from JSON."""
+    """Process bulk payment import from JSON (async for request.json())."""
     from fastapi.responses import JSONResponse
     from app.web.admin import get_current_user
 
@@ -2657,16 +2643,7 @@ def accounts_list(
             limit=per_page,
             offset=offset,
         )
-        all_accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
-        )
-        total = len(all_accounts)
+        total = db.query(Subscriber).count()
     total_pages = (total + per_page - 1) // per_page
 
     # Get sidebar stats and current user

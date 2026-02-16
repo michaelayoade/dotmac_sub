@@ -430,7 +430,7 @@ class Payments(ListResponseMixin):
             List of created allocations
         """
         created = []
-        remaining = payment.amount
+        remaining = round_money(Decimal(str(payment.amount or Decimal("0.00"))))
         for allocation in allocations:
             if allocation.amount > remaining:
                 raise HTTPException(
@@ -454,7 +454,7 @@ class Payments(ListResponseMixin):
             )
             if existing:
                 created.append(existing)
-                remaining -= existing.amount
+                remaining = round_money(remaining - existing.amount)
                 continue
 
             entry = PaymentAllocation(
@@ -469,7 +469,7 @@ class Payments(ListResponseMixin):
             # Create ledger entry for this allocation
             _create_payment_ledger_entry(db, payment, invoice, allocation.amount)
 
-            remaining -= allocation.amount
+            remaining = round_money(remaining - allocation.amount)
 
         # If there's remaining unallocated amount, create a credit ledger entry
         if remaining > 0:
@@ -479,6 +479,8 @@ class Payments(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: PaymentCreate):
+        if payload.amount is not None and payload.amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
         data = payload.model_dump(exclude={"allocations"})
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:
@@ -749,7 +751,7 @@ class Payments(ListResponseMixin):
 class PaymentAllocations(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentAllocationCreate):
-        payment = get_by_id(db, Payment, payload.payment_id)
+        payment = db.query(Payment).filter(Payment.id == payload.payment_id).with_for_update().first()
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         invoice = get_by_id(db, Invoice, payload.invoice_id)
@@ -758,6 +760,13 @@ class PaymentAllocations(ListResponseMixin):
         if str(invoice.account_id) != str(payment.account_id):
             raise HTTPException(status_code=400, detail="Invoice does not belong to account")
         _validate_invoice_currency(invoice, payment.currency)
+        # Idempotency check: return existing allocation for same (payment_id, invoice_id)
+        existing = db.query(PaymentAllocation).filter(
+            PaymentAllocation.payment_id == payment.id,
+            PaymentAllocation.invoice_id == payload.invoice_id,
+        ).first()
+        if existing:
+            return existing
         allocated_amount = (
             db.query(PaymentAllocation)
             .filter(PaymentAllocation.payment_id == payment.id)
@@ -769,6 +778,7 @@ class PaymentAllocations(ListResponseMixin):
         allocation = PaymentAllocation(**payload.model_dump())
         db.add(allocation)
         db.flush()
+        _create_payment_ledger_entry(db, payment, invoice, allocation.amount)
         _recalculate_invoice_totals(db, invoice)
         if invoice.status == InvoiceStatus.paid:
             from app.services import collections as collections_service
@@ -808,6 +818,12 @@ class PaymentAllocations(ListResponseMixin):
         if not allocation:
             raise HTTPException(status_code=404, detail="Payment allocation not found")
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
+        # Soft-delete corresponding ledger entries
+        db.query(LedgerEntry).filter(
+            LedgerEntry.payment_id == allocation.payment_id,
+            LedgerEntry.invoice_id == allocation.invoice_id,
+            LedgerEntry.source == LedgerSource.payment,
+        ).update({"is_active": False})
         db.delete(allocation)
         if invoice:
             db.flush()
@@ -1121,7 +1137,7 @@ class Refunds:
             if invoice:
                 # For full refunds, remove the allocation effect
                 if is_full_refund:
-                    allocation.amount = Decimal("0.00")
+                    db.delete(allocation)
                 db.flush()
                 _recalculate_invoice_totals(db, invoice)
 

@@ -1,32 +1,31 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.billing import (
     BankAccountCreate,
     BankAccountRead,
     BankAccountUpdate,
+    BillingRunRead,
     CollectionAccountCreate,
     CollectionAccountRead,
     CollectionAccountUpdate,
-    CreditNoteApplyRequest,
     CreditNoteApplicationRead,
+    CreditNoteApplyRequest,
     CreditNoteCreate,
     CreditNoteLineCreate,
     CreditNoteLineRead,
     CreditNoteLineUpdate,
     CreditNoteRead,
     CreditNoteUpdate,
+    InvoiceBulkActionResponse,
+    InvoiceBulkVoidRequest,
+    InvoiceBulkWriteOffRequest,
     InvoiceCreate,
     InvoiceLineCreate,
     InvoiceLineRead,
     InvoiceLineUpdate,
     InvoiceRead,
-    BillingRunRead,
-    InvoiceBulkActionResponse,
-    InvoiceBulkVoidRequest,
-    InvoiceBulkWriteOffRequest,
     InvoiceRunRequest,
     InvoiceRunResponse,
     InvoiceUpdate,
@@ -34,7 +33,6 @@ from app.schemas.billing import (
     LedgerEntryCreate,
     LedgerEntryRead,
     LedgerEntryUpdate,
-    PaymentCreate,
     PaymentAllocationCreate,
     PaymentAllocationRead,
     PaymentChannelAccountCreate,
@@ -43,32 +41,30 @@ from app.schemas.billing import (
     PaymentChannelCreate,
     PaymentChannelRead,
     PaymentChannelUpdate,
+    PaymentCreate,
     PaymentMethodCreate,
     PaymentMethodRead,
     PaymentMethodUpdate,
-    PaymentRead,
-    PaymentUpdate,
     PaymentProviderCreate,
     PaymentProviderEventIngest,
     PaymentProviderEventRead,
     PaymentProviderRead,
     PaymentProviderUpdate,
+    PaymentRead,
+    PaymentUpdate,
     TaxRateCreate,
     TaxRateRead,
     TaxRateUpdate,
 )
+from app.schemas.common import ListResponse
 from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# --- Invoices ---
 
 
 @router.post(
@@ -76,17 +72,28 @@ def get_db():
     response_model=InvoiceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
     return billing_service.invoices.create(db, payload)
 
 
-@router.get("/invoices/{invoice_id}", response_model=InvoiceRead, tags=["invoices"])
+@router.get(
+    "/invoices/{invoice_id}",
+    response_model=InvoiceRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def get_invoice(invoice_id: str, db: Session = Depends(get_db)):
     return billing_service.invoices.get(db, invoice_id)
 
 
-@router.get("/invoices", response_model=ListResponse[InvoiceRead], tags=["invoices"])
+@router.get(
+    "/invoices",
+    response_model=ListResponse[InvoiceRead],
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def list_invoices(
     account_id: str | None = None,
     status: str | None = None,
@@ -106,6 +113,7 @@ def list_invoices(
     "/invoices/{invoice_id}",
     response_model=InvoiceRead,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_invoice(
     invoice_id: str, payload: InvoiceUpdate, db: Session = Depends(get_db)
@@ -117,6 +125,7 @@ def update_invoice(
     "/invoices/{invoice_id}/write-off",
     response_model=InvoiceRead,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def write_off_invoice(
     invoice_id: str, payload: InvoiceWriteOffRequest, db: Session = Depends(get_db)
@@ -128,6 +137,7 @@ def write_off_invoice(
     "/invoices/bulk-write-off",
     response_model=InvoiceBulkActionResponse,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def bulk_write_off_invoices(
     payload: InvoiceBulkWriteOffRequest, db: Session = Depends(get_db)
@@ -140,6 +150,7 @@ def bulk_write_off_invoices(
     "/invoices/bulk-void",
     response_model=InvoiceBulkActionResponse,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def bulk_void_invoices(
     payload: InvoiceBulkVoidRequest, db: Session = Depends(get_db)
@@ -152,6 +163,7 @@ def bulk_void_invoices(
     "/invoice-runs",
     response_model=InvoiceRunResponse,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def run_invoice_cycle(
     payload: InvoiceRunRequest, db: Session = Depends(get_db)
@@ -164,7 +176,12 @@ def run_invoice_cycle(
     )
 
 
-@router.get("/billing-runs", response_model=ListResponse[BillingRunRead], tags=["invoices"])
+@router.get(
+    "/billing-runs",
+    response_model=ListResponse[BillingRunRead],
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def list_billing_runs(
     status: str | None = None,
     order_by: str = Query(default="created_at"),
@@ -178,7 +195,12 @@ def list_billing_runs(
     )
 
 
-@router.get("/billing-runs/{run_id}", response_model=BillingRunRead, tags=["invoices"])
+@router.get(
+    "/billing-runs/{run_id}",
+    response_model=BillingRunRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def get_billing_run(run_id: str, db: Session = Depends(get_db)):
     return billing_service.billing_runs.get(db, run_id)
 
@@ -187,9 +209,13 @@ def get_billing_run(run_id: str, db: Session = Depends(get_db)):
     "/invoices/{invoice_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_invoice(invoice_id: str, db: Session = Depends(get_db)):
     billing_service.invoices.delete(db, invoice_id)
+
+
+# --- Credit Notes ---
 
 
 @router.post(
@@ -197,6 +223,7 @@ def delete_invoice(invoice_id: str, db: Session = Depends(get_db)):
     response_model=CreditNoteRead,
     status_code=status.HTTP_201_CREATED,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db)):
     return billing_service.credit_notes.create(db, payload)
@@ -206,6 +233,7 @@ def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db))
     "/credit-notes/{credit_note_id}",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     return billing_service.credit_notes.get(db, credit_note_id)
@@ -215,6 +243,7 @@ def get_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     "/credit-notes",
     response_model=ListResponse[CreditNoteRead],
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_credit_notes(
     account_id: str | None = None,
@@ -236,6 +265,7 @@ def list_credit_notes(
     "/credit-notes/{credit_note_id}",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_credit_note(
     credit_note_id: str, payload: CreditNoteUpdate, db: Session = Depends(get_db)
@@ -247,6 +277,7 @@ def update_credit_note(
     "/credit-notes/{credit_note_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     billing_service.credit_notes.delete(db, credit_note_id)
@@ -256,6 +287,7 @@ def delete_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     "/credit-notes/{credit_note_id}/void",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def void_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     return billing_service.credit_notes.void(db, credit_note_id)
@@ -265,6 +297,7 @@ def void_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
     "/credit-notes/{credit_note_id}/apply",
     response_model=CreditNoteApplicationRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def apply_credit_note(
     credit_note_id: str, payload: CreditNoteApplyRequest, db: Session = Depends(get_db)
@@ -272,11 +305,15 @@ def apply_credit_note(
     return billing_service.credit_notes.apply(db, credit_note_id, payload)
 
 
+# --- Collection Accounts ---
+
+
 @router.post(
     "/collection-accounts",
     response_model=CollectionAccountRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payment-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_collection_account(payload: CollectionAccountCreate, db: Session = Depends(get_db)):
     return billing_service.collection_accounts.create(db, payload)
@@ -286,6 +323,7 @@ def create_collection_account(payload: CollectionAccountCreate, db: Session = De
     "/collection-accounts/{account_id}",
     response_model=CollectionAccountRead,
     tags=["payment-accounts"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_collection_account(account_id: str, db: Session = Depends(get_db)):
     return billing_service.collection_accounts.get(db, account_id)
@@ -295,6 +333,7 @@ def get_collection_account(account_id: str, db: Session = Depends(get_db)):
     "/collection-accounts",
     response_model=ListResponse[CollectionAccountRead],
     tags=["payment-accounts"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_collection_accounts(
     is_active: bool | None = None,
@@ -313,6 +352,7 @@ def list_collection_accounts(
     "/collection-accounts/{account_id}",
     response_model=CollectionAccountRead,
     tags=["payment-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_collection_account(
     account_id: str, payload: CollectionAccountUpdate, db: Session = Depends(get_db)
@@ -324,9 +364,13 @@ def update_collection_account(
     "/collection-accounts/{account_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payment-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_collection_account(account_id: str, db: Session = Depends(get_db)):
     billing_service.collection_accounts.delete(db, account_id)
+
+
+# --- Payment Channels ---
 
 
 @router.post(
@@ -334,6 +378,7 @@ def delete_collection_account(account_id: str, db: Session = Depends(get_db)):
     response_model=PaymentChannelRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment_channel(payload: PaymentChannelCreate, db: Session = Depends(get_db)):
     return billing_service.payment_channels.create(db, payload)
@@ -343,6 +388,7 @@ def create_payment_channel(payload: PaymentChannelCreate, db: Session = Depends(
     "/payment-channels/{channel_id}",
     response_model=PaymentChannelRead,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_payment_channel(channel_id: str, db: Session = Depends(get_db)):
     return billing_service.payment_channels.get(db, channel_id)
@@ -352,6 +398,7 @@ def get_payment_channel(channel_id: str, db: Session = Depends(get_db)):
     "/payment-channels",
     response_model=ListResponse[PaymentChannelRead],
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_channels(
     is_active: bool | None = None,
@@ -370,6 +417,7 @@ def list_payment_channels(
     "/payment-channels/{channel_id}",
     response_model=PaymentChannelRead,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_payment_channel(
     channel_id: str, payload: PaymentChannelUpdate, db: Session = Depends(get_db)
@@ -381,9 +429,13 @@ def update_payment_channel(
     "/payment-channels/{channel_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment_channel(channel_id: str, db: Session = Depends(get_db)):
     billing_service.payment_channels.delete(db, channel_id)
+
+
+# --- Payment Channel Accounts ---
 
 
 @router.post(
@@ -391,6 +443,7 @@ def delete_payment_channel(channel_id: str, db: Session = Depends(get_db)):
     response_model=PaymentChannelAccountRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment_channel_account(
     payload: PaymentChannelAccountCreate, db: Session = Depends(get_db)
@@ -402,6 +455,7 @@ def create_payment_channel_account(
     "/payment-channel-accounts/{mapping_id}",
     response_model=PaymentChannelAccountRead,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_payment_channel_account(mapping_id: str, db: Session = Depends(get_db)):
     return billing_service.payment_channel_accounts.get(db, mapping_id)
@@ -411,6 +465,7 @@ def get_payment_channel_account(mapping_id: str, db: Session = Depends(get_db)):
     "/payment-channel-accounts",
     response_model=ListResponse[PaymentChannelAccountRead],
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_channel_accounts(
     channel_id: str | None = None,
@@ -438,6 +493,7 @@ def list_payment_channel_accounts(
     "/payment-channel-accounts/{mapping_id}",
     response_model=PaymentChannelAccountRead,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_payment_channel_account(
     mapping_id: str, payload: PaymentChannelAccountUpdate, db: Session = Depends(get_db)
@@ -449,9 +505,13 @@ def update_payment_channel_account(
     "/payment-channel-accounts/{mapping_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment_channel_account(mapping_id: str, db: Session = Depends(get_db)):
     billing_service.payment_channel_accounts.delete(db, mapping_id)
+
+
+# --- Payment Allocations ---
 
 
 @router.post(
@@ -459,6 +519,7 @@ def delete_payment_channel_account(mapping_id: str, db: Session = Depends(get_db
     response_model=PaymentAllocationRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment_allocation(payload: PaymentAllocationCreate, db: Session = Depends(get_db)):
     return billing_service.payment_allocations.create(db, payload)
@@ -468,6 +529,7 @@ def create_payment_allocation(payload: PaymentAllocationCreate, db: Session = De
     "/payment-allocations",
     response_model=ListResponse[PaymentAllocationRead],
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_allocations(
     payment_id: str | None = None,
@@ -487,9 +549,13 @@ def list_payment_allocations(
     "/payment-allocations/{allocation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment_allocation(allocation_id: str, db: Session = Depends(get_db)):
     billing_service.payment_allocations.delete(db, allocation_id)
+
+
+# --- Credit Note Lines ---
 
 
 @router.post(
@@ -497,6 +563,7 @@ def delete_payment_allocation(allocation_id: str, db: Session = Depends(get_db))
     response_model=CreditNoteLineRead,
     status_code=status.HTTP_201_CREATED,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_credit_note_line(payload: CreditNoteLineCreate, db: Session = Depends(get_db)):
     return billing_service.credit_note_lines.create(db, payload)
@@ -506,6 +573,7 @@ def create_credit_note_line(payload: CreditNoteLineCreate, db: Session = Depends
     "/credit-note-lines/{line_id}",
     response_model=CreditNoteLineRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_credit_note_line(line_id: str, db: Session = Depends(get_db)):
     return billing_service.credit_note_lines.get(db, line_id)
@@ -515,6 +583,7 @@ def get_credit_note_line(line_id: str, db: Session = Depends(get_db)):
     "/credit-note-lines",
     response_model=ListResponse[CreditNoteLineRead],
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_credit_note_lines(
     credit_note_id: str | None = None,
@@ -534,6 +603,7 @@ def list_credit_note_lines(
     "/credit-note-lines/{line_id}",
     response_model=CreditNoteLineRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_credit_note_line(
     line_id: str, payload: CreditNoteLineUpdate, db: Session = Depends(get_db)
@@ -545,15 +615,20 @@ def update_credit_note_line(
     "/credit-note-lines/{line_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_credit_note_line(line_id: str, db: Session = Depends(get_db)):
     billing_service.credit_note_lines.delete(db, line_id)
+
+
+# --- Credit Note Applications ---
 
 
 @router.get(
     "/credit-note-applications",
     response_model=ListResponse[CreditNoteApplicationRead],
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_credit_note_applications(
     credit_note_id: str | None = None,
@@ -573,9 +648,13 @@ def list_credit_note_applications(
     "/credit-note-applications/{application_id}",
     response_model=CreditNoteApplicationRead,
     tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_credit_note_application(application_id: str, db: Session = Depends(get_db)):
     return billing_service.credit_note_applications.get(db, application_id)
+
+
+# --- Invoice Lines ---
 
 
 @router.post(
@@ -583,6 +662,7 @@ def get_credit_note_application(application_id: str, db: Session = Depends(get_d
     response_model=InvoiceLineRead,
     status_code=status.HTTP_201_CREATED,
     tags=["invoice-lines"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_invoice_line(payload: InvoiceLineCreate, db: Session = Depends(get_db)):
     return billing_service.invoice_lines.create(db, payload)
@@ -592,6 +672,7 @@ def create_invoice_line(payload: InvoiceLineCreate, db: Session = Depends(get_db
     "/invoice-lines/{line_id}",
     response_model=InvoiceLineRead,
     tags=["invoice-lines"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_invoice_line(line_id: str, db: Session = Depends(get_db)):
     return billing_service.invoice_lines.get(db, line_id)
@@ -601,6 +682,7 @@ def get_invoice_line(line_id: str, db: Session = Depends(get_db)):
     "/invoice-lines",
     response_model=ListResponse[InvoiceLineRead],
     tags=["invoice-lines"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_invoice_lines(
     invoice_id: str | None = None,
@@ -620,6 +702,7 @@ def list_invoice_lines(
     "/invoice-lines/{line_id}",
     response_model=InvoiceLineRead,
     tags=["invoice-lines"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_invoice_line(
     line_id: str, payload: InvoiceLineUpdate, db: Session = Depends(get_db)
@@ -631,9 +714,13 @@ def update_invoice_line(
     "/invoice-lines/{line_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["invoice-lines"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_invoice_line(line_id: str, db: Session = Depends(get_db)):
     billing_service.invoice_lines.delete(db, line_id)
+
+
+# --- Payment Methods ---
 
 
 @router.post(
@@ -641,6 +728,7 @@ def delete_invoice_line(line_id: str, db: Session = Depends(get_db)):
     response_model=PaymentMethodRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payment-methods"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment_method(payload: PaymentMethodCreate, db: Session = Depends(get_db)):
     return billing_service.payment_methods.create(db, payload)
@@ -650,6 +738,7 @@ def create_payment_method(payload: PaymentMethodCreate, db: Session = Depends(ge
     "/payment-methods/{method_id}",
     response_model=PaymentMethodRead,
     tags=["payment-methods"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_payment_method(method_id: str, db: Session = Depends(get_db)):
     return billing_service.payment_methods.get(db, method_id)
@@ -659,6 +748,7 @@ def get_payment_method(method_id: str, db: Session = Depends(get_db)):
     "/payment-methods",
     response_model=ListResponse[PaymentMethodRead],
     tags=["payment-methods"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_methods(
     account_id: str | None = None,
@@ -678,6 +768,7 @@ def list_payment_methods(
     "/payment-methods/{method_id}",
     response_model=PaymentMethodRead,
     tags=["payment-methods"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_payment_method(
     method_id: str, payload: PaymentMethodUpdate, db: Session = Depends(get_db)
@@ -689,9 +780,13 @@ def update_payment_method(
     "/payment-methods/{method_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payment-methods"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment_method(method_id: str, db: Session = Depends(get_db)):
     billing_service.payment_methods.delete(db, method_id)
+
+
+# --- Payment Providers ---
 
 
 @router.post(
@@ -699,6 +794,7 @@ def delete_payment_method(method_id: str, db: Session = Depends(get_db)):
     response_model=PaymentProviderRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payment-providers"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment_provider(payload: PaymentProviderCreate, db: Session = Depends(get_db)):
     return billing_service.payment_providers.create(db, payload)
@@ -708,6 +804,7 @@ def create_payment_provider(payload: PaymentProviderCreate, db: Session = Depend
     "/payment-providers/{provider_id}",
     response_model=PaymentProviderRead,
     tags=["payment-providers"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_payment_provider(provider_id: str, db: Session = Depends(get_db)):
     return billing_service.payment_providers.get(db, provider_id)
@@ -717,6 +814,7 @@ def get_payment_provider(provider_id: str, db: Session = Depends(get_db)):
     "/payment-providers",
     response_model=ListResponse[PaymentProviderRead],
     tags=["payment-providers"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_providers(
     is_active: bool | None = None,
@@ -735,6 +833,7 @@ def list_payment_providers(
     "/payment-providers/{provider_id}",
     response_model=PaymentProviderRead,
     tags=["payment-providers"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_payment_provider(
     provider_id: str, payload: PaymentProviderUpdate, db: Session = Depends(get_db)
@@ -746,15 +845,20 @@ def update_payment_provider(
     "/payment-providers/{provider_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payment-providers"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment_provider(provider_id: str, db: Session = Depends(get_db)):
     billing_service.payment_providers.delete(db, provider_id)
+
+
+# --- Payment Events ---
 
 
 @router.post(
     "/payment-events/ingest",
     response_model=PaymentProviderEventRead,
     tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def ingest_payment_event(payload: PaymentProviderEventIngest, db: Session = Depends(get_db)):
     return billing_service.payment_provider_events.ingest(db, payload)
@@ -764,6 +868,7 @@ def ingest_payment_event(payload: PaymentProviderEventIngest, db: Session = Depe
     "/payment-events/{event_id}",
     response_model=PaymentProviderEventRead,
     tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_payment_event(event_id: str, db: Session = Depends(get_db)):
     return billing_service.payment_provider_events.get(db, event_id)
@@ -773,6 +878,7 @@ def get_payment_event(event_id: str, db: Session = Depends(get_db)):
     "/payment-events",
     response_model=ListResponse[PaymentProviderEventRead],
     tags=["payment-events"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_payment_events(
     provider_id: str | None = None,
@@ -798,11 +904,15 @@ def list_payment_events(
     )
 
 
+# --- Bank Accounts ---
+
+
 @router.post(
     "/bank-accounts",
     response_model=BankAccountRead,
     status_code=status.HTTP_201_CREATED,
     tags=["bank-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_bank_account(payload: BankAccountCreate, db: Session = Depends(get_db)):
     return billing_service.bank_accounts.create(db, payload)
@@ -812,6 +922,7 @@ def create_bank_account(payload: BankAccountCreate, db: Session = Depends(get_db
     "/bank-accounts/{bank_account_id}",
     response_model=BankAccountRead,
     tags=["bank-accounts"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
     return billing_service.bank_accounts.get(db, bank_account_id)
@@ -821,6 +932,7 @@ def get_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
     "/bank-accounts",
     response_model=ListResponse[BankAccountRead],
     tags=["bank-accounts"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_bank_accounts(
     account_id: str | None = None,
@@ -840,6 +952,7 @@ def list_bank_accounts(
     "/bank-accounts/{bank_account_id}",
     response_model=BankAccountRead,
     tags=["bank-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_bank_account(
     bank_account_id: str, payload: BankAccountUpdate, db: Session = Depends(get_db)
@@ -851,9 +964,13 @@ def update_bank_account(
     "/bank-accounts/{bank_account_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["bank-accounts"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
     billing_service.bank_accounts.delete(db, bank_account_id)
+
+
+# --- Payments ---
 
 
 @router.post(
@@ -861,17 +978,28 @@ def delete_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
     response_model=PaymentRead,
     status_code=status.HTTP_201_CREATED,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
     return billing_service.payments.create(db, payload)
 
 
-@router.get("/payments/{payment_id}", response_model=PaymentRead, tags=["payments"])
+@router.get(
+    "/payments/{payment_id}",
+    response_model=PaymentRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def get_payment(payment_id: str, db: Session = Depends(get_db)):
     return billing_service.payments.get(db, payment_id)
 
 
-@router.get("/payments", response_model=ListResponse[PaymentRead], tags=["payments"])
+@router.get(
+    "/payments",
+    response_model=ListResponse[PaymentRead],
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def list_payments(
     account_id: str | None = None,
     invoice_id: str | None = None,
@@ -892,6 +1020,7 @@ def list_payments(
     "/payments/{payment_id}",
     response_model=PaymentRead,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_payment(
     payment_id: str, payload: PaymentUpdate, db: Session = Depends(get_db)
@@ -903,6 +1032,7 @@ def update_payment(
     "/payments/{payment_id}/mark-succeeded",
     response_model=PaymentRead,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def mark_payment_succeeded(payment_id: str, db: Session = Depends(get_db)):
     return billing_service.payments.mark_status(db, payment_id, status="succeeded")
@@ -912,6 +1042,7 @@ def mark_payment_succeeded(payment_id: str, db: Session = Depends(get_db)):
     "/payments/{payment_id}/mark-failed",
     response_model=PaymentRead,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def mark_payment_failed(payment_id: str, db: Session = Depends(get_db)):
     return billing_service.payments.mark_status(db, payment_id, status="failed")
@@ -921,9 +1052,13 @@ def mark_payment_failed(payment_id: str, db: Session = Depends(get_db)):
     "/payments/{payment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["payments"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_payment(payment_id: str, db: Session = Depends(get_db)):
     billing_service.payments.delete(db, payment_id)
+
+
+# --- Ledger Entries ---
 
 
 @router.post(
@@ -931,6 +1066,7 @@ def delete_payment(payment_id: str, db: Session = Depends(get_db)):
     response_model=LedgerEntryRead,
     status_code=status.HTTP_201_CREATED,
     tags=["ledger-entries"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_ledger_entry(payload: LedgerEntryCreate, db: Session = Depends(get_db)):
     return billing_service.ledger_entries.create(db, payload)
@@ -940,6 +1076,7 @@ def create_ledger_entry(payload: LedgerEntryCreate, db: Session = Depends(get_db
     "/ledger-entries/{entry_id}",
     response_model=LedgerEntryRead,
     tags=["ledger-entries"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
     return billing_service.ledger_entries.get(db, entry_id)
@@ -949,6 +1086,7 @@ def get_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
     "/ledger-entries",
     response_model=ListResponse[LedgerEntryRead],
     tags=["ledger-entries"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def list_ledger_entries(
     account_id: str | None = None,
@@ -970,6 +1108,7 @@ def list_ledger_entries(
     "/ledger-entries/{entry_id}",
     response_model=LedgerEntryRead,
     tags=["ledger-entries"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_ledger_entry(
     entry_id: str, payload: LedgerEntryUpdate, db: Session = Depends(get_db)
@@ -981,9 +1120,13 @@ def update_ledger_entry(
     "/ledger-entries/{entry_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["ledger-entries"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
     billing_service.ledger_entries.delete(db, entry_id)
+
+
+# --- Tax Rates ---
 
 
 @router.post(
@@ -991,6 +1134,7 @@ def delete_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
     response_model=TaxRateRead,
     status_code=status.HTTP_201_CREATED,
     tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def create_tax_rate(payload: TaxRateCreate, db: Session = Depends(get_db)):
     return billing_service.tax_rates.create(db, payload)
@@ -1000,12 +1144,18 @@ def create_tax_rate(payload: TaxRateCreate, db: Session = Depends(get_db)):
     "/tax-rates/{rate_id}",
     response_model=TaxRateRead,
     tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:read"))],
 )
 def get_tax_rate(rate_id: str, db: Session = Depends(get_db)):
     return billing_service.tax_rates.get(db, rate_id)
 
 
-@router.get("/tax-rates", response_model=ListResponse[TaxRateRead], tags=["tax-rates"])
+@router.get(
+    "/tax-rates",
+    response_model=ListResponse[TaxRateRead],
+    tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def list_tax_rates(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
@@ -1023,6 +1173,7 @@ def list_tax_rates(
     "/tax-rates/{rate_id}",
     response_model=TaxRateRead,
     tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def update_tax_rate(
     rate_id: str, payload: TaxRateUpdate, db: Session = Depends(get_db)
@@ -1034,6 +1185,7 @@ def update_tax_rate(
     "/tax-rates/{rate_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:write"))],
 )
 def delete_tax_rate(rate_id: str, db: Session = Depends(get_db)):
     billing_service.tax_rates.delete(db, rate_id)

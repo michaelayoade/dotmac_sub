@@ -488,7 +488,7 @@ class InvoiceRead(InvoiceBase):
     created_at: datetime
     updated_at: datetime
     lines: list[InvoiceLineRead] = Field(default_factory=list)
-    payments: list[PaymentRead] = Field(default_factory=list)
+    payment_allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 
 class CreditNoteRead(CreditNoteBase):
