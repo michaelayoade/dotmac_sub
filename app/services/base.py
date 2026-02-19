@@ -184,8 +184,10 @@ class BaseCRUDService(Generic[T]):
                 if hasattr(cls.model_class, field) and value is not None:
                     query = query.filter(getattr(cls.model_class, field) == value)
 
-        if is_active is not None and hasattr(cls.model_class, "is_active"):
-            query = query.filter(cls.model_class.is_active == is_active)
+        if is_active is not None:
+            is_active_attr = getattr(cls.model_class, "is_active", None)
+            if is_active_attr is not None:
+                query = query.filter(is_active_attr == is_active)
 
         return query.offset(offset).limit(limit).all()
 
@@ -213,8 +215,10 @@ class BaseCRUDService(Generic[T]):
                 if hasattr(cls.model_class, field) and value is not None:
                     query = query.filter(getattr(cls.model_class, field) == value)
 
-        if is_active is not None and hasattr(cls.model_class, "is_active"):
-            query = query.filter(cls.model_class.is_active == is_active)
+        if is_active is not None:
+            is_active_attr = getattr(cls.model_class, "is_active", None)
+            if is_active_attr is not None:
+                query = query.filter(is_active_attr == is_active)
 
         return query.count()
 

@@ -10,6 +10,7 @@ import base64
 import logging
 import os
 import secrets
+from typing import Any
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
@@ -110,7 +111,7 @@ def get_encryption_key() -> bytes | None:
     """
     global _encryption_warning_logged
 
-    key_str = None
+    key_str: str | None = None
 
     # Try to get from settings system first
     try:
@@ -120,7 +121,11 @@ def get_encryption_key() -> bytes | None:
 
         session = SessionLocal()
         try:
-            key_str = resolve_value(session, SettingDomain.network, "wireguard_key_encryption_key")
+            key_obj = resolve_value(
+                session, SettingDomain.network, "wireguard_key_encryption_key"
+            )
+            if isinstance(key_obj, str):
+                key_str = key_obj
         finally:
             session.close()
     except Exception:

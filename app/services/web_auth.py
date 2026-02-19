@@ -13,6 +13,15 @@ from app.services.auth_flow import AuthFlow
 templates = Jinja2Templates(directory="templates")
 
 
+def _session_cookie_settings(db: Session) -> dict:
+    """Derive session_token cookie settings from refresh cookie config."""
+    refresh = AuthFlow.refresh_cookie_settings(db)
+    return {
+        "secure": refresh["secure"],
+        "samesite": refresh["samesite"],
+    }
+
+
 def _safe_next(next_url: str | None, fallback: str = "/admin/dashboard") -> str:
     if next_url and next_url.startswith("/"):
         return next_url
@@ -72,12 +81,13 @@ def login_submit(
 
         response = RedirectResponse(url=redirect_url, status_code=303)
         max_age = 30 * 24 * 60 * 60 if remember else None
+        cookie_cfg = _session_cookie_settings(db)
         response.set_cookie(
             key="session_token",
             value=result.get("access_token", ""),
             httponly=True,
-            secure=True,
-            samesite="none",
+            secure=cookie_cfg["secure"],
+            samesite=cookie_cfg["samesite"],
             max_age=max_age,
         )
         refresh_token = result.get("refresh_token")
@@ -126,19 +136,21 @@ def mfa_submit(
         return RedirectResponse(url="/auth/login", status_code=303)
     redirect_url = _safe_next(next_url)
     try:
-        result = auth_flow_service.auth_flow.verify_mfa(
+        result = auth_flow_service.auth_flow.mfa_verify(
             db=db,
             mfa_token=mfa_token,
             code=code,
+            request=request,
         )
         response = RedirectResponse(url=redirect_url, status_code=303)
         response.delete_cookie("mfa_pending")
+        cookie_cfg = _session_cookie_settings(db)
         response.set_cookie(
             key="session_token",
             value=result.get("access_token", ""),
             httponly=True,
-            secure=True,
-            samesite="none",
+            secure=cookie_cfg["secure"],
+            samesite=cookie_cfg["samesite"],
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
@@ -161,7 +173,7 @@ def forgot_password_page(request: Request, success: bool = False):
 
 def forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        auth_flow_service.auth_flow.request_password_reset(db=db, email=email)
+        auth_flow_service.request_password_reset(db=db, email=email)
     except Exception:
         pass
     return templates.TemplateResponse(
@@ -218,12 +230,13 @@ def refresh(request: Request, db: Session, next_url: str | None = None):
         return RedirectResponse(url=login_url, status_code=303)
 
     response = RedirectResponse(url=redirect_url, status_code=303)
+    cookie_cfg = _session_cookie_settings(db)
     response.set_cookie(
         key="session_token",
         value=result.get("access_token", ""),
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=cookie_cfg["secure"],
+        samesite=cookie_cfg["samesite"],
     )
     refresh_token = result.get("refresh_token")
     if refresh_token:

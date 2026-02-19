@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING, cast
 
 from fastapi import HTTPException
 
@@ -8,6 +8,28 @@ from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
+
+if TYPE_CHECKING:
+    from app.models.domain_settings import DomainSetting
+
+
+def _coerce_int_value(value: object) -> int | None:
+    # Domain settings values are stored as text/json and flow through `object` types here.
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
 
 
 @dataclass(frozen=True)
@@ -1872,7 +1894,7 @@ def resolve_value(db, domain: SettingDomain, key: str) -> object | None:
     # 1. Check cache first
     cached = SettingsCache.get(domain.value, key)
     if cached is not None:
-        return cached
+        return cast(object, cached)
 
     # 2. Query database
     service = DOMAIN_SETTINGS_SERVICE.get(domain)
@@ -1891,14 +1913,13 @@ def resolve_value(db, domain: SettingDomain, key: str) -> object | None:
     if spec.allowed and value is not None and value not in spec.allowed:
         value = spec.default
     if spec.value_type == SettingValueType.integer and value is not None:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
+        parsed = _coerce_int_value(value)
+        if parsed is None:
             parsed = spec.default if isinstance(spec.default, int) else None
         if spec.min_value is not None and parsed is not None and parsed < spec.min_value:
-            parsed = spec.default
+            parsed = spec.default if isinstance(spec.default, int) else None
         if spec.max_value is not None and parsed is not None and parsed > spec.max_value:
-            parsed = spec.default
+            parsed = spec.default if isinstance(spec.default, int) else None
         value = parsed
 
     # 3. Cache the result (only non-None values)
@@ -1967,14 +1988,13 @@ def resolve_values_atomic(
         if spec.allowed and value is not None and value not in spec.allowed:
             value = spec.default
         if spec.value_type == SettingValueType.integer and value is not None:
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
+            parsed = _coerce_int_value(value)
+            if parsed is None:
                 parsed = spec.default if isinstance(spec.default, int) else None
             if spec.min_value is not None and parsed is not None and parsed < spec.min_value:
-                parsed = spec.default
+                parsed = spec.default if isinstance(spec.default, int) else None
             if spec.max_value is not None and parsed is not None and parsed > spec.max_value:
-                parsed = spec.default
+                parsed = spec.default if isinstance(spec.default, int) else None
             value = parsed
 
         if value is not None:
@@ -1988,13 +2008,13 @@ def resolve_values_atomic(
     return cached
 
 
-def extract_db_value(setting) -> object | None:
+def extract_db_value(setting: "DomainSetting | None") -> object | None:
     if not setting:
         return None
     if setting.value_text is not None:
-        return setting.value_text
+        return cast(object, setting.value_text)
     if setting.value_json is not None:
-        return setting.value_json
+        return cast(object, setting.value_json)
     return None
 
 
@@ -2032,7 +2052,11 @@ def normalize_for_db(spec: SettingSpec, value: object) -> tuple[str | None, obje
         bool_value = bool(value)
         return ("true" if bool_value else "false"), None
     if spec.value_type == SettingValueType.integer:
-        return str(int(value)), None
+        parsed = _coerce_int_value(value)
+        if parsed is None:
+            # Should be prevented by validation in callers, but avoid crashing on bad inputs.
+            return None, value
+        return str(parsed), None
     if spec.value_type == SettingValueType.string:
         return str(value), None
     return None, value

@@ -4,17 +4,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import web_admin_dashboard as web_admin_dashboard_service
 router = APIRouter(tags=["web-admin-dashboard"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

@@ -12,10 +12,9 @@ class SettingsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/system/settings") -> None:
         """Navigate to the settings page."""
-        super().goto("/admin/system/settings")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the settings page is loaded."""

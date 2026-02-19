@@ -110,7 +110,9 @@ def _crawl_links(
     allow_login_redirects: bool,
     show_response: bool,
 ) -> None:
-    queue = deque([(f"{base_url}{path}", None) for path in start_paths])
+    queue: deque[tuple[str, str | None]] = deque(
+        (f"{base_url}{path}", None) for path in start_paths
+    )
     visited: set[str] = set()
 
     while queue and len(visited) < max_pages:

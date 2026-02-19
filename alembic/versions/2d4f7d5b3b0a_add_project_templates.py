@@ -7,6 +7,7 @@ Create Date: 2026-01-14 00:00:00.000000
 
 from datetime import datetime, timezone
 import uuid
+from typing import Any, cast
 
 from alembic import op
 import sqlalchemy as sa
@@ -205,9 +206,10 @@ def upgrade() -> None:
             ],
         )
 
-        task_rows = []
+        task_rows: list[dict[str, Any]] = []
         for template in template_defs:
-            for idx, title in enumerate(template["tasks"], start=1):
+            tasks = cast(list[str], template["tasks"])
+            for idx, title in enumerate(tasks, start=1):
                 task_rows.append(
                     {
                         "id": uuid.uuid4(),

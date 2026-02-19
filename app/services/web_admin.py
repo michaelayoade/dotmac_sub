@@ -2,6 +2,8 @@
 
 from sqlalchemy.orm import Session
 
+from app.models.provisioning import ServiceOrderStatus
+
 
 def _get_initials(name: str) -> str:
     if not name:
@@ -18,9 +20,11 @@ def get_current_user(request) -> dict:
         user = request.state.user
         name = f"{user.first_name} {user.last_name}".strip() if hasattr(user, "first_name") else "User"
         person_id = getattr(user, "person_id", None)
+        subscriber_id = str(person_id if person_id else getattr(user, "id", ""))
         return {
             "id": str(getattr(user, "id", "")),
-            "person_id": str(person_id if person_id else getattr(user, "id", "")),
+            "person_id": subscriber_id,
+            "subscriber_id": subscriber_id,
             "initials": _get_initials(name),
             "name": name,
             "email": getattr(user, "email", ""),
@@ -39,14 +43,10 @@ def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
     from app.services import provisioning as provisioning_service
 
-    def get_status(obj):
-        status = getattr(obj, "status", "")
-        return status.value if hasattr(status, "value") else str(status)
-
     try:
         orders = provisioning_service.service_orders.list(
             db=db,
-            account_id=None,
+            subscriber_id=None,
             subscription_id=None,
             status=None,
             order_by="created_at",
@@ -56,7 +56,7 @@ def get_sidebar_stats(db: Session) -> dict:
         )
         service_orders_count = sum(
             1 for o in orders
-            if get_status(o) not in ("completed", "cancelled", "canceled")
+            if o.status not in (ServiceOrderStatus.active, ServiceOrderStatus.canceled, ServiceOrderStatus.failed)
         )
     except Exception:
         service_orders_count = 0

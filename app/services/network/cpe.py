@@ -21,17 +21,18 @@ from app.schemas.network import (
     CPEDeviceUpdate,
     PortCreate,
     PortUpdate,
-    PortVlanCreate,
     PortVlanUpdate,
-    VlanCreate,
     VlanUpdate,
 )
 from app.services import settings_spec
+from app.services.crud import CRUDManager
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
 )
+from app.services.common import coerce_uuid
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin
 from app.validators import network as network_validators
 
@@ -98,7 +99,10 @@ def _auto_register_tr069_device(db: Session, device: CPEDevice) -> None:
     db.commit()
 
 
-class CPEDevices(ListResponseMixin):
+class CPEDevices(CRUDManager[CPEDevice]):
+    model = CPEDevice
+    not_found_detail = "CPE device not found"
+
     @staticmethod
     def create(db: Session, payload: CPEDeviceCreate):
         network_validators.validate_cpe_device_links(
@@ -132,12 +136,9 @@ class CPEDevices(ListResponseMixin):
         _auto_register_tr069_device(db, device)
         return device
 
-    @staticmethod
-    def get(db: Session, device_id: str):
-        device = db.get(CPEDevice, device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="CPE device not found")
-        return device
+    @classmethod
+    def get(cls, db: Session, device_id: str):
+        return super().get(db, device_id)
 
     @staticmethod
     def list(
@@ -150,10 +151,13 @@ class CPEDevices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(CPEDevice)
-        if subscriber_id:
-            query = query.filter(CPEDevice.subscriber_id == subscriber_id)
-        if subscription_id:
-            query = query.filter(CPEDevice.subscription_id == subscription_id)
+        query = apply_optional_equals(
+            query,
+            {
+                CPEDevice.subscriber_id: subscriber_id,
+                CPEDevice.subscription_id: subscription_id,
+            },
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -184,19 +188,20 @@ class CPEDevices(ListResponseMixin):
         _auto_register_tr069_device(db, device)
         return device
 
-    @staticmethod
-    def delete(db: Session, device_id: str):
-        device = db.get(CPEDevice, device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="CPE device not found")
-        db.delete(device)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, device_id: str):
+        return super().delete(db, device_id)
 
 
-class Ports(ListResponseMixin):
+class Ports(CRUDManager[Port]):
+    model = Port
+    not_found_detail = "Port not found"
+
     @staticmethod
     def create(db: Session, payload: PortCreate):
         data = payload.model_dump()
+        # Backwards-compat: PortCreate accepts `olt_id` as an alias for `device_id`.
+        data.pop("olt_id", None)
         fields_set = payload.model_fields_set
         if "port_type" not in fields_set:
             default_type = settings_spec.resolve_value(
@@ -220,68 +225,65 @@ class Ports(ListResponseMixin):
         db.refresh(port)
         return port
 
-    @staticmethod
-    def get(db: Session, port_id: str):
-        port = db.get(Port, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Port not found")
+    @classmethod
+    def get(cls, db: Session, port_id: str):
+        port = super().get(db, port_id)
+        # Backwards-compat: treat disabled ports as deleted.
+        if port.status == PortStatus.disabled:
+            raise HTTPException(status_code=404, detail=cls.not_found_detail)
         return port
 
     @staticmethod
     def list(
         db: Session,
-        device_id: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        olt_id: str | None = None,
+        device_id: str | None = None,
+        port_type: str | None = None,
+        status: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(Port)
-        if device_id:
-            query = query.filter(Port.device_id == device_id)
+        if device_id and not olt_id:
+            olt_id = device_id
+        if olt_id:
+            query = query.filter(Port.device_id == coerce_uuid(olt_id))
+        if port_type:
+            query = query.filter(Port.port_type == _validate_enum(port_type, PortType, "port_type"))
+        if status:
+            query = query.filter(Port.status == _validate_enum(status, PortStatus, "status"))
+        if is_active is True:
+            query = query.filter(Port.status != PortStatus.disabled)
+        elif is_active is False:
+            query = query.filter(Port.status == PortStatus.disabled)
         query = _apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": Port.created_at, "name": Port.name},
+            {"created_at": Port.created_at, "name": Port.name, "port_number": Port.port_number},
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, port_id: str, payload: PortUpdate):
-        port = db.get(Port, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Port not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(port, key, value)
-        db.commit()
-        db.refresh(port)
-        return port
+    @classmethod
+    def update(cls, db: Session, port_id: str, payload: PortUpdate):
+        return super().update(db, port_id, payload)
 
-    @staticmethod
-    def delete(db: Session, port_id: str):
-        port = db.get(Port, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Port not found")
-        db.delete(port)
+    @classmethod
+    def delete(cls, db: Session, port_id: str):
+        # Soft-delete ports by disabling them. Tests expect the row to remain.
+        port = cls.get(db, port_id)
+        port.status = PortStatus.disabled
         db.commit()
 
 
-class Vlans(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: VlanCreate):
-        vlan = Vlan(**payload.model_dump())
-        db.add(vlan)
-        db.commit()
-        db.refresh(vlan)
-        return vlan
-
-    @staticmethod
-    def get(db: Session, vlan_id: str):
-        vlan = db.get(Vlan, vlan_id)
-        if not vlan:
-            raise HTTPException(status_code=404, detail="VLAN not found")
-        return vlan
+class Vlans(CRUDManager[Vlan]):
+    model = Vlan
+    not_found_detail = "VLAN not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -294,12 +296,8 @@ class Vlans(ListResponseMixin):
         offset: int,
     ):
         query = db.query(Vlan)
-        if region_id:
-            query = query.filter(Vlan.region_id == region_id)
-        if is_active is None:
-            query = query.filter(Vlan.is_active.is_(True))
-        else:
-            query = query.filter(Vlan.is_active == is_active)
+        query = apply_optional_equals(query, {Vlan.region_id: region_id})
+        query = apply_active_state(query, Vlan.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -308,41 +306,22 @@ class Vlans(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, vlan_id: str, payload: VlanUpdate):
-        vlan = db.get(Vlan, vlan_id)
-        if not vlan:
-            raise HTTPException(status_code=404, detail="VLAN not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(vlan, key, value)
-        db.commit()
-        db.refresh(vlan)
-        return vlan
+    @classmethod
+    def get(cls, db: Session, vlan_id: str):
+        return super().get(db, vlan_id)
 
-    @staticmethod
-    def delete(db: Session, vlan_id: str):
-        vlan = db.get(Vlan, vlan_id)
-        if not vlan:
-            raise HTTPException(status_code=404, detail="VLAN not found")
-        vlan.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, vlan_id: str, payload: VlanUpdate):
+        return super().update(db, vlan_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, vlan_id: str):
+        return super().delete(db, vlan_id)
 
 
-class PortVlans(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: PortVlanCreate):
-        link = PortVlan(**payload.model_dump())
-        db.add(link)
-        db.commit()
-        db.refresh(link)
-        return link
-
-    @staticmethod
-    def get(db: Session, link_id: str):
-        link = db.get(PortVlan, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="Port VLAN link not found")
-        return link
+class PortVlans(CRUDManager[PortVlan]):
+    model = PortVlan
+    not_found_detail = "Port VLAN link not found"
 
     @staticmethod
     def list(
@@ -355,36 +334,29 @@ class PortVlans(ListResponseMixin):
         offset: int,
     ):
         query = db.query(PortVlan)
-        if port_id:
-            query = query.filter(PortVlan.port_id == port_id)
-        if vlan_id:
-            query = query.filter(PortVlan.vlan_id == vlan_id)
+        query = apply_optional_equals(
+            query,
+            {PortVlan.port_id: port_id, PortVlan.vlan_id: vlan_id},
+        )
         query = _apply_ordering(
             query,
             order_by,
             order_dir,
-            {"port_id": PortVlan.port_id, "vlan_id": PortVlan.vlan_id},
+            {"created_at": PortVlan.created_at, "port_id": PortVlan.port_id, "vlan_id": PortVlan.vlan_id},
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, link_id: str, payload: PortVlanUpdate):
-        link = db.get(PortVlan, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="Port VLAN link not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(link, key, value)
-        db.commit()
-        db.refresh(link)
-        return link
+    @classmethod
+    def get(cls, db: Session, link_id: str):
+        return super().get(db, link_id)
 
-    @staticmethod
-    def delete(db: Session, link_id: str):
-        link = db.get(PortVlan, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="Port VLAN link not found")
-        db.delete(link)
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, link_id: str, payload: PortVlanUpdate):
+        return super().update(db, link_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, link_id: str):
+        return super().delete(db, link_id)
 
 
 cpe_devices = CPEDevices()

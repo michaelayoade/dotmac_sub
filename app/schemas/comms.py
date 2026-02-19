@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.models.comms import CustomerNotificationStatus
 
@@ -35,7 +35,9 @@ class CustomerNotificationRead(CustomerNotificationBase):
 
 
 class EtaUpdateBase(BaseModel):
-    service_order_id: UUID
+    service_order_id: UUID = Field(
+        validation_alias=AliasChoices("service_order_id", "work_order_id")
+    )
     eta_at: datetime
     note: str | None = None
 
@@ -79,6 +81,8 @@ class SurveyRead(SurveyBase):
 
 class SurveyResponseBase(BaseModel):
     survey_id: UUID
+    work_order_id: UUID | None = None
+    ticket_id: UUID | None = None
     responses: dict | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
 

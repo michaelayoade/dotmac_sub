@@ -205,18 +205,22 @@ class HuaweiProvisioner(Provisioner, ListResponseMixin):
         if not any([edit_config, rpc, get_filter]):
             raise ValueError(f"{step} requires commands, edit_config, rpc, or get_filter")
         with _netconf_manager(conn) as mgr:
-            outputs: list[str] = []
+            netconf_outputs: list[str] = []
             if edit_config:
                 target = config.get("target", "running")
                 mgr.edit_config(target=target, config=edit_config)
-                outputs.append("edit_config ok")
+                netconf_outputs.append("edit_config ok")
             if rpc:
                 result = mgr.dispatch(rpc)
-                outputs.append(str(result))
+                netconf_outputs.append(str(result))
             if get_filter:
                 result = mgr.get(filter=get_filter)
-                outputs.append(str(result))
-        return ProvisioningResult(status="ok", detail="huawei netconf ok", payload={"outputs": outputs})
+                netconf_outputs.append(str(result))
+        return ProvisioningResult(
+            status="ok",
+            detail="huawei netconf ok",
+            payload={"outputs": netconf_outputs},
+        )
 
 
 class ZteProvisioner(HuaweiProvisioner, ListResponseMixin):
@@ -237,7 +241,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
 
     def _resolve_device_id(self, context: dict, config: dict) -> str | None:
         device_id = config.get("device_id") or context.get("genieacs_device_id")
-        if device_id:
+        if isinstance(device_id, str) and device_id:
             return device_id
         oui = config.get("oui") or context.get("tr069_oui")
         product_class = config.get("product_class") or context.get("tr069_product_class")
@@ -246,7 +250,14 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             or context.get("tr069_serial_number")
             or context.get("cpe_serial_number")
         )
-        if oui and product_class and serial_number:
+        if (
+            isinstance(oui, str)
+            and isinstance(product_class, str)
+            and isinstance(serial_number, str)
+            and oui
+            and product_class
+            and serial_number
+        ):
             return f"{oui}-{product_class}-{serial_number}"
         return None
 

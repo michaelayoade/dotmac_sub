@@ -5,21 +5,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import gis as gis_service
 from app.schemas.gis import GeoLocationCreate, GeoLocationUpdate
 from app.models.gis import GeoLocationType, GeoAreaType
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("", response_class=HTMLResponse)

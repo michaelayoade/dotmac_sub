@@ -121,7 +121,7 @@ class TestResetPassword:
     def test_invalid_token_shows_error(self, anon_page: Page, settings):
         """Invalid reset token should show error message."""
         reset = ResetPasswordPage(anon_page, settings.base_url)
-        reset.goto("invalid-token-12345")
+        reset.goto_with_token("invalid-token-12345")
         # Either shows the form (to submit and fail) or redirects/shows error
         # Trying to reset with invalid token should fail
         reset.fill_password("NewPassword123!")
@@ -132,7 +132,7 @@ class TestResetPassword:
     def test_password_mismatch_validation(self, anon_page: Page, settings):
         """Mismatched passwords should show validation error."""
         reset = ResetPasswordPage(anon_page, settings.base_url)
-        reset.goto("some-token")
+        reset.goto_with_token("some-token")
         reset.fill_password("Password123!")
         reset.fill_password_confirm("DifferentPassword!")
         reset.submit()

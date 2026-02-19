@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import (
     audit as audit_service,
     analytics as analytics_service,
@@ -35,14 +35,6 @@ from app.services import (
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/web", tags=["web"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _render(request: Request, title: str, items):
@@ -84,7 +76,7 @@ def network_monitoring_home(request: Request, db: Session = Depends(get_db)):
 def provisioning_home(request: Request, db: Session = Depends(get_db)):
     items = provisioning_service.service_orders.list(
         db=db,
-        account_id=None,
+        subscriber_id=None,
         subscription_id=None,
         status=None,
         order_by="created_at",
@@ -210,6 +202,7 @@ def subscribers_home(request: Request, db: Session = Depends(get_db)):
     items = subscriber_service.subscribers.list(
         db=db,
         organization_id=None,
+        subscriber_type=None,
         order_by="created_at",
         order_dir="desc",
         limit=25,

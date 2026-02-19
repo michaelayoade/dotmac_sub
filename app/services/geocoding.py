@@ -102,8 +102,8 @@ def geocode_address(db: Session, data: dict) -> dict:
         return data
     first = results[0]
     try:
-        data["latitude"] = float(first.get("lat"))
-        data["longitude"] = float(first.get("lon"))
+        data["latitude"] = float(str(first.get("lat") or ""))
+        data["longitude"] = float(str(first.get("lon") or ""))
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="Invalid geocoding response") from exc
     return data
@@ -125,8 +125,8 @@ def geocode_preview(db: Session, data: dict, limit: int = 3) -> list[dict]:
             preview.append(
                 {
                     "display_name": item.get("display_name"),
-                    "latitude": float(item.get("lat")),
-                    "longitude": float(item.get("lon")),
+                    "latitude": float(str(item.get("lat") or "")),
+                    "longitude": float(str(item.get("lon") or "")),
                     "class": item.get("class"),
                     "type": item.get("type"),
                     "importance": item.get("importance"),

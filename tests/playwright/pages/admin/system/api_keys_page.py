@@ -12,10 +12,9 @@ class APIKeysPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/system/api-keys") -> None:
         """Navigate to the API keys list."""
-        super().goto("/admin/system/api-keys")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the API keys page is loaded."""

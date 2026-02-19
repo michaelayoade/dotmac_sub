@@ -7,6 +7,7 @@ Now stubbed as CRM functionality has been removed.
 import hashlib
 import hmac
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy.orm import Session
 
@@ -29,7 +30,7 @@ def verify_webhook_signature(
         return False
 
     if not secret:
-        secret = settings.meta_app_secret
+        secret = cast(str | None, getattr(settings, "meta_app_secret", None))
     if not secret:
         logger.warning("meta_webhook_signature_no_secret")
         return False

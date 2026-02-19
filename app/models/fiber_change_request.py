@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
@@ -40,10 +40,13 @@ class FiberChangeRequest(Base):
     status: Mapped[FiberChangeRequestStatus] = mapped_column(
         Enum(FiberChangeRequestStatus), default=FiberChangeRequestStatus.pending
     )
-    requested_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+    requested_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    reviewed_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+    requested_by_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    reviewed_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     review_notes: Mapped[str | None] = mapped_column(Text)
@@ -58,6 +61,3 @@ class FiberChangeRequest(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
-    requested_by = relationship("Subscriber", foreign_keys=[requested_by_subscriber_id])
-    reviewed_by = relationship("Subscriber", foreign_keys=[reviewed_by_subscriber_id])

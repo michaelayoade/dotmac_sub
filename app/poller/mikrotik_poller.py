@@ -12,7 +12,7 @@ import signal
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, cast
 from uuid import UUID
 
 import redis.asyncio as redis
@@ -76,9 +76,9 @@ class MikroTikConnection:
         self.password = password
         self.port = port
         self._pool: Optional[RouterOsApiPool] = None
-        self._connection = None
-        self._last_connected: Optional[datetime] = None
-        self._consecutive_failures = 0
+        self._connection: Any | None = None
+        self._last_connected: datetime | None = None
+        self._consecutive_failures: int = 0
 
     async def connect(self) -> bool:
         """Establish connection to the device."""
@@ -95,8 +95,11 @@ class MikroTikConnection:
                     plaintext_login=True,
                 ),
             )
+            pool = self._pool
+            if pool is None:
+                return False
             self._connection = await loop.run_in_executor(
-                None, self._pool.get_api
+                None, lambda: pool.get_api()
             )
             self._last_connected = datetime.now(timezone.utc)
             self._consecutive_failures = 0
@@ -120,14 +123,15 @@ class MikroTikConnection:
 
     async def is_connected(self) -> bool:
         """Check if connection is still alive."""
-        if not self._connection:
+        conn = self._connection
+        if conn is None:
             return False
         try:
             # Try a simple command to verify connection
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self._connection.get_resource("/system/identity").get()
+                lambda: conn.get_resource("/system/identity").get()
             )
             return True
         except Exception:
@@ -139,15 +143,19 @@ class MikroTikConnection:
 
         Returns list of QueueStats for all simple queues.
         """
-        if not self._connection:
+        conn = self._connection
+        if conn is None:
             if not await self.connect():
+                return []
+            conn = self._connection
+            if conn is None:
                 return []
 
         try:
             loop = asyncio.get_event_loop()
             queues = await loop.run_in_executor(
                 None,
-                lambda: self._connection.get_resource("/queue/simple").get()
+                lambda: conn.get_resource("/queue/simple").get()
             )
 
             stats = []
@@ -184,10 +192,12 @@ class MikroTikConnection:
         # Back off exponentially based on failures
         if self._consecutive_failures == 0:
             return True
-        backoff_seconds = min(60, 2 ** self._consecutive_failures)
+        backoff_seconds = 2 ** self._consecutive_failures
+        if backoff_seconds > 60:
+            backoff_seconds = 60
         if self._last_connected:
             elapsed = (datetime.now(timezone.utc) - self._last_connected).total_seconds()
-            return elapsed >= backoff_seconds
+            return bool(elapsed >= backoff_seconds)
         return True
 
 
@@ -291,7 +301,7 @@ class DevicePool:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.error(f"Polling error: {result}")
                 continue
             device_id, stats = result
@@ -328,7 +338,7 @@ class BandwidthPoller:
 
     async def _get_redis(self) -> redis.Redis:
         if self._redis is None:
-            self._redis = redis.from_url(REDIS_URL)
+            self._redis = cast(redis.Redis, redis.from_url(REDIS_URL))
         return self._redis
 
     async def _publish_samples(self, samples: list[BandwidthSample]):
@@ -340,7 +350,7 @@ class BandwidthPoller:
 
         # Publish as a batch to the stream
         for sample in samples:
-            data = {
+            data: dict[bytes | str | int | float, bytes | str | int | float] = {
                 "subscription_id": sample.subscription_id,
                 "nas_device_id": sample.nas_device_id,
                 "queue_name": sample.queue_name,

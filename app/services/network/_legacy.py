@@ -8,6 +8,8 @@ submodules in future refactoring:
 - PON port splitter links -> olt.py
 """
 
+from uuid import UUID
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -31,67 +33,52 @@ from app.models.network import (
 )
 from app.models.domain_settings import SettingDomain
 from app.schemas.network import (
-    FdhCabinetCreate,
     FdhCabinetUpdate,
-    FiberSegmentCreate,
     FiberSegmentUpdate,
-    FiberSpliceClosureCreate,
     FiberSpliceClosureUpdate,
-    FiberSpliceCreate,
     FiberSpliceUpdate,
-    FiberSpliceTrayCreate,
     FiberSpliceTrayUpdate,
     FiberStrandCreate,
     FiberStrandUpdate,
-    FiberTerminationPointCreate,
     FiberTerminationPointUpdate,
-    PonPortSplitterLinkCreate,
     PonPortSplitterLinkUpdate,
-    SplitterCreate,
-    SplitterPortAssignmentCreate,
     SplitterPortAssignmentUpdate,
-    SplitterPortCreate,
     SplitterPortUpdate,
     SplitterUpdate,
 )
 from app.services import settings_spec
-from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import (
+    apply_active_state,
+    apply_optional_equals,
+    apply_optional_ilike,
+)
 from app.services.response import ListResponseMixin
 
 
-class FdhCabinets(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FdhCabinetCreate):
-        cabinet = FdhCabinet(**payload.model_dump())
-        db.add(cabinet)
-        db.commit()
-        db.refresh(cabinet)
-        return cabinet
-
-    @staticmethod
-    def get(db: Session, cabinet_id: str):
-        cabinet = db.get(FdhCabinet, cabinet_id)
-        if not cabinet:
-            raise HTTPException(status_code=404, detail="FDH cabinet not found")
-        return cabinet
+class FdhCabinets(CRUDManager[FdhCabinet]):
+    model = FdhCabinet
+    not_found_detail = "FDH cabinet not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
         db: Session,
-        name: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        name: str | None = None,
+        region_id: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(FdhCabinet)
-        if name:
-            query = query.filter(FdhCabinet.name.ilike(f"%{name}%"))
-        if is_active is None:
-            query = query.filter(FdhCabinet.is_active.is_(True))
-        else:
-            query = query.filter(FdhCabinet.is_active == is_active)
+        query = apply_optional_ilike(query, {FdhCabinet.name: name})
+        if region_id:
+            query = query.filter(FdhCabinet.region_id == coerce_uuid(region_id))
+        query = apply_active_state(query, FdhCabinet.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -100,62 +87,46 @@ class FdhCabinets(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, cabinet_id: str, payload: FdhCabinetUpdate):
-        cabinet = db.get(FdhCabinet, cabinet_id)
-        if not cabinet:
-            raise HTTPException(status_code=404, detail="FDH cabinet not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(cabinet, key, value)
-        db.commit()
-        db.refresh(cabinet)
-        return cabinet
+    @classmethod
+    def get(cls, db: Session, cabinet_id: str):
+        return super().get(db, cabinet_id)
 
-    @staticmethod
-    def delete(db: Session, cabinet_id: str):
-        cabinet = db.get(FdhCabinet, cabinet_id)
-        if not cabinet:
-            raise HTTPException(status_code=404, detail="FDH cabinet not found")
-        cabinet.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, cabinet_id: str, payload: FdhCabinetUpdate):
+        return super().update(db, cabinet_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, cabinet_id: str):
+        return super().delete(db, cabinet_id)
 
 
-class Splitters(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SplitterCreate):
-        splitter = Splitter(**payload.model_dump())
-        db.add(splitter)
-        db.commit()
-        db.refresh(splitter)
-        return splitter
-
-    @staticmethod
-    def get(db: Session, splitter_id: str):
-        splitter = db.get(Splitter, splitter_id)
-        if not splitter:
-            raise HTTPException(status_code=404, detail="Splitter not found")
-        return splitter
+class Splitters(CRUDManager[Splitter]):
+    model = Splitter
+    not_found_detail = "Splitter not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
         db: Session,
-        name: str | None,
-        fdh_cabinet_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        name: str | None = None,
+        fdh_cabinet_id: str | None = None,
+        # Backwards-compat alias used by older tests/callers.
+        fdh_id: str | None = None,
+        is_active: bool | None = None,
     ):
+        if fdh_id and not fdh_cabinet_id:
+            fdh_cabinet_id = fdh_id
         query = db.query(Splitter)
-        if name:
-            query = query.filter(Splitter.name.ilike(f"%{name}%"))
-        if fdh_cabinet_id:
-            query = query.filter(Splitter.fdh_cabinet_id == fdh_cabinet_id)
-        if is_active is None:
-            query = query.filter(Splitter.is_active.is_(True))
-        else:
-            query = query.filter(Splitter.is_active == is_active)
+        query = apply_optional_ilike(query, {Splitter.name: name})
+        query = apply_optional_equals(
+            query, {Splitter.fdh_id: coerce_uuid(fdh_cabinet_id)}
+        )
+        query = apply_active_state(query, Splitter.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -164,65 +135,46 @@ class Splitters(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, splitter_id: str, payload: SplitterUpdate):
-        splitter = db.get(Splitter, splitter_id)
-        if not splitter:
-            raise HTTPException(status_code=404, detail="Splitter not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(splitter, key, value)
-        db.commit()
-        db.refresh(splitter)
-        return splitter
+    @classmethod
+    def get(cls, db: Session, splitter_id: str):
+        return super().get(db, splitter_id)
 
-    @staticmethod
-    def delete(db: Session, splitter_id: str):
-        splitter = db.get(Splitter, splitter_id)
-        if not splitter:
-            raise HTTPException(status_code=404, detail="Splitter not found")
-        splitter.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, splitter_id: str, payload: SplitterUpdate):
+        return super().update(db, splitter_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, splitter_id: str):
+        return super().delete(db, splitter_id)
 
 
-class SplitterPorts(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SplitterPortCreate):
-        port = SplitterPort(**payload.model_dump())
-        db.add(port)
-        db.commit()
-        db.refresh(port)
-        return port
-
-    @staticmethod
-    def get(db: Session, port_id: str):
-        port = db.get(SplitterPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Splitter port not found")
-        return port
+class SplitterPorts(CRUDManager[SplitterPort]):
+    model = SplitterPort
+    not_found_detail = "Splitter port not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
         db: Session,
-        splitter_id: str | None,
-        port_type: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        splitter_id: str | None = None,
+        port_type: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(SplitterPort)
-        if splitter_id:
-            query = query.filter(SplitterPort.splitter_id == splitter_id)
+        query = apply_optional_equals(
+            query, {SplitterPort.splitter_id: coerce_uuid(splitter_id)}
+        )
         if port_type:
             query = query.filter(
                 SplitterPort.port_type
                 == validate_enum(port_type, SplitterPortType, "port_type")
             )
-        if is_active is None:
-            query = query.filter(SplitterPort.is_active.is_(True))
-        else:
-            query = query.filter(SplitterPort.is_active == is_active)
+        query = apply_active_state(query, SplitterPort.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -231,41 +183,54 @@ class SplitterPorts(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, port_id: str, payload: SplitterPortUpdate):
-        port = db.get(SplitterPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Splitter port not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(port, key, value)
-        db.commit()
-        db.refresh(port)
-        return port
+    @classmethod
+    def get(cls, db: Session, port_id: str):
+        return super().get(db, port_id)
+
+    @classmethod
+    def update(cls, db: Session, port_id: str, payload: SplitterPortUpdate):
+        return super().update(db, port_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, port_id: str):
+        return super().delete(db, port_id)
 
     @staticmethod
-    def delete(db: Session, port_id: str):
-        port = db.get(SplitterPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="Splitter port not found")
-        port.is_active = False
-        db.commit()
+    def utilization(db: Session, splitter_id: str | None):
+        """Return splitter port utilization summary."""
+        splitter_uuid: UUID | None = None
+        if splitter_id:
+            try:
+                splitter_uuid = UUID(splitter_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid splitter_id") from exc
+
+        ports_query = db.query(SplitterPort).filter(SplitterPort.is_active.is_(True))
+        if splitter_uuid:
+            ports_query = ports_query.filter(SplitterPort.splitter_id == splitter_uuid)
+        total_ports = ports_query.count()
+
+        assigned_query = (
+            db.query(SplitterPortAssignment.splitter_port_id)
+            .join(SplitterPort, SplitterPort.id == SplitterPortAssignment.splitter_port_id)
+            .filter(SplitterPortAssignment.active.is_(True))
+        )
+        if splitter_uuid:
+            assigned_query = assigned_query.filter(SplitterPort.splitter_id == splitter_uuid)
+        assigned_ports = assigned_query.distinct().count()
+
+        return {
+            "splitter_id": splitter_id,
+            "total_ports": total_ports,
+            "assigned_ports": assigned_ports,
+        }
 
 
-class SplitterPortAssignments(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SplitterPortAssignmentCreate):
-        assignment = SplitterPortAssignment(**payload.model_dump())
-        db.add(assignment)
-        db.commit()
-        db.refresh(assignment)
-        return assignment
-
-    @staticmethod
-    def get(db: Session, assignment_id: str):
-        assignment = db.get(SplitterPortAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Splitter port assignment not found")
-        return assignment
+class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
+    model = SplitterPortAssignment
+    not_found_detail = "Splitter port assignment not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -278,12 +243,11 @@ class SplitterPortAssignments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(SplitterPortAssignment)
-        if splitter_port_id:
-            query = query.filter(SplitterPortAssignment.splitter_port_id == splitter_port_id)
-        if is_active is None:
-            query = query.filter(SplitterPortAssignment.is_active.is_(True))
-        else:
-            query = query.filter(SplitterPortAssignment.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {SplitterPortAssignment.splitter_port_id: splitter_port_id},
+        )
+        query = apply_active_state(query, SplitterPortAssignment.active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -292,27 +256,25 @@ class SplitterPortAssignments(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, assignment_id: str, payload: SplitterPortAssignmentUpdate):
-        assignment = db.get(SplitterPortAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Splitter port assignment not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(assignment, key, value)
-        db.commit()
-        db.refresh(assignment)
-        return assignment
+    @classmethod
+    def get(cls, db: Session, assignment_id: str):
+        return super().get(db, assignment_id)
 
-    @staticmethod
-    def delete(db: Session, assignment_id: str):
-        assignment = db.get(SplitterPortAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="Splitter port assignment not found")
-        assignment.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, assignment_id: str, payload: SplitterPortAssignmentUpdate):
+        return super().update(db, assignment_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, assignment_id: str):
+        return super().delete(db, assignment_id)
 
 
-class FiberStrands(ListResponseMixin):
+class FiberStrands(CRUDManager[FiberStrand]):
+    model = FiberStrand
+    not_found_detail = "Fiber strand not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: FiberStrandCreate):
         segment = None
@@ -337,15 +299,15 @@ class FiberStrands(ListResponseMixin):
         db.commit()
         db.refresh(strand)
         if segment:
-            strand.segment_id = segment.id
+            # Link segment <-> strand for callers expecting `strand.segment_id`.
+            segment.fiber_strand_id = strand.id
+            db.commit()
+            db.refresh(strand)
         return strand
 
-    @staticmethod
-    def get(db: Session, strand_id: str):
-        strand = db.get(FiberStrand, strand_id)
-        if not strand:
-            raise HTTPException(status_code=404, detail="Fiber strand not found")
-        return strand
+    @classmethod
+    def get(cls, db: Session, strand_id: str):
+        return super().get(db, strand_id)
 
     @staticmethod
     def list(
@@ -372,10 +334,7 @@ class FiberStrands(ListResponseMixin):
                 FiberStrand.status
                 == validate_enum(status, FiberStrandStatus, "status")
             )
-        if is_active is None:
-            query = query.filter(FiberStrand.is_active.is_(True))
-        else:
-            query = query.filter(FiberStrand.is_active == is_active)
+        query = apply_active_state(query, FiberStrand.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -384,59 +343,34 @@ class FiberStrands(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, strand_id: str, payload: FiberStrandUpdate):
-        strand = db.get(FiberStrand, strand_id)
-        if not strand:
-            raise HTTPException(status_code=404, detail="Fiber strand not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(strand, key, value)
-        db.commit()
-        db.refresh(strand)
-        return strand
+    @classmethod
+    def update(cls, db: Session, strand_id: str, payload: FiberStrandUpdate):
+        return super().update(db, strand_id, payload)
 
-    @staticmethod
-    def delete(db: Session, strand_id: str):
-        strand = db.get(FiberStrand, strand_id)
-        if not strand:
-            raise HTTPException(status_code=404, detail="Fiber strand not found")
-        strand.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, strand_id: str):
+        return super().delete(db, strand_id)
 
 
-class FiberSpliceClosures(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FiberSpliceClosureCreate):
-        closure = FiberSpliceClosure(**payload.model_dump())
-        db.add(closure)
-        db.commit()
-        db.refresh(closure)
-        return closure
-
-    @staticmethod
-    def get(db: Session, closure_id: str):
-        closure = db.get(FiberSpliceClosure, closure_id)
-        if not closure:
-            raise HTTPException(status_code=404, detail="Fiber splice closure not found")
-        return closure
+class FiberSpliceClosures(CRUDManager[FiberSpliceClosure]):
+    model = FiberSpliceClosure
+    not_found_detail = "Fiber splice closure not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
         db: Session,
-        name: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        name: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(FiberSpliceClosure)
-        if name:
-            query = query.filter(FiberSpliceClosure.name.ilike(f"%{name}%"))
-        if is_active is None:
-            query = query.filter(FiberSpliceClosure.is_active.is_(True))
-        else:
-            query = query.filter(FiberSpliceClosure.is_active == is_active)
+        query = apply_optional_ilike(query, {FiberSpliceClosure.name: name})
+        query = apply_active_state(query, FiberSpliceClosure.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -445,59 +379,35 @@ class FiberSpliceClosures(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, closure_id: str, payload: FiberSpliceClosureUpdate):
-        closure = db.get(FiberSpliceClosure, closure_id)
-        if not closure:
-            raise HTTPException(status_code=404, detail="Fiber splice closure not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(closure, key, value)
-        db.commit()
-        db.refresh(closure)
-        return closure
+    @classmethod
+    def get(cls, db: Session, closure_id: str):
+        return super().get(db, closure_id)
 
-    @staticmethod
-    def delete(db: Session, closure_id: str):
-        closure = db.get(FiberSpliceClosure, closure_id)
-        if not closure:
-            raise HTTPException(status_code=404, detail="Fiber splice closure not found")
-        closure.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, closure_id: str, payload: FiberSpliceClosureUpdate):
+        return super().update(db, closure_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, closure_id: str):
+        return super().delete(db, closure_id)
 
 
-class FiberSplices(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FiberSpliceCreate):
-        splice = FiberSplice(**payload.model_dump())
-        db.add(splice)
-        db.commit()
-        db.refresh(splice)
-        return splice
-
-    @staticmethod
-    def get(db: Session, splice_id: str):
-        splice = db.get(FiberSplice, splice_id)
-        if not splice:
-            raise HTTPException(status_code=404, detail="Fiber splice not found")
-        return splice
+class FiberSplices(CRUDManager[FiberSplice]):
+    model = FiberSplice
+    not_found_detail = "Fiber splice not found"
+    soft_delete_field = None
 
     @staticmethod
     def list(
         db: Session,
-        tray_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        tray_id: str | None = None,
     ):
         query = db.query(FiberSplice)
-        if tray_id:
-            query = query.filter(FiberSplice.tray_id == tray_id)
-        if is_active is None:
-            query = query.filter(FiberSplice.is_active.is_(True))
-        else:
-            query = query.filter(FiberSplice.is_active == is_active)
+        query = apply_optional_equals(query, {FiberSplice.tray_id: coerce_uuid(tray_id)})
         query = apply_ordering(
             query,
             order_by,
@@ -506,59 +416,75 @@ class FiberSplices(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, splice_id: str, payload: FiberSpliceUpdate):
-        splice = db.get(FiberSplice, splice_id)
-        if not splice:
-            raise HTTPException(status_code=404, detail="Fiber splice not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(splice, key, value)
-        db.commit()
-        db.refresh(splice)
-        return splice
+    @classmethod
+    def get(cls, db: Session, splice_id: str):
+        return super().get(db, splice_id)
+
+    @classmethod
+    def update(cls, db: Session, splice_id: str, payload: FiberSpliceUpdate):
+        return super().update(db, splice_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, splice_id: str):
+        return super().delete(db, splice_id)
 
     @staticmethod
-    def delete(db: Session, splice_id: str):
-        splice = db.get(FiberSplice, splice_id)
-        if not splice:
-            raise HTTPException(status_code=404, detail="Fiber splice not found")
-        splice.is_active = False
-        db.commit()
+    def trace_response(db: Session, strand_id: str, max_hops: int = 25) -> dict[str, object]:
+        """Build a minimal fiber path response for a strand.
+
+        Note: This is intentionally conservative. It returns nearby splices for the
+        strand, suitable for the API response model.
+        """
+        try:
+            strand_uuid = UUID(strand_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid strand_id") from exc
+
+        # Find splices touching this strand.
+        splices = (
+            db.query(FiberSplice)
+            .filter(
+                (FiberSplice.from_strand_id == strand_uuid)
+                | (FiberSplice.to_strand_id == strand_uuid)
+            )
+            .limit(max_hops)
+            .all()
+        )
+
+        segments: list[dict[str, object]] = []
+        for splice in splices:
+            segments.append(
+                {
+                    "segment_type": "splice",
+                    "strand_id": strand_id,
+                    "splice_id": str(splice.id),
+                    "closure_id": str(splice.closure_id),
+                    "upstream": None,
+                    "downstream": None,
+                }
+            )
+
+        return {"segments": segments}
 
 
-class FiberSpliceTrays(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FiberSpliceTrayCreate):
-        tray = FiberSpliceTray(**payload.model_dump())
-        db.add(tray)
-        db.commit()
-        db.refresh(tray)
-        return tray
-
-    @staticmethod
-    def get(db: Session, tray_id: str):
-        tray = db.get(FiberSpliceTray, tray_id)
-        if not tray:
-            raise HTTPException(status_code=404, detail="Fiber splice tray not found")
-        return tray
+class FiberSpliceTrays(CRUDManager[FiberSpliceTray]):
+    model = FiberSpliceTray
+    not_found_detail = "Fiber splice tray not found"
+    soft_delete_field = None
 
     @staticmethod
     def list(
         db: Session,
-        closure_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        closure_id: str | None = None,
     ):
         query = db.query(FiberSpliceTray)
-        if closure_id:
-            query = query.filter(FiberSpliceTray.closure_id == closure_id)
-        if is_active is None:
-            query = query.filter(FiberSpliceTray.is_active.is_(True))
-        else:
-            query = query.filter(FiberSpliceTray.is_active == is_active)
+        query = apply_optional_equals(
+            query, {FiberSpliceTray.closure_id: coerce_uuid(closure_id)}
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -567,59 +493,42 @@ class FiberSpliceTrays(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, tray_id: str, payload: FiberSpliceTrayUpdate):
-        tray = db.get(FiberSpliceTray, tray_id)
-        if not tray:
-            raise HTTPException(status_code=404, detail="Fiber splice tray not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(tray, key, value)
-        db.commit()
-        db.refresh(tray)
-        return tray
+    @classmethod
+    def get(cls, db: Session, tray_id: str):
+        return super().get(db, tray_id)
 
-    @staticmethod
-    def delete(db: Session, tray_id: str):
-        tray = db.get(FiberSpliceTray, tray_id)
-        if not tray:
-            raise HTTPException(status_code=404, detail="Fiber splice tray not found")
-        tray.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, tray_id: str, payload: FiberSpliceTrayUpdate):
+        return super().update(db, tray_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, tray_id: str):
+        return super().delete(db, tray_id)
 
 
-class FiberTerminationPoints(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FiberTerminationPointCreate):
-        point = FiberTerminationPoint(**payload.model_dump())
-        db.add(point)
-        db.commit()
-        db.refresh(point)
-        return point
-
-    @staticmethod
-    def get(db: Session, point_id: str):
-        point = db.get(FiberTerminationPoint, point_id)
-        if not point:
-            raise HTTPException(status_code=404, detail="Fiber termination point not found")
-        return point
+class FiberTerminationPoints(CRUDManager[FiberTerminationPoint]):
+    model = FiberTerminationPoint
+    not_found_detail = "Fiber termination point not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
         db: Session,
-        strand_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        endpoint_type: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(FiberTerminationPoint)
-        if strand_id:
-            query = query.filter(FiberTerminationPoint.strand_id == strand_id)
-        if is_active is None:
-            query = query.filter(FiberTerminationPoint.is_active.is_(True))
-        else:
-            query = query.filter(FiberTerminationPoint.is_active == is_active)
+        if endpoint_type:
+            query = query.filter(
+                FiberTerminationPoint.endpoint_type
+                == validate_enum(endpoint_type, ODNEndpointType, "endpoint_type")
+            )
+        query = apply_active_state(query, FiberTerminationPoint.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -628,41 +537,24 @@ class FiberTerminationPoints(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, point_id: str, payload: FiberTerminationPointUpdate):
-        point = db.get(FiberTerminationPoint, point_id)
-        if not point:
-            raise HTTPException(status_code=404, detail="Fiber termination point not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(point, key, value)
-        db.commit()
-        db.refresh(point)
-        return point
+    @classmethod
+    def get(cls, db: Session, point_id: str):
+        return super().get(db, point_id)
 
-    @staticmethod
-    def delete(db: Session, point_id: str):
-        point = db.get(FiberTerminationPoint, point_id)
-        if not point:
-            raise HTTPException(status_code=404, detail="Fiber termination point not found")
-        point.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, point_id: str, payload: FiberTerminationPointUpdate):
+        return super().update(db, point_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, point_id: str):
+        return super().delete(db, point_id)
 
 
-class FiberSegments(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: FiberSegmentCreate):
-        segment = FiberSegment(**payload.model_dump())
-        db.add(segment)
-        db.commit()
-        db.refresh(segment)
-        return segment
-
-    @staticmethod
-    def get(db: Session, segment_id: str):
-        segment = db.get(FiberSegment, segment_id)
-        if not segment:
-            raise HTTPException(status_code=404, detail="Fiber segment not found")
-        return segment
+class FiberSegments(CRUDManager[FiberSegment]):
+    model = FiberSegment
+    not_found_detail = "Fiber segment not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -683,10 +575,7 @@ class FiberSegments(ListResponseMixin):
             )
         if fiber_strand_id:
             query = query.filter(FiberSegment.fiber_strand_id == fiber_strand_id)
-        if is_active is None:
-            query = query.filter(FiberSegment.is_active.is_(True))
-        else:
-            query = query.filter(FiberSegment.is_active == is_active)
+        query = apply_active_state(query, FiberSegment.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -695,41 +584,24 @@ class FiberSegments(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, segment_id: str, payload: FiberSegmentUpdate):
-        segment = db.get(FiberSegment, segment_id)
-        if not segment:
-            raise HTTPException(status_code=404, detail="Fiber segment not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(segment, key, value)
-        db.commit()
-        db.refresh(segment)
-        return segment
+    @classmethod
+    def get(cls, db: Session, segment_id: str):
+        return super().get(db, segment_id)
 
-    @staticmethod
-    def delete(db: Session, segment_id: str):
-        segment = db.get(FiberSegment, segment_id)
-        if not segment:
-            raise HTTPException(status_code=404, detail="Fiber segment not found")
-        segment.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, segment_id: str, payload: FiberSegmentUpdate):
+        return super().update(db, segment_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, segment_id: str):
+        return super().delete(db, segment_id)
 
 
-class PonPortSplitterLinks(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: PonPortSplitterLinkCreate):
-        link = PonPortSplitterLink(**payload.model_dump())
-        db.add(link)
-        db.commit()
-        db.refresh(link)
-        return link
-
-    @staticmethod
-    def get(db: Session, link_id: str):
-        link = db.get(PonPortSplitterLink, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="PON port splitter link not found")
-        return link
+class PonPortSplitterLinks(CRUDManager[PonPortSplitterLink]):
+    model = PonPortSplitterLink
+    not_found_detail = "PON port splitter link not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -743,14 +615,14 @@ class PonPortSplitterLinks(ListResponseMixin):
         offset: int,
     ):
         query = db.query(PonPortSplitterLink)
-        if pon_port_id:
-            query = query.filter(PonPortSplitterLink.pon_port_id == pon_port_id)
-        if splitter_id:
-            query = query.filter(PonPortSplitterLink.splitter_id == splitter_id)
-        if is_active is None:
-            query = query.filter(PonPortSplitterLink.is_active.is_(True))
-        else:
-            query = query.filter(PonPortSplitterLink.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {
+                PonPortSplitterLink.pon_port_id: pon_port_id,
+                PonPortSplitterLink.splitter_port_id: splitter_id,
+            },
+        )
+        query = apply_active_state(query, PonPortSplitterLink.active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -759,24 +631,17 @@ class PonPortSplitterLinks(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, link_id: str, payload: PonPortSplitterLinkUpdate):
-        link = db.get(PonPortSplitterLink, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="PON port splitter link not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(link, key, value)
-        db.commit()
-        db.refresh(link)
-        return link
+    @classmethod
+    def get(cls, db: Session, link_id: str):
+        return super().get(db, link_id)
 
-    @staticmethod
-    def delete(db: Session, link_id: str):
-        link = db.get(PonPortSplitterLink, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="PON port splitter link not found")
-        link.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, link_id: str, payload: PonPortSplitterLinkUpdate):
+        return super().update(db, link_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, link_id: str):
+        return super().delete(db, link_id)
 
 
 # Service instances

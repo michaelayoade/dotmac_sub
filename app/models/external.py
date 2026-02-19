@@ -15,6 +15,8 @@ class ExternalEntityType(enum.Enum):
     subscription = "subscription"
     invoice = "invoice"
     service_order = "service_order"
+    # Backwards-compat: older integrations/tests used ticket references.
+    ticket = "ticket"
 
 
 class ExternalReference(Base):

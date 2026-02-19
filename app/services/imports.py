@@ -27,7 +27,14 @@ def _imports_int_setting(db: Session, key: str, default: int) -> int:
     if value is None:
         return default
     try:
-        parsed = int(value)
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float):
+            parsed = int(value)
+        elif isinstance(value, str):
+            parsed = int(value)
+        else:
+            return default
     except (TypeError, ValueError):
         return default
     return parsed

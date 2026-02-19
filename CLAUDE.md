@@ -70,7 +70,8 @@ app/
 │   ├── admin/         # Admin portal (/admin/*)
 │   ├── customer/      # Customer portal (/portal/*)
 │   ├── reseller/      # Reseller portal (/reseller/*)
-│   └── vendor/        # Vendor portal (/vendor/*)
+│   ├── auth/          # Shared web auth (/auth/*)
+│   └── public/        # Public/legal pages
 ├── models/            # SQLAlchemy ORM models
 ├── services/          # ALL business logic lives here
 ├── schemas/           # Pydantic request/response models
@@ -89,7 +90,7 @@ docs/                  # Documentation
 ## Critical Rules
 
 ### 1. Service Layer — Routes are THIN WRAPPERS
-**IMPORTANT:** Routes MUST NOT contain database queries, business logic, or conditionals.
+**IMPORTANT:** Routes (both API and web) MUST NOT contain database queries, business logic, or conditionals. Routes may ONLY: parse request parameters, construct Pydantic schemas, call a single service method, and return the response/redirect. Any aggregation, filtering, sorting, direct ORM mutations, or `db.commit()` calls belong in the service layer.
 
 ```python
 # CORRECT
@@ -100,8 +101,28 @@ def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db))
 # WRONG — logic in route
 @router.post("/subscriptions")
 def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db)):
-    subscription = Subscription(**data.dict())  # NO
-    db.add(subscription)                        # NO
+    subscription = Subscription(**data.dict())  # NO — direct ORM construction
+    db.add(subscription)                        # NO — direct DB mutation
+
+# WRONG — business logic in route
+@router.get("/dashboard")
+def dashboard(db: Session = Depends(get_db)):
+    orders = service.list(db)
+    pending = sum(1 for o in orders if o.status == "pending")  # NO — aggregation
+    return {"pending": pending}
+
+# WRONG — direct model mutation in route
+@router.post("/orders")
+def create_order(db: Session = Depends(get_db)):
+    order = service.create(db, payload)
+    order.some_field = value  # NO — direct ORM mutation
+    db.commit()              # NO — db.commit() in route
+
+# CORRECT — add a service method instead
+@router.get("/dashboard")
+def dashboard(db: Session = Depends(get_db)):
+    stats = service.dashboard_stats(db)  # Aggregation lives in service
+    return stats
 ```
 
 ### 2. Multi-tenancy — Filter Data Appropriately
@@ -384,7 +405,6 @@ Use `test_db` fixture from `conftest.py` for database tests.
 | Admin | `/admin` | `/auth/login` |
 | Customer | `/portal` | `/portal/auth/login` |
 | Reseller | `/reseller` | `/reseller/auth/login` |
-| Vendor | `/vendor` | `/vendor/auth/login` |
 | API | `/api/v1` | JWT Bearer token |
 
 ## Environment Variables

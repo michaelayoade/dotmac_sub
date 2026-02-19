@@ -23,6 +23,8 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_optional_equals
 from app.services.response import ListResponseMixin
 from app.services import settings_spec
 from app.services.events import emit_event
@@ -50,24 +52,24 @@ def _resolve_billing_cycle(
     offer_version_id: str | None,
 ) -> BillingCycle:
     if offer_version_id:
-        price = (
+        version_price: OfferVersionPrice | None = (
             db.query(OfferVersionPrice)
             .filter(OfferVersionPrice.offer_version_id == offer_version_id)
             .filter(OfferVersionPrice.price_type == PriceType.recurring)
             .filter(OfferVersionPrice.is_active.is_(True))
             .first()
         )
-        if price and price.billing_cycle:
-            return price.billing_cycle
-    price = (
+        if version_price and version_price.billing_cycle:
+            return version_price.billing_cycle
+    offer_price: OfferPrice | None = (
         db.query(OfferPrice)
         .filter(OfferPrice.offer_id == offer_id)
         .filter(OfferPrice.price_type == PriceType.recurring)
         .filter(OfferPrice.is_active.is_(True))
         .first()
     )
-    if price and price.billing_cycle:
-        return price.billing_cycle
+    if offer_price and offer_price.billing_cycle:
+        return offer_price.billing_cycle
     offer = db.get(CatalogOffer, offer_id)
     return offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
 
@@ -162,17 +164,25 @@ def _emit_subscription_status_event(
         "from_status": from_str,
         "to_status": to_str,
     }
-    context = {
-        "subscription_id": subscription.id,
-        "account_id": subscription.subscriber_id,
-    }
 
     # Map status transitions to event types
     if to_status == SubscriptionStatus.active:
         if from_status == SubscriptionStatus.suspended:
-            emit_event(db, EventType.subscription_resumed, payload, **context)
+            emit_event(
+                db,
+                EventType.subscription_resumed,
+                payload,
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
         else:
-            emit_event(db, EventType.subscription_activated, payload, **context)
+            emit_event(
+                db,
+                EventType.subscription_activated,
+                payload,
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+            )
             # Generate prorated invoice for new activations
             _generate_proration_if_enabled(db, subscription, from_status)
 
@@ -180,9 +190,21 @@ def _emit_subscription_status_event(
         _sync_credentials_to_radius(db, subscription.subscriber_id)
 
     elif to_status == SubscriptionStatus.suspended:
-        emit_event(db, EventType.subscription_suspended, payload, **context)
+        emit_event(
+            db,
+            EventType.subscription_suspended,
+            payload,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
     elif to_status == SubscriptionStatus.canceled:
-        emit_event(db, EventType.subscription_canceled, payload, **context)
+        emit_event(
+            db,
+            EventType.subscription_canceled,
+            payload,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
 
 
 def _create_service_order_for_subscription(db: Session, subscription: Subscription):
@@ -311,6 +333,21 @@ class Subscriptions(ListResponseMixin):
                 account_id=subscription.subscriber_id,
             )
 
+        # SQLite drops tzinfo even when DateTime(timezone=True), and emit_event()
+        # commits may expire the instance. Normalize to UTC right before returning
+        # so callers/tests can do arithmetic with aware datetimes.
+        def _ensure_utc(value: datetime | None) -> datetime | None:
+            if value is None:
+                return None
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+
+        subscription.start_at = _ensure_utc(subscription.start_at)
+        subscription.end_at = _ensure_utc(subscription.end_at)
+        subscription.next_billing_at = _ensure_utc(subscription.next_billing_at)
+        subscription.canceled_at = _ensure_utc(subscription.canceled_at)
+
         return subscription
 
     @staticmethod
@@ -342,10 +379,13 @@ class Subscriptions(ListResponseMixin):
             selectinload(Subscription.offer),
             selectinload(Subscription.add_ons).selectinload(SubscriptionAddOn.add_on),
         )
-        if subscriber_id:
-            query = query.filter(Subscription.subscriber_id == subscriber_id)
-        if offer_id:
-            query = query.filter(Subscription.offer_id == offer_id)
+        query = apply_optional_equals(
+            query,
+            {
+                Subscription.subscriber_id: subscriber_id,
+                Subscription.offer_id: offer_id,
+            },
+        )
         if status:
             query = query.filter(
                 Subscription.status == validate_enum(status, SubscriptionStatus, "status")
@@ -512,7 +552,10 @@ class Subscriptions(ListResponseMixin):
         }
 
 
-class SubscriptionAddOns(ListResponseMixin):
+class SubscriptionAddOns(CRUDManager[SubscriptionAddOn]):
+    model = SubscriptionAddOn
+    not_found_detail = "Subscription add-on not found"
+
     @staticmethod
     def create(db: Session, payload: SubscriptionAddOnCreate):
         catalog_validators.validate_subscription_add_on(
@@ -532,12 +575,9 @@ class SubscriptionAddOns(ListResponseMixin):
         db.refresh(subscription_add_on)
         return subscription_add_on
 
-    @staticmethod
-    def get(db: Session, subscription_add_on_id: str):
-        subscription_add_on = db.get(SubscriptionAddOn, subscription_add_on_id)
-        if not subscription_add_on:
-            raise HTTPException(status_code=404, detail="Subscription add-on not found")
-        return subscription_add_on
+    @classmethod
+    def get(cls, db: Session, subscription_add_on_id: str):
+        return super().get(db, subscription_add_on_id)
 
     @staticmethod
     def list(
@@ -550,10 +590,13 @@ class SubscriptionAddOns(ListResponseMixin):
         offset: int,
     ):
         query = db.query(SubscriptionAddOn)
-        if subscription_id:
-            query = query.filter(SubscriptionAddOn.subscription_id == subscription_id)
-        if add_on_id:
-            query = query.filter(SubscriptionAddOn.add_on_id == add_on_id)
+        query = apply_optional_equals(
+            query,
+            {
+                SubscriptionAddOn.subscription_id: subscription_id,
+                SubscriptionAddOn.add_on_id: add_on_id,
+            },
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -585,10 +628,6 @@ class SubscriptionAddOns(ListResponseMixin):
         db.refresh(subscription_add_on)
         return subscription_add_on
 
-    @staticmethod
-    def delete(db: Session, subscription_add_on_id: str):
-        subscription_add_on = db.get(SubscriptionAddOn, subscription_add_on_id)
-        if not subscription_add_on:
-            raise HTTPException(status_code=404, detail="Subscription add-on not found")
-        db.delete(subscription_add_on)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, subscription_add_on_id: str):
+        return super().delete(db, subscription_add_on_id)

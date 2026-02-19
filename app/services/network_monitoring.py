@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import builtins
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
@@ -71,13 +73,13 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _alert_intervals_by_device(
     db: Session, period_start: datetime, period_end: datetime
 ) -> dict[str, list[tuple[datetime, datetime]]]:
-    period_start = _as_utc(period_start)
-    period_end = _as_utc(period_end)
+    period_start_utc = cast(datetime, _as_utc(period_start))
+    period_end_utc = cast(datetime, _as_utc(period_end))
     alerts = (
         db.query(Alert)
         .filter(Alert.metric_type == MetricType.uptime)
-        .filter(Alert.triggered_at <= period_end)
-        .filter((Alert.resolved_at.is_(None)) | (Alert.resolved_at >= period_start))
+        .filter(Alert.triggered_at <= period_end_utc)
+        .filter((Alert.resolved_at.is_(None)) | (Alert.resolved_at >= period_start_utc))
         .all()
     )
     intervals: dict[str, list[tuple[datetime, datetime]]] = {}
@@ -88,8 +90,8 @@ def _alert_intervals_by_device(
         resolved_at = _as_utc(alert.resolved_at)
         if triggered_at is None:
             continue
-        start = max(triggered_at, period_start)
-        end = min(resolved_at or period_end, period_end)
+        start = max(triggered_at, period_start_utc)
+        end = min(resolved_at or period_end_utc, period_end_utc)
         if end <= start:
             continue
         key = str(alert.device_id)
@@ -166,12 +168,12 @@ def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResp
                 )
             )
     elif group_by == "area":
-        grouped: dict[str, list[NetworkDevice]] = {}
+        grouped_by_region: dict[str, list[NetworkDevice]] = {}
         for device in devices:
             region = device.pop_site.region if device.pop_site else None
             key = region or "Unknown"
-            grouped.setdefault(key, []).append(device)
-        for region, grouped_devices in grouped.items():
+            grouped_by_region.setdefault(key, []).append(device)
+        for region, grouped_devices in grouped_by_region.items():
             device_count = len(grouped_devices)
             total_seconds = window_seconds * device_count
             downtime = sum(
@@ -754,7 +756,7 @@ class Alerts(ListResponseMixin):
 
     @staticmethod
     def bulk_acknowledge(
-        db: Session, alert_ids: list, payload: AlertAcknowledgeRequest
+        db: Session, alert_ids: builtins.list[str], payload: AlertAcknowledgeRequest
     ) -> int:
         if not alert_ids:
             raise HTTPException(status_code=400, detail="alert_ids required")
@@ -777,14 +779,14 @@ class Alerts(ListResponseMixin):
 
     @staticmethod
     def bulk_acknowledge_response(
-        db: Session, alert_ids: list, payload: AlertAcknowledgeRequest
-    ) -> dict:
+        db: Session, alert_ids: builtins.list[str], payload: AlertAcknowledgeRequest
+    ) -> dict[str, int]:
         updated = Alerts.bulk_acknowledge(db, alert_ids, payload)
         return {"updated": updated}
 
     @staticmethod
     def bulk_resolve(
-        db: Session, alert_ids: list, payload: AlertResolveRequest
+        db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
     ) -> int:
         if not alert_ids:
             raise HTTPException(status_code=400, detail="alert_ids required")
@@ -807,8 +809,8 @@ class Alerts(ListResponseMixin):
 
     @staticmethod
     def bulk_resolve_response(
-        db: Session, alert_ids: list, payload: AlertResolveRequest
-    ) -> dict:
+        db: Session, alert_ids: builtins.list[str], payload: AlertResolveRequest
+    ) -> dict[str, int]:
         updated = Alerts.bulk_resolve(db, alert_ids, payload)
         return {"updated": updated}
 

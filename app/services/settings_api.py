@@ -8,6 +8,19 @@ from app.services import domain_settings as settings_service
 from app.services import settings_spec
 from app.services.response import list_response
 
+
+def _coerce_int(value: object) -> int:
+    """Coerce common API payload values to int (or raise)."""
+    if isinstance(value, bool):
+        raise TypeError("bool is not an int setting")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value.strip())
+    raise TypeError(f"Unsupported int value type: {type(value).__name__}")
+
 _GIS_SETTING_KEYS = {
     "sync_enabled",
     "sync_interval_minutes",
@@ -128,7 +141,7 @@ def _normalize_spec_setting(
         )
     if spec.value_type == SettingValueType.integer:
         try:
-            parsed = int(coerced)
+            parsed = _coerce_int(coerced)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if spec.min_value is not None and parsed < spec.min_value:
@@ -238,7 +251,7 @@ def _normalize_gis_setting(key: str, payload: DomainSettingUpdate) -> DomainSett
     data = payload.model_dump(exclude_unset=True)
     if key == "sync_interval_minutes":
         try:
-            minutes = int(value)
+            minutes = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if minutes < 1:
@@ -318,7 +331,7 @@ def _normalize_geocoding_setting(
     data = payload.model_dump(exclude_unset=True)
     if key in _GEOCODING_SETTING_INT_KEYS:
         try:
-            parsed = int(value)
+            parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if parsed < 1:
@@ -402,7 +415,7 @@ def _normalize_radius_setting(key: str, payload: DomainSettingUpdate) -> DomainS
     data = payload.model_dump(exclude_unset=True)
     if key in _RADIUS_SETTING_INT_KEYS:
         try:
-            parsed = int(value)
+            parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if parsed < 1:
@@ -499,7 +512,7 @@ def _normalize_auth_setting(key: str, payload: DomainSettingUpdate) -> DomainSet
     data = payload.model_dump(exclude_unset=True)
     if key in _AUTH_SETTING_INT_KEYS:
         try:
-            parsed = int(value)
+            parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if parsed < 1:
@@ -682,7 +695,7 @@ def _normalize_imports_setting(
         raise HTTPException(status_code=400, detail="Value required")
     data = payload.model_dump(exclude_unset=True)
     try:
-        parsed = int(value)
+        parsed = _coerce_int(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Value must be an integer") from exc
     if parsed < 1:
@@ -746,7 +759,7 @@ def _normalize_notification_setting(
     data = payload.model_dump(exclude_unset=True)
     if key in _NOTIFICATION_SETTING_INT_KEYS:
         try:
-            parsed = int(value)
+            parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if parsed < 0:
@@ -832,7 +845,7 @@ def _normalize_scheduler_setting(
     data = payload.model_dump(exclude_unset=True)
     if key in {"beat_max_loop_interval", "beat_refresh_seconds"}:
         try:
-            parsed = int(value)
+            parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Value must be an integer") from exc
         if parsed < 1:

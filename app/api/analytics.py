@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.services.response import list_response
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.analytics import (
     KPIAggregateCreate,
     KPIAggregateRead,
@@ -15,14 +15,6 @@ from app.schemas.common import ListResponse
 from app.services import analytics as analytics_service
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post("/kpi-configs", response_model=KPIConfigRead, status_code=status.HTTP_201_CREATED)

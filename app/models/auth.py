@@ -14,7 +14,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db import Base
 
@@ -59,6 +59,8 @@ class UserCredential(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
     provider: Mapped[AuthProvider] = mapped_column(
         Enum(AuthProvider), default=AuthProvider.local, nullable=False
     )
@@ -106,6 +108,8 @@ class MFAMethod(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
     method_type: Mapped[MFAMethodType] = mapped_column(
         Enum(MFAMethodType), nullable=False
     )
@@ -148,6 +152,8 @@ class Session(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
     status: Mapped[SessionStatus] = mapped_column(
         Enum(SessionStatus), default=SessionStatus.active, nullable=False
     )
@@ -175,6 +181,8 @@ class ApiKey(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     label: Mapped[str | None] = mapped_column(String(120))
     key_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

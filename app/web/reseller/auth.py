@@ -4,17 +4,9 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import web_reseller_auth as web_reseller_auth_service
 router = APIRouter(prefix="/reseller/auth", tags=["web-reseller-auth"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/login", response_class=HTMLResponse)

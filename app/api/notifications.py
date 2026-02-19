@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.notification import (
     AlertNotificationLogRead,
@@ -34,14 +34,6 @@ from app.schemas.notification import (
 from app.services import notification as notification_service
 
 router = APIRouter()
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

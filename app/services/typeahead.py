@@ -10,8 +10,9 @@ from app.services.response import list_response
 
 def _subscriber_label(subscriber: Subscriber) -> str:
     """Generate label for a subscriber."""
-    if subscriber.organization:
-        return subscriber.organization.name
+    organization = subscriber.organization
+    if organization:
+        return str(organization.name)
     name = f"{subscriber.first_name} {subscriber.last_name}".strip()
     if subscriber.account_number:
         return f"{name} ({subscriber.account_number})"
@@ -29,8 +30,8 @@ def _subscription_label(subscription: Subscription) -> str:
 def _invoice_label(invoice: Invoice) -> str:
     number = invoice.invoice_number or "Invoice"
     balance = invoice.balance_due if invoice.balance_due is not None else invoice.total
-    if invoice.subscriber:
-        sub_label = _subscriber_label(invoice.subscriber)
+    if invoice.account:
+        sub_label = _subscriber_label(invoice.account)
         if balance is not None:
             amount_label = f"{invoice.currency} {balance:,.2f}"
             return f"{number} - {sub_label} · {amount_label}"
@@ -147,9 +148,9 @@ def invoices(db: Session, query: str, limit: int, subscriber_id: str | None = No
     like_term = f"%{term}%"
     query_base = (
         db.query(Invoice)
-        .outerjoin(Subscriber, Invoice.subscriber_id == Subscriber.id)
+        .outerjoin(Subscriber, Invoice.account_id == Subscriber.id)
         .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Invoice.subscriber))
+        .options(joinedload(Invoice.account))
         .filter(
             or_(
                 Invoice.invoice_number.ilike(like_term),
@@ -161,7 +162,7 @@ def invoices(db: Session, query: str, limit: int, subscriber_id: str | None = No
         )
     )
     if subscriber_id:
-        query_base = query_base.filter(Invoice.subscriber_id == subscriber_id)
+        query_base = query_base.filter(Invoice.account_id == subscriber_id)
     results = query_base.limit(limit).all()
     return [{"id": invoice.id, "label": _invoice_label(invoice)} for invoice in results]
 
@@ -427,9 +428,9 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
     # Search invoices
     invoice_results = (
         db.query(Invoice)
-        .outerjoin(Subscriber, Invoice.subscriber_id == Subscriber.id)
+        .outerjoin(Subscriber, Invoice.account_id == Subscriber.id)
         .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Invoice.subscriber))
+        .options(joinedload(Invoice.account))
         .filter(
             or_(
                 Invoice.invoice_number.ilike(like_term),

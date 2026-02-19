@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.catalog import (
     AccessCredentialCreate,
     AccessCredentialRead,
@@ -67,14 +67,6 @@ from app.services.auth_dependencies import require_method_permission
 router = APIRouter(
     dependencies=[Depends(require_method_permission("catalog:read", "catalog:write"))]
 )
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

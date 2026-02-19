@@ -204,7 +204,7 @@ class FakeRedis:
 
     def incr(self, key: str) -> int:
         self.store[key] = int(self.store.get(key, 0)) + 1
-        return self.store[key]
+        return int(self.store[key])
 
     def expire(self, key: str, seconds: int) -> bool:
         self.expiry[key] = seconds

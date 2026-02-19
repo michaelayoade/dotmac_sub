@@ -1,16 +1,15 @@
 """Admin NAS device management web routes."""
 
 import json
-from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.csrf import get_csrf_token
+from app.db import get_db
 from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,
@@ -19,23 +18,20 @@ from app.models.catalog import (
     ProvisioningAction,
 )
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
     NasDeviceCreate,
     NasDeviceUpdate,
     ProvisioningTemplateCreate,
     ProvisioningTemplateUpdate,
 )
-from app.services import audit as audit_service
 from app.services import nas as nas_service
 from app.services.audit_helpers import (
+    build_audit_activities,
     diff_dicts,
-    extract_changes,
-    format_changes,
     log_audit_event,
     model_to_dict,
 )
-from app.csrf import get_csrf_token
+from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/nas", tags=["web-admin-nas"])
@@ -51,16 +47,8 @@ DEVICE_AUDIT_EXCLUDE_FIELDS = {
 TEMPLATE_AUDIT_EXCLUDE_FIELDS = {"template_content"}
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network"):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
         "request": request,
@@ -89,89 +77,46 @@ def _get_form_options(db: Session) -> dict:
     }
 
 
-def _build_audit_activities(
-    db: Session,
-    entity_type: str,
-    entity_id: str,
-    limit: int = 10,
-) -> list[dict]:
-    events = audit_service.audit_events.list(
-        db=db,
-        actor_id=None,
-        actor_type=None,
-        action=None,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        request_id=None,
-        is_success=None,
-        status_code=None,
-        is_active=None,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=limit,
-        offset=0,
-    )
-    actor_ids = {str(event.actor_id) for event in events if getattr(event, "actor_id", None)}
-    people = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
-        }
-    activities = []
-    for event in events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        metadata = getattr(event, "metadata_", None) or {}
-        changes = extract_changes(metadata, getattr(event, "action", None))
-        change_summary = format_changes(changes, max_items=2)
-        activities.append(
-            {
-                "title": (event.action or "Activity").replace("_", " ").title(),
-                "description": f"{actor_name}" + (f" · {change_summary}" if change_summary else ""),
-                "occurred_at": event.occurred_at,
-            }
-        )
-    return activities
-
 
 # ============== NAS Dashboard ==============
 
 
 @router.get("/", response_class=HTMLResponse)
-async def nas_index(
+def nas_index(
     request: Request,
     db: Session = Depends(get_db),
-    vendor: str = None,
-    status: str = None,
-    search: str = None,
+    vendor: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
     page: int = Query(1, ge=1),
 ):
     """NAS device management dashboard."""
     limit = 25
     offset = (page - 1) * limit
 
-    # Build filters
-    filters = {}
-    if vendor:
-        filters["vendor"] = NasVendor(vendor)
-    if status:
-        filters["status"] = NasDeviceStatus(status)
-    if search:
-        filters["search"] = search
+    vendor_filter = NasVendor(vendor) if vendor else None
+    status_filter = NasDeviceStatus(status) if status else None
+    search_filter = search if search else None
 
     # Get devices with pagination
     devices = nas_service.NasDevices.list(
-        db,
+        db=db,
         limit=limit,
         offset=offset,
         order_by="name",
         order_dir="asc",
-        **filters,
+        vendor=vendor_filter,
+        status=status_filter,
+        search=search_filter,
     )
 
     # Get total count for pagination
-    total = nas_service.NasDevices.count(db, **filters)
+    total = nas_service.NasDevices.count(
+        db=db,
+        vendor=vendor_filter,
+        status=status_filter,
+        search=search_filter,
+    )
 
     # Get stats
     stats = {
@@ -209,7 +154,7 @@ async def nas_index(
 
 
 @router.get("/devices/new", response_class=HTMLResponse)
-async def device_form_new(request: Request, db: Session = Depends(get_db)):
+def device_form_new(request: Request, db: Session = Depends(get_db)):
     """New NAS device form."""
     return templates.TemplateResponse(
         "admin/network/nas/device_form.html",
@@ -223,7 +168,7 @@ async def device_form_new(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/devices/new", response_class=HTMLResponse)
-async def device_create(
+def device_create(
     request: Request,
     db: Session = Depends(get_db),
     name: str = Form(...),
@@ -284,7 +229,7 @@ async def device_create(
                 **_get_form_options(db),
                 "device": None,
                 "errors": errors,
-                "form_data": await request.form(),
+                "form_data": parse_form_data_sync(request),
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
             },
         )
@@ -346,14 +291,14 @@ async def device_create(
                 **_get_form_options(db),
                 "device": None,
                 "errors": errors,
-                "form_data": await request.form(),
+                "form_data": parse_form_data_sync(request),
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
             },
         )
 
 
 @router.get("/devices/{device_id}", response_class=HTMLResponse)
-async def device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
+def device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
     """NAS device detail page."""
     device = nas_service.NasDevices.get(db, device_id)
 
@@ -367,7 +312,7 @@ async def device_detail(request: Request, device_id: str, db: Session = Depends(
         db, nas_device_id=UUID(device_id), limit=10, offset=0
     )
 
-    activities = _build_audit_activities(db, "nas_device", device_id, limit=10)
+    activities = build_audit_activities(db, "nas_device", device_id, limit=10)
 
     return templates.TemplateResponse(
         "admin/network/nas/device_detail.html",
@@ -384,9 +329,9 @@ async def device_detail(request: Request, device_id: str, db: Session = Depends(
 def _get_pop_site_label(device) -> str | None:
     """Get POP site label for typeahead pre-population."""
     if device and device.pop_site:
-        label = device.pop_site.name
+        label = str(device.pop_site.name)
         if device.pop_site.city:
-            label = f"{label} ({device.pop_site.city})"
+            label = f"{label} ({str(device.pop_site.city)})"
         return label
     return None
 
@@ -398,9 +343,9 @@ def _get_pop_site_label_by_id(db: Session, pop_site_id: str | None) -> str | Non
     try:
         pop_site = db.get(PopSite, UUID(pop_site_id))
         if pop_site:
-            label = pop_site.name
+            label = str(pop_site.name)
             if pop_site.city:
-                label = f"{label} ({pop_site.city})"
+                label = f"{label} ({str(pop_site.city)})"
             return label
     except (ValueError, TypeError):
         pass
@@ -408,7 +353,7 @@ def _get_pop_site_label_by_id(db: Session, pop_site_id: str | None) -> str | Non
 
 
 @router.get("/devices/{device_id}/edit", response_class=HTMLResponse)
-async def device_form_edit(request: Request, device_id: str, db: Session = Depends(get_db)):
+def device_form_edit(request: Request, device_id: str, db: Session = Depends(get_db)):
     """Edit NAS device form."""
     device = nas_service.NasDevices.get(db, device_id)
 
@@ -425,7 +370,7 @@ async def device_form_edit(request: Request, device_id: str, db: Session = Depen
 
 
 @router.post("/devices/{device_id}/edit", response_class=HTMLResponse)
-async def device_update(
+def device_update(
     request: Request,
     device_id: str,
     db: Session = Depends(get_db),
@@ -559,7 +504,7 @@ async def device_update(
 
 
 @router.post("/devices/{device_id}/delete")
-async def device_delete(request: Request, device_id: str, db: Session = Depends(get_db)):
+def device_delete(request: Request, device_id: str, db: Session = Depends(get_db)):
     """Delete NAS device."""
     device = nas_service.NasDevices.get(db, device_id)
     from app.web.admin import get_current_user
@@ -578,7 +523,7 @@ async def device_delete(request: Request, device_id: str, db: Session = Depends(
 
 
 @router.post("/devices/{device_id}/ping")
-async def device_ping(device_id: str, db: Session = Depends(get_db)):
+def device_ping(device_id: str, db: Session = Depends(get_db)):
     """Update device last_seen_at timestamp."""
     nas_service.NasDevices.update_last_seen(db, device_id)
     return RedirectResponse(f"/admin/network/nas/devices/{device_id}", status_code=303)
@@ -588,7 +533,7 @@ async def device_ping(device_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/devices/{device_id}/backups", response_class=HTMLResponse)
-async def device_backups(
+def device_backups(
     request: Request,
     device_id: str,
     db: Session = Depends(get_db),
@@ -625,7 +570,7 @@ async def device_backups(
 
 
 @router.post("/devices/{device_id}/backups/trigger")
-async def device_backup_trigger(
+def device_backup_trigger(
     request: Request,
     device_id: str,
     db: Session = Depends(get_db),
@@ -633,7 +578,9 @@ async def device_backup_trigger(
 ):
     """Trigger a configuration backup from the device."""
     try:
-        backup = nas_service.DeviceProvisioner.backup_config(db, device_id, triggered_by)
+        backup = nas_service.DeviceProvisioner.backup_config(
+            db, UUID(device_id), triggered_by
+        )
         from app.web.admin import get_current_user
         current_user = get_current_user(request)
         log_audit_event(
@@ -660,11 +607,11 @@ async def device_backup_trigger(
 
 
 @router.get("/backups/{backup_id}", response_class=HTMLResponse)
-async def backup_detail(request: Request, backup_id: str, db: Session = Depends(get_db)):
+def backup_detail(request: Request, backup_id: str, db: Session = Depends(get_db)):
     """Config backup detail page."""
     backup = nas_service.NasConfigBackups.get(db, backup_id)
     device = nas_service.NasDevices.get(db, str(backup.nas_device_id))
-    activities = _build_audit_activities(db, "nas_backup", backup_id, limit=5)
+    activities = build_audit_activities(db, "nas_backup", backup_id, limit=5)
 
     return templates.TemplateResponse(
         "admin/network/nas/backup_detail.html",
@@ -678,7 +625,7 @@ async def backup_detail(request: Request, backup_id: str, db: Session = Depends(
 
 
 @router.get("/backups/compare", response_class=HTMLResponse)
-async def backup_compare(
+def backup_compare(
     request: Request,
     backup_id_1: str,
     backup_id_2: str,
@@ -707,28 +654,31 @@ async def backup_compare(
 
 
 @router.get("/templates", response_class=HTMLResponse)
-async def templates_list(
+def templates_list(
     request: Request,
     db: Session = Depends(get_db),
-    vendor: str = None,
-    action: str = None,
+    vendor: str | None = None,
+    action: str | None = None,
     page: int = Query(1, ge=1),
 ):
     """List provisioning templates."""
     limit = 25
     offset = (page - 1) * limit
 
-    filters = {}
-    if vendor:
-        filters["vendor"] = NasVendor(vendor)
-    if action:
-        filters["action"] = ProvisioningAction(action)
+    vendor_filter = NasVendor(vendor) if vendor else None
+    action_filter = ProvisioningAction(action) if action else None
 
     provisioning_templates = nas_service.ProvisioningTemplates.list(
-        db, limit=limit, offset=offset, **filters
+        db=db,
+        limit=limit,
+        offset=offset,
+        vendor=vendor_filter,
+        action=action_filter,
     )
 
-    total = nas_service.ProvisioningTemplates.count(db, **filters)
+    total = nas_service.ProvisioningTemplates.count(
+        db=db, vendor=vendor_filter, action=action_filter
+    )
     total_pages = (total + limit - 1) // limit
 
     return templates.TemplateResponse(
@@ -753,7 +703,7 @@ async def templates_list(
 
 
 @router.get("/templates/new", response_class=HTMLResponse)
-async def template_form_new(request: Request, db: Session = Depends(get_db)):
+def template_form_new(request: Request, db: Session = Depends(get_db)):
     """New provisioning template form."""
     return templates.TemplateResponse(
         "admin/network/nas/template_form.html",
@@ -767,13 +717,13 @@ async def template_form_new(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/templates/new", response_class=HTMLResponse)
-async def template_create(
+def template_create(
     request: Request,
     db: Session = Depends(get_db),
     name: str = Form(...),
     vendor: str = Form(...),
     action: str = Form(...),
-    connection_type: str = Form(None),
+    connection_type: str = Form(...),
     template_content: str = Form(...),
     description: str = Form(None),
     placeholders: str = Form(None),  # JSON array
@@ -798,7 +748,7 @@ async def template_create(
                 **_get_form_options(db),
                 "template": None,
                 "errors": errors,
-                "form_data": await request.form(),
+                "form_data": parse_form_data_sync(request),
             },
         )
 
@@ -807,7 +757,7 @@ async def template_create(
             name=name,
             vendor=NasVendor(vendor),
             action=ProvisioningAction(action),
-            connection_type=ConnectionType(connection_type) if connection_type else None,
+            connection_type=ConnectionType(connection_type),
             template_content=template_content,
             description=description or None,
             placeholders=placeholder_list,
@@ -835,16 +785,16 @@ async def template_create(
                 **_get_form_options(db),
                 "template": None,
                 "errors": errors,
-                "form_data": await request.form(),
+                "form_data": parse_form_data_sync(request),
             },
         )
 
 
 @router.get("/templates/{template_id}", response_class=HTMLResponse)
-async def template_detail(request: Request, template_id: str, db: Session = Depends(get_db)):
+def template_detail(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Provisioning template detail page."""
     template = nas_service.ProvisioningTemplates.get(db, template_id)
-    activities = _build_audit_activities(db, "nas_template", template_id, limit=5)
+    activities = build_audit_activities(db, "nas_template", template_id, limit=5)
 
     return templates.TemplateResponse(
         "admin/network/nas/template_detail.html",
@@ -857,7 +807,7 @@ async def template_detail(request: Request, template_id: str, db: Session = Depe
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
-async def template_form_edit(request: Request, template_id: str, db: Session = Depends(get_db)):
+def template_form_edit(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Edit provisioning template form."""
     template = nas_service.ProvisioningTemplates.get(db, template_id)
 
@@ -873,7 +823,7 @@ async def template_form_edit(request: Request, template_id: str, db: Session = D
 
 
 @router.post("/templates/{template_id}/edit", response_class=HTMLResponse)
-async def template_update(
+def template_update(
     request: Request,
     template_id: str,
     db: Session = Depends(get_db),
@@ -951,7 +901,7 @@ async def template_update(
 
 
 @router.post("/templates/{template_id}/delete")
-async def template_delete(request: Request, template_id: str, db: Session = Depends(get_db)):
+def template_delete(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Delete provisioning template."""
     template = nas_service.ProvisioningTemplates.get(db, template_id)
     from app.web.admin import get_current_user
@@ -973,31 +923,37 @@ async def template_delete(request: Request, template_id: str, db: Session = Depe
 
 
 @router.get("/logs", response_class=HTMLResponse)
-async def logs_list(
+def logs_list(
     request: Request,
     db: Session = Depends(get_db),
-    device_id: str = None,
-    action: str = None,
-    status: str = None,
+    device_id: str | None = None,
+    action: str | None = None,
+    status: str | None = None,
     page: int = Query(1, ge=1),
 ):
     """List provisioning logs."""
     limit = 50
     offset = (page - 1) * limit
 
-    filters = {}
-    if device_id:
-        filters["nas_device_id"] = UUID(device_id)
-    if action:
-        filters["action"] = ProvisioningAction(action)
-    if status:
-        filters["status"] = status
+    device_filter = UUID(device_id) if device_id else None
+    action_filter = ProvisioningAction(action) if action else None
+    status_filter = status if status else None
 
     logs = nas_service.ProvisioningLogs.list(
-        db, limit=limit, offset=offset, **filters
+        db=db,
+        limit=limit,
+        offset=offset,
+        nas_device_id=device_filter,
+        action=action_filter,
+        status=status_filter,
     )
 
-    total = nas_service.ProvisioningLogs.count(db, **filters)
+    total = nas_service.ProvisioningLogs.count(
+        db=db,
+        nas_device_id=device_filter,
+        action=action_filter,
+        status=status_filter,
+    )
     total_pages = (total + limit - 1) // limit
 
     # Get devices for filter dropdown
@@ -1027,11 +983,11 @@ async def logs_list(
 
 
 @router.get("/logs/{log_id}", response_class=HTMLResponse)
-async def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
+def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
     """Provisioning log detail page."""
     log = nas_service.ProvisioningLogs.get(db, log_id)
     device = nas_service.NasDevices.get(db, str(log.nas_device_id)) if log.nas_device_id else None
-    activities = _build_audit_activities(db, "nas_provision_log", log_id, limit=5)
+    activities = build_audit_activities(db, "nas_provision_log", log_id, limit=5)
 
     return templates.TemplateResponse(
         "admin/network/nas/log_detail.html",

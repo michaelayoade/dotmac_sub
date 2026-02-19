@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 from app.models.auth import AuthProvider, MFAMethodType, SessionStatus
 
 
 class UserCredentialBase(BaseModel):
-    subscriber_id: UUID
+    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
     provider: AuthProvider = AuthProvider.local
     username: str | None = Field(default=None, max_length=150)
     radius_server_id: UUID | None = None
@@ -33,7 +33,9 @@ class UserCredentialCreate(UserCredentialBase):
 
 
 class UserCredentialUpdate(BaseModel):
-    subscriber_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     provider: AuthProvider | None = None
     username: str | None = Field(default=None, max_length=150)
     password_hash: str | None = Field(default=None, max_length=255)
@@ -71,7 +73,7 @@ class UserCredentialRead(UserCredentialBase):
 
 
 class MFAMethodBase(BaseModel):
-    subscriber_id: UUID
+    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
     method_type: MFAMethodType
     label: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
@@ -88,7 +90,9 @@ class MFAMethodCreate(MFAMethodBase):
 
 
 class MFAMethodUpdate(BaseModel):
-    subscriber_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     method_type: MFAMethodType | None = None
     label: str | None = Field(default=None, max_length=120)
     secret: str | None = Field(default=None, max_length=255)
@@ -110,7 +114,7 @@ class MFAMethodRead(MFAMethodBase):
 
 
 class SessionBase(BaseModel):
-    subscriber_id: UUID
+    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
     status: SessionStatus = SessionStatus.active
     token_hash: str = Field(min_length=1, max_length=255)
     ip_address: str | None = Field(default=None, max_length=64)
@@ -125,7 +129,9 @@ class SessionCreate(SessionBase):
 
 
 class SessionUpdate(BaseModel):
-    subscriber_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     status: SessionStatus | None = None
     token_hash: str | None = Field(default=None, min_length=1, max_length=255)
     ip_address: str | None = Field(default=None, max_length=64)
@@ -143,7 +149,9 @@ class SessionRead(SessionBase):
 
 
 class ApiKeyBase(BaseModel):
-    subscriber_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     label: str | None = Field(default=None, max_length=120)
     key_hash: str = Field(min_length=1, max_length=255)
     is_active: bool = True
@@ -157,7 +165,9 @@ class ApiKeyCreate(ApiKeyBase):
 
 
 class ApiKeyGenerateRequest(BaseModel):
-    subscriber_id: UUID | None = None
+    subscriber_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     label: str | None = Field(default=None, max_length=120)
     expires_at: datetime | None = None
 

@@ -4,7 +4,7 @@ from app.schemas.common import ListResponse
 from fastapi import APIRouter, Body, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.models.network import IPVersion
 from app.schemas.bandwidth import (
     BandwidthSampleCreate,
@@ -246,14 +246,6 @@ from app.services import (
 )
 
 router = APIRouter()
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(
@@ -2148,8 +2140,9 @@ def resolve_alert(
 def bulk_acknowledge_alerts(
     payload: AlertBulkAcknowledgeRequest, db: Session = Depends(get_db)
 ):
+    ack_payload = AlertAcknowledgeRequest(message=payload.message)
     response = monitoring_service.alerts.bulk_acknowledge_response(
-        db, payload.alert_ids, payload
+        db, [str(alert_id) for alert_id in payload.alert_ids], ack_payload
     )
     return AlertBulkActionResponse(**response)
 
@@ -2162,8 +2155,9 @@ def bulk_acknowledge_alerts(
 def bulk_resolve_alerts(
     payload: AlertBulkResolveRequest, db: Session = Depends(get_db)
 ):
+    resolve_payload = AlertResolveRequest(message=payload.message)
     response = monitoring_service.alerts.bulk_resolve_response(
-        db, payload.alert_ids, payload
+        db, [str(alert_id) for alert_id in payload.alert_ids], resolve_payload
     )
     return AlertBulkActionResponse(**response)
 

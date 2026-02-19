@@ -12,7 +12,8 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.response import ListResponseMixin
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services import settings_spec
 from app.schemas.catalog import (
     OfferRadiusProfileCreate,
@@ -24,7 +25,12 @@ from app.schemas.catalog import (
 )
 
 
-class RadiusProfiles(ListResponseMixin):
+class RadiusProfiles(CRUDManager[RadiusProfile]):
+    model = RadiusProfile
+    not_found_detail = "RADIUS profile not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: RadiusProfileCreate):
         data = payload.model_dump()
@@ -43,12 +49,9 @@ class RadiusProfiles(ListResponseMixin):
         db.refresh(profile)
         return profile
 
-    @staticmethod
-    def get(db: Session, profile_id: str):
-        profile = db.get(RadiusProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="RADIUS profile not found")
-        return profile
+    @classmethod
+    def get(cls, db: Session, profile_id: str):
+        return super().get(db, profile_id)
 
     @staticmethod
     def list(
@@ -65,10 +68,7 @@ class RadiusProfiles(ListResponseMixin):
             query = query.filter(
                 RadiusProfile.vendor == validate_enum(vendor, NasVendor, "vendor")
             )
-        if is_active is None:
-            query = query.filter(RadiusProfile.is_active.is_(True))
-        else:
-            query = query.filter(RadiusProfile.is_active == is_active)
+        query = apply_active_state(query, RadiusProfile.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -77,27 +77,19 @@ class RadiusProfiles(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, profile_id: str, payload: RadiusProfileUpdate):
-        profile = db.get(RadiusProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="RADIUS profile not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(profile, key, value)
-        db.commit()
-        db.refresh(profile)
-        return profile
+    @classmethod
+    def update(cls, db: Session, profile_id: str, payload: RadiusProfileUpdate):
+        return super().update(db, profile_id, payload)
 
-    @staticmethod
-    def delete(db: Session, profile_id: str):
-        profile = db.get(RadiusProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="RADIUS profile not found")
-        profile.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, profile_id: str):
+        return super().delete(db, profile_id)
 
 
-class RadiusAttributes(ListResponseMixin):
+class RadiusAttributes(CRUDManager[RadiusAttribute]):
+    model = RadiusAttribute
+    not_found_detail = "RADIUS attribute not found"
+
     @staticmethod
     def create(db: Session, payload: RadiusAttributeCreate):
         profile = db.get(RadiusProfile, payload.profile_id)
@@ -109,12 +101,9 @@ class RadiusAttributes(ListResponseMixin):
         db.refresh(attribute)
         return attribute
 
-    @staticmethod
-    def get(db: Session, attribute_id: str):
-        attribute = db.get(RadiusAttribute, attribute_id)
-        if not attribute:
-            raise HTTPException(status_code=404, detail="RADIUS attribute not found")
-        return attribute
+    @classmethod
+    def get(cls, db: Session, attribute_id: str):
+        return super().get(db, attribute_id)
 
     @staticmethod
     def list(
@@ -126,8 +115,7 @@ class RadiusAttributes(ListResponseMixin):
         offset: int,
     ):
         query = db.query(RadiusAttribute)
-        if profile_id:
-            query = query.filter(RadiusAttribute.profile_id == profile_id)
+        query = apply_optional_equals(query, {RadiusAttribute.profile_id: profile_id})
         query = apply_ordering(
             query,
             order_by,
@@ -152,16 +140,15 @@ class RadiusAttributes(ListResponseMixin):
         db.refresh(attribute)
         return attribute
 
-    @staticmethod
-    def delete(db: Session, attribute_id: str):
-        attribute = db.get(RadiusAttribute, attribute_id)
-        if not attribute:
-            raise HTTPException(status_code=404, detail="RADIUS attribute not found")
-        db.delete(attribute)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, attribute_id: str):
+        return super().delete(db, attribute_id)
 
 
-class OfferRadiusProfiles(ListResponseMixin):
+class OfferRadiusProfiles(CRUDManager[OfferRadiusProfile]):
+    model = OfferRadiusProfile
+    not_found_detail = "Offer RADIUS profile link not found"
+
     @staticmethod
     def create(db: Session, payload: OfferRadiusProfileCreate):
         offer = db.get(CatalogOffer, payload.offer_id)
@@ -176,12 +163,9 @@ class OfferRadiusProfiles(ListResponseMixin):
         db.refresh(link)
         return link
 
-    @staticmethod
-    def get(db: Session, link_id: str):
-        link = db.get(OfferRadiusProfile, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="Offer RADIUS profile link not found")
-        return link
+    @classmethod
+    def get(cls, db: Session, link_id: str):
+        return super().get(db, link_id)
 
     @staticmethod
     def list(
@@ -194,10 +178,13 @@ class OfferRadiusProfiles(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OfferRadiusProfile)
-        if offer_id:
-            query = query.filter(OfferRadiusProfile.offer_id == offer_id)
-        if profile_id:
-            query = query.filter(OfferRadiusProfile.profile_id == profile_id)
+        query = apply_optional_equals(
+            query,
+            {
+                OfferRadiusProfile.offer_id: offer_id,
+                OfferRadiusProfile.profile_id: profile_id,
+            },
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -226,10 +213,6 @@ class OfferRadiusProfiles(ListResponseMixin):
         db.refresh(link)
         return link
 
-    @staticmethod
-    def delete(db: Session, link_id: str):
-        link = db.get(OfferRadiusProfile, link_id)
-        if not link:
-            raise HTTPException(status_code=404, detail="Offer RADIUS profile link not found")
-        db.delete(link)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, link_id: str):
+        return super().delete(db, link_id)

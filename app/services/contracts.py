@@ -1,6 +1,6 @@
 """Service for contract signatures (click-to-sign workflow)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.contracts import ContractSignature
 from app.models.legal import LegalDocument, LegalDocumentType
 from app.models.provisioning import ServiceOrder
-from app.models.subscriber import SubscriberAccount
+from app.models.subscriber import Subscriber
 from app.schemas.contracts import ContractSignatureCreate
 from app.services.common import coerce_uuid
 
@@ -31,7 +31,7 @@ class ContractSignatures:
             HTTPException: If account not found
         """
         # Validate account exists
-        account = db.get(SubscriberAccount, payload.account_id)
+        account = db.get(Subscriber, payload.account_id)
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
@@ -43,7 +43,7 @@ class ContractSignatures:
 
         data = payload.model_dump()
         if not data.get("signed_at"):
-            data["signed_at"] = datetime.now(timezone.utc)
+            data["signed_at"] = datetime.now(UTC)
 
         signature = ContractSignature(**data)
         db.add(signature)
@@ -149,6 +149,108 @@ class ContractSignatures:
             .filter(LegalDocument.is_current.is_(True))
             .filter(LegalDocument.is_published.is_(True))
             .first()
+        )
+
+
+    @staticmethod
+    def get_contract_context(
+        db: Session, order_id: str, account_id: str | None
+    ) -> dict:
+        """Build template context for the contract signing page.
+
+        Returns dict with service_order, contract_html, document_id,
+        or raises HTTPException for not-found / access-denied.
+        Returns {"redirect": url} if already signed.
+        """
+        service_order = db.get(ServiceOrder, coerce_uuid(order_id))
+        if not service_order:
+            raise HTTPException(status_code=404, detail="Service order not found")
+
+        if account_id and str(service_order.subscriber_id) != str(account_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        existing = ContractSignatures.get_for_service_order(db, order_id)
+        if existing:
+            return {"redirect": f"/portal/service-orders/{order_id}?signed=true"}
+
+        contract_template = ContractSignatures.get_contract_template(
+            db, LegalDocumentType.terms_of_service
+        )
+        if contract_template and contract_template.content:
+            contract_html = contract_template.content
+        else:
+            contract_html = (
+                "<h2>Service Agreement</h2>"
+                "<p>By signing this agreement, you acknowledge and accept "
+                "the following terms:</p>"
+                "<ol>"
+                "<li>You agree to pay all service fees as invoiced.</li>"
+                "<li>Service is provided on a month-to-month basis unless "
+                "otherwise specified.</li>"
+                "<li>Either party may terminate with 30 days written notice.</li>"
+                "<li>You agree to use the service in accordance with "
+                "applicable laws.</li>"
+                "</ol>"
+                "<p>This agreement is effective upon signing and remains "
+                "in effect until terminated.</p>"
+            )
+
+        return {
+            "service_order": service_order,
+            "contract_html": contract_html,
+            "document_id": str(contract_template.id) if contract_template else None,
+        }
+
+    @staticmethod
+    def sign_contract_for_customer(
+        db: Session,
+        order_id: str,
+        account_id: str | None,
+        signer_name: str,
+        signer_email: str,
+        ip_address: str,
+        user_agent: str,
+    ) -> ContractSignature | str:
+        """Process contract signing for a customer portal user.
+
+        Returns the created ContractSignature, or a redirect URL string
+        if the contract was already signed.
+        """
+        service_order = db.get(ServiceOrder, coerce_uuid(order_id))
+        if not service_order:
+            raise HTTPException(status_code=404, detail="Service order not found")
+
+        if account_id and str(service_order.subscriber_id) != str(account_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        existing = ContractSignatures.get_for_service_order(db, order_id)
+        if existing:
+            return f"/portal/service-orders/{order_id}?already_signed=true"
+
+        contract_template = ContractSignatures.get_contract_template(
+            db, LegalDocumentType.terms_of_service
+        )
+        agreement_text = ""
+        document_id = None
+        if contract_template:
+            agreement_text = contract_template.content or ""
+            document_id = contract_template.id
+        else:
+            agreement_text = "Default service agreement terms accepted."
+
+        return ContractSignatures.create(
+            db,
+            ContractSignatureCreate(
+                account_id=service_order.subscriber_id,
+                service_order_id=service_order.id,
+                document_id=document_id,
+                signer_name=signer_name.strip(),
+                signer_email=signer_email.strip(),
+                ip_address=ip_address,
+                user_agent=user_agent[:500] if user_agent else None,
+                agreement_text=agreement_text,
+                signed_at=datetime.now(UTC),
+            ),
         )
 
 

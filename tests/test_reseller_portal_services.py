@@ -59,16 +59,11 @@ def reseller_user(db_session, person, reseller):
 @pytest.fixture()
 def reseller_account(db_session, subscriber, reseller):
     """Create a subscriber account linked to a reseller."""
-    from app.models.subscriber import SubscriberAccount
-
-    account = SubscriberAccount(
-        subscriber_id=subscriber.id,
-        reseller_id=reseller.id,
-    )
-    db_session.add(account)
+    # Accounts are represented by Subscriber in this codebase.
+    subscriber.reseller_id = reseller.id
     db_session.commit()
-    db_session.refresh(account)
-    return account
+    db_session.refresh(subscriber)
+    return subscriber
 
 
 # =============================================================================
@@ -796,12 +791,14 @@ def test_list_accounts_with_payments(db_session, reseller_account, reseller):
 
 def test_list_accounts_pagination(db_session, reseller, subscriber):
     """Test list_accounts with pagination."""
-    from app.models.subscriber import SubscriberAccount
+    from app.models.subscriber import Subscriber
 
     # Create multiple accounts
     for _ in range(5):
-        account = SubscriberAccount(
-            subscriber_id=subscriber.id,
+        account = Subscriber(
+            first_name="Paginate",
+            last_name="Account",
+            email=f"paginate-{uuid.uuid4().hex}@example.com",
             reseller_id=reseller.id,
         )
         db_session.add(account)
@@ -926,13 +923,15 @@ def test_create_impersonation_session_success_no_subscriptions(db_session, resel
 
 def test_create_impersonation_session_with_active_subscription(db_session, reseller, subscriber):
     """Test impersonation session with active subscription."""
-    from app.models.subscriber import SubscriberAccount
     from app.schemas.catalog import SubscriptionCreate
     from app.services import catalog as catalog_service
+    from app.models.subscriber import Subscriber
 
     # Create account linked to reseller
-    account = SubscriberAccount(
-        subscriber_id=subscriber.id,
+    account = Subscriber(
+        first_name="Reseller",
+        last_name="Account",
+        email=f"reseller-acct-{uuid.uuid4().hex}@example.com",
         reseller_id=reseller.id,
     )
     db_session.add(account)
@@ -985,13 +984,15 @@ def test_create_impersonation_session_with_active_subscription(db_session, resel
 
 def test_create_impersonation_session_with_pending_subscription(db_session, reseller, subscriber):
     """Test impersonation session with non-active subscription (fallback path)."""
-    from app.models.subscriber import SubscriberAccount
     from app.schemas.catalog import SubscriptionCreate
     from app.services import catalog as catalog_service
+    from app.models.subscriber import Subscriber
 
     # Create account linked to reseller
-    account = SubscriberAccount(
-        subscriber_id=subscriber.id,
+    account = Subscriber(
+        first_name="Reseller",
+        last_name="Account",
+        email=f"reseller-acct2-{uuid.uuid4().hex}@example.com",
         reseller_id=reseller.id,
     )
     db_session.add(account)

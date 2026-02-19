@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db import Base
 
@@ -83,6 +83,8 @@ class SubscriberRole(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id"), nullable=False
     )
@@ -91,6 +93,10 @@ class SubscriberRole(Base):
     )
 
     role = relationship("Role", back_populates="members")
+
+
+# Backwards-compatible alias: "person roles" are subscriber roles in this codebase.
+PersonRole = SubscriberRole
 
 
 class SubscriberPermission(Base):

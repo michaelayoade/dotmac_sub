@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
@@ -21,14 +21,6 @@ from app.services import rbac as rbac_service
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/rbac", tags=["rbac"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

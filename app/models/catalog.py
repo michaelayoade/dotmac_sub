@@ -159,6 +159,32 @@ class NasDeviceStatus(enum.Enum):
     decommissioned = "decommissioned"
 
 
+class HealthStatus(enum.Enum):
+    unknown = "unknown"
+    healthy = "healthy"
+    degraded = "degraded"
+    unhealthy = "unhealthy"
+
+
+class ProvisioningLogStatus(enum.Enum):
+    pending = "pending"
+    running = "running"
+    success = "success"
+    failed = "failed"
+    timeout = "timeout"
+
+
+class ExecutionMethod(enum.Enum):
+    ssh = "ssh"
+    api = "api"
+    radius_coa = "radius_coa"
+
+
+class DiscountType(enum.Enum):
+    percentage = "percentage"
+    fixed = "fixed"
+
+
 class ConfigBackupMethod(enum.Enum):
     """Methods for backing up device configuration."""
     ssh = "ssh"
@@ -611,7 +637,9 @@ class Subscription(Base):
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     discount: Mapped[bool] = mapped_column(Boolean, default=False)
     discount_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    discount_type: Mapped[str | None] = mapped_column(String(40))
+    discount_type: Mapped[DiscountType | None] = mapped_column(
+        Enum(DiscountType, values_callable=lambda x: [e.value for e in x]),
+    )
     service_status_raw: Mapped[str | None] = mapped_column(String(40))
     login: Mapped[str | None] = mapped_column(String(120))
     ipv4_address: Mapped[str | None] = mapped_column(String(64))
@@ -752,7 +780,10 @@ class NasDevice(Base):
     current_subscriber_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # Health tracking
-    health_status: Mapped[str] = mapped_column(String(20), default="unknown")
+    health_status: Mapped[HealthStatus] = mapped_column(
+        Enum(HealthStatus, values_callable=lambda x: [e.value for e in x]),
+        default=HealthStatus.unknown,
+    )
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Metadata
@@ -999,7 +1030,9 @@ class ProvisioningTemplate(Base):
     # Example: ["username", "password", "speed_down", "speed_up", "ip_address", "mac_address"]
 
     # Execution Settings
-    execution_method: Mapped[str | None] = mapped_column(String(40))  # ssh, api, radius_coa
+    execution_method: Mapped[ExecutionMethod | None] = mapped_column(
+        Enum(ExecutionMethod, values_callable=lambda x: [e.value for e in x]),
+    )
     expected_output: Mapped[str | None] = mapped_column(Text)  # regex pattern
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, default=30)
 
@@ -1055,8 +1088,10 @@ class ProvisioningLog(Base):
     response_received: Mapped[str | None] = mapped_column(Text)
 
     # Status
-    status: Mapped[str] = mapped_column(String(40), default="pending")
-    # pending, running, success, failed, timeout
+    status: Mapped[ProvisioningLogStatus] = mapped_column(
+        Enum(ProvisioningLogStatus, values_callable=lambda x: [e.value for e in x]),
+        default=ProvisioningLogStatus.pending,
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
     execution_time_ms: Mapped[int | None] = mapped_column(Integer)
 

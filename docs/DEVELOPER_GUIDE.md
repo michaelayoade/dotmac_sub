@@ -86,7 +86,6 @@ dotmac_sub/
 │   │   ├── admin/              # Admin portal routes
 │   │   ├── customer/           # Customer portal routes
 │   │   ├── reseller/           # Reseller portal routes
-│   │   ├── vendor/             # Vendor portal routes
 │   │   ├── auth/               # Authentication routes
 │   │   └── public/             # Public pages
 │   │
@@ -111,7 +110,7 @@ dotmac_sub/
 │   ├── admin/
 │   ├── customer/
 │   ├── reseller/
-│   └── vendor/
+│   └── public/
 │
 ├── static/
 │   ├── css/
@@ -132,7 +131,6 @@ dotmac_sub/
 | Admin | `/admin` | Staff, Administrators | Full system management |
 | Customer | `/portal` | End customers | Self-service portal |
 | Reseller | `/reseller` | Partner resellers | Multi-account management |
-| Vendor | `/vendor` | Installation contractors | Field service management |
 
 ---
 
@@ -173,9 +171,10 @@ Dashboard (/admin/dashboard)
     │   ├── RADIUS accounts
     │   └── POP Sites
     │
-    ├── Operations (/admin/operations)
-    │   ├── Service orders
-    │   └── Scheduling
+    ├── Catalog (/admin/catalog)
+    │   ├── Offers
+    │   ├── Subscriptions
+    │   └── Usage rating
     │
     ├── Reports (/admin/reports)
     │   ├── Revenue reports
@@ -240,9 +239,10 @@ Dashboard (/portal/dashboard)
 
 **Key Customer Workflows:**
 
-1. **View and Pay Invoice**
+1. **View Invoice and Track Arrangement**
    ```
-   Dashboard → Billing → Select Invoice → View Details → Make Payment
+   Dashboard → Billing → Select Invoice → View Details →
+   Billing Arrangements
    ```
 
 2. **Check Service Status**
@@ -278,37 +278,6 @@ Dashboard (/reseller/dashboard)
    ```
    Dashboard → Accounts → Select Account → View Details →
    Impersonate → Access Customer Portal as Customer
-   ```
-
----
-
-### Vendor Portal Journey
-
-**Entry Point:** `/vendor/dashboard`
-
-```
-Login (/vendor/auth/login)
-    │
-    ▼
-Dashboard (/vendor/dashboard)
-    │
-    ├── Available Projects (/vendor/projects/available)
-    │   ├── Browse open projects
-    │   └── Accept project
-    │
-    └── My Projects (/vendor/projects/my)
-        ├── View assigned projects
-        ├── Update progress
-        └── Complete installation
-```
-
-**Key Vendor Workflows:**
-
-1. **Accept and Complete Installation**
-   ```
-   Dashboard → Available Projects → View Details → Accept →
-   Schedule Visit → Complete Installation → Upload Photos →
-   Mark Complete
    ```
 
 ---
@@ -1219,7 +1188,6 @@ alembic upgrade head
 | Admin | `/admin` | `/auth/login` |
 | Customer | `/portal` | `/portal/auth/login` |
 | Reseller | `/reseller` | `/reseller/auth/login` |
-| Vendor | `/vendor` | `/vendor/auth/login` |
 
 ---
 

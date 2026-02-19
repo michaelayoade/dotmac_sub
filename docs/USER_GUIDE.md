@@ -10,9 +10,8 @@ A comprehensive guide for using the DotMac Subscription Management platform.
 2. [Admin Portal](#admin-portal)
 3. [Customer Portal](#customer-portal)
 4. [Reseller Portal](#reseller-portal)
-5. [Vendor Portal](#vendor-portal)
-6. [Common Tasks & Workflows](#common-tasks--workflows)
-7. [Tips & Shortcuts](#tips--shortcuts)
+5. [Common Tasks & Workflows](#common-tasks--workflows)
+6. [Tips & Shortcuts](#tips--shortcuts)
 
 ---
 
@@ -31,7 +30,6 @@ A comprehensive guide for using the DotMac Subscription Management platform.
 | Admin Portal | `https://your-domain.com/admin` | Staff & Administrators |
 | Customer Portal | `https://your-domain.com/portal` | End Customers |
 | Reseller Portal | `https://your-domain.com/reseller` | Partner Resellers |
-| Vendor Portal | `https://your-domain.com/vendor` | Installation Contractors |
 
 ### Logging In
 
@@ -172,19 +170,9 @@ The sidebar is organized into logical sections:
 #### Operations Section
 
 **Service Orders**
-- Create new service orders (new installs, upgrades, disconnects)
-- Track order progress through workflow stages
-- Assign to technicians or vendors
-
-**Installations**
-- Schedule installation appointments
-- Track installation progress
-- Document completion with photos
-
-**Dispatch Board**
-- Visual calendar of technician schedules
-- Drag-and-drop assignment
-- Real-time status updates
+- Track subscriber provisioning requests (new installs, upgrades, disconnects)
+- Review order progress and status history
+- Monitor open and completed installation-related tasks
 
 #### Billing Section
 
@@ -325,7 +313,7 @@ The sidebar is organized into logical sections:
 
 ## Customer Portal
 
-The Customer Portal allows subscribers to manage their accounts, view bills, and get support.
+The Customer Portal allows subscribers to manage their accounts, services, and billing.
 
 ### Dashboard
 
@@ -359,23 +347,15 @@ View your active services:
 ### Billing
 
 **View Invoices**
-1. Navigate to **Billing** > **Invoices**
+1. Navigate to **Billing**
 2. See list of all invoices with status (Paid, Unpaid, Overdue)
 3. Click an invoice to view details
 4. Download PDF for your records
 
-**Make a Payment**
-1. Navigate to **Billing** > **Payments**
-2. Enter payment amount
-3. Select payment method
-4. Confirm payment
-5. Receive confirmation
-
-**Payment History**
-- View all past payments
-- Payment date and amount
-- Payment method used
-- Transaction reference
+**Billing Arrangements**
+1. Navigate to **Billing** > **Arrangements**
+2. Create a new arrangement request if your account is eligible
+3. Track arrangement status and upcoming due dates
 
 ### Installations
 
@@ -438,7 +418,6 @@ The Reseller Portal allows partners to manage their customer accounts.
 - Account information
 - Service subscriptions
 - Billing history
-- Support tickets
 
 ### View as Customer
 
@@ -451,73 +430,6 @@ This feature allows you to see exactly what your customer sees:
 5. Click **Stop Impersonation** to return to Reseller Portal
 
 > **Note**: All actions taken while impersonating are logged for audit purposes.
-
----
-
-## Vendor Portal
-
-The Vendor Portal is for installation contractors and service providers.
-
-### Dashboard
-
-| Widget | Description |
-|--------|-------------|
-| **Open Bidding** | Number of projects available to bid on |
-| **My Projects** | Number of assigned projects |
-| **Available Projects** | List of open bidding opportunities |
-| **My Projects** | List of your assigned work |
-
-### Available Projects
-
-Browse projects open for bidding:
-
-1. Navigate to **Available Projects**
-2. View project details:
-   - Project ID
-   - Location
-   - Scope of work
-   - Bidding close date
-3. Submit your bid/quote
-
-### My Projects
-
-Manage your assigned projects:
-
-**Project List**
-- Project ID and name
-- Customer/location
-- Status (Pending, In Progress, Completed)
-- Due date
-
-**Project Details**
-- Full project specifications
-- Required materials
-- Installation instructions
-- Customer contact information
-
-### Quote Builder
-
-Create professional quotes:
-
-1. Navigate to **Quote Builder**
-2. Add line items (labor, materials, equipment)
-3. Set quantities and prices
-4. Add notes or terms
-5. Generate quote PDF
-6. Submit to DotMac
-
-### As-Built Submission
-
-Document completed installations:
-
-1. Open the completed project
-2. Navigate to **As-Built**
-3. Upload photos:
-   - Equipment installation
-   - Cable routing
-   - Test results
-4. Complete checklist items
-5. Submit for approval
 
 ---
 
@@ -538,16 +450,14 @@ Document completed installations:
    Choose product/plan
    ↓
 4. Create Service Order
-   Admin > Operations > Service Orders > New
-   Type: New Install
+   Subscriber Detail > Add Subscription
+   Set subscription status to Pending to trigger service order workflow
    ↓
-5. Schedule Installation
-   Assign to technician or vendor
-   Set appointment date/time
+5. Track Installation
+   Use the subscriber and customer detail views to monitor service order progress
    ↓
 6. Complete Installation
-   Technician marks complete
-   As-built documentation
+   Mark provisioning complete and update service status
    ↓
 7. Activate Service
    Provision network (RADIUS, VLAN)
@@ -728,5 +638,5 @@ The portals are mobile-responsive:
 
 ---
 
-*Last Updated: January 2025*
+*Last Updated: February 16, 2026*
 *Version: 1.0*

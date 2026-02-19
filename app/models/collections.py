@@ -46,7 +46,7 @@ class DunningCase(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("Subscriber", back_populates="dunning_cases", foreign_keys=[account_id])
+    subscriber = relationship("Subscriber", back_populates="dunning_cases", foreign_keys=[account_id])
     policy_set = relationship("PolicySet")
     actions = relationship("DunningActionLog", back_populates="case")
 

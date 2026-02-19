@@ -4,6 +4,8 @@ import os
 from sqlalchemy.orm import Session
 
 from app.models.subscription_engine import SettingValueType
+from app.models.domain_settings import SettingDomain
+from app.services.domain_settings import DomainSettings
 from app.services.domain_settings import (
     auth_settings,
     audit_settings,
@@ -924,6 +926,28 @@ def seed_provisioning_settings(db: Session) -> None:
         key="default_service_order_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("PROVISIONING_DEFAULT_SERVICE_ORDER_STATUS", "draft"),
+    )
+
+
+def seed_projects_settings(db: Session) -> None:
+    """Seed minimal projects settings required by services/tests."""
+    projects_settings = DomainSettings(SettingDomain.projects)
+    projects_settings.ensure_by_key(
+        db,
+        key="default_project_status",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PROJECTS_DEFAULT_PROJECT_STATUS", "active"),
+    )
+
+
+def seed_inventory_settings(db: Session) -> None:
+    """Seed minimal inventory settings required by services/tests."""
+    inventory_settings = DomainSettings(SettingDomain.inventory)
+    inventory_settings.ensure_by_key(
+        db,
+        key="default_reservation_status",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("INVENTORY_DEFAULT_RESERVATION_STATUS", "pending"),
     )
     provisioning_settings.ensure_by_key(
         db,

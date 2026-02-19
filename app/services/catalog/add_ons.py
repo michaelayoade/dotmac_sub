@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.models.catalog import AddOn, AddOnPrice, AddOnType, PriceType
 from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.response import ListResponseMixin
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services import settings_spec
 from app.schemas.catalog import (
     AddOnCreate,
@@ -19,7 +20,12 @@ from app.schemas.catalog import (
 )
 
 
-class AddOns(ListResponseMixin):
+class AddOns(CRUDManager[AddOn]):
+    model = AddOn
+    not_found_detail = "Add-on not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: AddOnCreate):
         data = payload.model_dump()
@@ -38,12 +44,9 @@ class AddOns(ListResponseMixin):
         db.refresh(add_on)
         return add_on
 
-    @staticmethod
-    def get(db: Session, add_on_id: str):
-        add_on = db.get(AddOn, add_on_id)
-        if not add_on:
-            raise HTTPException(status_code=404, detail="Add-on not found")
-        return add_on
+    @classmethod
+    def get(cls, db: Session, add_on_id: str):
+        return super().get(db, add_on_id)
 
     @staticmethod
     def list(
@@ -56,10 +59,7 @@ class AddOns(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AddOn)
-        if is_active is None:
-            query = query.filter(AddOn.is_active.is_(True))
-        else:
-            query = query.filter(AddOn.is_active == is_active)
+        query = apply_active_state(query, AddOn.is_active, is_active)
         if addon_type:
             query = query.filter(
                 AddOn.addon_type == validate_enum(addon_type, AddOnType, "addon_type")
@@ -72,27 +72,21 @@ class AddOns(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, add_on_id: str, payload: AddOnUpdate):
-        add_on = db.get(AddOn, add_on_id)
-        if not add_on:
-            raise HTTPException(status_code=404, detail="Add-on not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(add_on, key, value)
-        db.commit()
-        db.refresh(add_on)
-        return add_on
+    @classmethod
+    def update(cls, db: Session, add_on_id: str, payload: AddOnUpdate):
+        return super().update(db, add_on_id, payload)
 
-    @staticmethod
-    def delete(db: Session, add_on_id: str):
-        add_on = db.get(AddOn, add_on_id)
-        if not add_on:
-            raise HTTPException(status_code=404, detail="Add-on not found")
-        add_on.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, add_on_id: str):
+        return super().delete(db, add_on_id)
 
 
-class AddOnPrices(ListResponseMixin):
+class AddOnPrices(CRUDManager[AddOnPrice]):
+    model = AddOnPrice
+    not_found_detail = "Add-on price not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: AddOnPriceCreate):
         data = payload.model_dump()
@@ -117,12 +111,9 @@ class AddOnPrices(ListResponseMixin):
         db.refresh(price)
         return price
 
-    @staticmethod
-    def get(db: Session, price_id: str):
-        price = db.get(AddOnPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Add-on price not found")
-        return price
+    @classmethod
+    def get(cls, db: Session, price_id: str):
+        return super().get(db, price_id)
 
     @staticmethod
     def list(
@@ -135,12 +126,8 @@ class AddOnPrices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AddOnPrice)
-        if add_on_id:
-            query = query.filter(AddOnPrice.add_on_id == add_on_id)
-        if is_active is None:
-            query = query.filter(AddOnPrice.is_active.is_(True))
-        else:
-            query = query.filter(AddOnPrice.is_active == is_active)
+        query = apply_optional_equals(query, {AddOnPrice.add_on_id: add_on_id})
+        query = apply_active_state(query, AddOnPrice.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -149,21 +136,10 @@ class AddOnPrices(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, price_id: str, payload: AddOnPriceUpdate):
-        price = db.get(AddOnPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Add-on price not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(price, key, value)
-        db.commit()
-        db.refresh(price)
-        return price
+    @classmethod
+    def update(cls, db: Session, price_id: str, payload: AddOnPriceUpdate):
+        return super().update(db, price_id, payload)
 
-    @staticmethod
-    def delete(db: Session, price_id: str):
-        price = db.get(AddOnPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Add-on price not found")
-        price.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, price_id: str):
+        return super().delete(db, price_id)

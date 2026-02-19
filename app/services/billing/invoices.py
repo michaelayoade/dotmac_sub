@@ -107,7 +107,7 @@ class Invoices(ListResponseMixin):
             invoice_id,
             options=[
                 selectinload(Invoice.lines),
-                selectinload(Invoice.payments),
+                selectinload(Invoice.payment_allocations),
             ],
         )
         if not invoice:
@@ -127,7 +127,7 @@ class Invoices(ListResponseMixin):
     ):
         query = db.query(Invoice).options(
             selectinload(Invoice.lines),
-            selectinload(Invoice.payments),
+            selectinload(Invoice.payment_allocations),
         )
         if account_id:
             query = query.filter(Invoice.account_id == account_id)
@@ -186,14 +186,31 @@ class Invoices(ListResponseMixin):
                 "from_status": previous_status.value if previous_status else None,
                 "to_status": new_status.value if new_status else None,
             }
-            context = {"account_id": invoice.account_id, "invoice_id": invoice.id}
 
             if new_status == InvoiceStatus.issued:
-                emit_event(db, EventType.invoice_sent, payload_dict, **context)
+                emit_event(
+                    db,
+                    EventType.invoice_sent,
+                    payload_dict,
+                    account_id=invoice.account_id,
+                    invoice_id=invoice.id,
+                )
             elif new_status == InvoiceStatus.paid:
-                emit_event(db, EventType.invoice_paid, payload_dict, **context)
+                emit_event(
+                    db,
+                    EventType.invoice_paid,
+                    payload_dict,
+                    account_id=invoice.account_id,
+                    invoice_id=invoice.id,
+                )
             elif new_status == InvoiceStatus.overdue:
-                emit_event(db, EventType.invoice_overdue, payload_dict, **context)
+                emit_event(
+                    db,
+                    EventType.invoice_overdue,
+                    payload_dict,
+                    account_id=invoice.account_id,
+                    invoice_id=invoice.id,
+                )
 
         return invoice
 

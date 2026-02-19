@@ -11,6 +11,7 @@ from app.models.provisioning import (
     ProvisioningStepType,
     ProvisioningVendor,
     ServiceOrderStatus,
+    ServiceOrderType,
     ServiceState,
     TaskStatus,
 )
@@ -26,6 +27,7 @@ class ServiceOrderBase(BaseModel):
     subscription_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus = ServiceOrderStatus.draft
+    order_type: ServiceOrderType | None = None
     project_type: ProjectType | None = None
     notes: str | None = None
 
@@ -41,6 +43,7 @@ class ServiceOrderUpdate(BaseModel):
     subscription_id: UUID | None = None
     requested_by_contact_id: UUID | None = None
     status: ServiceOrderStatus | None = None
+    order_type: ServiceOrderType | None = None
     project_type: ProjectType | None = None
     notes: str | None = None
 

@@ -17,49 +17,38 @@ from app.models.network import (
     PonPort,
 )
 from app.schemas.network import (
-    OLTDeviceCreate,
     OLTDeviceUpdate,
     OltCardCreate,
     OltCardPortCreate,
     OltCardPortUpdate,
     OltCardUpdate,
-    OltPowerUnitCreate,
     OltPowerUnitUpdate,
-    OltSfpModuleCreate,
     OltSfpModuleUpdate,
     OltShelfCreate,
     OltShelfUpdate,
     OntAssignmentCreate,
     OntAssignmentUpdate,
-    OntUnitCreate,
     OntUnitUpdate,
     PonPortCreate,
     PonPortUpdate,
 )
 from app.services import settings_spec
+from app.services.crud import CRUDManager
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
 )
+from app.services.common import coerce_uuid
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin
 
 
-class OLTDevices(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OLTDeviceCreate):
-        device = OLTDevice(**payload.model_dump())
-        db.add(device)
-        db.commit()
-        db.refresh(device)
-        return device
-
-    @staticmethod
-    def get(db: Session, device_id: str):
-        device = db.get(OLTDevice, device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        return device
+class OLTDevices(CRUDManager[OLTDevice]):
+    model = OLTDevice
+    not_found_detail = "OLT device not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -71,10 +60,7 @@ class OLTDevices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OLTDevice)
-        if is_active is None:
-            query = query.filter(OLTDevice.is_active.is_(True))
-        else:
-            query = query.filter(OLTDevice.is_active == is_active)
+        query = apply_active_state(query, OLTDevice.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -83,76 +69,81 @@ class OLTDevices(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, device_id: str, payload: OLTDeviceUpdate):
-        device = db.get(OLTDevice, device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(device, key, value)
-        db.commit()
-        db.refresh(device)
-        return device
+    @classmethod
+    def get(cls, db: Session, device_id: str):
+        return super().get(db, device_id)
 
-    @staticmethod
-    def delete(db: Session, device_id: str):
-        device = db.get(OLTDevice, device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        device.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate):
+        return super().update(db, device_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, device_id: str):
+        return super().delete(db, device_id)
 
 
-class PonPorts(ListResponseMixin):
+class PonPorts(CRUDManager[PonPort]):
+    model = PonPort
+    not_found_detail = "PON port not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: PonPortCreate):
         olt = db.get(OLTDevice, payload.olt_id)
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
+        card_port: OltCardPort | None = None
         if payload.olt_card_port_id:
             card_port = db.get(OltCardPort, payload.olt_card_port_id)
             if not card_port:
                 raise HTTPException(status_code=404, detail="OLT card port not found")
-        data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "port_type" not in fields_set:
-            default_type = settings_spec.resolve_value(
-                db, SettingDomain.network, "default_olt_port_type"
+        elif payload.card_id:
+            if payload.port_number is None:
+                raise HTTPException(status_code=400, detail="port_number is required when card_id is provided")
+            card = db.get(OltCard, payload.card_id)
+            if not card:
+                raise HTTPException(status_code=404, detail="OLT card not found")
+            card_port = OltCardPort(
+                card_id=payload.card_id,
+                port_number=payload.port_number,
+                port_type=OltPortType.pon,
+                name=payload.name,
+                is_active=True,
             )
-            if default_type:
-                data["port_type"] = _validate_enum(
-                    default_type, OltPortType, "port_type"
-                )
+            db.add(card_port)
+            db.commit()
+            db.refresh(card_port)
+        data = payload.model_dump()
+        if payload.card_id and not payload.olt_card_port_id and card_port:
+            data["olt_card_port_id"] = card_port.id
         port = PonPort(**data)
         db.add(port)
         db.commit()
         db.refresh(port)
         return port
 
-    @staticmethod
-    def get(db: Session, port_id: str):
-        port = db.get(PonPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="PON port not found")
-        return port
+    @classmethod
+    def get(cls, db: Session, port_id: str):
+        return super().get(db, port_id)
 
     @staticmethod
     def list(
         db: Session,
-        olt_id: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "asc",
+        limit: int = 20,
+        offset: int = 0,
+        card_id: str | None = None,
+        olt_id: str | None = None,
+        is_active: bool | None = None,
     ):
         query = db.query(PonPort)
-        if olt_id:
-            query = query.filter(PonPort.olt_id == olt_id)
-        if is_active is None:
-            query = query.filter(PonPort.is_active.is_(True))
-        else:
-            query = query.filter(PonPort.is_active == is_active)
+        if card_id:
+            query = query.join(OltCardPort, PonPort.olt_card_port_id == OltCardPort.id)
+            query = query.filter(OltCardPort.card_id == coerce_uuid(card_id))
+        query = apply_optional_equals(query, {PonPort.olt_id: olt_id})
+        query = apply_active_state(query, PonPort.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -163,9 +154,7 @@ class PonPorts(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, port_id: str, payload: PonPortUpdate):
-        port = db.get(PonPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="PON port not found")
+        port = PonPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         if "olt_id" in data:
             olt = db.get(OLTDevice, data["olt_id"])
@@ -181,13 +170,9 @@ class PonPorts(ListResponseMixin):
         db.refresh(port)
         return port
 
-    @staticmethod
-    def delete(db: Session, port_id: str):
-        port = db.get(PonPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="PON port not found")
-        port.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, port_id: str):
+        return super().delete(db, port_id)
 
     @staticmethod
     def utilization(db: Session, olt_id: str | None):
@@ -213,21 +198,11 @@ class PonPorts(ListResponseMixin):
         }
 
 
-class OntUnits(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OntUnitCreate):
-        unit = OntUnit(**payload.model_dump())
-        db.add(unit)
-        db.commit()
-        db.refresh(unit)
-        return unit
-
-    @staticmethod
-    def get(db: Session, unit_id: str):
-        unit = db.get(OntUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="ONT unit not found")
-        return unit
+class OntUnits(CRUDManager[OntUnit]):
+    model = OntUnit
+    not_found_detail = "ONT unit not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -239,10 +214,7 @@ class OntUnits(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OntUnit)
-        if is_active is None:
-            query = query.filter(OntUnit.is_active.is_(True))
-        else:
-            query = query.filter(OntUnit.is_active == is_active)
+        query = apply_active_state(query, OntUnit.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -251,41 +223,22 @@ class OntUnits(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, unit_id: str, payload: OntUnitUpdate):
-        unit = db.get(OntUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="ONT unit not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(unit, key, value)
-        db.commit()
-        db.refresh(unit)
-        return unit
+    @classmethod
+    def get(cls, db: Session, unit_id: str):
+        return super().get(db, unit_id)
 
-    @staticmethod
-    def delete(db: Session, unit_id: str):
-        unit = db.get(OntUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="ONT unit not found")
-        unit.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate):
+        return super().update(db, unit_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, unit_id: str):
+        return super().delete(db, unit_id)
 
 
-class OntAssignments(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OntAssignmentCreate):
-        assignment = OntAssignment(**payload.model_dump())
-        db.add(assignment)
-        db.commit()
-        db.refresh(assignment)
-        return assignment
-
-    @staticmethod
-    def get(db: Session, assignment_id: str):
-        assignment = db.get(OntAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="ONT assignment not found")
-        return assignment
+class OntAssignments(CRUDManager[OntAssignment]):
+    model = OntAssignment
+    not_found_detail = "ONT assignment not found"
 
     @staticmethod
     def list(
@@ -298,10 +251,13 @@ class OntAssignments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OntAssignment)
-        if ont_unit_id:
-            query = query.filter(OntAssignment.ont_unit_id == ont_unit_id)
-        if pon_port_id:
-            query = query.filter(OntAssignment.pon_port_id == pon_port_id)
+        query = apply_optional_equals(
+            query,
+            {
+                OntAssignment.ont_unit_id: ont_unit_id,
+                OntAssignment.pon_port_id: pon_port_id,
+            },
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -310,27 +266,23 @@ class OntAssignments(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, assignment_id: str, payload: OntAssignmentUpdate):
-        assignment = db.get(OntAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="ONT assignment not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(assignment, key, value)
-        db.commit()
-        db.refresh(assignment)
-        return assignment
+    @classmethod
+    def get(cls, db: Session, assignment_id: str):
+        return super().get(db, assignment_id)
 
-    @staticmethod
-    def delete(db: Session, assignment_id: str):
-        assignment = db.get(OntAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="ONT assignment not found")
-        db.delete(assignment)
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate):
+        return super().update(db, assignment_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, assignment_id: str):
+        return super().delete(db, assignment_id)
 
 
-class OltShelves(ListResponseMixin):
+class OltShelves(CRUDManager[OltShelf]):
+    model = OltShelf
+    not_found_detail = "OLT shelf not found"
+
     @staticmethod
     def create(db: Session, payload: OltShelfCreate):
         olt = db.get(OLTDevice, payload.olt_id)
@@ -342,12 +294,9 @@ class OltShelves(ListResponseMixin):
         db.refresh(shelf)
         return shelf
 
-    @staticmethod
-    def get(db: Session, shelf_id: str):
-        shelf = db.get(OltShelf, shelf_id)
-        if not shelf:
-            raise HTTPException(status_code=404, detail="OLT shelf not found")
-        return shelf
+    @classmethod
+    def get(cls, db: Session, shelf_id: str):
+        return super().get(db, shelf_id)
 
     @staticmethod
     def list(
@@ -359,8 +308,7 @@ class OltShelves(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OltShelf)
-        if olt_id:
-            query = query.filter(OltShelf.olt_id == olt_id)
+        query = apply_optional_equals(query, {OltShelf.olt_id: olt_id})
         query = _apply_ordering(
             query,
             order_by,
@@ -371,9 +319,7 @@ class OltShelves(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, shelf_id: str, payload: OltShelfUpdate):
-        shelf = db.get(OltShelf, shelf_id)
-        if not shelf:
-            raise HTTPException(status_code=404, detail="OLT shelf not found")
+        shelf = OltShelves.get(db, shelf_id)
         data = payload.model_dump(exclude_unset=True)
         if "olt_id" in data:
             olt = db.get(OLTDevice, data["olt_id"])
@@ -385,16 +331,15 @@ class OltShelves(ListResponseMixin):
         db.refresh(shelf)
         return shelf
 
-    @staticmethod
-    def delete(db: Session, shelf_id: str):
-        shelf = db.get(OltShelf, shelf_id)
-        if not shelf:
-            raise HTTPException(status_code=404, detail="OLT shelf not found")
-        db.delete(shelf)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, shelf_id: str):
+        return super().delete(db, shelf_id)
 
 
-class OltCards(ListResponseMixin):
+class OltCards(CRUDManager[OltCard]):
+    model = OltCard
+    not_found_detail = "OLT card not found"
+
     @staticmethod
     def create(db: Session, payload: OltCardCreate):
         shelf = db.get(OltShelf, payload.shelf_id)
@@ -406,12 +351,9 @@ class OltCards(ListResponseMixin):
         db.refresh(card)
         return card
 
-    @staticmethod
-    def get(db: Session, card_id: str):
-        card = db.get(OltCard, card_id)
-        if not card:
-            raise HTTPException(status_code=404, detail="OLT card not found")
-        return card
+    @classmethod
+    def get(cls, db: Session, card_id: str):
+        return super().get(db, card_id)
 
     @staticmethod
     def list(
@@ -423,8 +365,7 @@ class OltCards(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OltCard)
-        if shelf_id:
-            query = query.filter(OltCard.shelf_id == shelf_id)
+        query = apply_optional_equals(query, {OltCard.shelf_id: shelf_id})
         query = _apply_ordering(
             query,
             order_by,
@@ -435,9 +376,7 @@ class OltCards(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, card_id: str, payload: OltCardUpdate):
-        card = db.get(OltCard, card_id)
-        if not card:
-            raise HTTPException(status_code=404, detail="OLT card not found")
+        card = OltCards.get(db, card_id)
         data = payload.model_dump(exclude_unset=True)
         if "shelf_id" in data:
             shelf = db.get(OltShelf, data["shelf_id"])
@@ -449,16 +388,15 @@ class OltCards(ListResponseMixin):
         db.refresh(card)
         return card
 
-    @staticmethod
-    def delete(db: Session, card_id: str):
-        card = db.get(OltCard, card_id)
-        if not card:
-            raise HTTPException(status_code=404, detail="OLT card not found")
-        db.delete(card)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, card_id: str):
+        return super().delete(db, card_id)
 
 
-class OltCardPorts(ListResponseMixin):
+class OltCardPorts(CRUDManager[OltCardPort]):
+    model = OltCardPort
+    not_found_detail = "OLT card port not found"
+
     @staticmethod
     def create(db: Session, payload: OltCardPortCreate):
         card = db.get(OltCard, payload.card_id)
@@ -470,25 +408,26 @@ class OltCardPorts(ListResponseMixin):
         db.refresh(port)
         return port
 
-    @staticmethod
-    def get(db: Session, port_id: str):
-        port = db.get(OltCardPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="OLT card port not found")
-        return port
+    @classmethod
+    def get(cls, db: Session, port_id: str):
+        return super().get(db, port_id)
 
     @staticmethod
     def list(
         db: Session,
         card_id: str | None,
+        port_type: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
     ):
         query = db.query(OltCardPort)
-        if card_id:
-            query = query.filter(OltCardPort.card_id == card_id)
+        query = apply_optional_equals(query, {OltCardPort.card_id: card_id})
+        if port_type:
+            query = query.filter(
+                OltCardPort.port_type == _validate_enum(port_type, OltPortType, "port_type")
+            )
         query = _apply_ordering(
             query,
             order_by,
@@ -499,9 +438,7 @@ class OltCardPorts(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, port_id: str, payload: OltCardPortUpdate):
-        port = db.get(OltCardPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="OLT card port not found")
+        port = OltCardPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         if "card_id" in data:
             card = db.get(OltCard, data["card_id"])
@@ -513,30 +450,16 @@ class OltCardPorts(ListResponseMixin):
         db.refresh(port)
         return port
 
-    @staticmethod
-    def delete(db: Session, port_id: str):
-        port = db.get(OltCardPort, port_id)
-        if not port:
-            raise HTTPException(status_code=404, detail="OLT card port not found")
-        db.delete(port)
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, port_id: str):
+        return super().delete(db, port_id)
 
 
-class OltPowerUnits(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OltPowerUnitCreate):
-        unit = OltPowerUnit(**payload.model_dump())
-        db.add(unit)
-        db.commit()
-        db.refresh(unit)
-        return unit
-
-    @staticmethod
-    def get(db: Session, unit_id: str):
-        unit = db.get(OltPowerUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="OLT power unit not found")
-        return unit
+class OltPowerUnits(CRUDManager[OltPowerUnit]):
+    model = OltPowerUnit
+    not_found_detail = "OLT power unit not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -549,12 +472,8 @@ class OltPowerUnits(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OltPowerUnit)
-        if olt_id:
-            query = query.filter(OltPowerUnit.olt_id == olt_id)
-        if is_active is None:
-            query = query.filter(OltPowerUnit.is_active.is_(True))
-        else:
-            query = query.filter(OltPowerUnit.is_active == is_active)
+        query = apply_optional_equals(query, {OltPowerUnit.olt_id: olt_id})
+        query = apply_active_state(query, OltPowerUnit.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -563,41 +482,24 @@ class OltPowerUnits(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, unit_id: str, payload: OltPowerUnitUpdate):
-        unit = db.get(OltPowerUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="OLT power unit not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(unit, key, value)
-        db.commit()
-        db.refresh(unit)
-        return unit
+    @classmethod
+    def get(cls, db: Session, unit_id: str):
+        return super().get(db, unit_id)
 
-    @staticmethod
-    def delete(db: Session, unit_id: str):
-        unit = db.get(OltPowerUnit, unit_id)
-        if not unit:
-            raise HTTPException(status_code=404, detail="OLT power unit not found")
-        unit.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate):
+        return super().update(db, unit_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, unit_id: str):
+        return super().delete(db, unit_id)
 
 
-class OltSfpModules(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OltSfpModuleCreate):
-        module = OltSfpModule(**payload.model_dump())
-        db.add(module)
-        db.commit()
-        db.refresh(module)
-        return module
-
-    @staticmethod
-    def get(db: Session, module_id: str):
-        module = db.get(OltSfpModule, module_id)
-        if not module:
-            raise HTTPException(status_code=404, detail="OLT SFP module not found")
-        return module
+class OltSfpModules(CRUDManager[OltSfpModule]):
+    model = OltSfpModule
+    not_found_detail = "OLT SFP module not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -610,12 +512,11 @@ class OltSfpModules(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OltSfpModule)
-        if olt_card_port_id:
-            query = query.filter(OltSfpModule.olt_card_port_id == olt_card_port_id)
-        if is_active is None:
-            query = query.filter(OltSfpModule.is_active.is_(True))
-        else:
-            query = query.filter(OltSfpModule.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {OltSfpModule.olt_card_port_id: olt_card_port_id},
+        )
+        query = apply_active_state(query, OltSfpModule.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -624,24 +525,17 @@ class OltSfpModules(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, module_id: str, payload: OltSfpModuleUpdate):
-        module = db.get(OltSfpModule, module_id)
-        if not module:
-            raise HTTPException(status_code=404, detail="OLT SFP module not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(module, key, value)
-        db.commit()
-        db.refresh(module)
-        return module
+    @classmethod
+    def get(cls, db: Session, module_id: str):
+        return super().get(db, module_id)
 
-    @staticmethod
-    def delete(db: Session, module_id: str):
-        module = db.get(OltSfpModule, module_id)
-        if not module:
-            raise HTTPException(status_code=404, detail="OLT SFP module not found")
-        module.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, module_id: str, payload: OltSfpModuleUpdate):
+        return super().update(db, module_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, module_id: str):
+        return super().delete(db, module_id)
 
 
 olt_devices = OLTDevices()

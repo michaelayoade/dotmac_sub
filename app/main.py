@@ -42,6 +42,7 @@ from app.api.fiber_plant import router as fiber_plant_router
 from app.api.nextcloud_talk import router as nextcloud_talk_router
 from app.api.wireguard import router as wireguard_router, public_router as wireguard_public_router
 from app.api.nas import router as nas_router
+from app.api.provisioning import router as provisioning_api_router
 from app.api.bandwidth import router as bandwidth_router
 from app.api.validation import router as validation_router
 from app.api.defaults import router as defaults_router
@@ -217,8 +218,11 @@ async def csrf_middleware(request: Request, call_next):
                                     content_disp = part.get("Content-Disposition", "")
                                     if 'name="_csrf_token"' in content_disp or "name=_csrf_token" in content_disp:
                                         payload = part.get_payload(decode=True)
-                                        if payload:
-                                            form_token = payload.decode('utf-8').strip()
+                                        if isinstance(payload, (bytes, bytearray)):
+                                            form_token = payload.decode("utf-8", errors="ignore").strip()
+                                            break
+                                        if isinstance(payload, str) and payload.strip():
+                                            form_token = payload.strip()
                                             break
                     else:
                         form_data = parse_qs(body.decode('utf-8'))
@@ -322,7 +326,6 @@ def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
     return any(path.startswith(prefix) for prefix in skip_paths)
 
 def _include_api_router(router, dependencies=None):
-    app.include_router(router, dependencies=dependencies)
     app.include_router(router, prefix="/api/v1", dependencies=dependencies)
 
 
@@ -354,6 +357,7 @@ _include_api_router(fiber_plant_router, dependencies=[Depends(require_user_auth)
 _include_api_router(nextcloud_talk_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(wireguard_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(nas_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(provisioning_api_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(bandwidth_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(validation_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(defaults_router, dependencies=[Depends(require_user_auth)])

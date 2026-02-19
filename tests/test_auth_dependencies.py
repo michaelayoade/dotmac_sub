@@ -11,7 +11,7 @@ from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
 from app.services.auth import hash_api_key
 from app.services import auth_dependencies as auth_dep
-from app.models.rbac import Permission, PersonRole, Role, RolePermission
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
 from app.models.auth import AuthProvider, UserCredential
 
 
@@ -45,7 +45,7 @@ def _make_request():
 def test_require_user_auth_accepts_valid_token(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
-        person_id=person.id,
+        subscriber_id=person.id,
         provider=AuthProvider.local,
         username="auth@example.com",
         password_hash=hash_password("secret"),
@@ -56,14 +56,14 @@ def test_require_user_auth_accepts_valid_token(db_session, person, monkeypatch):
 
     tokens = AuthFlow._issue_tokens(db_session, str(person.id), _make_request())
     auth = require_user_auth(authorization=f"Bearer {tokens['access_token']}", db=db_session)
-    assert auth["person_id"] == str(person.id)
+    assert auth["subscriber_id"] == str(person.id)
     assert auth["session_id"]
 
 
 def test_require_user_auth_rejects_expired_session(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
@@ -80,7 +80,7 @@ def test_require_user_auth_rejects_expired_session(db_session, person, monkeypat
 def test_require_audit_auth_accepts_api_key(db_session, person):
     raw_key = "raw-api-key"
     api_key = ApiKey(
-        person_id=person.id,
+        subscriber_id=person.id,
         label="test",
         key_hash=hash_api_key(raw_key),
         is_active=True,
@@ -101,7 +101,7 @@ def test_require_audit_auth_accepts_api_key(db_session, person):
 def test_require_audit_auth_requires_scope(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -118,7 +118,7 @@ def test_require_audit_auth_requires_scope(db_session, person, monkeypatch):
 def test_require_audit_auth_accepts_scope(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -135,7 +135,7 @@ def test_require_audit_auth_accepts_scope(db_session, person, monkeypatch):
 def test_require_audit_auth_accepts_session_token(db_session, person):
     refresh_token = uuid.uuid4().hex
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash=hash_session_token(refresh_token),
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -167,7 +167,7 @@ def test_extract_bearer_and_scope_helpers():
 def test_require_role_and_permission(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -187,10 +187,10 @@ def test_require_role_and_permission(db_session, person, monkeypatch):
     with pytest.raises(HTTPException):
         require_role(auth=auth, db=db_session)
 
-    link = PersonRole(person_id=person.id, role_id=role.id)
+    link = SubscriberRole(subscriber_id=person.id, role_id=role.id)
     db_session.add(link)
     db_session.commit()
-    assert require_role(auth=auth, db=db_session)["person_id"] == str(person.id)
+    assert require_role(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
 
     require_permission = auth_dep.require_permission("tickets:read")
     with pytest.raises(HTTPException):
@@ -199,7 +199,7 @@ def test_require_role_and_permission(db_session, person, monkeypatch):
     role_perm = RolePermission(role_id=role.id, permission_id=permission.id)
     db_session.add(role_perm)
     db_session.commit()
-    assert require_permission(auth=auth, db=db_session)["person_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
 
 
 def test_require_user_auth_missing_token(db_session):
@@ -228,7 +228,7 @@ def test_require_audit_auth_invalid_session(db_session, person, monkeypatch):
 def test_require_audit_auth_revoked_session(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         revoked_at=datetime.now(timezone.utc),
@@ -244,7 +244,7 @@ def test_require_audit_auth_revoked_session(db_session, person, monkeypatch):
 def test_require_audit_auth_sets_actor_id(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -261,7 +261,7 @@ def test_require_audit_auth_sets_actor_id(db_session, person, monkeypatch):
 def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
     refresh_token = uuid.uuid4().hex
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash=hash_session_token(refresh_token),
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -279,7 +279,7 @@ def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
 def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
     raw_key = "raw-key"
     api_key = ApiKey(
-        person_id=person.id,
+        subscriber_id=person.id,
         label="test",
         key_hash=hash_api_key(raw_key),
         is_active=True,
@@ -298,7 +298,7 @@ def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
 def test_require_role_missing_role(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -316,7 +316,7 @@ def test_require_role_missing_role(db_session, person, monkeypatch):
 def test_require_role_short_circuit(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -326,13 +326,13 @@ def test_require_role_short_circuit(db_session, person, monkeypatch):
     token = _make_access_token(str(person.id), str(session.id), roles=["admin"])
     auth = require_user_auth(authorization=f"Bearer {token}", db=db_session)
     require_role = auth_dep.require_role("admin")
-    assert require_role(auth=auth, db=db_session)["person_id"] == str(person.id)
+    assert require_role(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
 
 
 def test_require_permission_missing_permission(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -350,7 +350,7 @@ def test_require_permission_missing_permission(db_session, person, monkeypatch):
 def test_require_permission_short_circuit(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     session = AuthSession(
-        person_id=person.id,
+        subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -360,4 +360,4 @@ def test_require_permission_short_circuit(db_session, person, monkeypatch):
     token = _make_access_token(str(person.id), str(session.id), roles=["admin"])
     auth = require_user_auth(authorization=f"Bearer {token}", db=db_session)
     require_permission = auth_dep.require_permission("any:perm")
-    assert require_permission(auth=auth, db=db_session)["person_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)

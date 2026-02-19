@@ -23,6 +23,13 @@ class Settings:
     avatar_allowed_types: str = os.getenv("AVATAR_ALLOWED_TYPES", "image/jpeg,image/png,image/gif,image/webp")
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")
 
+    # Splynx MySQL sync settings (for incremental sync from remote Splynx DB)
+    mysql_host: str = os.getenv("SPLYNX_MYSQL_HOST", "127.0.0.1")
+    mysql_port: int = int(os.getenv("SPLYNX_MYSQL_PORT", "3306"))
+    mysql_user: str = os.getenv("SPLYNX_MYSQL_USER", "splynx")
+    mysql_password: str = os.getenv("SPLYNX_MYSQL_PASSWORD", "")
+    mysql_database: str = os.getenv("SPLYNX_MYSQL_DATABASE", "splynx")
+
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")
 

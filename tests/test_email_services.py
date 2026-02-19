@@ -15,6 +15,7 @@ def test_send_email_success(db_session, monkeypatch):
         return fake_smtp
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp)
     monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_USER", "testuser")
@@ -44,6 +45,7 @@ def test_send_email_html_and_text(db_session, monkeypatch):
         return fake_smtp
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp)
     monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
@@ -71,6 +73,7 @@ def test_send_email_with_tracking(db_session, monkeypatch):
         return fake_smtp
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp)
     monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
@@ -92,8 +95,11 @@ def test_get_smtp_config_from_env(monkeypatch):
     """Test getting SMTP config from environment variables."""
     monkeypatch.setenv("SMTP_HOST", "mail.example.com")
     monkeypatch.setenv("SMTP_PORT", "465")
+    # Some environments may set SMTP_USERNAME; ensure this test is deterministic.
+    monkeypatch.setenv("SMTP_USERNAME", "admin")
     monkeypatch.setenv("SMTP_USER", "admin")
     monkeypatch.setenv("SMTP_PASSWORD", "secret123")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "sender@example.com")
     monkeypatch.setenv("SMTP_FROM", "sender@example.com")
     monkeypatch.setenv("SMTP_TLS", "true")
 
@@ -112,6 +118,7 @@ def test_send_email_connection_error(db_session, monkeypatch):
         raise ConnectionRefusedError("Connection refused")
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp_error)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp_error)
     monkeypatch.setenv("SMTP_HOST", "invalid.host")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
@@ -133,6 +140,7 @@ def test_send_email_auth_failure_logs(db_session, monkeypatch, caplog):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp_auth_error)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp_auth_error)
     monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
@@ -157,6 +165,7 @@ def test_smtp_connection_auth_failure_logs(monkeypatch, caplog):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
     monkeypatch.setattr("smtplib.SMTP", mock_smtp_auth_error)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp_auth_error)
     config = {
         "host": "smtp.test.local",
         "port": 587,

@@ -1,7 +1,7 @@
 """Smart Defaults Service - Provides intelligent default values for forms."""
 
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -135,8 +135,8 @@ class SmartDefaultsService:
 
     def calculate_due_date(
         self,
-        issued_at: Optional[date] = None,
-        payment_terms_days: Optional[int] = None
+        issued_at: date | None = None,
+        payment_terms_days: int | None = None
     ) -> date:
         """
         Calculate the due date based on issue date and payment terms.
@@ -161,6 +161,34 @@ class SmartDefaultsService:
                 payment_terms_days = int(payment_terms_days)
 
         return issued_at + timedelta(days=payment_terms_days)
+
+    def calculate_due_date_detail(
+        self,
+        issued_at: date | None = None,
+        payment_terms_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Calculate due date and return all resolved values.
+
+        Returns dict with issued_at, payment_terms_days, and due_at as ISO strings.
+        """
+        if issued_at is None:
+            issued_at = date.today()
+
+        if payment_terms_days is None:
+            payment_terms_days = self._get_setting(
+                SettingDomain.billing,
+                "default_payment_terms_days",
+                30,
+            )
+            if isinstance(payment_terms_days, str):
+                payment_terms_days = int(payment_terms_days)
+
+        due_at = issued_at + timedelta(days=payment_terms_days)
+        return {
+            "issued_at": issued_at.isoformat(),
+            "payment_terms_days": payment_terms_days,
+            "due_at": due_at.isoformat(),
+        }
 
     def get_currency_settings(self) -> dict[str, Any]:
         """

@@ -533,9 +533,9 @@ class Payments(ListResponseMixin):
         payment = Payment(**data)
         db.add(payment)
         db.flush()
-        allocations = []
+        allocation_creates: list[PaymentAllocationCreate] = []
         if payload.allocations:
-            allocations = [
+            allocation_creates = [
                 PaymentAllocationCreate(
                     payment_id=payment.id,
                     invoice_id=allocation.invoice_id,
@@ -544,10 +544,16 @@ class Payments(ListResponseMixin):
                 )
                 for allocation in payload.allocations
             ]
-        if allocations:
-            Payments._create_allocations(db, payment, allocations)
+        allocations: list[PaymentAllocation]
+        if allocation_creates:
+            allocations = Payments._create_allocations(db, payment, allocation_creates)
         else:
             allocations = Payments._auto_allocate(db, payment)
+
+        # Tests run with autoflush disabled; make sure allocations/ledger exist in DB
+        # before we query them during invoice recalculation.
+        db.flush()
+
         invoices_to_recalculate = {alloc.invoice_id for alloc in allocations}
         for invoice_id in invoices_to_recalculate:
             invoice = get_by_id(db, Invoice, invoice_id)
@@ -734,16 +740,30 @@ class Payments(ListResponseMixin):
                 "from_status": previous_status.value if previous_status else None,
                 "to_status": normalized.value,
             }
-            context = {
-                "account_id": payment.account_id,
-                "invoice_id": allocation_invoice_id,
-            }
             if normalized == PaymentStatus.succeeded:
-                emit_event(db, EventType.payment_received, payload, **context)
+                emit_event(
+                    db,
+                    EventType.payment_received,
+                    payload,
+                    account_id=payment.account_id,
+                    invoice_id=allocation_invoice_id,
+                )
             elif normalized == PaymentStatus.failed:
-                emit_event(db, EventType.payment_failed, payload, **context)
+                emit_event(
+                    db,
+                    EventType.payment_failed,
+                    payload,
+                    account_id=payment.account_id,
+                    invoice_id=allocation_invoice_id,
+                )
             elif normalized == PaymentStatus.refunded:
-                emit_event(db, EventType.payment_refunded, payload, **context)
+                emit_event(
+                    db,
+                    EventType.payment_refunded,
+                    payload,
+                    account_id=payment.account_id,
+                    invoice_id=allocation_invoice_id,
+                )
 
         return payment
 
@@ -974,6 +994,7 @@ class PaymentChannelAccounts(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentChannelAccountCreate):
         channel = _validate_payment_channel(db, str(payload.channel_id))
+        assert channel is not None
         _validate_collection_account(db, str(payload.collection_account_id), payload.currency)
         if payload.is_default:
             db.query(PaymentChannelAccount).filter(

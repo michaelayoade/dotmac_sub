@@ -10,7 +10,7 @@ if ROOT_DIR not in sys.path:
 
 from app.db import SessionLocal
 from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.rbac import Role, PersonRole
+from app.models.rbac import Role, SubscriberRole
 from app.schemas.notification import NotificationBulkCreateRequest
 from app.services import notification as notification_service
 
@@ -39,9 +39,9 @@ def main():
             return
 
         person_ids = [
-            str(row.person_id)
-            for row in db.query(PersonRole.person_id)
-            .filter(PersonRole.role_id == role.id)
+            str(row.subscriber_id)
+            for row in db.query(SubscriberRole.subscriber_id)
+            .filter(SubscriberRole.role_id == role.id)
             .distinct()
             .all()
         ]

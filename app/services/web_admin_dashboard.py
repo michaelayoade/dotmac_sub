@@ -7,17 +7,28 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
+from app.models.billing import InvoiceStatus
+from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntUnit
 from app.models.network_monitoring import DeviceStatus, NetworkDevice
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import (
     audit as audit_service,
+)
+from app.services import (
     billing as billing_service,
-    subscriber as subscriber_service,
-    web_admin as web_admin_service,
-    system_health as system_health_service,
+)
+from app.services import (
     settings_spec,
+)
+from app.services import (
+    subscriber as subscriber_service,
+)
+from app.services import (
+    system_health as system_health_service,
+)
+from app.services import (
+    web_admin as web_admin_service,
 )
 from app.services.audit_helpers import (
     extract_changes,
@@ -32,11 +43,6 @@ templates = Jinja2Templates(directory="templates")
 
 def _invoice_total(inv) -> float:
     return float(getattr(inv, "total", None) or getattr(inv, "total_amount", 0) or 0)
-
-
-def _get_status(obj) -> str:
-    status = getattr(obj, "status", "")
-    return status.value if hasattr(status, "value") else str(status)
 
 
 def _float_setting(value) -> float | None:
@@ -173,13 +179,13 @@ def dashboard(request: Request, db: Session):
     )
 
     paid_revenue = sum(
-        _invoice_total(inv) for inv in all_invoices if _get_status(inv) == "paid"
+        _invoice_total(inv) for inv in all_invoices if inv.status == InvoiceStatus.paid
     )
     pending_amount = sum(
-        _invoice_total(inv) for inv in all_invoices if _get_status(inv) in ("pending", "sent")
+        _invoice_total(inv) for inv in all_invoices if inv.status == InvoiceStatus.issued
     )
     overdue_amount = sum(
-        _invoice_total(inv) for inv in all_invoices if _get_status(inv) == "overdue"
+        _invoice_total(inv) for inv in all_invoices if inv.status == InvoiceStatus.overdue
     )
 
     arpu = paid_revenue / active_subscribers if active_subscribers > 0 else 0

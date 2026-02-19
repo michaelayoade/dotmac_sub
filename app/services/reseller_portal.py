@@ -13,6 +13,7 @@ import app.services.auth_flow as auth_flow_service
 from app.services import customer_portal
 from app.services import catalog as catalog_service
 from app.services.common import coerce_uuid
+from app.services.session_store import delete_session, load_session, store_session
 from app.services.settings_spec import resolve_value
 
 SESSION_COOKIE_NAME = "reseller_session"
@@ -20,8 +21,8 @@ SESSION_COOKIE_NAME = "reseller_session"
 _DEFAULT_SESSION_TTL = 86400  # 24 hours
 _DEFAULT_REMEMBER_TTL = 2592000  # 30 days
 
-# Simple in-memory session store (in production, use Redis or database)
 _RESELLER_SESSIONS: dict[str, dict] = {}
+_RESELLER_SESSION_PREFIX = "session:reseller_portal"
 
 
 def _now() -> datetime:
@@ -38,17 +39,29 @@ def _initials(subscriber: Subscriber) -> str:
 def _subscriber_label(subscriber: Subscriber | None) -> str:
     if not subscriber:
         return "Account"
-    if subscriber.subscriber:
-        # Check for organization first (B2B case)
-        if subscriber.subscriber.organization:
-            organization = subscriber.subscriber.organization
-            return organization.legal_name or organization.name or "Customer"
-        # Individual subscriber
-        first = subscriber.subscriber.first_name or ""
-        last = subscriber.subscriber.last_name or ""
-        display = f"{first} {last}".strip()
-        return display or subscriber.subscriber.display_name or "Customer"
-    return "Customer"
+    # Backwards-compat: older code treats SubscriberAccount as having a `.person`
+    # relationship (and optionally organization via that person).
+    person = getattr(subscriber, "person", None)
+    base = person or subscriber
+
+    def _clean_str(value: object | None) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        return ""
+
+    organization = getattr(base, "organization", None)
+    if organization:
+        legal_name = _clean_str(getattr(organization, "legal_name", None))
+        name = _clean_str(getattr(organization, "name", None))
+        if legal_name:
+            return legal_name
+        if name:
+            return name
+    first = _clean_str(getattr(base, "first_name", None))
+    last = _clean_str(getattr(base, "last_name", None))
+    display = f"{first} {last}".strip()
+    display_name = _clean_str(getattr(base, "display_name", None))
+    return display or display_name or "Customer"
 
 
 def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
@@ -63,37 +76,51 @@ def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
 
 def _create_session(
     username: str,
-    subscriber_id: str,
     reseller_id: str,
     remember: bool,
+    subscriber_id: str | None = None,
     db: Session | None = None,
+    person_id: str | None = None,
 ) -> str:
+    if not subscriber_id:
+        subscriber_id = person_id
+    if not subscriber_id:
+        raise ValueError("subscriber_id/person_id is required")
     session_token = secrets.token_urlsafe(32)
     ttl_seconds = _session_ttl_seconds(remember, db)
-    _RESELLER_SESSIONS[session_token] = {
+    session_payload = {
         "username": username,
         "subscriber_id": subscriber_id,
+        # Backwards-compat: older tests/callers use "person_id".
+        "person_id": subscriber_id,
         "reseller_id": reseller_id,
         "remember": remember,
         "created_at": _now().isoformat(),
         "expires_at": (_now() + timedelta(seconds=ttl_seconds)).isoformat(),
     }
+    store_session(
+        _RESELLER_SESSION_PREFIX,
+        session_token,
+        session_payload,
+        ttl_seconds,
+        _RESELLER_SESSIONS,
+    )
     return session_token
 
 
 def _get_session(session_token: str) -> dict | None:
-    session = _RESELLER_SESSIONS.get(session_token)
+    session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     if not session:
         return None
     expires_at = datetime.fromisoformat(session["expires_at"])
     if _now() > expires_at:
-        del _RESELLER_SESSIONS[session_token]
+        invalidate_session(session_token)
         return None
     return session
 
 
 def invalidate_session(session_token: str) -> None:
-    _RESELLER_SESSIONS.pop(session_token, None)
+    delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
 
 
 def login(db: Session, username: str, password: str, request: Request, remember: bool) -> dict:
@@ -172,6 +199,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     return {
         "session": session,
         "current_user": current_user,
+        # Backwards-compat: older callers/tests expect `person`.
+        "person": subscriber,
         "subscriber": subscriber,
         "reseller": reseller,
         "reseller_user": reseller_user,
@@ -186,17 +215,42 @@ def refresh_session(session_token: str | None, db: Session | None = None) -> dic
         return None
     ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
     session["expires_at"] = (_now() + timedelta(seconds=ttl_seconds)).isoformat()
+    store_session(
+        _RESELLER_SESSION_PREFIX,
+        session_token,
+        session,
+        ttl_seconds,
+        _RESELLER_SESSIONS,
+    )
     return session
 
 
 def _session_ttl_seconds(remember: bool, db: Session | None = None) -> int:
     """Get session TTL in seconds, using configurable settings when db is available."""
     if remember:
-        ttl = resolve_value(db, SettingDomain.auth, "reseller_remember_ttl_seconds") if db else None
-        return ttl if ttl is not None else _DEFAULT_REMEMBER_TTL
+        ttl = (
+            resolve_value(db, SettingDomain.auth, "reseller_remember_ttl_seconds")
+            if db
+            else None
+        )
+        if ttl is None:
+            return _DEFAULT_REMEMBER_TTL
+        try:
+            return int(str(ttl))
+        except (TypeError, ValueError):
+            return _DEFAULT_REMEMBER_TTL
     else:
-        ttl = resolve_value(db, SettingDomain.auth, "reseller_session_ttl_seconds") if db else None
-        return ttl if ttl is not None else _DEFAULT_SESSION_TTL
+        ttl = (
+            resolve_value(db, SettingDomain.auth, "reseller_session_ttl_seconds")
+            if db
+            else None
+        )
+        if ttl is None:
+            return _DEFAULT_SESSION_TTL
+        try:
+            return int(str(ttl))
+        except (TypeError, ValueError):
+            return _DEFAULT_SESSION_TTL
 
 
 def get_session_max_age(db: Session | None = None) -> int:
@@ -268,7 +322,7 @@ def list_accounts(
             {
                 "id": str(account.id),
                 "account_number": account.account_number,
-                "subscriber_name": _subscriber_label(account.subscriber),
+                "subscriber_name": _subscriber_label(account),
                 "status": account.status.value if account.status else "active",
                 "open_balance": summary.get("balance", 0),
                 "open_invoices": summary.get("count", 0),
@@ -365,3 +419,13 @@ def create_customer_imsubscriberation_session(
         return_to=return_to,
     )
     return session_token
+
+
+def create_customer_impersonation_session(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    return_to: str,
+) -> str:
+    """Backwards-compat wrapper for a historical typo in the function name."""
+    return create_customer_imsubscriberation_session(db, reseller_id, account_id, return_to)

@@ -3,32 +3,36 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
+from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
     MFAMethodType,
-    Session as AuthSession,
     SessionStatus,
     UserCredential,
 )
+from app.models.auth import (
+    Session as AuthSession,
+)
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
+from app.models.subscriber import Subscriber
+from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
+from app.services import radius_auth as radius_auth_service
 from app.services.common import coerce_uuid
 from app.services.response import ListResponseMixin
-from app.models.rbac import Permission, SubscriberRole, Role, RolePermission
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscriber import Subscriber
 from app.services.secrets import resolve_secret
-from app.services import radius_auth as radius_auth_service
-from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 
 PASSWORD_CONTEXT = CryptContext(
     schemes=["pbkdf2_sha256", "bcrypt"],
@@ -55,14 +59,14 @@ def _env_int(name: str) -> int | None:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -87,7 +91,7 @@ def _setting_value(db: Session | None, key: str) -> str | None:
     if not setting:
         return None
     if setting.value_text:
-        return setting.value_text
+        return cast(str, setting.value_text)
     if setting.value_json is not None:
         return str(setting.value_json)
     return None
@@ -217,7 +221,7 @@ def _issue_access_token(
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db))
+    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
 
 
 def _issue_mfa_token(db: Session | None, subscriber_id: str) -> str:
@@ -228,7 +232,7 @@ def _issue_mfa_token(db: Session | None, subscriber_id: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
     }
-    return jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db))
+    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
 
 
 def _password_reset_ttl_minutes(db: Session | None) -> int:
@@ -253,7 +257,7 @@ def _issue_password_reset_token(db: Session | None, subscriber_id: str, email: s
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()),
     }
-    return jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db))
+    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
 
 
 def _decode_password_reset_token(db: Session | None, token: str) -> dict:
@@ -262,7 +266,10 @@ def _decode_password_reset_token(db: Session | None, token: str) -> dict:
 
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
     try:
-        payload = jwt.decode(token, _jwt_secret(db), algorithms=[_jwt_algorithm(db)])
+        payload = cast(
+            dict[Any, Any],
+            jwt.decode(token, _jwt_secret(db), algorithms=[_jwt_algorithm(db)]),
+        )
     except JWTError as exc:
         raise HTTPException(status_code=401, detail="Invalid token") from exc
     if payload.get("typ") != expected_type:
@@ -275,10 +282,15 @@ def decode_access_token(db: Session | None, token: str) -> dict:
 
 
 def _subscriber_or_404(db: Session, subscriber_id: str) -> Subscriber:
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(subscriber_id)))
     if not subscriber:
         raise HTTPException(status_code=404, detail="Subscriber not found")
     return subscriber
+
+
+def _person_or_404(db: Session, person_id: str) -> Subscriber:
+    """Backwards-compatible helper: people are subscribers in this codebase."""
+    return _subscriber_or_404(db, person_id)
 
 
 def _load_rbac_claims(db: Session, subscriber_id: str):
@@ -308,14 +320,15 @@ def _load_rbac_claims(db: Session, subscriber_id: str):
 
 
 def _primary_totp_method(db: Session, subscriber_id: str) -> MFAMethod | None:
-    return (
+    return cast(
+        MFAMethod | None,
         db.query(MFAMethod)
         .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
         .filter(MFAMethod.method_type == MFAMethodType.totp)
         .filter(MFAMethod.is_active.is_(True))
         .filter(MFAMethod.enabled.is_(True))
         .filter(MFAMethod.is_primary.is_(True))
-        .first()
+        .first(),
     )
 
 
@@ -331,13 +344,13 @@ def _decrypt_secret(db: Session | None, secret: str) -> str:
 
 
 def hash_password(password: str) -> str:
-    return PASSWORD_CONTEXT.hash(password)
+    return cast(str, PASSWORD_CONTEXT.hash(password))
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
         return False
-    return PASSWORD_CONTEXT.verify(password, password_hash)
+    return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
 
 
 class AuthFlow(ListResponseMixin):
@@ -470,7 +483,7 @@ class AuthFlow(ListResponseMixin):
                 "mfa_token": _issue_mfa_token(db, str(credential.subscriber_id)),
             }
 
-        return AuthFlow._issue_tokens(db, credential.subscriber_id, request)
+        return AuthFlow._issue_tokens(db, str(credential.subscriber_id), request)
 
     @staticmethod
     def mfa_setup(db: Session, subscriber_id: str, label: str | None):
@@ -697,6 +710,58 @@ class AuthFlow(ListResponseMixin):
 auth_flow = AuthFlow()
 
 
+def change_password(
+    db: Session,
+    subscriber_id: str,
+    current_password: str,
+    new_password: str,
+) -> datetime:
+    """
+    Change a user's password after verifying the current password.
+    Returns the timestamp when the password was changed.
+    """
+    stmt = (
+        sa_select(UserCredential)
+        .where(UserCredential.subscriber_id == coerce_uuid(subscriber_id))
+        .where(UserCredential.is_active.is_(True))
+    )
+    credential = db.scalars(stmt).first()
+
+    if not credential:
+        raise HTTPException(status_code=404, detail="No credentials found")
+
+    if not verify_password(current_password, credential.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    if current_password == new_password:
+        raise HTTPException(status_code=400, detail="New password must be different")
+
+    now = _now()
+    credential.password_hash = hash_password(new_password)
+    credential.password_updated_at = now
+    credential.must_change_password = False
+    db.flush()
+
+    return now
+
+
+def forgot_password_flow(db: Session, email: str) -> None:
+    """
+    Handle the forgot-password flow: generate a reset token and send the email.
+    Always completes without error to prevent email enumeration.
+    """
+    from app.services.email import send_password_reset_email
+
+    result = request_password_reset(db, email)
+    if result:
+        send_password_reset_email(
+            db=db,
+            to_email=result["email"],
+            reset_token=result["token"],
+            person_name=result.get("subscriber_name"),
+        )
+
+
 def request_password_reset(db: Session, email: str) -> dict | None:
     """
     Request a password reset for the given email.
@@ -758,3 +823,32 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     db.commit()
 
     return now
+
+
+def validate_active_session(
+    db: Session,
+    session_id: str,
+    subscriber_id: str,
+) -> tuple[AuthSession, Subscriber] | None:
+    """Validate that an active, non-expired session exists for the subscriber.
+
+    Returns (session, subscriber) tuple if valid, else None.
+    """
+    now = _now()
+    session = (
+        db.query(AuthSession)
+        .filter(AuthSession.id == session_id)
+        .filter(AuthSession.subscriber_id == subscriber_id)
+        .filter(AuthSession.status == SessionStatus.active)
+        .filter(AuthSession.revoked_at.is_(None))
+        .filter(AuthSession.expires_at > now)
+        .first()
+    )
+    if not session:
+        return None
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        return None
+
+    return session, subscriber

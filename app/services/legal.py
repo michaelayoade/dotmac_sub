@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models.legal import LegalDocument, LegalDocumentType
@@ -47,6 +47,39 @@ class LegalDocumentService:
             query = query.order_by(order_col.asc())
 
         return query.offset(offset).limit(limit).all()
+
+    def get_list_stats(
+        self,
+        db: Session,
+        *,
+        document_type: Optional[LegalDocumentType] = None,
+        is_published: Optional[bool] = None,
+    ) -> dict[str, int]:
+        """Return total/published/draft counts for list page filters."""
+        count_query = db.query(func.count(LegalDocument.id))
+        if document_type is not None:
+            count_query = count_query.filter(LegalDocument.document_type == document_type)
+        if is_published is not None:
+            count_query = count_query.filter(LegalDocument.is_published == is_published)
+        total = count_query.scalar() or 0
+
+        published_query = db.query(func.count(LegalDocument.id)).filter(
+            LegalDocument.is_published.is_(True)
+        )
+        draft_query = db.query(func.count(LegalDocument.id)).filter(
+            LegalDocument.is_published.is_(False)
+        )
+        if document_type is not None:
+            published_query = published_query.filter(
+                LegalDocument.document_type == document_type
+            )
+            draft_query = draft_query.filter(LegalDocument.document_type == document_type)
+
+        return {
+            "total": total,
+            "published": published_query.scalar() or 0,
+            "draft": draft_query.scalar() or 0,
+        }
 
     def get(self, db: Session, document_id: str) -> Optional[LegalDocument]:
         """Get a legal document by ID."""

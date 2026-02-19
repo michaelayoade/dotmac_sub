@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -30,13 +30,13 @@ def login_for_token(api_context, username: str, password: str) -> str:
         return _login_for_token_via_web(api_context, username, password)
     if not response.ok:
         raise AuthError(f"Login failed for {username}: {response.status}")
-    payload = response.json()
+    payload = cast(dict[str, Any], response.json())
     if payload.get("mfa_required"):
         pytest.skip("MFA is enabled for this account; disable MFA for E2E users.")
-    token = payload.get("access_token")
-    if not token:
+    token_obj = payload.get("access_token")
+    if not isinstance(token_obj, str) or not token_obj:
         raise AuthError("Login response missing access_token")
-    return token
+    return token_obj
 
 
 def _login_for_token_via_web(api_context, username: str, password: str) -> str:
@@ -70,10 +70,12 @@ def ensure_person(api_context, token: str, first_name: str, last_name: str, emai
     response = api_get(api_context, f"/api/v1/people?email={email}", headers=headers)
     if not response.ok:
         raise AuthError(f"Failed to list people: {response.status}")
-    data = response.json()
-    items = data.get("items", [])
-    if items:
-        return items[0]
+    data = cast(dict[str, Any], response.json())
+    items_obj = data.get("items", [])
+    if isinstance(items_obj, list) and items_obj:
+        item0 = items_obj[0]
+        if isinstance(item0, dict):
+            return cast(dict[str, Any], item0)
 
     response = api_post_json(
         api_context,
@@ -83,7 +85,7 @@ def ensure_person(api_context, token: str, first_name: str, last_name: str, emai
     )
     if not response.ok:
         raise AuthError(f"Failed to create person: {response.status}")
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def ensure_user_credential(
@@ -101,10 +103,15 @@ def ensure_user_credential(
     )
     if not response.ok:
         raise AuthError(f"Failed to list credentials: {response.status}")
-    data = response.json()
-    for cred in data.get("items", []):
-        if cred.get("username") == username and cred.get("is_active"):
-            return cred
+    data = cast(dict[str, Any], response.json())
+    items_obj = data.get("items", [])
+    if isinstance(items_obj, list):
+        for cred_obj in items_obj:
+            if not isinstance(cred_obj, dict):
+                continue
+            cred = cast(dict[str, Any], cred_obj)
+            if cred.get("username") == username and cred.get("is_active"):
+                return cred
 
     response = api_post_json(
         api_context,
@@ -120,7 +127,7 @@ def ensure_user_credential(
     )
     if not response.ok:
         raise AuthError(f"Failed to create credential: {response.status}")
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def ensure_role_id(api_context, token: str, role_name: str) -> str:
@@ -128,10 +135,17 @@ def ensure_role_id(api_context, token: str, role_name: str) -> str:
     response = api_get(api_context, "/api/v1/rbac/roles?limit=200", headers=headers)
     if not response.ok:
         raise AuthError(f"Failed to list roles: {response.status}")
-    data = response.json()
-    for role in data.get("items", []):
-        if role.get("name") == role_name and role.get("is_active"):
-            return role["id"]
+    data = cast(dict[str, Any], response.json())
+    items_obj = data.get("items", [])
+    if isinstance(items_obj, list):
+        for role_obj in items_obj:
+            if not isinstance(role_obj, dict):
+                continue
+            role = cast(dict[str, Any], role_obj)
+            if role.get("name") == role_name and role.get("is_active"):
+                role_id = role.get("id")
+                if isinstance(role_id, str) and role_id:
+                    return role_id
     raise AuthError(f"Role not found: {role_name}")
 
 
@@ -144,10 +158,12 @@ def ensure_person_role(api_context, token: str, person_id: str, role_id: str) ->
     )
     if not response.ok:
         raise AuthError(f"Failed to list person roles: {response.status}")
-    data = response.json()
-    items = data.get("items", [])
-    if items:
-        return items[0]
+    data = cast(dict[str, Any], response.json())
+    items_obj = data.get("items", [])
+    if isinstance(items_obj, list) and items_obj:
+        item0 = items_obj[0]
+        if isinstance(item0, dict):
+            return cast(dict[str, Any], item0)
 
     response = api_post_json(
         api_context,
@@ -157,4 +173,4 @@ def ensure_person_role(api_context, token: str, person_id: str, role_id: str) ->
     )
     if not response.ok:
         raise AuthError(f"Failed to create person role: {response.status}")
-    return response.json()
+    return cast(dict[str, Any], response.json())

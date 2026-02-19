@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+from typing import cast
 
 from app.models.payment_arrangement import (
     ArrangementStatus,
@@ -87,9 +88,9 @@ class PaymentArrangements(ListResponseMixin):
             The created payment arrangement
         """
         # Validate account
-        from app.models.subscriber import SubscriberAccount
+        from app.models.subscriber import Subscriber
 
-        account = db.get(SubscriberAccount, coerce_uuid(account_id))
+        account = db.get(Subscriber, coerce_uuid(account_id))
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
@@ -207,7 +208,7 @@ class PaymentArrangements(ListResponseMixin):
 
         if account_id:
             query = query.filter(
-                PaymentArrangement.account_id == coerce_uuid(account_id)
+                PaymentArrangement.subscriber_id == coerce_uuid(account_id)
             )
 
         if status:
@@ -228,7 +229,7 @@ class PaymentArrangements(ListResponseMixin):
                 "status": PaymentArrangement.status,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return cast(list[PaymentArrangement], apply_pagination(query, limit, offset).all())
 
     @staticmethod
     def approve(
@@ -260,7 +261,7 @@ class PaymentArrangements(ListResponseMixin):
         arrangement.status = ArrangementStatus.active
         arrangement.approved_at = now
         if approver_id:
-            arrangement.approved_by_person_id = coerce_uuid(approver_id)
+            arrangement.approved_by_subscriber_id = coerce_uuid(approver_id)
 
         # Mark first installment as due
         first_installment = (
@@ -458,7 +459,10 @@ class PaymentArrangementInstallments(ListResponseMixin):
                 "status": PaymentArrangementInstallment.status,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return cast(
+            list[PaymentArrangementInstallment],
+            apply_pagination(query, limit, offset).all(),
+        )
 
 
 payment_arrangements = PaymentArrangements()

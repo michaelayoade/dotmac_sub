@@ -13,9 +13,9 @@ class CustomerUsagePage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/customer/usage") -> None:
         """Navigate to the usage page."""
-        super().goto("/customer/usage")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the usage page is loaded."""

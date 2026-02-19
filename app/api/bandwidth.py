@@ -7,9 +7,10 @@ and usage statistics. Supports both admin and customer portal access.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional, cast
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -55,7 +56,7 @@ class BandwidthSeriesResponse(BaseModel):
 
 # Admin endpoints
 @router.get("/series/{subscription_id}", response_model=BandwidthSeriesResponse)
-async def get_bandwidth_series(
+def get_bandwidth_series(
     subscription_id: UUID,
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
@@ -74,8 +75,13 @@ async def get_bandwidth_series(
     """
     bandwidth_samples.check_subscription_access(db, subscription_id, current_user)
 
-    result = await bandwidth_samples.get_bandwidth_series(
-        db, subscription_id, start_at, end_at, interval
+    result = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_series,
+        db,
+        subscription_id,
+        start_at,
+        end_at,
+        interval,
     )
 
     data = [BandwidthSeriesPoint(**point) for point in result["data"]]
@@ -83,7 +89,7 @@ async def get_bandwidth_series(
 
 
 @router.get("/stats/{subscription_id}", response_model=BandwidthStats)
-async def get_bandwidth_stats(
+def get_bandwidth_stats(
     subscription_id: UUID,
     period: str = Query(default="24h", pattern="^(1h|24h|7d|30d)$"),
     db: Session = Depends(get_db),
@@ -96,12 +102,17 @@ async def get_bandwidth_stats(
     """
     bandwidth_samples.check_subscription_access(db, subscription_id, current_user)
 
-    stats = await bandwidth_samples.get_bandwidth_stats(db, subscription_id, period)
+    stats = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_stats,
+        db,
+        subscription_id,
+        period,
+    )
     return BandwidthStats(**stats)
 
 
 @router.get("/live/{subscription_id}")
-async def get_live_bandwidth(
+def get_live_bandwidth(
     subscription_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
@@ -149,12 +160,12 @@ async def get_live_bandwidth(
 
 
 @router.get("/top-users", response_model=list[TopUserEntry])
-async def get_top_users(
+def get_top_users(
     limit: int = Query(default=10, ge=1, le=100),
     duration: str = Query(default="1h", pattern="^(1h|24h|7d)$"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-):
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> list[TopUserEntry]:
     """
     Get top bandwidth consumers.
 
@@ -164,13 +175,21 @@ async def get_top_users(
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    results = await bandwidth_samples.get_top_users(db, limit, duration)
-    return [TopUserEntry(**r) for r in results]
+    results = cast(
+        list[dict[str, object]],
+        anyio.from_thread.run(
+        bandwidth_samples.get_top_users,
+        db,
+        limit,
+        duration,
+        ),
+    )
+    return [TopUserEntry.model_validate(r) for r in results]
 
 
 # Customer portal endpoints (own data only)
 @router.get("/my/series", response_model=BandwidthSeriesResponse)
-async def get_my_bandwidth_series(
+def get_my_bandwidth_series(
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
     interval: str = Query(default="auto", pattern="^(auto|1m|5m|1h)$"),
@@ -184,18 +203,20 @@ async def get_my_bandwidth_series(
     """
     subscription = bandwidth_samples.get_user_active_subscription(db, current_user)
 
-    return await get_bandwidth_series(
-        subscription_id=subscription.id,
-        start_at=start_at,
-        end_at=end_at,
-        interval=interval,
-        db=db,
-        current_user=current_user,
+    result = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_series,
+        db,
+        subscription.id,
+        start_at,
+        end_at,
+        interval,
     )
+    data = [BandwidthSeriesPoint(**point) for point in result["data"]]
+    return BandwidthSeriesResponse(data=data, total=result["total"], source=result["source"])
 
 
 @router.get("/my/stats", response_model=BandwidthStats)
-async def get_my_bandwidth_stats(
+def get_my_bandwidth_stats(
     period: str = Query(default="24h", pattern="^(1h|24h|7d|30d)$"),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -207,16 +228,17 @@ async def get_my_bandwidth_stats(
     """
     subscription = bandwidth_samples.get_user_active_subscription(db, current_user)
 
-    return await get_bandwidth_stats(
-        subscription_id=subscription.id,
-        period=period,
-        db=db,
-        current_user=current_user,
+    stats = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_stats,
+        db,
+        subscription.id,
+        period,
     )
+    return BandwidthStats(**stats)
 
 
 @router.get("/my/live")
-async def get_my_live_bandwidth(
+def get_my_live_bandwidth(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -228,7 +250,7 @@ async def get_my_live_bandwidth(
     """
     subscription = bandwidth_samples.get_user_active_subscription(db, current_user)
 
-    return await get_live_bandwidth(
+    return get_live_bandwidth(
         subscription_id=subscription.id,
         request=request,
         db=db,

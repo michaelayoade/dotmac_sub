@@ -12,10 +12,9 @@ class SubscribersPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/subscribers") -> None:
         """Navigate to the subscribers list."""
-        super().goto("/admin/subscribers")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the subscribers page is loaded."""

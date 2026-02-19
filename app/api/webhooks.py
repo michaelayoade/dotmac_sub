@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.webhook import (
     WebhookDeliveryCreate,
     WebhookDeliveryRead,
@@ -17,14 +17,6 @@ from app.schemas.webhook import (
 from app.services import webhook as webhook_service
 
 router = APIRouter(prefix="/webhooks")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

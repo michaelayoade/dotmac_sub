@@ -13,7 +13,7 @@ class AuditEventBase(BaseModel):
     action: str
     entity_type: str
     entity_id: str | None = None
-    status_code: int
+    status_code: int | None = None
     is_success: bool = True
     is_active: bool = True
     ip_address: str | None = None

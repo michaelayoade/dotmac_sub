@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.gis import (
     ElevationRead,
     GeoAreaCreate,
@@ -22,14 +22,6 @@ from app.services import gis as gis_service
 from app.services import gis_sync as gis_sync_service
 
 router = APIRouter(prefix="/gis")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

@@ -9,6 +9,17 @@ from app.imports.loader import ImportError
 from app.services import imports as import_service
 
 
+def _coerce_error_index(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
 def import_subscriber_custom_fields(path: str) -> int:
     errors: list[ImportError] = []
     db = SessionLocal()
@@ -18,7 +29,10 @@ def import_subscriber_custom_fields(path: str) -> int:
             db, content
         )
         errors.extend(
-            ImportError(index=err["index"], detail=str(err["detail"]))
+            ImportError(
+                index=_coerce_error_index(err.get("index")),
+                detail=str(err.get("detail")),
+            )
             for err in service_errors
         )
     finally:

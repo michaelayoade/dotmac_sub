@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from tests.playwright.helpers.api import api_get, api_post_json, bearer_headers
 from tests.playwright.helpers.auth import AuthError, ensure_person
+
+
+def _response_json_dict(response) -> dict[str, Any]:
+    data = response.json()
+    if not isinstance(data, dict):
+        raise TypeError("Expected response.json() to return a dict")
+    return cast(dict[str, Any], data)
 
 
 def ensure_person_subscriber_account(
@@ -36,7 +43,7 @@ def ensure_person_subscriber_account(
         )
         if not response.ok:
             raise AuthError(f"Failed to create subscriber: {response.status}")
-        subscriber = response.json()
+        subscriber = _response_json_dict(response)
 
     response = api_get(
         api_context,
@@ -58,7 +65,7 @@ def ensure_person_subscriber_account(
         )
         if not response.ok:
             raise AuthError(f"Failed to create account: {response.status}")
-        account = response.json()
+        account = _response_json_dict(response)
 
     return {
         "person": person,
@@ -89,7 +96,7 @@ def create_test_invoice(
     )
     if not response.ok:
         raise AuthError(f"Failed to create invoice: {response.status}")
-    return response.json()
+    return _response_json_dict(response)
 
 
 def create_test_payment(
@@ -115,7 +122,7 @@ def create_test_payment(
     )
     if not response.ok:
         raise AuthError(f"Failed to create payment: {response.status}")
-    return response.json()
+    return _response_json_dict(response)
 
 
 def create_test_ledger_entry(
@@ -142,7 +149,7 @@ def create_test_ledger_entry(
     )
     if not response.ok:
         raise AuthError(f"Failed to create ledger entry: {response.status}")
-    return response.json()
+    return _response_json_dict(response)
 
 
 def create_test_service_order(
@@ -166,7 +173,7 @@ def create_test_service_order(
     )
     if not response.ok:
         raise AuthError(f"Failed to create service order: {response.status}")
-    return response.json()
+    return _response_json_dict(response)
 
 
 def create_test_work_order(
@@ -190,4 +197,4 @@ def create_test_work_order(
     )
     if not response.ok:
         raise AuthError(f"Failed to create work order: {response.status}")
-    return response.json()
+    return _response_json_dict(response)

@@ -4,17 +4,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import web_public_legal as legal_web_service
 router = APIRouter(prefix="/legal", tags=["public-legal"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/privacy", response_class=HTMLResponse)

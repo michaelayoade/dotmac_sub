@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import pytest
@@ -41,7 +42,7 @@ def browser(playwright_instance, settings: E2ESettings):
     if browser_type is None:
         browser_type = playwright_instance.firefox
 
-    launch_kwargs = {
+    launch_kwargs: dict[str, Any] = {
         "headless": settings.headless,
         "slow_mo": settings.slow_mo_ms,
         "timeout": settings.navigation_timeout_ms,
@@ -278,9 +279,12 @@ def customer_context(browser, settings: E2ESettings, api_context, admin_token: s
 
     # Extract customer_session cookie from response
     customer_session = None
-    for cookie in response.headers.get_all("set-cookie"):
+    for header in response.headers_array:
+        if header["name"].lower() != "set-cookie":
+            continue
+        cookie = header["value"]
         if "customer_session=" in cookie:
-            customer_session = cookie.split("customer_session=")[1].split(";")[0]
+            customer_session = cookie.split("customer_session=")[1].split(";", 1)[0]
             break
 
     if not customer_session:

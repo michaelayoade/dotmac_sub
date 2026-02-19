@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.audit import AuditEventRead
 from app.services import audit as audit_service
 from app.api.deps import require_audit_auth
@@ -12,14 +12,6 @@ router = APIRouter(
     tags=["audit-events"],
     dependencies=[Depends(require_audit_auth)],
 )
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/{event_id}", response_model=AuditEventRead)

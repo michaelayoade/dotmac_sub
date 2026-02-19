@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import builtins
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -96,8 +98,13 @@ class BandwidthSamples(ListResponseMixin):
                 status_code=400,
                 detail="Invalid interval. Allowed: minute, hour, day",
             )
-        agg_map = {"avg": func.avg, "max": func.max, "min": func.min}
-        if agg not in agg_map:
+        if agg == "avg":
+            agg_fn: Any = func.avg
+        elif agg == "max":
+            agg_fn = func.max
+        elif agg == "min":
+            agg_fn = func.min
+        else:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid agg. Allowed: avg, max, min",
@@ -105,8 +112,8 @@ class BandwidthSamples(ListResponseMixin):
         bucket = func.date_trunc(interval_map[interval], BandwidthSample.sample_at)
         query = db.query(
             bucket.label("bucket_start"),
-            agg_map[agg](BandwidthSample.rx_bps).label("rx_bps"),
-            agg_map[agg](BandwidthSample.tx_bps).label("tx_bps"),
+            cast(Any, agg_fn)(BandwidthSample.rx_bps).label("rx_bps"),
+            cast(Any, agg_fn)(BandwidthSample.tx_bps).label("tx_bps"),
         )
         if subscription_id:
             query = query.filter(BandwidthSample.subscription_id == subscription_id)
@@ -422,7 +429,7 @@ class BandwidthSamples(ListResponseMixin):
         db: Session,
         limit: int = 10,
         duration: str = "1h",
-    ) -> list[dict]:
+    ) -> builtins.list[dict[str, object]]:
         """Get top bandwidth consumers with account names.
 
         Returns:
@@ -443,11 +450,15 @@ class BandwidthSamples(ListResponseMixin):
                 if sub_id:
                     subscription = db.get(Subscription, UUID(sub_id))
                     if subscription and subscription.subscriber:
-                        account = subscription.subscriber
-                        if account.subscriber and account.subscriber.person:
-                            account_name = f"{account.subscriber.person.first_name} {account.subscriber.person.last_name}"
-                        elif account.subscriber and account.subscriber.organization:
-                            account_name = account.subscriber.organization.name
+                        subscriber = subscription.subscriber
+                        if subscriber.organization:
+                            account_name = (
+                                subscriber.organization.legal_name
+                                or subscriber.organization.name
+                            )
+                        else:
+                            full_name = f"{subscriber.first_name} {subscriber.last_name}".strip()
+                            account_name = full_name or subscriber.display_name
 
                 enriched.append({
                     "subscription_id": sub_id or "unknown",

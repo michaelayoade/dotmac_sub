@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import UUID
 
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -60,15 +61,16 @@ def build_network_map_context(db: Session) -> dict:
         .filter(FdhCabinet.longitude.isnot(None))
         .all()
     )
-    splitter_counts = {}
+    splitter_counts: dict[UUID | None, int] = {}
     if fdhs:
         fdh_ids = [fdh.id for fdh in fdhs]
-        splitter_counts = dict(
-            db.query(Splitter.fdh_id, func.count(Splitter.id))
+        splitter_counts = {
+            row[0]: row[1]
+            for row in db.query(Splitter.fdh_id, func.count(Splitter.id))
             .filter(Splitter.fdh_id.in_(fdh_ids))
             .group_by(Splitter.fdh_id)
             .all()
-        )
+        }
     for fdh in fdhs:
         features.append(
             {
@@ -163,8 +165,6 @@ def build_network_map_context(db: Session) -> dict:
             }
         )
 
-    survey_points = []
-
     # Customers with addresses that have coordinates, including online status
     active_sessions_subq = (
         db.query(Subscription.subscriber_id)
@@ -180,7 +180,11 @@ def build_network_map_context(db: Session) -> dict:
         .subquery()
     )
 
-    map_limit = settings_spec.resolve_value(db, SettingDomain.gis, "map_customer_limit")
+    map_limit_raw = settings_spec.resolve_value(db, SettingDomain.gis, "map_customer_limit")
+    try:
+        map_limit = int(str(map_limit_raw)) if map_limit_raw is not None else None
+    except (TypeError, ValueError):
+        map_limit = None
     if map_limit is not None and map_limit <= 0:
         map_limit = None
 
@@ -226,7 +230,7 @@ def build_network_map_context(db: Session) -> dict:
         )
         .order_by(Address.id)
     )
-    if map_limit:
+    if map_limit is not None:
         customer_addresses_query = customer_addresses_query.limit(map_limit)
     customer_addresses = customer_addresses_query.all()
 

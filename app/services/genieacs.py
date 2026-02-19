@@ -7,7 +7,7 @@ This module provides a client for interacting with the GenieACS NBI
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -86,7 +86,9 @@ class GenieACSClient:
     # Device Operations
     # -------------------------------------------------------------------------
 
-    def list_devices(self, query: dict | None = None, projection: dict | None = None) -> list[dict]:
+    def list_devices(
+        self, query: dict | None = None, projection: dict | None = None
+    ) -> list[dict[str, Any]]:
         """List devices with optional filtering.
 
         Args:
@@ -103,9 +105,9 @@ class GenieACSClient:
             params["projection"] = json.dumps(projection)
 
         response = self._request("GET", "/devices", params=params)
-        return response.json()
+        return cast(list[dict[str, Any]], response.json())
 
-    def get_device(self, device_id: str) -> dict:
+    def get_device(self, device_id: str) -> dict[str, Any]:
         """Get device by ID.
 
         Args:
@@ -116,7 +118,7 @@ class GenieACSClient:
         """
         encoded_id = quote(device_id, safe="")
         response = self._request("GET", f"/devices/{encoded_id}")
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     def delete_device(self, device_id: str) -> None:
         """Delete device.
@@ -326,7 +328,7 @@ class GenieACSClient:
         task = {"name": "deleteObject", "objectName": object_path}
         return self.create_task(device_id, task, connection_request)
 
-    def get_pending_tasks(self, device_id: str) -> list[dict]:
+    def get_pending_tasks(self, device_id: str) -> list[dict[str, Any]]:
         """Get pending tasks for device.
 
         Args:
@@ -338,7 +340,7 @@ class GenieACSClient:
         query = {"device": device_id}
         params = {"query": json.dumps(query)}
         response = self._request("GET", "/tasks", params=params)
-        return response.json()
+        return cast(list[dict[str, Any]], response.json())
 
     def delete_task(self, task_id: str) -> None:
         """Delete/cancel a task.
@@ -352,16 +354,16 @@ class GenieACSClient:
     # Preset Operations
     # -------------------------------------------------------------------------
 
-    def list_presets(self) -> list[dict]:
+    def list_presets(self) -> list[dict[str, Any]]:
         """List all presets.
 
         Returns:
             List of presets
         """
         response = self._request("GET", "/presets")
-        return response.json()
+        return cast(list[dict[str, Any]], response.json())
 
-    def get_preset(self, preset_id: str) -> dict:
+    def get_preset(self, preset_id: str) -> dict[str, Any]:
         """Get preset by ID.
 
         Args:
@@ -371,9 +373,9 @@ class GenieACSClient:
             Preset document
         """
         response = self._request("GET", f"/presets/{preset_id}")
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
-    def create_preset(self, preset: dict) -> dict:
+    def create_preset(self, preset: dict[str, Any]) -> dict[str, Any]:
         """Create a preset.
 
         Args:
@@ -383,7 +385,9 @@ class GenieACSClient:
             Created preset
         """
         response = self._request("PUT", f"/presets/{preset['_id']}", json_data=preset)
-        return response.json() if response.text else preset
+        if not response.text:
+            return preset
+        return cast(dict[str, Any], response.json())
 
     def delete_preset(self, preset_id: str) -> None:
         """Delete a preset.
@@ -397,16 +401,16 @@ class GenieACSClient:
     # Provision Operations
     # -------------------------------------------------------------------------
 
-    def list_provisions(self) -> list[dict]:
+    def list_provisions(self) -> list[dict[str, Any]]:
         """List all provisions.
 
         Returns:
             List of provisions
         """
         response = self._request("GET", "/provisions")
-        return response.json()
+        return cast(list[dict[str, Any]], response.json())
 
-    def get_provision(self, provision_id: str) -> dict:
+    def get_provision(self, provision_id: str) -> dict[str, Any]:
         """Get provision by ID.
 
         Args:
@@ -416,7 +420,7 @@ class GenieACSClient:
             Provision document
         """
         response = self._request("GET", f"/provisions/{provision_id}")
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     def create_provision(self, provision_id: str, script: str) -> None:
         """Create/update a provision script.
@@ -439,7 +443,7 @@ class GenieACSClient:
     # Fault Operations
     # -------------------------------------------------------------------------
 
-    def list_faults(self, device_id: str | None = None) -> list[dict]:
+    def list_faults(self, device_id: str | None = None) -> list[dict[str, Any]]:
         """List faults, optionally filtered by device.
 
         Args:
@@ -453,7 +457,7 @@ class GenieACSClient:
             params["query"] = json.dumps({"device": device_id})
 
         response = self._request("GET", "/faults", params=params)
-        return response.json()
+        return cast(list[dict[str, Any]], response.json())
 
     def delete_fault(self, fault_id: str) -> None:
         """Delete/acknowledge a fault.
@@ -531,7 +535,7 @@ class GenieACSClient:
             raise ValueError(f"Invalid device ID format: {device_id}")
         return parts[0], parts[1], parts[2]
 
-    def extract_parameter_value(self, device: dict, parameter_path: str) -> Any:
+    def extract_parameter_value(self, device: dict[str, Any], parameter_path: str) -> Any:
         """Extract parameter value from device document.
 
         GenieACS stores parameters in a nested structure. This helper
@@ -545,7 +549,7 @@ class GenieACSClient:
             Parameter value or None if not found
         """
         parts = parameter_path.split(".")
-        current = device
+        current: object = device
 
         for part in parts:
             if not isinstance(current, dict):

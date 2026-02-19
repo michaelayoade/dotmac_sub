@@ -11,6 +11,7 @@ from app.models.network import (
     FiberEndpointType,
     FiberSegmentType,
     FiberStrandStatus,
+    HardwareUnitStatus,
     IPVersion,
     ODNEndpointType,
     OltPortType,
@@ -64,8 +65,7 @@ class CPEDeviceRead(CPEDeviceBase):
     updated_at: datetime
 
 
-class PortBase(BaseModel):
-    device_id: UUID
+class PortFields(BaseModel):
     olt_id: UUID | None = None
     port_number: int | None = Field(default=None, ge=1)
     name: str = Field(min_length=1, max_length=80)
@@ -74,7 +74,11 @@ class PortBase(BaseModel):
     notes: str | None = None
 
 
-class PortCreate(PortBase):
+class PortBase(PortFields):
+    device_id: UUID
+
+
+class PortCreate(PortFields):
     model_config = ConfigDict(extra="forbid")
     device_id: UUID | None = None
 
@@ -369,16 +373,19 @@ class OLTDeviceRead(OLTDeviceBase):
     updated_at: datetime
 
 
-class PonPortBase(BaseModel):
+class PonPortFields(BaseModel):
     olt_id: UUID
     olt_card_port_id: UUID | None = None
-    name: str = Field(min_length=1, max_length=120)
     port_number: int | None = None
     notes: str | None = None
     is_active: bool = True
 
 
-class PonPortCreate(PonPortBase):
+class PonPortBase(PonPortFields):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class PonPortCreate(PonPortFields):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=120)
     card_id: UUID | None = Field(default=None, exclude=True)
@@ -689,8 +696,7 @@ class SplitterPortAssignmentRead(SplitterPortAssignmentBase):
     updated_at: datetime
 
 
-class FiberStrandBase(BaseModel):
-    cable_name: str = Field(min_length=1, max_length=160)
+class FiberStrandFields(BaseModel):
     strand_number: int = Field(ge=1)
     label: str | None = Field(default=None, max_length=160)
     status: FiberStrandStatus = FiberStrandStatus.available
@@ -702,7 +708,11 @@ class FiberStrandBase(BaseModel):
     is_active: bool = True
 
 
-class FiberStrandCreate(FiberStrandBase):
+class FiberStrandBase(FiberStrandFields):
+    cable_name: str = Field(min_length=1, max_length=160)
+
+
+class FiberStrandCreate(FiberStrandFields):
     model_config = ConfigDict(extra="forbid")
     cable_name: str | None = Field(default=None, min_length=1, max_length=160)
     segment_id: UUID | None = Field(default=None, exclude=True)
@@ -787,17 +797,20 @@ class FiberSpliceTrayRead(FiberSpliceTrayBase):
     updated_at: datetime
 
 
-class FiberSpliceBase(BaseModel):
-    closure_id: UUID
-    from_strand_id: UUID
-    to_strand_id: UUID
+class FiberSpliceFields(BaseModel):
     tray_id: UUID | None = None
     splice_type: str | None = Field(default=None, max_length=80)
     loss_db: float | None = None
     notes: str | None = None
 
 
-class FiberSpliceCreate(FiberSpliceBase):
+class FiberSpliceBase(FiberSpliceFields):
+    closure_id: UUID
+    from_strand_id: UUID
+    to_strand_id: UUID
+
+
+class FiberSpliceCreate(FiberSpliceFields):
     model_config = ConfigDict(extra="forbid")
     closure_id: UUID | None = None
     from_strand_id: UUID | None = None
@@ -928,7 +941,7 @@ class PonPortSplitterLinkRead(PonPortSplitterLinkBase):
 class OltPowerUnitBase(BaseModel):
     olt_id: UUID
     slot: str = Field(min_length=1, max_length=40)
-    status: str | None = Field(default=None, max_length=40)
+    status: HardwareUnitStatus | None = None
     notes: str | None = None
     is_active: bool = True
 
@@ -940,7 +953,7 @@ class OltPowerUnitCreate(OltPowerUnitBase):
 class OltPowerUnitUpdate(BaseModel):
     olt_id: UUID | None = None
     slot: str | None = Field(default=None, min_length=1, max_length=40)
-    status: str | None = Field(default=None, max_length=40)
+    status: HardwareUnitStatus | None = None
     notes: str | None = None
     is_active: bool | None = None
 

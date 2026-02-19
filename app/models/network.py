@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from geoalchemy2 import Geometry
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 
 from app.db import Base
@@ -53,6 +53,13 @@ class PortStatus(enum.Enum):
 class IPVersion(enum.Enum):
     ipv4 = "ipv4"
     ipv6 = "ipv6"
+
+
+class HardwareUnitStatus(enum.Enum):
+    active = "active"
+    inactive = "inactive"
+    failed = "failed"
+    unknown = "unknown"
 
 
 class OltPortType(enum.Enum):
@@ -140,7 +147,11 @@ class CPEDevice(Base):
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
     subscription = relationship("Subscription", back_populates="cpe_devices")
     service_address = relationship("Address")
-    ports = relationship("Port", back_populates="device")
+    ports = relationship(
+        "Port",
+        back_populates="device",
+        primaryjoin=lambda: CPEDevice.id == foreign(Port.device_id),
+    )
 
 
 class Port(Base):
@@ -149,9 +160,10 @@ class Port(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    device_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("cpe_devices.id"), nullable=False
-    )
+    # Note: this is intentionally not a hard FK. Some legacy callers treat
+    # `device_id` / `olt_id` as an identifier for non-CPE devices.
+    device_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    port_number: Mapped[int | None] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     port_type: Mapped[PortType] = mapped_column(
         Enum(PortType), default=PortType.ethernet
@@ -168,12 +180,25 @@ class Port(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    device = relationship("CPEDevice", back_populates="ports")
+    device = relationship(
+        "CPEDevice",
+        back_populates="ports",
+        primaryjoin=lambda: foreign(Port.device_id) == CPEDevice.id,
+    )
     vlans = relationship("PortVlan", back_populates="port")
 
     @hybrid_property
     def is_active(self) -> bool:
         return self.status != PortStatus.disabled
+
+    @property
+    def olt_id(self) -> uuid.UUID:
+        """Backwards-compat alias for legacy code/tests."""
+        return self.device_id
+
+    @olt_id.setter
+    def olt_id(self, value: uuid.UUID) -> None:
+        self.device_id = value
 
 
 class Vlan(Base):
@@ -218,6 +243,15 @@ class PortVlan(Base):
         UUID(as_uuid=True), ForeignKey("vlans.id"), nullable=False
     )
     is_tagged: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     port = relationship("Port", back_populates="vlans")
     vlan = relationship("Vlan", back_populates="port_links")
@@ -552,6 +586,13 @@ class PonPort(Base):
         "PonPortSplitterLink", back_populates="pon_port", uselist=False
     )
 
+    @property
+    def card_id(self) -> uuid.UUID | None:
+        """Backwards-compat: expose card_id via the linked OLT card port."""
+        if self.olt_card_port:
+            return self.olt_card_port.card_id
+        return None
+
 
 class OltPowerUnit(Base):
     __tablename__ = "olt_power_units"
@@ -566,7 +607,9 @@ class OltPowerUnit(Base):
         UUID(as_uuid=True), ForeignKey("olt_devices.id"), nullable=False
     )
     slot: Mapped[str] = mapped_column(String(40), nullable=False)
-    status: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[HardwareUnitStatus | None] = mapped_column(
+        Enum(HardwareUnitStatus, values_callable=lambda x: [e.value for e in x]),
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -856,6 +899,17 @@ class FiberStrand(Base):
     )
     segments = relationship("FiberSegment", back_populates="fiber_strand")
 
+    @property
+    def segment_id(self) -> uuid.UUID | None:
+        """Backwards-compat scalar segment identifier.
+
+        The current schema allows a strand to be linked to one or more segments.
+        Older callers/tests expect a single `segment_id` attribute.
+        """
+        if self.segments:
+            return self.segments[0].id
+        return None
+
 
 class FiberSpliceClosure(Base):
     __tablename__ = "fiber_splice_closures"
@@ -944,23 +998,25 @@ class FiberSplice(Base):
     __tablename__ = "fiber_splices"
     __table_args__ = (
         UniqueConstraint("from_strand_id", "to_strand_id", name="uq_fiber_splices_from_to"),
+        UniqueConstraint("tray_id", "position", name="uq_fiber_splices_tray_position"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    closure_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("fiber_splice_closures.id"), nullable=False
+    closure_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fiber_splice_closures.id"), nullable=True
     )
-    from_strand_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("fiber_strands.id"), nullable=False
+    from_strand_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fiber_strands.id"), nullable=True
     )
-    to_strand_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("fiber_strands.id"), nullable=False
+    to_strand_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fiber_strands.id"), nullable=True
     )
     tray_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("fiber_splice_trays.id")
     )
+    position: Mapped[int | None] = mapped_column(Integer)
     splice_type: Mapped[str | None] = mapped_column(String(80))
     loss_db: Mapped[float | None] = mapped_column(Float)
     notes: Mapped[str | None] = mapped_column(Text)

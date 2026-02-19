@@ -18,7 +18,6 @@ from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
     trim_redis_stream as trim_bandwidth_stream,
 )
-from app.tasks.workflow import detect_sla_breaches
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces, walk_interfaces as walk_snmp_interfaces
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -48,7 +47,6 @@ __all__ = [
     "cleanup_bandwidth_hot_data",
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
-    "detect_sla_breaches",
     "discover_snmp_interfaces",
     "walk_snmp_interfaces",
     "deliver_webhook",

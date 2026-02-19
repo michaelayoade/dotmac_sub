@@ -13,9 +13,9 @@ class ForgotPasswordPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/auth/forgot-password") -> None:
         """Navigate to the forgot password page."""
-        super().goto("/auth/forgot-password")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the forgot password page is loaded."""
@@ -34,10 +34,9 @@ class ForgotPasswordPage(BasePage):
         self.fill_email(email)
         self.submit()
 
-    def expect_success_message(self) -> None:
+    def expect_success_message(self, message: str = "check your email") -> None:
         """Assert the success message is displayed."""
-        # After submission, the page shows a success message
-        expect(self.page.get_by_text("check your email")).to_be_visible()
+        expect(self.page.get_by_text(message)).to_be_visible()
 
     def click_back_to_login(self) -> None:
         """Click the back to login link."""

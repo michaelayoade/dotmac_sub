@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -7,9 +9,13 @@ from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.schemas.workflow import StatusTransitionRequest
 from app.services.common import validate_enum, coerce_uuid
 
+from typing import TypeVar, cast
 
-def _get_by_id(db: Session, model, value):
-    return db.get(model, coerce_uuid(value))
+TModel = TypeVar("TModel")
+
+
+def _get_by_id(db: Session, model: type[TModel], value: str | UUID) -> TModel | None:
+    return cast(TModel | None, db.get(model, coerce_uuid(value)))
 
 
 def transition_service_order(

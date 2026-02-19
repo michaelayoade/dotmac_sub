@@ -9,21 +9,13 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.models.legal import LegalDocumentType
 from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
 from app.services import legal as legal_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/legal", tags=["web-admin-legal"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _base_context(request: Request, db: Session, active_page: str = "legal"):
@@ -73,23 +65,12 @@ def legal_documents_list(
         limit=per_page,
         offset=offset,
     )
-
-    # Get all documents for count
-    all_docs = legal_service.legal_documents.list(
-        db=db,
+    stats = legal_service.legal_documents.get_list_stats(
+        db,
         document_type=doc_type,
         is_published=published,
-        limit=1000,
-        offset=0,
     )
-    total = len(all_docs)
-    total_pages = (total + per_page - 1) // per_page
-
-    stats = {
-        "total": total,
-        "published": sum(1 for d in all_docs if d.is_published),
-        "draft": sum(1 for d in all_docs if not d.is_published),
-    }
+    total_pages = (stats["total"] + per_page - 1) // per_page
 
     context = _base_context(request, db)
     context.update({
@@ -265,7 +246,7 @@ def legal_document_update(
 
 
 @router.post("/{document_id}/upload", response_class=HTMLResponse)
-async def legal_document_upload(
+def legal_document_upload(
     request: Request,
     document_id: str,
     file: UploadFile = File(...),
@@ -287,7 +268,7 @@ async def legal_document_upload(
             )
 
         # Read file content
-        content = await file.read()
+        content = file.file.read()
 
         # Max file size: 10MB
         if len(content) > 10 * 1024 * 1024:
@@ -297,7 +278,7 @@ async def legal_document_upload(
             db=db,
             document_id=document_id,
             file_content=content,
-            file_name=file.filename,
+            file_name=file.filename or "document",
             mime_type=file.content_type,
         )
 
@@ -340,7 +321,9 @@ def legal_document_publish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Publish a legal document."""
-    payload = LegalDocumentUpdate(is_published=True, is_current=True)
+    payload = LegalDocumentUpdate.model_validate(
+        {"is_published": True, "is_current": True}
+    )
     document = legal_service.legal_documents.update(
         db=db, document_id=document_id, payload=payload
     )
@@ -358,7 +341,7 @@ def legal_document_unpublish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Unpublish a legal document."""
-    payload = LegalDocumentUpdate(is_published=False)
+    payload = LegalDocumentUpdate.model_validate({"is_published": False})
     document = legal_service.legal_documents.update(
         db=db, document_id=document_id, payload=payload
     )

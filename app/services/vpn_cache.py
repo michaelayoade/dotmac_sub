@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 from app.models.domain_settings import SettingDomain
 from app.services.settings_spec import resolve_value
@@ -26,7 +26,7 @@ try:
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    redis = None  # type: ignore
+    redis = None  # type: ignore[assignment]
 
 
 # Configuration
@@ -35,10 +35,38 @@ CACHE_PREFIX = "wg:"
 _DEFAULT_TTL = 900  # 15 minutes fallback
 
 
+def _coerce_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
 def _get_default_ttl() -> int:
     """Get the default VPN cache TTL from settings."""
-    ttl = resolve_value(None, SettingDomain.network, "vpn_cache_default_ttl_seconds")
-    return ttl if ttl else _DEFAULT_TTL
+    # In many call sites (and unit tests) we don't have a DB session available.
+    # Settings resolution can require DB access, so keep this fail-safe.
+    try:
+        ttl = resolve_value(
+            None, SettingDomain.network, "vpn_cache_default_ttl_seconds"
+        )
+    except Exception:
+        return _DEFAULT_TTL
+    if ttl is None:
+        return _DEFAULT_TTL
+    parsed = _coerce_int(ttl)
+    return parsed if parsed is not None else _DEFAULT_TTL
 
 
 # Cache TTL functions - these allow runtime configuration
@@ -54,10 +82,10 @@ def _get_mikrotik_script_ttl() -> int:
     return _get_default_ttl()
 
 
-_redis_client: redis.Redis | None = None
+_redis_client: Any | None = None
 
 
-def get_redis_client() -> redis.Redis | None:
+def get_redis_client() -> Any | None:
     """Get or create Redis client.
 
     Returns None if Redis is not available or connection fails.
@@ -107,7 +135,7 @@ def get_cached(key: str) -> str | None:
         return None
 
     try:
-        return client.get(key)
+        return cast(str | None, client.get(key))
     except Exception:
         return None
 
@@ -160,7 +188,7 @@ def delete_pattern(pattern: str) -> int:
     try:
         keys = list(client.scan_iter(f"{CACHE_PREFIX}{pattern}*"))
         if keys:
-            return client.delete(*keys)
+            return cast(int, client.delete(*keys))
         return 0
     except Exception:
         return 0
@@ -286,7 +314,7 @@ def cached(
             cached_value = get_cached(cache_key)
             if cached_value is not None:
                 try:
-                    return json.loads(cached_value)
+                    return cast(T, json.loads(cached_value))
                 except json.JSONDecodeError:
                     return cached_value  # type: ignore
 
@@ -321,7 +349,7 @@ def get_cache_stats() -> dict[str, Any]:
         return {"available": False}
 
     try:
-        info = client.info("memory")
+        info = cast(dict[str, Any], client.info("memory"))
         keys = list(client.scan_iter(f"{CACHE_PREFIX}*"))
 
         return {

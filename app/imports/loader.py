@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-ModelT = TypeVar("ModelT")
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 @dataclass

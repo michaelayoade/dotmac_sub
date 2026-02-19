@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+
 from fastapi import HTTPException
 from geoalchemy2.functions import ST_Contains, ST_Distance, ST_DWithin, ST_MakePoint, ST_SetSRID
 from sqlalchemy import func
@@ -15,35 +17,24 @@ from app.models.gis import (
     GeoLocationType,
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin, list_response
 from app.schemas.gis import (
-    GeoAreaCreate,
     GeoAreaUpdate,
     GeoFeatureCollectionRead,
     GeoFeatureRead,
-    GeoLayerCreate,
     GeoLayerUpdate,
-    GeoLocationCreate,
     GeoLocationUpdate,
 )
 
 
 
-class GeoLocations(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: GeoLocationCreate):
-        location = GeoLocation(**payload.model_dump())
-        db.add(location)
-        db.commit()
-        db.refresh(location)
-        return location
-
-    @staticmethod
-    def get(db: Session, location_id: str):
-        location = db.get(GeoLocation, location_id)
-        if not location:
-            raise HTTPException(status_code=404, detail="Geo location not found")
-        return location
+class GeoLocations(CRUDManager[GeoLocation]):
+    model = GeoLocation
+    not_found_detail = "Geo location not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -67,14 +58,14 @@ class GeoLocations(ListResponseMixin):
                 GeoLocation.location_type
                 == validate_enum(location_type, GeoLocationType, "location_type")
             )
-        if address_id:
-            query = query.filter(GeoLocation.address_id == address_id)
-        if pop_site_id:
-            query = query.filter(GeoLocation.pop_site_id == pop_site_id)
-        if is_active is None:
-            query = query.filter(GeoLocation.is_active.is_(True))
-        else:
-            query = query.filter(GeoLocation.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {
+                GeoLocation.address_id: address_id,
+                GeoLocation.pop_site_id: pop_site_id,
+            },
+        )
+        query = apply_active_state(query, GeoLocation.is_active, is_active)
         if None not in (min_latitude, min_longitude, max_latitude, max_longitude):
             query = query.filter(GeoLocation.latitude >= min_latitude)
             query = query.filter(GeoLocation.longitude >= min_longitude)
@@ -88,24 +79,17 @@ class GeoLocations(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, location_id: str, payload: GeoLocationUpdate):
-        location = db.get(GeoLocation, location_id)
-        if not location:
-            raise HTTPException(status_code=404, detail="Geo location not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(location, key, value)
-        db.commit()
-        db.refresh(location)
-        return location
+    @classmethod
+    def get(cls, db: Session, location_id: str):
+        return super().get(db, location_id)
 
-    @staticmethod
-    def delete(db: Session, location_id: str):
-        location = db.get(GeoLocation, location_id)
-        if not location:
-            raise HTTPException(status_code=404, detail="Geo location not found")
-        location.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, location_id: str, payload: GeoLocationUpdate):
+        return super().update(db, location_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, location_id: str):
+        return super().delete(db, location_id)
 
     @staticmethod
     def find_nearby(
@@ -115,7 +99,7 @@ class GeoLocations(ListResponseMixin):
         radius_meters: float,
         location_type: str | None = None,
         limit: int = 100,
-    ) -> list[GeoLocation]:
+    ) -> builtins.list[GeoLocation]:
         """Find locations within a radius using PostGIS spatial query.
 
         Args:
@@ -161,7 +145,7 @@ class GeoLocations(ListResponseMixin):
         area_id: str,
         location_type: str | None = None,
         limit: int = 100,
-    ) -> list[GeoLocation]:
+    ) -> builtins.list[GeoLocation]:
         """Find locations within a GeoArea polygon.
 
         Args:
@@ -196,21 +180,11 @@ class GeoLocations(ListResponseMixin):
         return query.limit(limit).all()
 
 
-class GeoAreas(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: GeoAreaCreate):
-        area = GeoArea(**payload.model_dump())
-        db.add(area)
-        db.commit()
-        db.refresh(area)
-        return area
-
-    @staticmethod
-    def get(db: Session, area_id: str):
-        area = db.get(GeoArea, area_id)
-        if not area:
-            raise HTTPException(status_code=404, detail="Geo area not found")
-        return area
+class GeoAreas(CRUDManager[GeoArea]):
+    model = GeoArea
+    not_found_detail = "Geo area not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -231,10 +205,7 @@ class GeoAreas(ListResponseMixin):
             query = query.filter(
                 GeoArea.area_type == validate_enum(area_type, GeoAreaType, "area_type")
             )
-        if is_active is None:
-            query = query.filter(GeoArea.is_active.is_(True))
-        else:
-            query = query.filter(GeoArea.is_active == is_active)
+        query = apply_active_state(query, GeoArea.is_active, is_active)
         if None not in (min_latitude, min_longitude, max_latitude, max_longitude):
             query = query.filter(GeoArea.max_latitude >= min_latitude)
             query = query.filter(GeoArea.max_longitude >= min_longitude)
@@ -248,24 +219,17 @@ class GeoAreas(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, area_id: str, payload: GeoAreaUpdate):
-        area = db.get(GeoArea, area_id)
-        if not area:
-            raise HTTPException(status_code=404, detail="Geo area not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(area, key, value)
-        db.commit()
-        db.refresh(area)
-        return area
+    @classmethod
+    def get(cls, db: Session, area_id: str):
+        return super().get(db, area_id)
 
-    @staticmethod
-    def delete(db: Session, area_id: str):
-        area = db.get(GeoArea, area_id)
-        if not area:
-            raise HTTPException(status_code=404, detail="Geo area not found")
-        area.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, area_id: str, payload: GeoAreaUpdate):
+        return super().update(db, area_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, area_id: str):
+        return super().delete(db, area_id)
 
     @staticmethod
     def contains_point(
@@ -304,7 +268,7 @@ class GeoAreas(ListResponseMixin):
         latitude: float,
         longitude: float,
         area_type: str | None = None,
-    ) -> list[GeoArea]:
+    ) -> builtins.list[GeoArea]:
         """Find all areas that contain a given point.
 
         Args:
@@ -333,21 +297,15 @@ class GeoAreas(ListResponseMixin):
         return query.all()
 
 
-class GeoLayers(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: GeoLayerCreate):
-        layer = GeoLayer(**payload.model_dump())
-        db.add(layer)
-        db.commit()
-        db.refresh(layer)
-        return layer
+class GeoLayers(CRUDManager[GeoLayer]):
+    model = GeoLayer
+    not_found_detail = "Geo layer not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
-    @staticmethod
-    def get(db: Session, layer_id: str):
-        layer = db.get(GeoLayer, layer_id)
-        if not layer:
-            raise HTTPException(status_code=404, detail="Geo layer not found")
-        return layer
+    @classmethod
+    def get(cls, db: Session, layer_id: str):
+        return super().get(db, layer_id)
 
     @staticmethod
     def get_by_key(db: Session, layer_key: str):
@@ -378,10 +336,7 @@ class GeoLayers(ListResponseMixin):
                 GeoLayer.source_type
                 == validate_enum(source_type, GeoLayerSource, "source_type")
             )
-        if is_active is None:
-            query = query.filter(GeoLayer.is_active.is_(True))
-        else:
-            query = query.filter(GeoLayer.is_active == is_active)
+        query = apply_active_state(query, GeoLayer.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -390,24 +345,13 @@ class GeoLayers(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, layer_id: str, payload: GeoLayerUpdate):
-        layer = db.get(GeoLayer, layer_id)
-        if not layer:
-            raise HTTPException(status_code=404, detail="Geo layer not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(layer, key, value)
-        db.commit()
-        db.refresh(layer)
-        return layer
+    @classmethod
+    def update(cls, db: Session, layer_id: str, payload: GeoLayerUpdate):
+        return super().update(db, layer_id, payload)
 
-    @staticmethod
-    def delete(db: Session, layer_id: str):
-        layer = db.get(GeoLayer, layer_id)
-        if not layer:
-            raise HTTPException(status_code=404, detail="Geo layer not found")
-        layer.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, layer_id: str):
+        return super().delete(db, layer_id)
 
 
 class GeoFeatures(ListResponseMixin):

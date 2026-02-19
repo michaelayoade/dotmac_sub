@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date, datetime, timezone
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -77,7 +78,9 @@ class SubscriptionChangeRequests(ListResponseMixin):
             current_offer_id=subscription.offer_id,
             requested_offer_id=new_offer.id,
             effective_date=effective_date,
-            requested_by_person_id=coerce_uuid(requested_by_person_id) if requested_by_person_id else None,
+            requested_by_subscriber_id=coerce_uuid(requested_by_person_id)
+            if requested_by_person_id
+            else None,
             notes=notes,
             status=SubscriptionChangeStatus.pending,
         )
@@ -143,7 +146,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 "status": SubscriptionChangeRequest.status,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return cast(list[SubscriptionChangeRequest], apply_pagination(query, limit, offset).all())
 
     @staticmethod
     def approve(
@@ -175,7 +178,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         request.status = SubscriptionChangeStatus.approved
         request.reviewed_at = now
         if reviewer_id:
-            request.reviewed_by_person_id = coerce_uuid(reviewer_id)
+            request.reviewed_by_subscriber_id = coerce_uuid(reviewer_id)
 
         db.commit()
         db.refresh(request)
@@ -216,7 +219,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         request.reviewed_at = now
         request.rejection_reason = reason
         if reviewer_id:
-            request.reviewed_by_person_id = coerce_uuid(reviewer_id)
+            request.reviewed_by_subscriber_id = coerce_uuid(reviewer_id)
 
         db.commit()
         db.refresh(request)
@@ -256,10 +259,18 @@ class SubscriptionChangeRequests(ListResponseMixin):
 
         # Get new offer for pricing info
         from app.models.catalog import CatalogOffer
+        from app.models.catalog import PriceType
 
         new_offer = db.get(CatalogOffer, request.requested_offer_id)
         if new_offer:
-            subscription.monthly_price = new_offer.price
+            # Best-effort: update unit price from the offer's active recurring price, if present.
+            recurring_prices = [
+                price
+                for price in (new_offer.prices or [])
+                if price.is_active and price.price_type == PriceType.recurring
+            ]
+            if recurring_prices:
+                subscription.unit_price = recurring_prices[0].amount
 
         now = datetime.now(timezone.utc)
         request.status = SubscriptionChangeStatus.applied

@@ -264,7 +264,8 @@ def send_sms(
             )
 
     elif provider == "africastalking":
-        username = _get_setting(db, "sms_username", "SMS_USERNAME", "sandbox")
+        # Africa's Talking requires a username; default to "sandbox" if unset.
+        username = _get_setting(db, "sms_username", "SMS_USERNAME", "sandbox") or "sandbox"
         if not api_key:
             error_message = "Africa's Talking API key not configured"
             logger.error(error_message)

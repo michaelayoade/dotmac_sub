@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -24,11 +25,14 @@ def _parse_bool(value: str | None) -> bool:
     return value in {"on", "true", "1", "yes"}
 
 
-def _parse_json(value: str | None) -> dict | None:
+def _parse_json(value: str | None) -> dict[str, Any] | None:
     if not value:
         return None
     try:
-        return json.loads(value)
+        loaded = json.loads(value)
+        if not isinstance(loaded, dict):
+            raise HTTPException(status_code=400, detail="JSON object required")
+        return loaded
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 

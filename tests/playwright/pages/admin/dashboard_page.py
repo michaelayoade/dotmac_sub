@@ -12,10 +12,9 @@ class AdminDashboardPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/dashboard") -> None:
         """Navigate to the dashboard."""
-        self.page.goto(f"{self.base_url}/admin/dashboard", wait_until="domcontentloaded")
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded")
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""

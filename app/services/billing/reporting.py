@@ -2,16 +2,14 @@
 
 Provides statistics, summaries, and reports for billing data.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-
-def _get_status_value(obj, attr_name: str) -> str:
-    """Helper to get status value from enum or string."""
-    status = getattr(obj, attr_name, "")
-    return status.value if hasattr(status, "value") else str(status or "")
+from app.models.billing import InvoiceStatus
+from app.models.subscriber import SubscriberStatus
 
 
 class BillingReporting:
@@ -54,19 +52,18 @@ class BillingReporting:
         draft_count = 0
 
         for inv in all_invoices:
-            status = _get_status_value(inv, "status")
             total = Decimal(str(getattr(inv, "total", 0) or 0))
 
-            if status == "paid":
+            if inv.status == InvoiceStatus.paid:
                 total_revenue += total
                 paid_count += 1
-            elif status in ("pending", "sent"):
+            elif inv.status == InvoiceStatus.issued:
                 pending_amount += total
                 pending_count += 1
-            elif status == "overdue":
+            elif inv.status == InvoiceStatus.overdue:
                 overdue_amount += total
                 overdue_count += 1
-            elif status == "draft":
+            elif inv.status == InvoiceStatus.draft:
                 draft_count += 1
 
         return {
@@ -108,10 +105,9 @@ class BillingReporting:
 
         for account in accounts:
             total_balance += Decimal(str(getattr(account, "balance", 0) or 0))
-            status = _get_status_value(account, "status") or "active"
-            if status == "active":
+            if account.status == SubscriberStatus.active:
                 active_count += 1
-            elif status == "suspended":
+            elif account.status == SubscriberStatus.suspended:
                 suspended_count += 1
 
         return {
@@ -143,8 +139,8 @@ class BillingReporting:
             offset=0,
         )
 
-        today = datetime.now(timezone.utc).date()
-        buckets = {
+        today = datetime.now(UTC).date()
+        buckets: dict[str, list[Any]] = {
             "current": [],
             "1_30": [],
             "31_60": [],
@@ -153,8 +149,7 @@ class BillingReporting:
         }
 
         for invoice in all_invoices:
-            status = _get_status_value(invoice, "status")
-            if status in {"paid", "void"}:
+            if invoice.status in {InvoiceStatus.paid, InvoiceStatus.void}:
                 continue
 
             due_at = invoice.due_at.date() if invoice.due_at else None

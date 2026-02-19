@@ -1,16 +1,12 @@
 """Web authentication dependencies for cookie-based auth with redirects."""
 
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import Depends, Request
-from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
-from app.models.auth import Session as AuthSession, SessionStatus
-from app.models.subscriber import Subscriber
-from app.services.auth_flow import decode_access_token
+from app.db import get_db as _get_db
+from app.services.auth_flow import decode_access_token, validate_active_session
 
 
 class AuthenticationRequired(Exception):
@@ -19,15 +15,6 @@ class AuthenticationRequired(Exception):
     def __init__(self, redirect_url: str = "/auth/login"):
         self.redirect_url = redirect_url
         super().__init__("Authentication required")
-
-
-def _get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 def get_session_token(request: Request) -> str | None:
     """Extract session token from cookie or Authorization header."""
@@ -68,23 +55,10 @@ def validate_session_token(
     if not subscriber_id or not session_id:
         return None
 
-    now = datetime.now(timezone.utc)
-    session = (
-        db.query(AuthSession)
-        .filter(AuthSession.id == session_id)
-        .filter(AuthSession.subscriber_id == subscriber_id)
-        .filter(AuthSession.status == SessionStatus.active)
-        .filter(AuthSession.revoked_at.is_(None))
-        .filter(AuthSession.expires_at > now)
-        .first()
-    )
-    if not session:
+    result = validate_active_session(db, session_id, subscriber_id)
+    if not result:
         return None
-
-    # Get subscriber details
-    subscriber = db.get(Subscriber, subscriber_id)
-    if not subscriber:
-        return None
+    _session, subscriber = result
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])

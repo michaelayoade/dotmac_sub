@@ -41,9 +41,11 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
         items.append(
             {
                 "id": subscriber.id,
-                "type": "subscriber",
+                # Backwards-compat: historically this search returned "person"
+                # and other form helpers still parse refs like "person:<uuid>".
+                "type": "person",
                 "label": label,
-                "ref": f"subscriber:{subscriber.id}",
+                "ref": f"person:{subscriber.id}",
             }
         )
     for org in organizations:

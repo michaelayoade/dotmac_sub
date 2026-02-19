@@ -5,28 +5,28 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.services import web_admin as web_admin_service
-
-from app.web.auth.dependencies import require_web_auth
-from app.web.admin.dashboard import router as dashboard_router
-from app.web.admin.subscribers import router as subscribers_router
-from app.web.admin.customers import router as customers_router, contacts_router
+from app.web.admin.admin_hub import router as admin_hub_router
 from app.web.admin.billing import router as billing_router
-from app.web.admin.system import router as system_router
-from app.web.admin.network import router as network_router
 from app.web.admin.catalog import router as catalog_router
+from app.web.admin.catalog_settings import router as catalog_settings_router
+from app.web.admin.configuration import router as configuration_router
+from app.web.admin.customers import contacts_router
+from app.web.admin.customers import router as customers_router
+from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.gis import router as gis_router
-from app.web.admin.reports import router as reports_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
-from app.web.admin.resellers import router as resellers_router
-from app.web.admin.notifications import router as notifications_router
-from app.web.admin.wireguard import router as wireguard_router
 from app.web.admin.nas import router as nas_router
-from app.web.admin.catalog_settings import router as catalog_settings_router
+from app.web.admin.network import router as network_router
+from app.web.admin.notifications import router as notifications_router
+from app.web.admin.provisioning import router as provisioning_router
+from app.web.admin.reports import router as reports_router
+from app.web.admin.resellers import router as resellers_router
+from app.web.admin.subscribers import router as subscribers_router
+from app.web.admin.system import router as system_router
 from app.web.admin.usage import router as usage_router
-from app.web.admin.configuration import router as configuration_router
-from app.web.admin.admin_hub import router as admin_hub_router
-
+from app.web.admin.wireguard import router as wireguard_router
+from app.web.auth.dependencies import require_web_auth
 
 router = APIRouter(
     prefix="/admin",
@@ -70,5 +70,6 @@ router.include_router(catalog_settings_router)
 router.include_router(usage_router)
 router.include_router(configuration_router, prefix="/system")
 router.include_router(admin_hub_router, prefix="/system")
+router.include_router(provisioning_router)
 
 __all__ = ["router"]

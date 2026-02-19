@@ -1,58 +1,29 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
-from app.models.connector import ConnectorConfig
+from app.db import get_db
 from app.schemas.nextcloud_talk import (
     NextcloudTalkMessageRequest,
     NextcloudTalkRoomCreateRequest,
     NextcloudTalkRoomListRequest,
 )
-from app.services.common import coerce_uuid
-from app.services.nextcloud_talk import NextcloudTalkClient, NextcloudTalkError
+from app.services.nextcloud_talk import (
+    NextcloudTalkClient,
+    NextcloudTalkError,
+    resolve_talk_client,
+)
 
 router = APIRouter(prefix="/nextcloud-talk", tags=["nextcloud-talk"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def _resolve_client(db: Session, payload) -> NextcloudTalkClient:
-    base_url = payload.base_url
-    username = payload.username
-    app_password = payload.app_password
-    timeout = payload.timeout_sec
-
-    if payload.connector_config_id:
-        config = db.get(ConnectorConfig, coerce_uuid(payload.connector_config_id))
-        if not config:
-            raise HTTPException(status_code=404, detail="Connector config not found")
-        auth_config = dict(config.auth_config or {})
-        base_url = base_url or config.base_url
-        username = username or auth_config.get("username")
-        app_password = (
-            app_password
-            or auth_config.get("app_password")
-            or auth_config.get("password")
-        )
-        timeout = timeout or config.timeout_sec or auth_config.get("timeout_sec")
-
-    if not base_url or not username or not app_password:
-        raise HTTPException(
-            status_code=400,
-            detail="Nextcloud Talk credentials are incomplete.",
-        )
-
-    return NextcloudTalkClient(
-        base_url=base_url,
-        username=username,
-        app_password=app_password,
-        timeout=float(timeout or 30.0),
+    return resolve_talk_client(
+        db,
+        base_url=payload.base_url,
+        username=payload.username,
+        app_password=payload.app_password,
+        timeout_sec=payload.timeout_sec,
+        connector_config_id=payload.connector_config_id,
     )
 
 

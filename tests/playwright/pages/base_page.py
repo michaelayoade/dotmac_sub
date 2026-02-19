@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from playwright.sync_api import Page, expect
 
 
@@ -106,10 +108,10 @@ class BasePage:
         cookies = self.page.context.cookies()
         return any(c["name"] == name for c in cookies)
 
-    def get_cookie(self, name: str) -> dict | None:
+    def get_cookie(self, name: str) -> dict[str, Any] | None:
         """Get a cookie by name."""
         cookies = self.page.context.cookies()
         for cookie in cookies:
             if cookie["name"] == name:
-                return cookie
+                return dict(cookie)
         return None

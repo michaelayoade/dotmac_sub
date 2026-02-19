@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.models.wireguard import WireGuardPeerStatus
 from app.schemas.wireguard import (
     GenerateProvisionTokenRequest,
@@ -29,14 +29,6 @@ from app.services import wireguard as wg_service
 
 router = APIRouter(prefix="/wireguard", tags=["wireguard"])
 public_router = APIRouter(prefix="/wireguard-provision", tags=["wireguard-provisioning-public"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # ============== Server Endpoints ==============
@@ -152,7 +144,6 @@ def list_peers(
         db,
         server_id=server_id,
         status=status,
-        nas_device_id=nas_device_id,
         limit=limit,
         offset=offset,
     )

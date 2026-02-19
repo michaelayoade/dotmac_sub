@@ -135,6 +135,11 @@ class Invoice(Base):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memo: Mapped[str | None] = mapped_column(Text)
+    is_sent: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    added_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    splynx_invoice_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -144,7 +149,8 @@ class Invoice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
-    account = relationship("Subscriber")
+    account = relationship("Subscriber", foreign_keys=[account_id])
+    added_by = relationship("Subscriber", foreign_keys=[added_by_id])
     lines = relationship("InvoiceLine", back_populates="invoice")
     payment_allocations = relationship("PaymentAllocation", back_populates="invoice")
     ledger_entries = relationship("LedgerEntry", back_populates="invoice")
@@ -395,6 +401,8 @@ class Payment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     external_id: Mapped[str | None] = mapped_column(String(120))
     memo: Mapped[str | None] = mapped_column(Text)
+    receipt_number: Mapped[str | None] = mapped_column(String(120))
+    splynx_payment_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

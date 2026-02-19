@@ -1,6 +1,8 @@
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 import logging
+from typing import cast
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -177,8 +179,8 @@ def _resolve_overdue_days(
 
     # Subtract grace period if account has one configured
     grace_period = 0
-    if account and account.grace_period:
-        grace_period = account.grace_period
+    if account and account.grace_period_days is not None:
+        grace_period = int(account.grace_period_days)
 
     return max(raw_days - grace_period, 0)
 
@@ -225,15 +227,20 @@ def _suspend_account(db: Session, account_id: str) -> bool:
     account.status = SubscriberStatus.suspended
     suspended_count = 0
 
-    # Suspend all active subscriptions
+    # Suspend all active (and pending) subscriptions.
     subscriptions = (
         db.query(Subscription)
         .options(selectinload(Subscription.offer))
         .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.status == SubscriptionStatus.active)
+        .filter(
+            Subscription.status.in_(
+                [SubscriptionStatus.active, SubscriptionStatus.pending]
+            )
+        )
         .all()
     )
     for sub in subscriptions:
+        from_status = sub.status.value if sub.status else None
         sub.status = SubscriptionStatus.suspended
         suspended_count += 1
         # Emit subscription.suspended event
@@ -243,7 +250,7 @@ def _suspend_account(db: Session, account_id: str) -> bool:
             {
                 "subscription_id": str(sub.id),
                 "offer_name": sub.offer.name if sub.offer else None,
-                "from_status": "active",
+                "from_status": from_status,
                 "to_status": "suspended",
                 "reason": "dunning",
             },
@@ -328,10 +335,10 @@ def _restore_account(db: Session, account_id: str) -> int:
 
 def _get_account_email(db: Session, account_id: str) -> str | None:
     """Get the billing email for an account."""
-    account = db.get(Subscriber, coerce_uuid(account_id))
+    account = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(account_id)))
     if not account:
         return None
-    return account.email
+    return str(account.email) if account.email else None
 
 
 def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
@@ -579,14 +586,16 @@ def _create_prepaid_warning_notification(
         )
         return
 
-    subject = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_warning_subject"
-    ) or "Low Balance Warning"
-    body_template = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_warning_body"
-    ) or (
+    subject = str(
+        settings_spec.resolve_value(db, SettingDomain.collections, "prepaid_warning_subject")
+        or "Low Balance Warning"
+    )
+    body_template = str(
+        settings_spec.resolve_value(db, SettingDomain.collections, "prepaid_warning_body")
+        or (
         "Your prepaid balance is below the minimum threshold ({threshold}). "
         "Current balance: {balance}. Please top up to avoid suspension."
+        )
     )
     try:
         body = body_template.format(balance=balance, threshold=threshold)
@@ -814,7 +823,7 @@ class DunningCases(ListResponseMixin):
 
     @staticmethod
     def delete(db: Session, case_id: str):
-        case = db.get(DunningCase, case_id)
+        case = cast(DunningCase | None, db.get(DunningCase, case_id))
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         db.delete(case)
@@ -823,7 +832,7 @@ class DunningCases(ListResponseMixin):
     @staticmethod
     def pause(db: Session, case_id: str, notes: str | None = None) -> DunningCase:
         """Pause a dunning case."""
-        case = db.get(DunningCase, case_id)
+        case = cast(DunningCase | None, db.get(DunningCase, case_id))
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         if case.status not in (DunningCaseStatus.open,):
@@ -861,7 +870,7 @@ class DunningCases(ListResponseMixin):
     @staticmethod
     def resume(db: Session, case_id: str, notes: str | None = None) -> DunningCase:
         """Resume a paused dunning case."""
-        case = db.get(DunningCase, case_id)
+        case = cast(DunningCase | None, db.get(DunningCase, case_id))
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         if case.status != DunningCaseStatus.paused:
@@ -907,7 +916,7 @@ class DunningCases(ListResponseMixin):
         Raises:
             HTTPException: If case not found, already closed, or has unpaid invoices
         """
-        case = db.get(DunningCase, case_id)
+        case = cast(DunningCase | None, db.get(DunningCase, case_id))
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         if case.status in (DunningCaseStatus.closed, DunningCaseStatus.resolved):
@@ -962,7 +971,7 @@ class DunningCases(ListResponseMixin):
     @staticmethod
     def add_note(db: Session, case_id: str, note: str) -> DunningCase:
         """Add a note to a dunning case."""
-        case = db.get(DunningCase, case_id)
+        case = cast(DunningCase | None, db.get(DunningCase, case_id))
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         case.notes = (case.notes + "\n" + note) if case.notes else note
@@ -1079,7 +1088,7 @@ class DunningWorkflow(ListResponseMixin):
             .filter(Invoice.is_active.is_(True))
             .all()
         )
-        overdue_accounts = {}
+        overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
             overdue_accounts.setdefault(invoice.account_id, []).append(invoice)
             if (
@@ -1272,16 +1281,53 @@ class DunningWorkflow(ListResponseMixin):
             skipped=skipped,
         )
 
+    @staticmethod
+    def resolve_cases_for_account(
+        db: Session,
+        account_id: str,
+        invoice_id: str | None = None,
+        commit: bool = True,
+    ) -> int:
+        cases = (
+            db.query(DunningCase)
+            .filter(DunningCase.account_id == account_id)
+            .filter(
+                DunningCase.status.in_([DunningCaseStatus.open, DunningCaseStatus.paused])
+            )
+            .all()
+        )
+        if not cases:
+            return 0
+        now = datetime.now(timezone.utc)
+        for case in cases:
+            case.status = DunningCaseStatus.resolved
+            case.resolved_at = now
+            _create_action_log(
+                db,
+                case,
+                DunningAction.notify,
+                case.current_step,
+                invoice_id,
+                outcome="resolved",
+                notes="Resolved after payment",
+            )
+        if commit:
+            db.commit()
+        return len(cases)
+
 
 class PrepaidEnforcement(ListResponseMixin):
     @staticmethod
     def run(db: Session, payload: PrepaidEnforcementRunRequest) -> PrepaidEnforcementRunResponse:
         run_at = payload.run_at or datetime.now(timezone.utc)
-        timezone_name = settings_spec.resolve_value(
-            db, SettingDomain.scheduler, "timezone"
-        ) or "UTC"
+        timezone_name = str(
+            settings_spec.resolve_value(db, SettingDomain.scheduler, "timezone") or "UTC"
+        )
+        blocking_time_value = settings_spec.resolve_value(
+            db, SettingDomain.collections, "prepaid_blocking_time"
+        )
         blocking_time = _parse_blocking_time(
-            settings_spec.resolve_value(db, SettingDomain.collections, "prepaid_blocking_time")
+            str(blocking_time_value) if blocking_time_value is not None else None
         )
         skip_weekends = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_skip_weekends"
@@ -1289,12 +1335,26 @@ class PrepaidEnforcement(ListResponseMixin):
         skip_holidays = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_skip_holidays"
         ) or []
-        grace_days_default = settings_spec.resolve_value(
+        grace_days_default_raw = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_grace_days"
-        ) or 0
-        deactivation_days_default = settings_spec.resolve_value(
+        )
+        deactivation_days_default_raw = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_deactivation_days"
-        ) or 0
+        )
+        try:
+            grace_days_default = (
+                int(str(grace_days_default_raw)) if grace_days_default_raw is not None else 0
+            )
+        except (TypeError, ValueError):
+            grace_days_default = 0
+        try:
+            deactivation_days_default = (
+                int(str(deactivation_days_default_raw))
+                if deactivation_days_default_raw is not None
+                else 0
+            )
+        except (TypeError, ValueError):
+            deactivation_days_default = 0
 
         try:
             local_run_at = run_at.astimezone(ZoneInfo(timezone_name))
@@ -1403,7 +1463,11 @@ class PrepaidEnforcement(ListResponseMixin):
                 account.prepaid_low_balance_at = run_at
                 if deactivation_days_default:
                     account.prepaid_deactivation_at = run_at + timedelta(days=deactivation_days_default)
-            grace_days = account.grace_period if account.grace_period is not None else grace_days_default
+            grace_days = (
+                int(account.grace_period_days)
+                if account.grace_period_days is not None
+                else grace_days_default
+            )
             grace_until = low_balance_at + timedelta(days=grace_days) if grace_days > 0 else low_balance_at
             if run_at < grace_until:
                 if not payload.dry_run:

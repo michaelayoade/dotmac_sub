@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, event, TypeDecorator, String
@@ -12,20 +13,17 @@ from app.db import Base
 
 
 class _JoseDateTimeProxy:
-    @staticmethod
-    def utcnow():
+    def utcnow(self):
         from datetime import datetime, timezone
 
         return datetime.now(timezone.utc)
 
-    @staticmethod
-    def now(tz=None):
+    def now(self, tz: Any | None = None):
         from datetime import datetime
 
         return datetime.now(tz)
 
-    @staticmethod
-    def __getattr__(name):
+    def __getattr__(self, name: str) -> Any:
         from datetime import datetime
 
         return getattr(datetime, name)
@@ -35,7 +33,7 @@ class _JoseDateTimeProxy:
 def _patch_jose_datetime(monkeypatch):
     import jose.jwt as jose_jwt
 
-    monkeypatch.setattr(jose_jwt, "datetime", _JoseDateTimeProxy, raising=False)
+    monkeypatch.setattr(jose_jwt, "datetime", _JoseDateTimeProxy(), raising=False)
 
 # Register UUID adapter for SQLite - store as string
 sqlite3.register_adapter(uuid.UUID, lambda u: str(u))
@@ -95,8 +93,8 @@ def _sqlite_uuid_result_processor(self, dialect, coltype):
     return _original_uuid_result_processor(self, dialect, coltype)
 
 
-sqltypes.Uuid.bind_processor = _sqlite_uuid_bind_processor
-sqltypes.Uuid.result_processor = _sqlite_uuid_result_processor
+setattr(sqltypes.Uuid, "bind_processor", _sqlite_uuid_bind_processor)
+setattr(sqltypes.Uuid, "result_processor", _sqlite_uuid_result_processor)
 
 
 # Monkey-patch PostgreSQL JSONB type for SQLite compatibility
@@ -151,7 +149,6 @@ def engine():
             "sqlite+pysqlite://",
             connect_args={
                 "check_same_thread": False,
-                "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
             },
             poolclass=StaticPool,
         )
@@ -217,6 +214,26 @@ def subscriber(db_session):
 def person(subscriber):
     """Alias for subscriber fixture for backward compatibility."""
     return subscriber
+
+
+@pytest.fixture()
+def subscriber_account(subscriber):
+    """Legacy alias for unified Subscriber (formerly SubscriberAccount)."""
+    return subscriber
+
+
+@pytest.fixture()
+def work_order():
+    """Lightweight fixture for comms tests (legacy name for service order)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(id=uuid.uuid4())
+
+
+@pytest.fixture()
+def ticket():
+    """Lightweight fixture for comms tests."""
+    from types import SimpleNamespace
+    return SimpleNamespace(id=uuid.uuid4())
 
 
 @pytest.fixture(autouse=True)
@@ -299,7 +316,7 @@ def subscription(db_session, subscriber, catalog_offer):
     subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
-            subscriber_id=subscriber.id,
+            account_id=subscriber.id,
             offer_id=catalog_offer.id,
         ),
     )

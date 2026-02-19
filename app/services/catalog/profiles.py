@@ -3,37 +3,24 @@
 Provides services for RegionZones, UsageAllowances, and SlaProfiles.
 """
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.catalog import RegionZone, SlaProfile, UsageAllowance
 from app.services.common import apply_ordering, apply_pagination
-from app.services.response import ListResponseMixin
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state
 from app.schemas.catalog import (
-    RegionZoneCreate,
     RegionZoneUpdate,
-    SlaProfileCreate,
     SlaProfileUpdate,
-    UsageAllowanceCreate,
     UsageAllowanceUpdate,
 )
 
 
-class RegionZones(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: RegionZoneCreate):
-        zone = RegionZone(**payload.model_dump())
-        db.add(zone)
-        db.commit()
-        db.refresh(zone)
-        return zone
-
-    @staticmethod
-    def get(db: Session, zone_id: str):
-        zone = db.get(RegionZone, zone_id)
-        if not zone:
-            raise HTTPException(status_code=404, detail="Region zone not found")
-        return zone
+class RegionZones(CRUDManager[RegionZone]):
+    model = RegionZone
+    not_found_detail = "Region zone not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -45,10 +32,7 @@ class RegionZones(ListResponseMixin):
         offset: int,
     ):
         query = db.query(RegionZone)
-        if is_active is None:
-            query = query.filter(RegionZone.is_active.is_(True))
-        else:
-            query = query.filter(RegionZone.is_active == is_active)
+        query = apply_active_state(query, RegionZone.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -57,41 +41,24 @@ class RegionZones(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, zone_id: str, payload: RegionZoneUpdate):
-        zone = db.get(RegionZone, zone_id)
-        if not zone:
-            raise HTTPException(status_code=404, detail="Region zone not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(zone, key, value)
-        db.commit()
-        db.refresh(zone)
-        return zone
+    @classmethod
+    def get(cls, db: Session, zone_id: str):
+        return super().get(db, zone_id)
 
-    @staticmethod
-    def delete(db: Session, zone_id: str):
-        zone = db.get(RegionZone, zone_id)
-        if not zone:
-            raise HTTPException(status_code=404, detail="Region zone not found")
-        zone.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, zone_id: str, payload: RegionZoneUpdate):
+        return super().update(db, zone_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, zone_id: str):
+        return super().delete(db, zone_id)
 
 
-class UsageAllowances(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: UsageAllowanceCreate):
-        allowance = UsageAllowance(**payload.model_dump())
-        db.add(allowance)
-        db.commit()
-        db.refresh(allowance)
-        return allowance
-
-    @staticmethod
-    def get(db: Session, allowance_id: str):
-        allowance = db.get(UsageAllowance, allowance_id)
-        if not allowance:
-            raise HTTPException(status_code=404, detail="Usage allowance not found")
-        return allowance
+class UsageAllowances(CRUDManager[UsageAllowance]):
+    model = UsageAllowance
+    not_found_detail = "Usage allowance not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -103,10 +70,7 @@ class UsageAllowances(ListResponseMixin):
         offset: int,
     ):
         query = db.query(UsageAllowance)
-        if is_active is None:
-            query = query.filter(UsageAllowance.is_active.is_(True))
-        else:
-            query = query.filter(UsageAllowance.is_active == is_active)
+        query = apply_active_state(query, UsageAllowance.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -115,41 +79,24 @@ class UsageAllowances(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, allowance_id: str, payload: UsageAllowanceUpdate):
-        allowance = db.get(UsageAllowance, allowance_id)
-        if not allowance:
-            raise HTTPException(status_code=404, detail="Usage allowance not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(allowance, key, value)
-        db.commit()
-        db.refresh(allowance)
-        return allowance
+    @classmethod
+    def get(cls, db: Session, allowance_id: str):
+        return super().get(db, allowance_id)
 
-    @staticmethod
-    def delete(db: Session, allowance_id: str):
-        allowance = db.get(UsageAllowance, allowance_id)
-        if not allowance:
-            raise HTTPException(status_code=404, detail="Usage allowance not found")
-        allowance.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, allowance_id: str, payload: UsageAllowanceUpdate):
+        return super().update(db, allowance_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, allowance_id: str):
+        return super().delete(db, allowance_id)
 
 
-class SlaProfiles(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SlaProfileCreate):
-        profile = SlaProfile(**payload.model_dump())
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
-        return profile
-
-    @staticmethod
-    def get(db: Session, profile_id: str):
-        profile = db.get(SlaProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="SLA profile not found")
-        return profile
+class SlaProfiles(CRUDManager[SlaProfile]):
+    model = SlaProfile
+    not_found_detail = "SLA profile not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -161,10 +108,7 @@ class SlaProfiles(ListResponseMixin):
         offset: int,
     ):
         query = db.query(SlaProfile)
-        if is_active is None:
-            query = query.filter(SlaProfile.is_active.is_(True))
-        else:
-            query = query.filter(SlaProfile.is_active == is_active)
+        query = apply_active_state(query, SlaProfile.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -173,21 +117,14 @@ class SlaProfiles(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, profile_id: str, payload: SlaProfileUpdate):
-        profile = db.get(SlaProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="SLA profile not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(profile, key, value)
-        db.commit()
-        db.refresh(profile)
-        return profile
+    @classmethod
+    def get(cls, db: Session, profile_id: str):
+        return super().get(db, profile_id)
 
-    @staticmethod
-    def delete(db: Session, profile_id: str):
-        profile = db.get(SlaProfile, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="SLA profile not found")
-        profile.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, profile_id: str, payload: SlaProfileUpdate):
+        return super().update(db, profile_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, profile_id: str):
+        return super().delete(db, profile_id)

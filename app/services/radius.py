@@ -39,6 +39,25 @@ from app.schemas.radius import (
 from app.services import settings_spec
 
 
+def _coerce_int_setting(value: object) -> int | None:
+    # settings_spec.resolve_value() is intentionally loose-typed (object).
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
 class RadiusServers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: RadiusServerCreate):
@@ -48,14 +67,16 @@ class RadiusServers(ListResponseMixin):
             default_auth_port = settings_spec.resolve_value(
                 db, SettingDomain.radius, "default_auth_port"
             )
-            if default_auth_port:
-                data["auth_port"] = int(default_auth_port)
+            auth_port = _coerce_int_setting(default_auth_port)
+            if auth_port is not None:
+                data["auth_port"] = auth_port
         if "acct_port" not in fields_set:
             default_acct_port = settings_spec.resolve_value(
                 db, SettingDomain.radius, "default_acct_port"
             )
-            if default_acct_port:
-                data["acct_port"] = int(default_acct_port)
+            acct_port = _coerce_int_setting(default_acct_port)
+            if acct_port is not None:
+                data["acct_port"] = acct_port
         server = RadiusServer(**data)
         db.add(server)
         db.commit()
@@ -376,7 +397,7 @@ class RadiusUsers(ListResponseMixin):
     ):
         query = db.query(RadiusUser)
         if account_id:
-            query = query.filter(RadiusUser.account_id == account_id)
+            query = query.filter(RadiusUser.subscriber_id == coerce_uuid(account_id))
         if is_active is None:
             query = query.filter(RadiusUser.is_active.is_(True))
         else:
@@ -503,7 +524,7 @@ class RadiusSyncJobs(ListResponseMixin):
         started_at = datetime.now(timezone.utc)
         users_created = users_updated = clients_created = clients_updated = 0
         status = RadiusSyncStatus.success
-        details: dict[str, int] = {}
+        details: dict[str, object] = {}
         try:
             external_config = _external_db_config(db, job)
             if job.sync_nas_clients:
@@ -519,18 +540,18 @@ class RadiusSyncJobs(ListResponseMixin):
                     raw_secret = resolve_secret(decrypted_secret)
                     if not raw_secret:
                         continue
-                    existing = (
+                    existing_client = (
                         db.query(RadiusClient)
                         .filter(RadiusClient.server_id == job.server_id)
                         .filter(RadiusClient.client_ip == device.ip_address)
                         .first()
                     )
                     secret_hash = _hash_secret(raw_secret)
-                    if existing:
-                        existing.nas_device_id = device.id
-                        existing.shared_secret_hash = secret_hash
-                        existing.description = device.name
-                        existing.is_active = True
+                    if existing_client:
+                        existing_client.nas_device_id = device.id
+                        existing_client.shared_secret_hash = secret_hash
+                        existing_client.description = device.name
+                        existing_client.is_active = True
                         clients_updated += 1
                     else:
                         client = RadiusClient(
@@ -564,23 +585,23 @@ class RadiusSyncJobs(ListResponseMixin):
                     )
                     if not subscription:
                         continue
-                    existing = (
+                    existing_user = (
                         db.query(RadiusUser)
                         .filter(RadiusUser.access_credential_id == credential.id)
                         .first()
                     )
-                    if existing:
-                        existing.subscription_id = subscription.id
-                        existing.account_id = subscription.subscriber_id
-                        existing.username = credential.username
-                        existing.secret_hash = credential.secret_hash
-                        existing.radius_profile_id = credential.radius_profile_id
-                        existing.is_active = True
-                        existing.last_sync_at = datetime.now(timezone.utc)
+                    if existing_user:
+                        existing_user.subscription_id = subscription.id
+                        existing_user.subscriber_id = subscription.subscriber_id
+                        existing_user.username = credential.username
+                        existing_user.secret_hash = credential.secret_hash
+                        existing_user.radius_profile_id = credential.radius_profile_id
+                        existing_user.is_active = True
+                        existing_user.last_sync_at = datetime.now(timezone.utc)
                         users_updated += 1
                     else:
                         user = RadiusUser(
-                            account_id=subscription.subscriber_id,
+                            subscriber_id=subscription.subscriber_id,
                             subscription_id=subscription.id,
                             access_credential_id=credential.id,
                             username=credential.username,

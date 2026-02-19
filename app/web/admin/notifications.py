@@ -1,29 +1,25 @@
 """Admin notifications management routes."""
 
 import json
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Optional
-from uuid import UUID
 
-from app.db import SessionLocal
-from app.models.notification import NotificationChannel, NotificationStatus
+from app.db import get_db
+from app.models.notification import (
+    DeliveryStatus,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.services import notification as notification_service
 from app.services import web_admin_notifications as web_admin_notifications_service
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def _htmx_error_response(
@@ -54,7 +50,7 @@ def notifications_menu(request: Request, db: Session = Depends(get_db)):
 @router.get("/templates", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
 def notification_templates_list(
     request: Request,
-    channel: Optional[str] = None,
+    channel: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -72,37 +68,12 @@ def notification_templates_list(
         offset=offset,
     )
 
-    all_templates = notification_service.templates.list(
-        db=db,
-        channel=channel if channel else None,
-        is_active=None,
-        order_by="name",
-        order_dir="asc",
-        limit=10000,
-        offset=0,
-    )
-    total = len(all_templates)
+    total = notification_service.templates.count(db=db, channel=channel if channel else None)
     total_pages = (total + per_page - 1) // per_page if total else 1
 
-    # Get channel counts
-    all_active = notification_service.templates.list(
-        db=db,
-        channel=None,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=10000,
-        offset=0,
-    )
-    channel_counts = {
-        "email": sum(1 for t in all_active if t.channel == NotificationChannel.email),
-        "sms": sum(1 for t in all_active if t.channel == NotificationChannel.sms),
-        "push": sum(1 for t in all_active if t.channel == NotificationChannel.push),
-        "whatsapp": sum(1 for t in all_active if t.channel == NotificationChannel.whatsapp),
-        "webhook": sum(1 for t in all_active if t.channel == NotificationChannel.webhook),
-    }
+    channel_counts = notification_service.templates.channel_counts(db)
 
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/notifications/templates_list.html",
         {
@@ -126,7 +97,7 @@ def notification_templates_list(
 @router.get("/templates/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
 def notification_template_new(request: Request, db: Session = Depends(get_db)):
     """Create new notification template form."""
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/notifications/template_form.html",
         {
@@ -160,14 +131,14 @@ def notification_template_create(
         payload = NotificationTemplateCreate(
             name=name.strip(),
             code=code.strip().lower().replace(" ", "_"),
-            channel=channel,
+            channel=NotificationChannel(channel),
             subject=subject.strip() if subject else None,
             body=body.strip(),
         )
         template = notification_service.templates.create(db=db, payload=payload)
         return RedirectResponse(url=f"/admin/notifications/templates/{template.id}", status_code=303)
     except Exception as exc:
-        from app.web.admin import get_sidebar_stats, get_current_user
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/notifications/template_form.html",
             {
@@ -201,7 +172,7 @@ def notification_template_detail(
             status_code=404,
         )
 
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/notifications/template_form.html",
         {
@@ -238,7 +209,7 @@ def notification_template_update(
         payload = NotificationTemplateUpdate(
             name=name.strip(),
             code=code.strip().lower().replace(" ", "_"),
-            channel=channel,
+            channel=NotificationChannel(channel),
             subject=subject.strip() if subject else None,
             body=body.strip(),
             is_active=is_active,
@@ -247,7 +218,7 @@ def notification_template_update(
         return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
     except Exception as exc:
         template = notification_service.templates.get(db=db, template_id=str(template_id))
-        from app.web.admin import get_sidebar_stats, get_current_user
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/notifications/template_form.html",
             {
@@ -275,8 +246,8 @@ def notification_template_test(
     db: Session = Depends(get_db),
 ):
     """Send a test notification using this template."""
-    from app.services import sms as sms_service
     from app.services import email as email_service
+    from app.services import sms as sms_service
 
     try:
         template = notification_service.templates.get(db=db, template_id=str(template_id))
@@ -295,7 +266,7 @@ def notification_template_test(
                 db=db,
                 to_email=test_recipient.strip(),
                 subject=template.subject or "Test Notification",
-                body=template.body,
+                body_html=template.body,
             )
             message = f"Test email sent to {test_recipient}"
         else:
@@ -339,8 +310,8 @@ def notification_template_delete(
 @router.get("/queue", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
 def notification_queue(
     request: Request,
-    status: Optional[str] = None,
-    channel: Optional[str] = None,
+    status: str | None = None,
+    channel: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -359,38 +330,17 @@ def notification_queue(
         offset=offset,
     )
 
-    all_notifications = notification_service.notifications.list(
+    effective_status = status if status else "queued"
+    total = notification_service.notifications.count(
         db=db,
         channel=channel if channel else None,
-        status=status if status else "queued",
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10000,
-        offset=0,
+        status=effective_status,
     )
-    total = len(all_notifications)
     total_pages = (total + per_page - 1) // per_page if total else 1
 
-    # Get status counts
-    all_active = notification_service.notifications.list(
-        db=db,
-        channel=None,
-        status=None,
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10000,
-        offset=0,
-    )
-    status_counts = {
-        "queued": sum(1 for n in all_active if n.status == NotificationStatus.queued),
-        "sending": sum(1 for n in all_active if n.status == NotificationStatus.sending),
-        "delivered": sum(1 for n in all_active if n.status == NotificationStatus.delivered),
-        "failed": sum(1 for n in all_active if n.status == NotificationStatus.failed),
-    }
+    status_counts = notification_service.notifications.status_counts(db)
 
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/notifications/queue.html",
         {
@@ -416,8 +366,8 @@ def notification_queue(
 @router.get("/history", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
 def notification_history(
     request: Request,
-    status: Optional[str] = None,
-    channel: Optional[str] = None,
+    status: str | None = None,
+    channel: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -436,21 +386,13 @@ def notification_history(
         offset=offset,
     )
 
-    all_deliveries = notification_service.deliveries.list(
+    total = notification_service.deliveries.count(
         db=db,
-        notification_id=None,
         status=status if status else None,
-        is_active=True,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=10000,
-        offset=0,
     )
-    total = len(all_deliveries)
     total_pages = (total + per_page - 1) // per_page if total else 1
 
-    from app.models.notification import DeliveryStatus
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/notifications/history.html",
         {

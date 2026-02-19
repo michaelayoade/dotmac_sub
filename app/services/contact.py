@@ -2,8 +2,6 @@
 
 from sqlalchemy.orm import Session
 
-from app.services.subscriber import account_roles as subscriber_account_roles
-
 
 class Contacts:
     @staticmethod
@@ -18,15 +16,8 @@ class Contacts:
         limit: int = 100,
         offset: int = 0,
     ):
-        return subscriber_account_roles.list(
-            db=db,
-            account_id=account_id,
-            person_id=None,
-            order_by=order_by,
-            order_dir=order_dir,
-            limit=limit,
-            offset=offset,
-        )
+        # Person/account role compatibility layer is deprecated.
+        return []
 
 
 contacts = Contacts()

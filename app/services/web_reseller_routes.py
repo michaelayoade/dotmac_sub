@@ -1,9 +1,13 @@
 """Service helpers for reseller portal routes."""
 
+from __future__ import annotations
+
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from typing import Any
+from uuid import UUID
 
 from app.services import customer_portal
 from app.services import reseller_portal
@@ -99,7 +103,8 @@ def reseller_account_view(
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    session_token = reseller_portal.create_customer_impersonation_session(
+    # Note: underlying service function name is legacy misspelling.
+    session_token = reseller_portal.create_customer_imsubscriberation_session(
         db=db,
         reseller_id=str(context["reseller"].id),
         account_id=account_id,
@@ -136,15 +141,17 @@ def reseller_fiber_map(request: Request, db: Session):
         FdhCabinet.latitude.isnot(None),
         FdhCabinet.longitude.isnot(None)
     ).all()
-    splitter_counts = {}
+    splitter_counts: dict[UUID, int] = {}
     if fdh_cabinets:
         fdh_ids = [fdh.id for fdh in fdh_cabinets]
-        splitter_counts = dict(
+        for fdh_id, count in (
             db.query(Splitter.fdh_id, func.count(Splitter.id))
             .filter(Splitter.fdh_id.in_(fdh_ids))
             .group_by(Splitter.fdh_id)
             .all()
-        )
+        ):
+            if fdh_id is not None:
+                splitter_counts[fdh_id] = int(count)
     for fdh in fdh_cabinets:
         splitter_count = splitter_counts.get(fdh.id, 0)
         features.append({
@@ -165,22 +172,24 @@ def reseller_fiber_map(request: Request, db: Session):
         FiberSpliceClosure.latitude.isnot(None),
         FiberSpliceClosure.longitude.isnot(None)
     ).all()
-    splice_counts = {}
-    tray_counts = {}
+    splice_counts: dict[UUID, int] = {}
+    tray_counts: dict[UUID, int] = {}
     if closures:
         closure_ids = [closure.id for closure in closures]
-        splice_counts = dict(
+        for closure_id, count in (
             db.query(FiberSplice.closure_id, func.count(FiberSplice.id))
             .filter(FiberSplice.closure_id.in_(closure_ids))
             .group_by(FiberSplice.closure_id)
             .all()
-        )
-        tray_counts = dict(
+        ):
+            splice_counts[closure_id] = int(count)
+        for closure_id, count in (
             db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id))
             .filter(FiberSpliceTray.closure_id.in_(closure_ids))
             .group_by(FiberSpliceTray.closure_id)
             .all()
-        )
+        ):
+            tray_counts[closure_id] = int(count)
     for closure in closures:
         splice_count = splice_counts.get(closure.id, 0)
         tray_count = tray_counts.get(closure.id, 0)
@@ -231,12 +240,44 @@ def reseller_fiber_map(request: Request, db: Session):
         "segments": len(segments),
     }
 
-    cost_settings = {
-        "drop_cable_per_meter": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_drop_cable_cost_per_meter") or "2.50"),
-        "labor_per_meter": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_labor_cost_per_meter") or "1.50"),
-        "ont_device": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_ont_device_cost") or "85.00"),
-        "installation_base": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_installation_base_fee") or "50.00"),
-        "currency": settings_spec.resolve_value(db, SettingDomain.billing, "default_currency") or "NGN",
+    def _as_float(value: object, default: float) -> float:
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return default
+        return default
+
+    def _as_str(value: object, default: str) -> str:
+        if isinstance(value, str) and value.strip():
+            return value
+        return default
+
+    cost_settings: dict[str, Any] = {
+        "drop_cable_per_meter": _as_float(
+            settings_spec.resolve_value(db, SettingDomain.network, "fiber_drop_cable_cost_per_meter"),
+            2.50,
+        ),
+        "labor_per_meter": _as_float(
+            settings_spec.resolve_value(db, SettingDomain.network, "fiber_labor_cost_per_meter"),
+            1.50,
+        ),
+        "ont_device": _as_float(
+            settings_spec.resolve_value(db, SettingDomain.network, "fiber_ont_device_cost"),
+            85.00,
+        ),
+        "installation_base": _as_float(
+            settings_spec.resolve_value(db, SettingDomain.network, "fiber_installation_base_fee"),
+            50.00,
+        ),
+        "currency": _as_str(
+            settings_spec.resolve_value(db, SettingDomain.billing, "default_currency"),
+            "NGN",
+        ),
     }
 
     return templates.TemplateResponse(

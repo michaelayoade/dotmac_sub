@@ -36,6 +36,25 @@ from app.services.events.types import EventType
 logger = logging.getLogger(__name__)
 
 
+def _coerce_int_setting(value: object) -> int | None:
+    # settings_spec.resolve_value() returns object | None.
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
     year = value.year + total // 12
@@ -76,24 +95,24 @@ def _period_end(start: datetime, cycle: BillingCycle) -> datetime:
 
 def _resolve_price(db: Session, subscription: Subscription):
     if subscription.offer_version_id:
-        price = (
+        version_price = (
             db.query(OfferVersionPrice)
             .filter(OfferVersionPrice.offer_version_id == subscription.offer_version_id)
             .filter(OfferVersionPrice.price_type == PriceType.recurring)
             .filter(OfferVersionPrice.is_active.is_(True))
             .first()
         )
-        if price:
-            return price.amount, price.currency, price.billing_cycle
-    price = (
+        if version_price:
+            return version_price.amount, version_price.currency, version_price.billing_cycle
+    offer_price = (
         db.query(OfferPrice)
         .filter(OfferPrice.offer_id == subscription.offer_id)
         .filter(OfferPrice.price_type == PriceType.recurring)
         .filter(OfferPrice.is_active.is_(True))
         .first()
     )
-    if price:
-        return price.amount, price.currency, price.billing_cycle
+    if offer_price:
+        return offer_price.amount, offer_price.currency, offer_price.billing_cycle
     return None, None, None
 
 
@@ -203,9 +222,11 @@ def _log_billing_run_audit(
         except ObjectDeletedError:
             run_id = None
 
+    run_at_value = summary.get("run_at")
+    run_at_iso = run_at_value.isoformat() if isinstance(run_at_value, datetime) else None
     metadata = {
         "run_id": run_id,
-        "run_at": summary.get("run_at").isoformat() if summary.get("run_at") else None,
+        "run_at": run_at_iso,
         "subscriptions_scanned": summary.get("subscriptions_scanned", 0),
         "subscriptions_billed": summary.get("subscriptions_billed", 0),
         "invoices_created": summary.get("invoices_created", 0),
@@ -251,10 +272,8 @@ def run_invoice_cycle(
     due_days_raw = settings_spec.resolve_value(
         db, SettingDomain.billing, "invoice_due_days"
     )
-    try:
-        due_days = max(int(due_days_raw), 0) if due_days_raw is not None else 14
-    except (TypeError, ValueError):
-        due_days = 14
+    due_days_parsed = _coerce_int_setting(due_days_raw)
+    due_days = max(due_days_parsed, 0) if due_days_parsed is not None else 14
 
     # Read auto-activate setting if not explicitly specified
     if auto_activate_pending is True:
@@ -325,8 +344,9 @@ def run_invoice_cycle(
         if is_pending:
             period_start = _as_utc(subscription.start_at) or run_at
         else:
-            period_start = _as_utc(
-                subscription.next_billing_at or subscription.start_at or run_at
+            period_start = (
+                _as_utc(subscription.next_billing_at or subscription.start_at or run_at)
+                or run_at
             )
 
         if period_start > run_at:
@@ -573,10 +593,8 @@ def generate_prorated_invoice(
     due_days_raw = settings_spec.resolve_value(
         db, SettingDomain.billing, "invoice_due_days"
     )
-    try:
-        due_days = max(int(due_days_raw), 0) if due_days_raw is not None else 14
-    except (TypeError, ValueError):
-        due_days = 14
+    due_days_parsed = _coerce_int_setting(due_days_raw)
+    due_days = max(due_days_parsed, 0) if due_days_parsed is not None else 14
 
     # Create prorated invoice
     invoice = Invoice(
@@ -653,7 +671,7 @@ def run_invoice_cycle_with_retry(
     import time
     from sqlalchemy.exc import OperationalError, IntegrityError
 
-    last_error = None
+    last_error: BaseException | None = None
     for attempt in range(max_retries):
         try:
             return run_invoice_cycle(
@@ -678,4 +696,6 @@ def run_invoice_cycle_with_retry(
             # Don't retry non-transient errors
             raise
 
-    raise last_error
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Billing run failed but no exception was captured")

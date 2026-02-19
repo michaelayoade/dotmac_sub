@@ -13,15 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+from app.db import get_db
 from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,
@@ -41,9 +33,9 @@ from app.schemas.catalog import (
     ProvisioningTemplateUpdate,
 )
 from app.services.nas import (
+    DeviceProvisioner,
     NasConfigBackups,
     NasDevices,
-    DeviceProvisioner,
     ProvisioningLogs,
     ProvisioningTemplates,
 )
@@ -97,10 +89,7 @@ def create_nas_device(
 @router.get("/devices/stats")
 def get_nas_device_stats(db: Session = Depends(get_db)):
     """Get NAS device statistics by vendor and status."""
-    return {
-        "by_vendor": NasDevices.count_by_vendor(db),
-        "by_status": NasDevices.count_by_status(db),
-    }
+    return NasDevices.get_stats(db)
 
 
 @router.get("/devices/{device_id}", response_model=NasDeviceRead)

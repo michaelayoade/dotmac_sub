@@ -34,28 +34,46 @@ _DEFAULT_REDIS_STREAM_MAX_LENGTH = 100000
 _DEFAULT_REDIS_READ_TIMEOUT_MS = 1000
 
 
+def _parse_int_setting(value: object | None, default: int) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return default
+        try:
+            return int(s)
+        except ValueError:
+            return default
+    return default
+
+
 def _get_batch_size(db=None) -> int:
     """Get batch size from settings."""
     size = resolve_value(db, SettingDomain.bandwidth, "batch_size") if db else None
-    return size if size else _DEFAULT_BATCH_SIZE
+    return _parse_int_setting(size, _DEFAULT_BATCH_SIZE)
 
 
 def _get_hot_retention_hours(db=None) -> int:
     """Get hot data retention hours from settings."""
     hours = resolve_value(db, SettingDomain.bandwidth, "hot_retention_hours") if db else None
-    return hours if hours else _DEFAULT_HOT_RETENTION_HOURS
+    return _parse_int_setting(hours, _DEFAULT_HOT_RETENTION_HOURS)
 
 
 def _get_redis_stream_max_length(db=None) -> int:
     """Get Redis stream max length from settings."""
     length = resolve_value(db, SettingDomain.bandwidth, "redis_stream_max_length") if db else None
-    return length if length else _DEFAULT_REDIS_STREAM_MAX_LENGTH
+    return _parse_int_setting(length, _DEFAULT_REDIS_STREAM_MAX_LENGTH)
 
 
 def _get_redis_read_timeout_ms(db=None) -> int:
     """Get Redis read timeout in ms from settings."""
     timeout = resolve_value(db, SettingDomain.bandwidth, "redis_read_timeout_ms") if db else None
-    return timeout if timeout else _DEFAULT_REDIS_READ_TIMEOUT_MS
+    return _parse_int_setting(timeout, _DEFAULT_REDIS_READ_TIMEOUT_MS)
 
 
 def _get_redis_client():

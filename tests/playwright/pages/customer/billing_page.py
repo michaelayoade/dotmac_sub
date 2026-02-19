@@ -13,9 +13,9 @@ class CustomerBillingPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/customer/billing") -> None:
         """Navigate to the billing page."""
-        super().goto("/customer/billing")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the billing page is loaded."""

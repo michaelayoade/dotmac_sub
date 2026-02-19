@@ -4,7 +4,7 @@
 
 - `tests/playwright/conftest.py` - Playwright/pytest fixtures and storageState setup
 - `tests/playwright/helpers/` - API helpers, auth setup, test data factories
-- `tests/playwright/pages/` - Page Objects (admin portal, tickets, etc.)
+- `tests/playwright/pages/` - Page Objects (admin, customer, reseller, auth)
 - `tests/playwright/e2e/` - E2E specs (smoke, lifecycle, permissions)
 - `tests/playwright/.auth/` - Generated storageState files (ignored by git)
 
@@ -59,8 +59,7 @@ poetry run pytest tests/playwright/e2e
 
 - Authentication for admin/agent/user via `/api/v1/auth/login`
 - Role-based access checks (admin-only APIs, impersonation permission)
-- Ticket lifecycle workflow (create, assign, comment, status changes, close)
-- Smoke coverage for admin dashboard and ticket list
+- Portal smoke coverage for admin, customer, reseller, and auth pages
 - Smoke coverage for internal links in admin, customer portal, and public pages
 
 ## Notes
@@ -68,3 +67,4 @@ poetry run pytest tests/playwright/e2e
 - MFA must be disabled for E2E users.
 - Storage states are generated at runtime under `tests/playwright/.auth/`.
 - The admin portal does not enforce web auth yet, so the suite uses API tokens plus storageState to model login sessions.
+- Some legacy journey specs still reference page objects that are not currently implemented; keep documentation and tests in sync before enabling them in CI.

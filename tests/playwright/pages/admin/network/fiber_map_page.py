@@ -12,10 +12,9 @@ class FiberMapPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/network/fiber-map") -> None:
         """Navigate to the fiber map page."""
-        super().goto("/admin/network/fiber-map")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the fiber map page is loaded."""

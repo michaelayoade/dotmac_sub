@@ -9,13 +9,13 @@ Provides CRUD operations and business logic for:
 """
 import hashlib
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select, func, update
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
 
 from app.models.catalog import (
     ConfigBackupMethod,
@@ -28,7 +28,6 @@ from app.models.catalog import (
     ProvisioningLog,
     ProvisioningTemplate,
     RadiusProfile,
-    Subscription,
 )
 from app.models.network_monitoring import PopSite
 from app.schemas.catalog import (
@@ -42,7 +41,6 @@ from app.schemas.catalog import (
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_nas_credentials
 from app.services.response import ListResponseMixin
-
 
 _REDACT_KEYS = {
     "password",
@@ -110,7 +108,7 @@ class NasDevices(ListResponseMixin):
     def get(db: Session, device_id: str | UUID) -> NasDevice:
         """Get a NAS device by ID."""
         device_id = coerce_uuid(device_id)
-        device = db.get(NasDevice, device_id)
+        device = cast(NasDevice | None, db.get(NasDevice, device_id))
         if not device:
             raise HTTPException(status_code=404, detail="NAS device not found")
         return device
@@ -118,9 +116,12 @@ class NasDevices(ListResponseMixin):
     @staticmethod
     def get_by_code(db: Session, code: str) -> NasDevice | None:
         """Get a NAS device by its code."""
-        return db.execute(
+        return cast(
+            NasDevice | None,
+            db.execute(
             select(NasDevice).where(NasDevice.code == code)
-        ).scalar_one_or_none()
+            ).scalar_one_or_none(),
+        )
 
     @staticmethod
     def list(
@@ -202,7 +203,7 @@ class NasDevices(ListResponseMixin):
     def update_last_seen(db: Session, device_id: str | UUID) -> NasDevice:
         """Update the last_seen_at timestamp for a device."""
         device = NasDevices.get(db, device_id)
-        device.last_seen_at = datetime.now(timezone.utc)
+        device.last_seen_at = datetime.now(UTC)
         db.commit()
         db.refresh(device)
         return device
@@ -264,6 +265,14 @@ class NasDevices(ListResponseMixin):
         ).all()
         return {str(status.value): count for status, count in result}
 
+    @staticmethod
+    def get_stats(db: Session) -> dict:
+        """Get combined NAS device statistics by vendor and status."""
+        return {
+            "by_vendor": NasDevices.count_by_vendor(db),
+            "by_status": NasDevices.count_by_status(db),
+        }
+
 
 # =============================================================================
 # NAS CONFIG BACKUP SERVICE
@@ -314,7 +323,7 @@ class NasConfigBackups(ListResponseMixin):
         db.add(backup)
 
         # Update device last_backup_at
-        device.last_backup_at = datetime.now(timezone.utc)
+        device.last_backup_at = datetime.now(UTC)
 
         db.commit()
         db.refresh(backup)
@@ -331,7 +340,7 @@ class NasConfigBackups(ListResponseMixin):
         now: datetime | None = None,
     ) -> dict[str, int]:
         """Apply retention policy to NAS config backups."""
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         keep_all_cutoff = now - timedelta(days=keep_all_days)
         keep_daily_cutoff = now - timedelta(days=keep_daily_days)
         keep_weekly_cutoff = now - timedelta(days=keep_weekly_days)
@@ -391,7 +400,7 @@ class NasConfigBackups(ListResponseMixin):
     def get(db: Session, backup_id: str | UUID) -> NasConfigBackup:
         """Get a config backup by ID."""
         backup_id = coerce_uuid(backup_id)
-        backup = db.get(NasConfigBackup, backup_id)
+        backup = cast(NasConfigBackup | None, db.get(NasConfigBackup, backup_id))
         if not backup:
             raise HTTPException(status_code=404, detail="Config backup not found")
         return backup
@@ -442,11 +451,14 @@ class NasConfigBackups(ListResponseMixin):
     @staticmethod
     def get_current(db: Session, nas_device_id: UUID) -> NasConfigBackup | None:
         """Get the current (latest) backup for a device."""
-        return db.execute(
-            select(NasConfigBackup)
-            .where(NasConfigBackup.nas_device_id == nas_device_id)
-            .where(NasConfigBackup.is_current == True)
-        ).scalar_one_or_none()
+        return cast(
+            NasConfigBackup | None,
+            db.execute(
+                select(NasConfigBackup)
+                .where(NasConfigBackup.nas_device_id == nas_device_id)
+                .where(NasConfigBackup.is_current == True)
+            ).scalar_one_or_none(),
+        )
 
     @staticmethod
     def compare(db: Session, backup_id_1: UUID, backup_id_2: UUID) -> dict:
@@ -509,7 +521,9 @@ class ProvisioningTemplates(ListResponseMixin):
     def get(db: Session, template_id: str | UUID) -> ProvisioningTemplate:
         """Get a provisioning template by ID."""
         template_id = coerce_uuid(template_id)
-        template = db.get(ProvisioningTemplate, template_id)
+        template = cast(
+            ProvisioningTemplate | None, db.get(ProvisioningTemplate, template_id)
+        )
         if not template:
             raise HTTPException(status_code=404, detail="Provisioning template not found")
         return template
@@ -517,9 +531,12 @@ class ProvisioningTemplates(ListResponseMixin):
     @staticmethod
     def get_by_code(db: Session, code: str) -> ProvisioningTemplate | None:
         """Get a template by its code."""
-        return db.execute(
-            select(ProvisioningTemplate).where(ProvisioningTemplate.code == code)
-        ).scalar_one_or_none()
+        return cast(
+            ProvisioningTemplate | None,
+            db.execute(
+                select(ProvisioningTemplate).where(ProvisioningTemplate.code == code)
+            ).scalar_one_or_none(),
+        )
 
     @staticmethod
     def list(
@@ -579,28 +596,34 @@ class ProvisioningTemplates(ListResponseMixin):
     ) -> ProvisioningTemplate | None:
         """Find the best matching template for given criteria."""
         # First try exact match
-        template = db.execute(
-            select(ProvisioningTemplate)
-            .where(ProvisioningTemplate.vendor == vendor)
-            .where(ProvisioningTemplate.connection_type == connection_type)
-            .where(ProvisioningTemplate.action == action)
-            .where(ProvisioningTemplate.is_active == True)
-            .order_by(ProvisioningTemplate.is_default.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        template = cast(
+            ProvisioningTemplate | None,
+            db.execute(
+                select(ProvisioningTemplate)
+                .where(ProvisioningTemplate.vendor == vendor)
+                .where(ProvisioningTemplate.connection_type == connection_type)
+                .where(ProvisioningTemplate.action == action)
+                .where(ProvisioningTemplate.is_active == True)
+                .order_by(ProvisioningTemplate.is_default.desc())
+                .limit(1)
+            ).scalar_one_or_none(),
+        )
 
         if template:
             return template
 
         # Fall back to "other" vendor with same connection type and action
-        return db.execute(
-            select(ProvisioningTemplate)
-            .where(ProvisioningTemplate.vendor == NasVendor.other)
-            .where(ProvisioningTemplate.connection_type == connection_type)
-            .where(ProvisioningTemplate.action == action)
-            .where(ProvisioningTemplate.is_active == True)
-            .limit(1)
-        ).scalar_one_or_none()
+        return cast(
+            ProvisioningTemplate | None,
+            db.execute(
+                select(ProvisioningTemplate)
+                .where(ProvisioningTemplate.vendor == NasVendor.other)
+                .where(ProvisioningTemplate.connection_type == connection_type)
+                .where(ProvisioningTemplate.action == action)
+                .where(ProvisioningTemplate.is_active == True)
+                .limit(1)
+            ).scalar_one_or_none(),
+        )
 
     @staticmethod
     def update(
@@ -633,7 +656,7 @@ class ProvisioningTemplates(ListResponseMixin):
     @staticmethod
     def render(template: ProvisioningTemplate, variables: dict[str, Any]) -> str:
         """Render a template with given variables."""
-        content = template.template_content
+        content = str(template.template_content or "")
         for key, value in variables.items():
             content = content.replace(f"{{{{{key}}}}}", str(value))
         return content
@@ -660,7 +683,7 @@ class ProvisioningLogs(ListResponseMixin):
     def get(db: Session, log_id: str | UUID) -> ProvisioningLog:
         """Get a provisioning log by ID."""
         log_id = coerce_uuid(log_id)
-        log = db.get(ProvisioningLog, log_id)
+        log = cast(ProvisioningLog | None, db.get(ProvisioningLog, log_id))
         if not log:
             raise HTTPException(status_code=404, detail="Provisioning log not found")
         return log
@@ -748,7 +771,7 @@ class RadiusProfiles(ListResponseMixin):
     def get(db: Session, profile_id: str | UUID) -> RadiusProfile:
         """Get a RADIUS profile by ID."""
         profile_id = coerce_uuid(profile_id)
-        profile = db.get(RadiusProfile, profile_id)
+        profile = cast(RadiusProfile | None, db.get(RadiusProfile, profile_id))
         if not profile:
             raise HTTPException(status_code=404, detail="RADIUS profile not found")
         return profile
@@ -780,7 +803,7 @@ class RadiusProfiles(ListResponseMixin):
     def generate_mikrotik_rate_limit(profile: RadiusProfile) -> str:
         """Generate MikroTik rate-limit string from profile settings."""
         if profile.mikrotik_rate_limit:
-            return profile.mikrotik_rate_limit
+            return str(profile.mikrotik_rate_limit)
 
         if not profile.download_speed or not profile.upload_speed:
             return ""
@@ -981,6 +1004,7 @@ class DeviceProvisioner:
 
         host = device.management_ip or device.ip_address
         port = device.management_port or 22
+        assert host is not None
 
         client = paramiko.SSHClient()
         if device.ssh_verify_host_key is False:
@@ -1010,8 +1034,8 @@ class DeviceProvisioner:
                 )
 
             stdin, stdout, stderr = client.exec_command(command, timeout=60)
-            output = stdout.read().decode()
-            error = stderr.read().decode()
+            output: str = stdout.read().decode()
+            error: str = stderr.read().decode()
 
             if error and not output:
                 raise Exception(f"SSH error: {error}")
@@ -1054,7 +1078,7 @@ class DeviceProvisioner:
         )
 
         response.raise_for_status()
-        return response.text
+        return str(response.text)
 
     @staticmethod
     def backup_config(db: Session, nas_device_id: UUID, triggered_by: str = "system") -> NasConfigBackup:

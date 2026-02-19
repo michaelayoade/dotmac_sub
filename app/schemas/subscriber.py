@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from app.models.subscriber import (
     AddressType,
@@ -147,7 +147,23 @@ class SubscriberBase(BaseModel):
 
 
 class SubscriberCreate(SubscriberBase):
-    pass
+    model_config = ConfigDict(extra="forbid")
+
+    # Backwards-compat: allow "create" to target an existing person/subscriber row.
+    person_id: UUID | None = Field(default=None, exclude=True)
+
+    # If person_id is provided these can be omitted; service will update the existing row.
+    first_name: str | None = Field(default=None, min_length=1, max_length=80)
+    last_name: str | None = Field(default=None, min_length=1, max_length=80)
+    email: EmailStr | None = None
+
+    @model_validator(mode="after")
+    def _require_identity_when_creating_new(self) -> "SubscriberCreate":
+        if self.person_id:
+            return self
+        if not self.first_name or not self.last_name or not self.email:
+            raise ValueError("first_name, last_name, and email are required when person_id is not provided.")
+        return self
 
 
 class SubscriberUpdate(BaseModel):
@@ -324,12 +340,12 @@ class SubscriberCustomFieldRead(SubscriberCustomFieldBase):
     updated_at: datetime
 
 
-# --- Deprecated stubs for backwards compatibility ---
-# These models were removed during Person + SubscriberAccount consolidation
-# but are kept as empty stubs to prevent import errors in legacy code
+# --- Compatibility schemas ---
+# Accounts are represented by subscribers; these request/response shapes
+# remain to preserve API/import compatibility.
 
 class SubscriberAccountCreate(BaseModel):
-    """Deprecated stub - accounts consolidated into Subscriber."""
+    """Compatibility create payload for account-as-subscriber flows."""
     subscriber_id: UUID | None = None
     reseller_id: UUID | None = None
     account_number: str | None = None
@@ -337,31 +353,11 @@ class SubscriberAccountCreate(BaseModel):
 
 
 class SubscriberAccountUpdate(BaseModel):
-    """Deprecated stub - accounts consolidated into Subscriber."""
+    """Compatibility update payload for account-as-subscriber flows."""
     pass
 
 
 class SubscriberAccountRead(BaseModel):
-    """Deprecated stub - accounts consolidated into Subscriber."""
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID | None = None
-
-
-class AccountRoleCreate(BaseModel):
-    """Deprecated stub - account roles removed."""
-    account_id: UUID | None = None
-    subscriber_id: UUID | None = None
-    role: str | None = None
-    is_primary: bool = False
-    title: str | None = None
-
-
-class AccountRoleUpdate(BaseModel):
-    """Deprecated stub - account roles removed."""
-    pass
-
-
-class AccountRoleRead(BaseModel):
-    """Deprecated stub - account roles removed."""
+    """Compatibility read payload for account-as-subscriber flows."""
     model_config = ConfigDict(from_attributes=True)
     id: UUID | None = None

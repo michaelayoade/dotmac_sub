@@ -1,73 +1,61 @@
 """Admin billing management web routes."""
 
-import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any, cast
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Optional
-from uuid import UUID
 
-from app.db import SessionLocal
+from app.db import get_db
+from app.models.billing import Payment
 from app.models.catalog import BillingCycle
-from app.models.billing import (
-    CollectionAccountType,
-    CreditNote,
-    CreditNoteStatus,
-    LedgerEntry,
-    LedgerEntryType,
-    Invoice,
-    InvoiceStatus,
-    Payment,
-    PaymentChannelType,
-    PaymentMethod,
-    PaymentMethodType,
-)
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
-from app.services import audit as audit_service
-from app.services import billing as billing_service
-from app.services import settings_spec
-from app.services.audit_helpers import build_changes_metadata, extract_changes, format_changes, log_audit_event
-from app.services import billing_automation as billing_automation_service
-from app.services.billing import configuration as billing_config_service
-from app.services import collections as collections_service
-from app.services import subscriber as subscriber_service
-from app.services.common import validate_enum
 from app.schemas.billing import (
     CollectionAccountUpdate,
     CreditNoteApplyRequest,
     CreditNoteCreate,
     InvoiceCreate,
     InvoiceLineCreate,
-    InvoiceLineUpdate,
     InvoiceUpdate,
-    LedgerEntryCreate,
-    PaymentCreate,
-    PaymentMethodCreate,
-    PaymentUpdate,
     TaxRateCreate,
 )
-from app.schemas.subscriber import SubscriberAccountCreate
+from app.services import billing as billing_service
+from app.services import web_billing_accounts as web_billing_accounts_service
+from app.services import web_billing_channels as web_billing_channels_service
+from app.services import (
+    web_billing_collection_accounts as web_billing_collection_accounts_service,
+)
+from app.services import web_billing_credits as web_billing_credits_service
+from app.services import web_billing_customers as web_billing_customers_service
+from app.services import web_billing_dunning as web_billing_dunning_service
+from app.services import (
+    web_billing_invoice_actions as web_billing_invoice_actions_service,
+)
+from app.services import web_billing_invoice_batch as web_billing_invoice_batch_service
+from app.services import web_billing_invoice_bulk as web_billing_invoice_bulk_service
+from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
+from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import web_billing_ledger as web_billing_ledger_service
+from app.services import web_billing_overview as web_billing_overview_service
+from app.services import web_billing_payment_forms as web_billing_payment_forms_service
+from app.services import web_billing_payments as web_billing_payments_service
+from app.services import web_billing_tax_rates as web_billing_tax_rates_service
+from app.services.audit_helpers import build_changes_metadata, log_audit_event
 from app.services.auth_dependencies import require_permission
+from app.services.billing import configuration as billing_config_service
+from app.web.request_parsing import parse_json_body
+from app.models.billing import CreditNoteStatus
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return {
         "request": request,
         "active_page": active_page,
@@ -104,304 +92,8 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
-
-
-def _serialize_tax_rates(tax_rates: list) -> list[dict]:
-    serialized = []
-    for rate in tax_rates or []:
-        serialized.append(
-            {
-                "id": str(rate.id),
-                "name": rate.name,
-                "rate": float(rate.rate or 0),
-            }
-        )
-    return serialized
-
-
-def _account_label(account) -> str:
-    if not account:
-        return "Account"
-    if getattr(account, "subscriber", None):
-        subscriber = account.subscriber
-        if getattr(subscriber, "person", None):
-            person = subscriber.person
-            if getattr(person, "display_name", None):
-                return person.display_name
-            first = person.first_name or ""
-            last = person.last_name or ""
-            label = f"{first} {last}".strip()
-            if label:
-                return label
-        if getattr(subscriber, "organization", None):
-            name = subscriber.organization.name or ""
-            if name:
-                return name
-    if getattr(account, "account_number", None):
-        return f"Account {account.account_number}"
-    return "Account"
-
-
-def _payment_primary_invoice_id(payment: Payment | None) -> str | None:
-    if not payment or not payment.allocations:
-        return None
-    allocation = min(
-        payment.allocations,
-        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    return str(allocation.invoice_id)
-
-
-def _parse_customer_ref(value: str | None) -> tuple[str | None, str | None]:
-    if not value:
-        return None, None
-    raw = value.strip()
-    if ":" in raw:
-        kind, ref_id = raw.split(":", 1)
-        return kind, ref_id
-    return None, raw
-
-
-def _subscriber_label(subscriber) -> str:
-    if not subscriber:
-        return "Subscriber"
-    person = getattr(subscriber, "person", None)
-    if person:
-        if getattr(person, "organization", None):
-            return person.organization.name
-        name = " ".join(part for part in [person.first_name, person.last_name] if part)
-        return name or "Subscriber"
-    return "Subscriber"
-
-
-def _customer_label(db: Session, customer_ref: str | None) -> str | None:
-    kind, ref_id = _parse_customer_ref(customer_ref)
-    if not ref_id:
-        return None
-    try:
-        if kind == "organization":
-            from app.models.subscriber import Organization
-            organization = db.get(Organization, ref_id)
-            if organization:
-                return organization.name
-        else:
-            from app.models.subscriber import Subscriber
-            subscriber = db.get(Subscriber, ref_id)
-            if subscriber:
-                label = " ".join(part for part in [subscriber.first_name, subscriber.last_name] if part)
-                return label or None
-    except Exception:
-        return None
-    return None
-
-
-def _subscriber_ids_for_customer(db: Session, customer_ref: str | None) -> list[str]:
-    from app.services import subscriber as subscriber_service
-    kind, ref_id = _parse_customer_ref(customer_ref)
-    if not ref_id:
-        return []
-    subscribers = []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=None,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    else:
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=ref_id,
-            organization_id=None,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    return [str(sub.id) for sub in subscribers or []]
-
-
-def _accounts_for_customer(db: Session, customer_ref: str | None) -> list[dict]:
-    from app.services import subscriber as subscriber_service
-    kind, ref_id = _parse_customer_ref(customer_ref)
-    if not ref_id:
-        return []
-    subscribers = []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=None,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    else:
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=ref_id,
-            organization_id=None,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    accounts = []
-    for subscriber in subscribers or []:
-        for account in getattr(subscriber, "accounts", []) or []:
-            accounts.append(
-                {
-                    "id": str(account.id),
-                    "label": _account_label(account),
-                    "account_number": account.account_number,
-                }
-            )
-    return accounts
-
-
-def _subscribers_for_customer(db: Session, customer_ref: str | None) -> list[dict]:
-    from app.services import subscriber as subscriber_service
-    kind, ref_id = _parse_customer_ref(customer_ref)
-    if not ref_id:
-        return []
-    subscribers = []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=None,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    else:
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            person_id=ref_id,
-            organization_id=None,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    return [
-        {
-            "id": str(sub.id),
-            "label": _subscriber_label(sub),
-        }
-        for sub in subscribers or []
-    ]
-
-
-def _invoice_status_value(invoice) -> str:
-    status = getattr(invoice, "status", None)
-    return status.value if hasattr(status, "value") else str(status or "")
-
-
-def _filter_open_invoices(invoices: list) -> list:
-    return [
-        invoice
-        for invoice in invoices
-        if _invoice_status_value(invoice) in {"issued", "partially_paid", "overdue"}
-    ]
-
-
-def _resolve_invoice(db: Session, invoice_id: str | None):
-    if not invoice_id:
-        return None
-    try:
-        return billing_service.invoices.get(db=db, invoice_id=invoice_id)
-    except Exception:
-        return None
-
-
-def _invoice_balance_info(invoice) -> tuple[str | None, str | None]:
-    if not invoice:
-        return None, None
-    balance = invoice.balance_due if invoice.balance_due else invoice.total
-    if balance is None:
-        return None, None
-    value = f"{balance:.2f}"
-    display = f"{invoice.currency} {balance:,.2f}"
-    return value, display
-
-
-def _build_invoice_form_config(
-    invoice,
-    tax_rates_json: list | None,
-    existing_line_items: list | None,
-    payment_terms_days: int = 30,
-) -> dict:
-    currency = ""
-    if invoice and invoice.currency:
-        currency = str(invoice.currency).upper()
-    return {
-        "accountId": str(invoice.account_id) if invoice and invoice.account_id else "",
-        "invoiceNumber": invoice.invoice_number if invoice and invoice.invoice_number else "",
-        "status": invoice.status.value if invoice and invoice.status else "draft",
-        "currency": currency or "NGN",
-        "issuedAt": invoice.issued_at.strftime("%Y-%m-%d") if invoice and invoice.issued_at else "",
-        "dueAt": invoice.due_at.strftime("%Y-%m-%d") if invoice and invoice.due_at else "",
-        "memo": invoice.memo if invoice and invoice.memo else "",
-        "taxRates": tax_rates_json or [],
-        "lineItems": existing_line_items or [],
-        "invoiceId": str(invoice.id) if invoice else "",
-        "paymentTermsDays": payment_terms_days,
-    }
-
-
-def _payment_method_type_options() -> list[str]:
-    spec = settings_spec.get_spec(SettingDomain.billing, "default_payment_method_type")
-    if not spec or not spec.allowed:
-        return []
-    return sorted(spec.allowed)
-
-
-def _resolve_payment_method_id(
-    db: Session, account_id: UUID, selection: str | None
-) -> UUID | None:
-    if not selection:
-        return None
-    if selection.startswith("id:"):
-        return UUID(selection.split(":", 1)[1])
-    if selection.startswith("type:"):
-        method_type = selection.split(":", 1)[1]
-        allowed = _payment_method_type_options()
-        if allowed and method_type not in allowed:
-            raise ValueError("payment_method_type is invalid")
-        method_type_enum = PaymentMethodType(method_type)
-        method = (
-            db.query(PaymentMethod)
-            .filter(PaymentMethod.account_id == account_id)
-            .filter(PaymentMethod.method_type == method_type_enum)
-            .filter(PaymentMethod.is_active.is_(True))
-            .order_by(PaymentMethod.created_at.desc())
-            .first()
-        )
-        if method:
-            return method.id
-        label = method_type.replace("_", " ").title()
-        payload = PaymentMethodCreate(
-            account_id=account_id,
-            method_type=method_type_enum,
-            label=label,
-        )
-        method = billing_service.payment_methods.create(db, payload)
-        return method.id
-    return UUID(selection)
 
 
 def _parse_billing_cycle(value: str | None) -> BillingCycle | None:
@@ -419,90 +111,10 @@ def billing_overview(
     db: Session = Depends(get_db),
 ):
     """Billing overview page."""
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
-    )
-
-    # Calculate summary stats
-    all_invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
-    )
-
-    # Helper to get status value (handles both enum and string)
-    def get_status(inv):
-        status = getattr(inv, "status", "")
-        return status.value if hasattr(status, "value") else str(status)
-
-    total_revenue = sum(
-        float(getattr(inv, "total", 0) or 0)
-        for inv in all_invoices
-        if get_status(inv) == "paid"
-    )
-    pending_amount = sum(
-        float(getattr(inv, "total", 0) or 0)
-        for inv in all_invoices
-        if get_status(inv) in ("pending", "sent")
-    )
-    overdue_amount = sum(
-        float(getattr(inv, "total", 0) or 0)
-        for inv in all_invoices
-        if get_status(inv) == "overdue"
-    )
-
-    # Count invoices by status
-    paid_count = sum(1 for inv in all_invoices if get_status(inv) == "paid")
-    pending_count = sum(1 for inv in all_invoices if get_status(inv) in ("pending", "sent"))
-    overdue_count = sum(1 for inv in all_invoices if get_status(inv) == "overdue")
-    draft_count = sum(1 for inv in all_invoices if get_status(inv) == "draft")
-
-    stats = {
-        "total_revenue": total_revenue,
-        "pending_amount": pending_amount,
-        "overdue_amount": overdue_amount,
-        "total_invoices": len(all_invoices),
-        "paid_count": paid_count,
-        "pending_count": pending_count,
-        "overdue_count": overdue_count,
-        "draft_count": draft_count,
-    }
-
-    accounts = subscriber_service.accounts.list(
-        db=db,
-        subscriber_id=None,
-        reseller_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=2000,
-        offset=0,
-    )
-    total_balance = sum((getattr(account, "balance", 0) or 0) for account in accounts)
-    active_count = sum(
-        1
-        for account in accounts
-        if (getattr(account.status, "value", account.status) or "active") == "active"
-    )
-    suspended_count = sum(
-        1
-        for account in accounts
-        if (getattr(account.status, "value", account.status) or "") == "suspended"
-    )
+    state = web_billing_overview_service.build_overview_data(db)
 
     # Get sidebar stats and current user
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -510,11 +122,7 @@ def billing_overview(
         "admin/billing/index.html",
         {
             "request": request,
-            "invoices": invoices,
-            "stats": stats,
-            "total_balance": total_balance,
-            "active_count": active_count,
-            "suspended_count": suspended_count,
+            **state,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -524,85 +132,38 @@ def billing_overview(
 @router.get("/invoices", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def invoices_list(
     request: Request,
-    account_id: Optional[str] = None,
-    status: Optional[str] = None,
+    account_id: str | None = None,
+    status: str | None = None,
     customer_ref: str | None = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List all invoices with filtering."""
-    offset = (page - 1) * per_page
-
-    account_ids = []
-    customer_filtered = bool(customer_ref)
-    if customer_ref:
-        account_ids = [UUID(item["id"]) for item in _accounts_for_customer(db, customer_ref)]
-    invoices = []
-    if account_ids:
-        query = (
-            db.query(Invoice)
-            .filter(Invoice.account_id.in_(account_ids))
-            .filter(Invoice.is_active.is_(True))
-        )
-        if status:
-            query = query.filter(Invoice.status == validate_enum(status, InvoiceStatus, "status"))
-        invoices = (
-            query.order_by(Invoice.created_at.desc())
-            .offset(offset)
-            .limit(per_page)
-            .all()
-        )
-    elif not customer_filtered:
-        invoices = billing_service.invoices.list(
-            db=db,
-            account_id=UUID(account_id) if account_id else None,
-            status=status if status else None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
-        )
-
-    # Get total count
-    if account_ids:
-        count_query = (
-            db.query(Invoice)
-            .filter(Invoice.account_id.in_(account_ids))
-            .filter(Invoice.is_active.is_(True))
-        )
-        if status:
-            count_query = count_query.filter(Invoice.status == validate_enum(status, InvoiceStatus, "status"))
-        total = count_query.count()
-    elif not customer_filtered:
-        total_query = db.query(Invoice).filter(Invoice.is_active.is_(True))
-        if account_id:
-            total_query = total_query.filter(Invoice.account_id == UUID(account_id))
-        if status:
-            total_query = total_query.filter(
-                Invoice.status == validate_enum(status, InvoiceStatus, "status")
-            )
-        total = total_query.count()
-    else:
-        total = 0
-    total_pages = (total + per_page - 1) // per_page if total > 0 else 1
+    state = web_billing_overview_service.build_invoices_list_data(
+        db,
+        account_id=account_id,
+        status=status,
+        customer_ref=customer_ref,
+        page=page,
+        per_page=per_page,
+    )
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             "admin/billing/_invoices_table.html",
             {
                 "request": request,
-                "invoices": invoices,
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": total_pages,
+                "invoices": state["invoices"],
+                "page": state["page"],
+                "per_page": state["per_page"],
+                "total": state["total"],
+                "total_pages": state["total_pages"],
             },
         )
 
     # Get sidebar stats and current user
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -610,14 +171,7 @@ def invoices_list(
         "admin/billing/invoices.html",
         {
             "request": request,
-            "invoices": invoices,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "account_id": account_id,
-            "status": status,
-            "customer_ref": customer_ref,
+            **state,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -631,52 +185,17 @@ def invoice_new(
     account: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    resolved_account_id = account_id or account
-    selected_account = None
-    if resolved_account_id:
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=resolved_account_id)
-        except Exception:
-            selected_account = None
-    from datetime import timedelta
-    accounts = None
-    tax_rates = billing_service.tax_rates.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
+    state = web_billing_invoice_forms_service.new_form_state(
+        db,
+        account_id=account_id or account,
     )
-    tax_rates_json = _serialize_tax_rates(tax_rates)
-    invoice_config = _build_invoice_form_config(None, tax_rates_json, [], 30)
-    if selected_account:
-        invoice_config["accountId"] = str(selected_account.id)
 
-    # Get smart defaults from settings
-    invoice_due_days = settings_spec.resolve_value(
-        db, SettingDomain.billing, "invoice_due_days"
-    )
-    if invoice_due_days is None:
-        invoice_due_days = 14
-    default_currency = settings_spec.resolve_value(
-        db, SettingDomain.billing, "default_currency"
-    )
-    if default_currency is None:
-        default_currency = "NGN"
-    today = datetime.now(timezone.utc).date()
-    default_issue_date = today.strftime("%Y-%m-%d")
-    default_due_date = (today + timedelta(days=invoice_due_days)).strftime("%Y-%m-%d")
-
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/invoice_form.html",
         {
             "request": request,
-            "accounts": accounts,
-            "tax_rates": tax_rates,
-            "tax_rates_json": tax_rates_json,
-            "invoice_config": invoice_config,
+            **state,
             "invoice": None,
             "action_url": "/admin/billing/invoices/create",
             "form_title": "New Invoice",
@@ -686,14 +205,6 @@ def invoice_new(
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            "default_issue_date": default_issue_date,
-            "default_due_date": default_due_date,
-            "default_currency": default_currency,
-            "account_locked": bool(selected_account),
-            "account_label": _account_label(selected_account) if selected_account else None,
-            "account_number": selected_account.account_number if selected_account else None,
-            "selected_account_id": str(selected_account.id) if selected_account else None,
-            "account_x_model": "accountId",
         },
     )
 
@@ -718,132 +229,53 @@ def invoice_create(
     db: Session = Depends(get_db),
 ):
     try:
-        payload_data = {
-            "account_id": _parse_uuid(account_id, "account_id"),
-            "invoice_number": invoice_number.strip() if invoice_number else None,
-            "status": status or "draft",
-            "currency": currency.strip().upper(),
-            "issued_at": _parse_datetime(issued_at),
-            "due_at": _parse_datetime(due_at),
-            "memo": memo.strip() if memo else None,
-        }
-        payload = InvoiceCreate(**payload_data)
-        invoice = billing_service.invoices.create(db=db, payload=payload)
-        line_items = []
-
-        # Support both JSON format (new calculator) and array format (legacy)
-        if line_items_json and line_items_json.strip():
-            try:
-                items_data = json.loads(line_items_json)
-                for item in items_data:
-                    description = item.get("description", "").strip()
-                    if not description:
-                        continue
-                    line_items.append(
-                        {
-                            "description": description,
-                            "quantity": Decimal(str(item.get("quantity", 1))),
-                            "unit_price": Decimal(str(item.get("unitPrice", 0))),
-                            "tax_rate_id": UUID(item["taxRateId"]) if item.get("taxRateId") else None,
-                        }
-                    )
-            except (json.JSONDecodeError, KeyError, ValueError):
-                pass  # Fall through to array format
-
-        # Fallback to array format if JSON didn't produce items
-        if not line_items:
-            for idx, description in enumerate(line_description):
-                if not description or not description.strip():
-                    continue
-                quantity_raw = line_quantity[idx] if idx < len(line_quantity) else ""
-                unit_price_raw = line_unit_price[idx] if idx < len(line_unit_price) else ""
-                tax_rate_raw = line_tax_rate_id[idx] if idx < len(line_tax_rate_id) else ""
-                line_items.append(
-                    {
-                        "description": description.strip(),
-                        "quantity": _parse_decimal(quantity_raw, "quantity", Decimal("1")),
-                        "unit_price": _parse_decimal(
-                            unit_price_raw, "unit_price", Decimal("0.00")
-                        ),
-                        "tax_rate_id": UUID(tax_rate_raw) if tax_rate_raw else None,
-                    }
-                )
-        for item in line_items:
-            billing_service.invoice_lines.create(
-                db,
-                InvoiceLineCreate(
-                    invoice_id=invoice.id,
-                    description=item["description"],
-                    quantity=item["quantity"],
-                    unit_price=item["unit_price"],
-                    tax_rate_id=item["tax_rate_id"],
-                ),
-            )
-
-        # Handle "issue immediately" option
-        if issue_immediately:
-            billing_service.invoices.update(
-                db=db,
-                invoice_id=str(invoice.id),
-                payload=InvoiceUpdate(
-                    status="issued",
-                    issued_at=datetime.now(timezone.utc),
-                ),
-            )
-            db.refresh(invoice)
-
-        # Handle "send notification" option
-        if send_notification and invoice.account:
-            from app.services import email as email_service
-            # Get subscriber email from account
-            account = invoice.account
-            if account.subscriber:
-                subscriber = account.subscriber
-                email_addr = None
-                if subscriber.person and subscriber.person.email:
-                    email_addr = subscriber.person.email
-                elif subscriber.organization and subscriber.organization.email:
-                    email_addr = subscriber.organization.email
-                if email_addr:
-                    email_service.send_email(
-                        db=db,
-                        to_email=email_addr,
-                        subject=f"Invoice {invoice.invoice_number or invoice.id}",
-                        template_name="invoice_notification",
-                        context={
-                            "invoice": invoice,
-                            "account": account,
-                        },
-                    )
-    except Exception as exc:
-        selected_account = None
-        if account_id:
-            try:
-                selected_account = subscriber_service.accounts.get(db=db, account_id=account_id)
-            except Exception:
-                selected_account = None
-        accounts = None
-        tax_rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
+        payload_data = web_billing_invoices_service.build_invoice_payload_data(
+            account_id=_parse_uuid(account_id, "account_id"),
+            invoice_number=invoice_number,
+            status=status,
+            currency=currency,
+            issued_at=_parse_datetime(issued_at),
+            due_at=_parse_datetime(due_at),
+            memo=memo,
         )
-        tax_rates_json = _serialize_tax_rates(tax_rates)
-        invoice_config = _build_invoice_form_config(None, tax_rates_json, [], 30)
-        if selected_account:
-            invoice_config["accountId"] = str(selected_account.id)
-        from app.web.admin import get_sidebar_stats, get_current_user
+        payload = InvoiceCreate.model_validate(payload_data)
+        invoice = billing_service.invoices.create(db=db, payload=payload)
+        line_items = web_billing_invoices_service.parse_create_line_items(
+            line_items_json=line_items_json,
+            line_description=line_description,
+            line_quantity=line_quantity,
+            line_unit_price=line_unit_price,
+            line_tax_rate_id=line_tax_rate_id,
+            parse_decimal=_parse_decimal,
+        )
+        web_billing_invoices_service.create_invoice_lines(
+            db,
+            invoice_id=invoice.id,
+            line_items=line_items,
+        )
+        issued_invoice = web_billing_invoices_service.maybe_issue_invoice(
+            db,
+            invoice_id=invoice.id,
+            issue_immediately=issue_immediately,
+        )
+        if issued_invoice:
+            invoice = issued_invoice
+        web_billing_invoices_service.maybe_send_invoice_notification(
+            db,
+            invoice=invoice,
+            send_notification=send_notification,
+        )
+    except Exception as exc:
+        state = web_billing_invoice_forms_service.new_form_state(
+            db,
+            account_id=account_id,
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/invoice_form.html",
             {
                 "request": request,
-                "accounts": accounts,
-                "tax_rates": tax_rates,
-                "tax_rates_json": tax_rates_json,
-                "invoice_config": invoice_config,
+                **state,
                 "action_url": "/admin/billing/invoices/create",
                 "form_title": "New Invoice",
                 "submit_label": "Create Invoice",
@@ -852,11 +284,6 @@ def invoice_create(
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                "account_locked": bool(selected_account),
-                "account_label": _account_label(selected_account) if selected_account else None,
-                "account_number": selected_account.account_number if selected_account else None,
-                "selected_account_id": str(selected_account.id) if selected_account else None,
-                "account_x_model": "accountId",
             },
             status_code=400,
         )
@@ -876,64 +303,29 @@ def invoice_create(
 
 @router.get("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
 def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if not invoice:
+    state = web_billing_invoice_forms_service.edit_form_state(
+        db,
+        invoice_id=str(invoice_id),
+    )
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Invoice not found"},
             status_code=404,
         )
-    selected_account = invoice.account
-    if not selected_account and invoice.account_id:
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=str(invoice.account_id))
-        except Exception:
-            selected_account = None
-    tax_rates = billing_service.tax_rates.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    existing_line_items = [
-        {
-            "id": str(line.id),
-            "description": line.description,
-            "quantity": float(line.quantity or 1),
-            "unit_price": float(line.unit_price or 0),
-            "tax_rate_id": str(line.tax_rate_id) if line.tax_rate_id else None,
-        }
-        for line in (invoice.lines or [])
-        if getattr(line, "is_active", True)
-    ]
-    tax_rates_json = _serialize_tax_rates(tax_rates)
-    invoice_config = _build_invoice_form_config(invoice, tax_rates_json, existing_line_items, 30)
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/invoice_form.html",
         {
             "request": request,
-            "accounts": None,
-            "tax_rates": tax_rates,
-            "tax_rates_json": tax_rates_json,
-            "existing_line_items": existing_line_items,
-            "invoice_config": invoice_config,
-            "invoice": invoice,
+            **state,
             "action_url": f"/admin/billing/invoices/{invoice_id}/edit",
             "form_title": "Edit Invoice",
             "submit_label": "Save Changes",
-            "show_line_items": False,
             "active_page": "invoices",
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            "account_locked": True,
-            "account_label": _account_label(selected_account),
-            "account_number": selected_account.account_number if selected_account else None,
-            "selected_account_id": str(selected_account.id) if selected_account else str(invoice.account_id),
-            "account_x_model": "accountId",
         },
     )
 
@@ -954,63 +346,23 @@ def invoice_update(
 ):
     try:
         before = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-        payload_data = {
-            "account_id": _parse_uuid(account_id, "account_id"),
-            "invoice_number": invoice_number.strip() if invoice_number else None,
-            "status": status or "draft",
-            "currency": currency.strip().upper(),
-            "issued_at": _parse_datetime(issued_at),
-            "due_at": _parse_datetime(due_at),
-            "memo": memo.strip() if memo else None,
-        }
-        payload = InvoiceUpdate(**payload_data)
+        payload_data = web_billing_invoices_service.build_invoice_payload_data(
+            account_id=_parse_uuid(account_id, "account_id"),
+            invoice_number=invoice_number,
+            status=status,
+            currency=currency,
+            issued_at=_parse_datetime(issued_at),
+            due_at=_parse_datetime(due_at),
+            memo=memo,
+        )
+        payload = InvoiceUpdate.model_validate(payload_data)
         billing_service.invoices.update(db=db, invoice_id=str(invoice_id), payload=payload)
-        if line_items_json and line_items_json.strip():
-            try:
-                items_data = json.loads(line_items_json)
-            except json.JSONDecodeError:
-                items_data = None
-            if items_data is not None:
-                existing_lines = {
-                    str(line.id): line
-                    for line in (before.lines or [])
-                    if getattr(line, "is_active", True)
-                }
-                seen_ids: set[str] = set()
-                for item in items_data:
-                    description = str(item.get("description", "")).strip()
-                    if not description:
-                        continue
-                    quantity = Decimal(str(item.get("quantity", 1)))
-                    unit_price = Decimal(str(item.get("unitPrice", 0)))
-                    tax_rate_id = item.get("taxRateId") or item.get("tax_rate_id")
-                    line_id = item.get("id") or item.get("lineId") or item.get("line_id")
-                    if line_id and str(line_id) in existing_lines:
-                        seen_ids.add(str(line_id))
-                        billing_service.invoice_lines.update(
-                            db,
-                            str(line_id),
-                            InvoiceLineUpdate(
-                                description=description,
-                                quantity=quantity,
-                                unit_price=unit_price,
-                                tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-                            ),
-                        )
-                    else:
-                        billing_service.invoice_lines.create(
-                            db,
-                            InvoiceLineCreate(
-                                invoice_id=invoice_id,
-                                description=description,
-                                quantity=quantity,
-                                unit_price=unit_price,
-                                tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-                            ),
-                        )
-                for line_id in existing_lines:
-                    if line_id not in seen_ids:
-                        billing_service.invoice_lines.delete(db, line_id)
+        web_billing_invoices_service.apply_line_items_json_update(
+            db,
+            invoice_id=invoice_id,
+            before_invoice=before,
+            line_items_json=line_items_json,
+        )
         after = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -1025,47 +377,16 @@ def invoice_update(
             metadata=metadata_payload,
         )
     except Exception as exc:
-        invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-        selected_account = invoice.account if invoice else None
-        if not selected_account and invoice and invoice.account_id:
-            try:
-                selected_account = subscriber_service.accounts.get(
-                    db=db, account_id=str(invoice.account_id)
-                )
-            except Exception:
-                selected_account = None
-        tax_rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
+        state = web_billing_invoice_forms_service.edit_form_state(
+            db,
+            invoice_id=str(invoice_id),
         )
-        existing_line_items = [
-            {
-                "id": str(line.id),
-                "description": line.description,
-                "quantity": float(line.quantity or 1),
-                "unit_price": float(line.unit_price or 0),
-                "tax_rate_id": str(line.tax_rate_id) if line.tax_rate_id else None,
-            }
-            for line in (invoice.lines or [])
-            if getattr(line, "is_active", True)
-        ] if invoice else []
-        tax_rates_json = _serialize_tax_rates(tax_rates)
-        invoice_config = _build_invoice_form_config(invoice, tax_rates_json, existing_line_items, 30)
-        from app.web.admin import get_sidebar_stats, get_current_user
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/invoice_form.html",
             {
                 "request": request,
-                "accounts": None,
-                "tax_rates": tax_rates,
-                "tax_rates_json": tax_rates_json,
-                "existing_line_items": existing_line_items,
-                "invoice_config": invoice_config,
-                "invoice": invoice,
+                **(state or {}),
                 "action_url": f"/admin/billing/invoices/{invoice_id}/edit",
                 "form_title": "Edit Invoice",
                 "submit_label": "Save Changes",
@@ -1075,11 +396,6 @@ def invoice_update(
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                "account_locked": True,
-                "account_label": _account_label(selected_account),
-                "account_number": selected_account.account_number if selected_account else None,
-                "selected_account_id": str(selected_account.id) if selected_account else str(invoice.account_id) if invoice else None,
-                "account_x_model": "accountId",
             },
             status_code=400,
         )
@@ -1102,15 +418,11 @@ def invoice_generate_batch(
     billing_cycle: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    try:
-        summary = billing_automation_service.run_invoice_cycle(
-            db=db,
-            billing_cycle=_parse_billing_cycle(billing_cycle),
-            dry_run=False,
-        )
-        note = f"Batch run completed. Invoices created: {summary.get('invoices_created', 0)}."
-    except Exception as exc:
-        note = f"Batch run failed: {exc}"
+    note = web_billing_invoice_batch_service.run_batch(
+        db,
+        billing_cycle=billing_cycle,
+        parse_cycle_fn=_parse_billing_cycle,
+    )
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
         f"{note}"
@@ -1120,8 +432,8 @@ def invoice_generate_batch(
 
 @router.get("/invoices/batch", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def invoice_batch(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
-    today = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+    from app.web.admin import get_current_user, get_sidebar_stats
+    today = web_billing_invoice_actions_service.batch_today_str()
     return templates.TemplateResponse(
         "admin/billing/invoice_batch.html",
         {
@@ -1146,45 +458,17 @@ def invoice_generate_batch_preview(
 ):
     """Dry-run preview of batch invoice generation."""
     from fastapi.responses import JSONResponse
-    from decimal import Decimal
 
     try:
-        # Parse billing date
-        run_date = None
-        if billing_date:
-            run_date = datetime.strptime(billing_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
-        summary = billing_automation_service.run_invoice_cycle(
+        payload = web_billing_invoice_batch_service.preview_batch(
             db=db,
-            billing_cycle=_parse_billing_cycle(billing_cycle),
-            dry_run=True,
-            run_date=run_date,
+            billing_cycle=billing_cycle,
+            billing_date=billing_date,
+            parse_cycle_fn=_parse_billing_cycle,
         )
-
-        # Format response for preview
-        total_amount = summary.get("total_amount", Decimal("0.00"))
-        subscriptions = summary.get("subscriptions", [])
-
-        return JSONResponse({
-            "invoice_count": summary.get("invoices_created", 0),
-            "account_count": summary.get("accounts_affected", len(set(s.get("account_id") for s in subscriptions))),
-            "total_amount": float(total_amount),
-            "total_amount_formatted": f"NGN {total_amount:,.2f}",
-            "subscriptions": [
-                {
-                    "id": str(s.get("id", "")),
-                    "offer_name": s.get("offer_name", "Unknown"),
-                    "amount": float(s.get("amount", 0)),
-                    "amount_formatted": f"NGN {s.get('amount', 0):,.2f}",
-                }
-                for s in subscriptions[:50]  # Limit to first 50 for preview
-            ],
-        })
+        return JSONResponse(payload)
     except Exception as exc:
-        return JSONResponse(
-            {"error": str(exc), "invoice_count": 0, "account_count": 0, "total_amount_formatted": "NGN 0.00"},
-            status_code=400,
-        )
+        return JSONResponse(web_billing_invoice_batch_service.preview_error_payload(exc), status_code=400)
 
 
 @router.get("/invoices/{invoice_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
@@ -1194,8 +478,11 @@ def invoice_detail(
     db: Session = Depends(get_db),
 ):
     """View invoice details."""
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if not invoice:
+    detail_data = web_billing_invoices_service.load_invoice_detail_data(
+        db,
+        invoice_id=str(invoice_id),
+    )
+    if not detail_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Invoice not found"},
@@ -1203,75 +490,14 @@ def invoice_detail(
         )
 
     # Get sidebar stats and current user
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-    tax_rates = billing_service.tax_rates.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    credit_notes = (
-        db.query(CreditNote)
-        .filter(CreditNote.account_id == invoice.account_id)
-        .filter(CreditNote.is_active.is_(True))
-        .filter(
-            CreditNote.status.in_(
-                [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
-            )
-        )
-        .order_by(CreditNote.created_at.desc())
-        .all()
-    )
-    audit_events = audit_service.audit_events.list(
-        db=db,
-        actor_id=None,
-        actor_type=None,
-        action=None,
-        entity_type="invoice",
-        entity_id=str(invoice_id),
-        request_id=None,
-        is_success=None,
-        status_code=None,
-        is_active=None,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=10,
-        offset=0,
-    )
-    actor_ids = {str(event.actor_id) for event in audit_events if getattr(event, "actor_id", None)}
-    people = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
-        }
-    activities = []
-    for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        metadata = getattr(event, "metadata_", None) or {}
-        changes = extract_changes(metadata, getattr(event, "action", None))
-        change_summary = format_changes(changes, max_items=2)
-        activities.append(
-            {
-                "title": (event.action or "Activity").replace("_", " ").title(),
-                "description": f"{actor_name}" + (f" · {change_summary}" if change_summary else ""),
-                "occurred_at": event.occurred_at,
-            }
-        )
-
     return templates.TemplateResponse(
         "admin/billing/invoice_detail.html",
         {
             "request": request,
-            "invoice": invoice,
-            "tax_rates": tax_rates,
-            "credit_notes": credit_notes,
-            "activities": activities,
+            **detail_data,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1298,22 +524,16 @@ def invoice_line_create(
         )
         billing_service.invoice_lines.create(db, payload)
     except Exception as exc:
-        invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-        from app.web.admin import get_sidebar_stats, get_current_user
-        tax_rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
+        detail_data = web_billing_invoices_service.load_invoice_detail_data(
+            db,
+            invoice_id=str(invoice_id),
         )
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/invoice_detail.html",
             {
                 "request": request,
-                "invoice": invoice,
-                "tax_rates": tax_rates,
+                **(detail_data or {}),
                 "error": str(exc),
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
@@ -1354,35 +574,16 @@ def invoice_apply_credit(
             metadata=metadata_payload,
         )
     except Exception as exc:
-        invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-        from app.web.admin import get_sidebar_stats, get_current_user
-        tax_rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
+        detail_data = web_billing_invoices_service.load_invoice_detail_data(
+            db,
+            invoice_id=str(invoice_id),
         )
-        credit_notes = (
-            db.query(CreditNote)
-            .filter(CreditNote.account_id == invoice.account_id)
-            .filter(CreditNote.is_active.is_(True))
-            .filter(
-                CreditNote.status.in_(
-                    [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
-                )
-            )
-            .order_by(CreditNote.created_at.desc())
-            .all()
-        )
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/invoice_detail.html",
             {
                 "request": request,
-                "invoice": invoice,
-                "tax_rates": tax_rates,
-                "credit_notes": credit_notes,
+                **(detail_data or {}),
                 "error": str(exc),
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
@@ -1394,11 +595,7 @@ def invoice_apply_credit(
 
 @router.get("/invoices/{invoice_id}/pdf", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
-        f"PDF generation queued for invoice {invoice_id}."
-        "</div>"
-    )
+    return HTMLResponse(web_billing_invoice_actions_service.pdf_message(invoice_id))
 
 
 @router.post("/invoices/{invoice_id}/send", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
@@ -1413,11 +610,7 @@ def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         entity_id=str(invoice_id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
-    return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
-        f"Invoice {invoice_id} send queued."
-        "</div>"
-    )
+    return HTMLResponse(web_billing_invoice_actions_service.send_message(invoice_id))
 
 
 @router.post("/invoices/{invoice_id}/void", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
@@ -1432,11 +625,7 @@ def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         entity_id=str(invoice_id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
-    return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
-        f"Invoice {invoice_id} void queued."
-        "</div>"
-    )
+    return HTMLResponse(web_billing_invoice_actions_service.void_message(invoice_id))
 
 
 @router.post("/invoices/bulk/issue", dependencies=[Depends(require_permission("billing:write"))])
@@ -1447,33 +636,21 @@ def invoice_bulk_issue(
 ):
     """Bulk issue invoices (change status from draft to issued)."""
     from fastapi.responses import JSONResponse
-    from app.models.billing import InvoiceStatus
+
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
-    count = 0
-
-    for invoice_id in invoice_ids.split(","):
-        invoice_id = invoice_id.strip()
-        if not invoice_id:
-            continue
-        try:
-            invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status == InvoiceStatus.draft:
-                invoice.status = InvoiceStatus.issued
-                invoice.issued_at = datetime.now(timezone.utc)
-                db.commit()
-                log_audit_event(
-                    db=db,
-                    request=request,
-                    action="issue",
-                    entity_type="invoice",
-                    entity_id=invoice_id,
-                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-                )
-                count += 1
-        except Exception:
-            continue
+    updated_ids = web_billing_invoice_bulk_service.bulk_issue(db, invoice_ids)
+    count = len(updated_ids)
+    for invoice_id in updated_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="issue",
+            entity_type="invoice",
+            entity_id=invoice_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        )
 
     return JSONResponse({"message": f"Issued {count} invoices", "count": count})
 
@@ -1486,30 +663,21 @@ def invoice_bulk_send(
 ):
     """Bulk send invoice notifications."""
     from fastapi.responses import JSONResponse
+
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
-    count = 0
-
-    for invoice_id in invoice_ids.split(","):
-        invoice_id = invoice_id.strip()
-        if not invoice_id:
-            continue
-        try:
-            invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice:
-                # TODO: Queue email send task
-                log_audit_event(
-                    db=db,
-                    request=request,
-                    action="send",
-                    entity_type="invoice",
-                    entity_id=invoice_id,
-                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-                )
-                count += 1
-        except Exception:
-            continue
+    queued_ids = web_billing_invoice_bulk_service.bulk_send(db, invoice_ids)
+    count = len(queued_ids)
+    for invoice_id in queued_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="send",
+            entity_type="invoice",
+            entity_id=invoice_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        )
 
     return JSONResponse({"message": f"Queued {count} invoice notifications", "count": count})
 
@@ -1522,32 +690,21 @@ def invoice_bulk_void(
 ):
     """Bulk void invoices."""
     from fastapi.responses import JSONResponse
-    from app.models.billing import InvoiceStatus
+
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
-    count = 0
-
-    for invoice_id in invoice_ids.split(","):
-        invoice_id = invoice_id.strip()
-        if not invoice_id:
-            continue
-        try:
-            invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status not in [InvoiceStatus.paid, InvoiceStatus.void]:
-                invoice.status = InvoiceStatus.void
-                db.commit()
-                log_audit_event(
-                    db=db,
-                    request=request,
-                    action="void",
-                    entity_type="invoice",
-                    entity_id=invoice_id,
-                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-                )
-                count += 1
-        except Exception:
-            continue
+    updated_ids = web_billing_invoice_bulk_service.bulk_void(db, invoice_ids)
+    count = len(updated_ids)
+    for invoice_id in updated_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="void",
+            entity_type="invoice",
+            entity_id=invoice_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        )
 
     return JSONResponse({"message": f"Voided {count} invoices", "count": count})
 
@@ -1561,65 +718,19 @@ def billing_credits_list(
     db: Session = Depends(get_db),
 ):
     """List all credit notes."""
-    from app.web.admin import get_sidebar_stats, get_current_user
-
-    per_page = 50
-    offset = (page - 1) * per_page
-
-    account_ids = []
-    customer_filtered = bool(customer_ref)
-    if customer_ref:
-        account_ids = [UUID(item["id"]) for item in _accounts_for_customer(db, customer_ref)]
-
-    # Get status counts for filter badges
-    if customer_filtered and not account_ids:
-        status_counts = {
-            "draft": 0,
-            "issued": 0,
-            "partially_applied": 0,
-            "applied": 0,
-            "void": 0,
-        }
-    else:
-        status_query = db.query(CreditNote)
-        if account_ids:
-            status_query = status_query.filter(CreditNote.account_id.in_(account_ids))
-        status_counts = {
-            "draft": status_query.filter(CreditNote.status == CreditNoteStatus.draft).count(),
-            "issued": status_query.filter(CreditNote.status == CreditNoteStatus.issued).count(),
-            "partially_applied": status_query.filter(CreditNote.status == CreditNoteStatus.partially_applied).count(),
-            "applied": status_query.filter(CreditNote.status == CreditNoteStatus.applied).count(),
-            "void": status_query.filter(CreditNote.status == CreditNoteStatus.void).count(),
-        }
-
-    # Build query
-    query = db.query(CreditNote).filter(CreditNote.is_active.is_(True))
-    credits = []
-    total = 0
-    total_pages = 1
-    if account_ids:
-        query = query.filter(CreditNote.account_id.in_(account_ids))
-    if not customer_filtered or account_ids:
-        if status:
-            query = query.filter(CreditNote.status == status)
-        total = query.count()
-        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-        credits = (
-            query.order_by(CreditNote.created_at.desc()).offset(offset).limit(per_page).all()
-        )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    state = web_billing_credits_service.build_credits_list_data(
+        db,
+        page=page,
+        status=status,
+        customer_ref=customer_ref,
+    )
 
     return templates.TemplateResponse(
         "admin/billing/credits.html",
         {
             "request": request,
-            "credits": credits,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "status": status,
-            "status_counts": status_counts,
-            "customer_ref": customer_ref,
+            **state,
             "active_page": "credits",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -1636,19 +747,16 @@ def billing_credit_new(
     db: Session = Depends(get_db),
 ):
     resolved_account_id = account_id or account
-    selected_account = None
-    if resolved_account_id:
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=resolved_account_id)
-        except Exception:
-            selected_account = None
-    accounts = None
-    from app.web.admin import get_sidebar_stats, get_current_user
+    selected_account = web_billing_credits_service.resolve_selected_account(
+        db,
+        resolved_account_id,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/credit_form.html",
         {
             "request": request,
-            "accounts": accounts,
+            "accounts": None,
             "action_url": "/admin/billing/credits",
             "form_title": "Issue Credit",
             "submit_label": "Issue Credit",
@@ -1657,7 +765,7 @@ def billing_credit_new(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": bool(selected_account),
-            "account_label": _account_label(selected_account) if selected_account else None,
+            "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,
             "account_number": selected_account.account_number if selected_account else None,
             "selected_account_id": str(selected_account.id) if selected_account else None,
         },
@@ -1677,7 +785,7 @@ def billing_credit_create(
         credit_amount = _parse_decimal(amount, "amount")
         payload = CreditNoteCreate(
             account_id=_parse_uuid(account_id, "account_id"),
-            status="issued",
+            status=CreditNoteStatus.issued,
             currency=currency.strip().upper(),
             subtotal=credit_amount,
             tax_total=Decimal("0.00"),
@@ -1686,19 +794,13 @@ def billing_credit_create(
         )
         billing_service.credit_notes.create(db, payload)
     except Exception as exc:
-        selected_account = None
-        if account_id:
-            try:
-                selected_account = subscriber_service.accounts.get(db=db, account_id=account_id)
-            except Exception:
-                selected_account = None
-        accounts = None
-        from app.web.admin import get_sidebar_stats, get_current_user
+        selected_account = web_billing_credits_service.resolve_selected_account(db, account_id)
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/credit_form.html",
             {
                 "request": request,
-                "accounts": accounts,
+                "accounts": None,
                 "action_url": "/admin/billing/credits",
                 "form_title": "Issue Credit",
                 "submit_label": "Issue Credit",
@@ -1708,7 +810,7 @@ def billing_credit_create(
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 "account_locked": bool(selected_account),
-                "account_label": _account_label(selected_account) if selected_account else None,
+                "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,
                 "account_number": selected_account.account_number if selected_account else None,
                 "selected_account_id": str(selected_account.id) if selected_account else None,
             },
@@ -1726,62 +828,15 @@ def payments_list(
     db: Session = Depends(get_db),
 ):
     """List all payments."""
-    offset = (page - 1) * per_page
-    account_ids = []
-    customer_filtered = bool(customer_ref)
-    if customer_ref:
-        account_ids = [UUID(item["id"]) for item in _accounts_for_customer(db, customer_ref)]
-    payments = []
-    total = 0
-    if account_ids:
-        query = (
-            db.query(Payment)
-            .filter(Payment.account_id.in_(account_ids))
-            .filter(Payment.is_active.is_(True))
-            .order_by(Payment.created_at.desc())
-        )
-        total = query.count()
-        payments = query.offset(offset).limit(per_page).all()
-    elif not customer_filtered:
-        payments = billing_service.payments.list(
-            db=db,
-            account_id=None,
-            invoice_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
-        )
-        total = db.query(Payment).filter(Payment.is_active.is_(True)).count()
-    else:
-        total = 0
-    total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-
-    accounts = subscriber_service.accounts.list(
-        db=db,
-        subscriber_id=None,
-        reseller_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=2000,
-        offset=0,
-    )
-    total_balance = sum((getattr(account, "balance", 0) or 0) for account in accounts)
-    active_count = sum(
-        1
-        for account in accounts
-        if (getattr(account.status, "value", account.status) or "active") == "active"
-    )
-    suspended_count = sum(
-        1
-        for account in accounts
-        if (getattr(account.status, "value", account.status) or "") == "suspended"
+    state = web_billing_payments_service.build_payments_list_data(
+        db,
+        page=page,
+        per_page=per_page,
+        customer_ref=customer_ref,
     )
 
     # Get sidebar stats and current user
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -1789,15 +844,7 @@ def payments_list(
         "admin/billing/payments.html",
         {
             "request": request,
-            "payments": payments,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "total_balance": total_balance,
-            "active_count": active_count,
-            "suspended_count": suspended_count,
-            "customer_ref": customer_ref,
+            **state,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1813,87 +860,27 @@ def payment_new(
     account: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    prefill = {}
-    resolved_invoice_id = invoice_id or invoice
-    resolved_account_id = account_id or account
-    selected_account = None
-    invoice_label = None
-    balance_value = None
-    balance_display = None
-    if resolved_invoice_id:
-        try:
-            invoice_obj = billing_service.invoices.get(
-                db=db, invoice_id=resolved_invoice_id
-            )
-            prefill["invoice_id"] = str(invoice_obj.id)
-            prefill["invoice_number"] = invoice_obj.invoice_number
-            invoice_label = invoice_obj.invoice_number or "Invoice"
-            balance_value, balance_display = _invoice_balance_info(invoice_obj)
-            # Auto-fill amount from invoice balance_due
-            if invoice_obj.balance_due:
-                prefill["amount"] = float(invoice_obj.balance_due)
-            elif invoice_obj.total:
-                prefill["amount"] = float(invoice_obj.total)
-            # Auto-fill currency from invoice
-            if invoice_obj.currency:
-                prefill["currency"] = invoice_obj.currency
-            # Default status to succeeded for payment recording
-            prefill["status"] = "succeeded"
-            resolved_account_id = str(invoice_obj.account_id)
-        except Exception:
-            pass
-    if resolved_account_id:
-        prefill["account_id"] = resolved_account_id
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=resolved_account_id)
-        except Exception:
-            selected_account = None
-    accounts = None
-    payment_methods = []
-    payment_method_types = []
-    collection_accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=500,
-        offset=0,
+    state = web_billing_payment_forms_service.build_new_form_state(
+        db,
+        invoice_id=invoice_id,
+        invoice_alias=invoice,
+        account_id=account_id,
+        account_alias=account,
     )
-    # Get unpaid invoices for the dropdown
-    invoices = []
-    if selected_account:
-        invoices = billing_service.invoices.list(
-            db=db,
-            account_id=str(selected_account.id),
-            status=None,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-        invoices = _filter_open_invoices(invoices)
-        if prefill.get("invoice_id"):
-            try:
-                invoice_obj = billing_service.invoices.get(
-                    db=db, invoice_id=prefill["invoice_id"]
-                )
-                if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
-                    invoices = [invoice_obj, *invoices]
-            except Exception:
-                pass
-    from app.web.admin import get_sidebar_stats, get_current_user
+    selected_account = cast(Subscriber | None, state["selected_account"])
+    prefill = cast(dict[str, Any], state["prefill"])
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_form.html",
         {
             "request": request,
-            "accounts": accounts,
-            "payment_methods": payment_methods,
-            "payment_method_types": payment_method_types,
-            "collection_accounts": collection_accounts,
-            "invoices": invoices,
+            "accounts": None,
+            "payment_methods": [],
+            "payment_method_types": [],
+            "collection_accounts": state["collection_accounts"],
+            "invoices": state["invoices"],
             "prefill": prefill,
-            "invoice_label": invoice_label,
+            "invoice_label": state["invoice_label"],
             "action_url": "/admin/billing/payments/create",
             "form_title": "Record Payment",
             "submit_label": "Record Payment",
@@ -1902,14 +889,14 @@ def payment_new(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": bool(selected_account),
-            "account_label": _account_label(selected_account) if selected_account else None,
+            "account_label": web_billing_payment_forms_service.account_label(selected_account) if selected_account else None,
             "account_number": selected_account.account_number if selected_account else None,
             "selected_account_id": str(selected_account.id) if selected_account else None,
             "currency_locked": bool(prefill.get("invoice_id")),
             "show_invoice_typeahead": not bool(selected_account),
             "selected_invoice_id": prefill.get("invoice_id"),
-            "balance_value": balance_value,
-            "balance_display": balance_display,
+            "balance_value": state["balance_value"],
+            "balance_display": state["balance_display"],
         },
     )
 
@@ -1925,40 +912,19 @@ def payment_invoice_options(
     invoice_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    selected_account = None
-    if account_id:
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=account_id)
-        except Exception:
-            selected_account = None
-    invoices = []
-    if selected_account:
-        invoices = billing_service.invoices.list(
-            db=db,
-            account_id=str(selected_account.id),
-            status=None,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-        invoices = _filter_open_invoices(invoices)
-    invoice_label = None
-    if invoice_id:
-        invoice_obj = _resolve_invoice(db, invoice_id)
-        if invoice_obj:
-            invoice_label = invoice_obj.invoice_number or "Invoice"
-            if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
-                invoices = [invoice_obj, *invoices]
+    state = web_billing_payment_forms_service.load_invoice_options_state(
+        db,
+        account_id=account_id,
+        invoice_id=invoice_id,
+    )
     return templates.TemplateResponse(
         "admin/billing/_payment_invoice_select.html",
         {
             "request": request,
-            "invoices": invoices,
+            "invoices": state["invoices"],
             "selected_invoice_id": invoice_id,
-            "invoice_label": invoice_label,
-            "show_invoice_typeahead": not bool(selected_account),
+            "invoice_label": state["invoice_label"],
+            "show_invoice_typeahead": not bool(state["selected_account"]),
         },
     )
 
@@ -1974,18 +940,17 @@ def payment_invoice_currency(
     currency: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    invoice_obj = _resolve_invoice(db, invoice_id)
-    currency_value = currency or "NGN"
-    currency_locked = False
-    if invoice_obj and invoice_obj.currency:
-        currency_value = invoice_obj.currency
-        currency_locked = True
+    state = web_billing_payment_forms_service.load_invoice_currency_state(
+        db,
+        invoice_id=invoice_id,
+        currency=currency,
+    )
     return templates.TemplateResponse(
         "admin/billing/_payment_currency_field.html",
         {
             "request": request,
-            "currency_value": currency_value,
-            "currency_locked": currency_locked,
+            "currency_value": state["currency_value"],
+            "currency_locked": state["currency_locked"],
         },
     )
 
@@ -2001,21 +966,18 @@ def payment_invoice_details(
     amount: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    invoice_obj = _resolve_invoice(db, invoice_id)
-    amount_value = amount or ""
-    balance_value = None
-    balance_display = None
-    if invoice_obj:
-        balance_value, balance_display = _invoice_balance_info(invoice_obj)
-        if balance_value:
-            amount_value = balance_value
+    state = web_billing_payment_forms_service.load_invoice_details_state(
+        db,
+        invoice_id=invoice_id,
+        amount=amount,
+    )
     return templates.TemplateResponse(
         "admin/billing/_payment_amount_field.html",
         {
             "request": request,
-            "amount_value": amount_value,
-            "balance_value": balance_value,
-            "balance_display": balance_display,
+            "amount_value": state["amount_value"],
+            "balance_value": state["balance_value"],
+            "balance_display": state["balance_display"],
         },
     )
 
@@ -2032,7 +994,7 @@ def billing_customer_accounts(
     account_x_model: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    accounts = _accounts_for_customer(db, customer_ref)
+    accounts = web_billing_customers_service.accounts_for_customer(db, customer_ref)
     return templates.TemplateResponse(
         "admin/billing/_customer_account_select.html",
         {
@@ -2056,7 +1018,7 @@ def billing_customer_subscribers(
     subscriber_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    subscribers = _subscribers_for_customer(db, customer_ref)
+    subscribers = web_billing_customers_service.subscribers_for_customer(db, customer_ref)
     return templates.TemplateResponse(
         "admin/billing/_customer_subscriber_select.html",
         {
@@ -2084,35 +1046,20 @@ def payment_create(
     balance_value = None
     balance_display = None
     try:
-        resolved_invoice = _resolve_invoice(db, invoice_id)
-        if resolved_invoice:
-            balance_value, balance_display = _invoice_balance_info(resolved_invoice)
-        resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
-        if not resolved_account_id:
-            raise ValueError("account_id is required")
-        parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
-        if resolved_invoice and resolved_invoice.currency:
-            currency = resolved_invoice.currency
-        parsed_amount = _parse_decimal(amount, "amount")
-        allocations = None
-        if invoice_id:
-            from app.schemas.billing import PaymentAllocationApply
-            allocations = [PaymentAllocationApply(
-                invoice_id=UUID(invoice_id),
-                amount=parsed_amount,
-            )]
-        payload = PaymentCreate(
-            account_id=parsed_account_id,
-            collection_account_id=UUID(collection_account_id)
-            if collection_account_id
-            else None,
-            amount=parsed_amount,
-            currency=currency.strip().upper(),
-            status=status or "pending",
-            memo=memo.strip() if memo else None,
-            allocations=allocations,
+        result = web_billing_payments_service.process_payment_create(
+            db,
+            account_id=account_id,
+            amount=amount,
+            currency=currency,
+            status=status,
+            invoice_id=invoice_id,
+            collection_account_id=collection_account_id,
+            memo=memo,
         )
-        payment = billing_service.payments.create(db, payload)
+        payment = cast(Payment, result["payment"])
+        resolved_invoice = result["resolved_invoice"]
+        balance_value = result["balance_value"]
+        balance_display = result["balance_display"]
         from app.web.admin import get_current_user
         current_user = get_current_user(request)
         log_audit_event(
@@ -2124,67 +1071,32 @@ def payment_create(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={
                 "amount": str(payment.amount),
-                "invoice_id": _payment_primary_invoice_id(payment),
+                "invoice_id": web_billing_payments_service.payment_primary_invoice_id(payment),
             },
         )
     except Exception as exc:
-        selected_account = None
-        if account_id or resolved_invoice:
-            try:
-                selected_account = subscriber_service.accounts.get(
-                    db=db, account_id=account_id or str(resolved_invoice.account_id)
-                )
-            except Exception:
-                selected_account = None
-        accounts = None
-        payment_methods = []
-        payment_method_types = []
-        collection_accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
+        deps = cast(
+            dict[str, object],
+            web_billing_payment_forms_service.load_create_error_dependencies(
+                db,
+                account_id=account_id,
+                resolved_invoice=resolved_invoice,
+            ),
         )
-        invoices = []
-        if selected_account:
-            invoices = billing_service.invoices.list(
-                db=db,
-                account_id=str(selected_account.id),
-                status=None,
-                is_active=True,
-                order_by="created_at",
-                order_dir="desc",
-                limit=200,
-                offset=0,
-            )
-            invoices = _filter_open_invoices(invoices)
-        from app.web.admin import get_sidebar_stats, get_current_user
+        error_state = web_billing_payment_forms_service.build_create_error_context(
+            error=str(exc),
+            deps=deps,
+            resolved_invoice=resolved_invoice,
+            invoice_id=invoice_id,
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_form.html",
             {
                 "request": request,
-                "accounts": accounts,
-                "payment_methods": payment_methods,
-                "payment_method_types": payment_method_types,
-                "collection_accounts": collection_accounts,
-                "invoices": invoices,
-                "action_url": "/admin/billing/payments/create",
-                "form_title": "Record Payment",
-                "submit_label": "Record Payment",
-                "error": str(exc),
-                "active_page": "payments",
-                "active_menu": "billing",
+                **error_state,
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                "account_locked": bool(selected_account),
-                "account_label": _account_label(selected_account) if selected_account else None,
-                "account_number": selected_account.account_number if selected_account else None,
-                "selected_account_id": str(selected_account.id) if selected_account else None,
-                "currency_locked": bool(resolved_invoice),
-                "show_invoice_typeahead": not bool(selected_account),
-                "selected_invoice_id": invoice_id,
                 "balance_value": balance_value,
                 "balance_display": balance_display,
             },
@@ -2194,23 +1106,20 @@ def payment_create(
 
 
 @router.get("/payments/{payment_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
-def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get_db)):
-    payment = billing_service.payments.get(db=db, payment_id=str(payment_id))
-    if not payment:
+def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get_db)) -> HTMLResponse:
+    state = web_billing_payments_service.build_payment_detail_data(db, payment_id=str(payment_id))
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Payment not found"},
             status_code=404,
         )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_detail.html",
         {
             "request": request,
-            "payment": payment,
-            "primary_invoice_id": _payment_primary_invoice_id(payment),
-            "active_page": "payments",
-            "active_menu": "billing",
+            **state,
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
@@ -2218,66 +1127,27 @@ def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get
 
 
 @router.get("/payments/{payment_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
-def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_db)):
-    payment = billing_service.payments.get(db=db, payment_id=str(payment_id))
-    if not payment:
+def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_db)) -> HTMLResponse:
+    state = web_billing_payments_service.build_payment_edit_data(db, payment_id=str(payment_id))
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Payment not found"},
             status_code=404,
         )
-    selected_account = payment.account
-    primary_invoice_id = _payment_primary_invoice_id(payment)
-    if not selected_account and payment.account_id:
-        try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=str(payment.account_id))
-        except Exception:
-            selected_account = None
-    payment_methods = billing_service.payment_methods.list(
-        db=db,
-        account_id=str(payment.account_id),
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=500,
-        offset=0,
-    )
-    payment_method_types = _payment_method_type_options()
-    if payment.payment_method_id and all(
-        str(method.id) != str(payment.payment_method_id) for method in payment_methods
-    ):
-        method = billing_service.payment_methods.get(db, str(payment.payment_method_id))
-        if method:
-            payment_methods = [*payment_methods, method]
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=str(selected_account.id) if selected_account else None,
-        status=None,
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    invoices = _filter_open_invoices(invoices)
-    invoice_obj = None
-    if primary_invoice_id:
-        try:
-            invoice_obj = billing_service.invoices.get(db=db, invoice_id=primary_invoice_id)
-            if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
-                invoices = [invoice_obj, *invoices]
-        except Exception:
-            invoice_obj = None
-    balance_value, balance_display = _invoice_balance_info(invoice_obj)
-    from app.web.admin import get_sidebar_stats, get_current_user
+    payment = cast(Payment, state["payment"])
+    selected_account = cast(Subscriber | None, state["selected_account"])
+    primary_invoice_id = state["primary_invoice_id"]
+    deps = cast(dict[str, Any], state["deps"])
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_form.html",
         {
             "request": request,
             "accounts": None,
-            "payment_methods": payment_methods,
-            "payment_method_types": payment_method_types,
-            "invoices": invoices,
+            "payment_methods": deps["payment_methods"],
+            "payment_method_types": deps["payment_method_types"],
+            "invoices": deps["invoices"],
             "payment": payment,
             "action_url": f"/admin/billing/payments/{payment_id}/edit",
             "form_title": "Edit Payment",
@@ -2287,14 +1157,14 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": True,
-            "account_label": _account_label(selected_account),
+            "account_label": web_billing_payment_forms_service.account_label(selected_account),
             "account_number": selected_account.account_number if selected_account else None,
             "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id),
             "currency_locked": bool(primary_invoice_id),
             "show_invoice_typeahead": False,
             "selected_invoice_id": primary_invoice_id,
-            "balance_value": balance_value,
-            "balance_display": balance_display,
+            "balance_value": deps["balance_value"],
+            "balance_display": deps["balance_display"],
         },
     )
 
@@ -2313,47 +1183,19 @@ def payment_update(
     db: Session = Depends(get_db),
 ):
     try:
-        before = billing_service.payments.get(db=db, payment_id=str(payment_id))
-        current_invoice_id = _payment_primary_invoice_id(before)
-        resolved_invoice = _resolve_invoice(db, invoice_id)
-        resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
-        if not resolved_account_id:
-            resolved_account_id = str(before.account_id) if before else None
-        if not resolved_account_id:
-            raise ValueError("account_id is required")
-        parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
-        if resolved_invoice and resolved_invoice.currency:
-            currency = resolved_invoice.currency
-        requested_invoice_id = str(resolved_invoice.id) if resolved_invoice else None
-        invoice_changed = requested_invoice_id and requested_invoice_id != current_invoice_id
-        payload = PaymentUpdate(
-            account_id=parsed_account_id,
-            payment_method_id=_resolve_payment_method_id(
-                db, parsed_account_id, payment_method_id
-            ),
-            amount=_parse_decimal(amount, "amount"),
-            currency=currency.strip().upper(),
-            status=status or "pending",
-            memo=memo.strip() if memo else None,
+        result = web_billing_payments_service.process_payment_update(
+            db,
+            payment_id=str(payment_id),
+            account_id=account_id,
+            amount=amount,
+            currency=currency,
+            status=status,
+            invoice_id=invoice_id,
+            payment_method_id=payment_method_id,
+            memo=memo,
         )
-        billing_service.payments.update(db, str(payment_id), payload)
-        # If the invoice changed, update allocations
-        if invoice_changed and requested_invoice_id:
-            payment_obj = billing_service.payments.get(db=db, payment_id=str(payment_id))
-            # Remove existing allocations and create new one
-            for alloc in list(payment_obj.allocations):
-                db.delete(alloc)
-            db.flush()
-            from app.models.billing import PaymentAllocation
-            new_alloc = PaymentAllocation(
-                payment_id=payment_obj.id,
-                invoice_id=UUID(requested_invoice_id),
-                amount=payment_obj.amount,
-            )
-            db.add(new_alloc)
-            db.commit()
-            db.refresh(payment_obj)
-        after = billing_service.payments.get(db=db, payment_id=str(payment_id))
+        before = result["before"]
+        after = result["after"]
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
         current_user = get_current_user(request)
@@ -2367,81 +1209,27 @@ def payment_update(
             metadata=metadata_payload,
         )
     except Exception as exc:
-        payment = billing_service.payments.get(db=db, payment_id=str(payment_id))
-        selected_account = payment.account if payment else None
-        if not selected_account and payment and payment.account_id:
-            try:
-                selected_account = subscriber_service.accounts.get(
-                    db=db, account_id=str(payment.account_id)
-                )
-            except Exception:
-                selected_account = None
-        payment_methods = billing_service.payment_methods.list(
-            db=db,
-            account_id=str(payment.account_id),
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
+        edit_state = web_billing_payments_service.build_payment_edit_data(
+            db, payment_id=str(payment_id)
         )
-        payment_method_types = _payment_method_type_options()
-        if payment.payment_method_id and all(
-            str(method.id) != str(payment.payment_method_id) for method in payment_methods
-        ):
-            method = billing_service.payment_methods.get(db, str(payment.payment_method_id))
-            if method:
-                payment_methods = [*payment_methods, method]
-        invoices = billing_service.invoices.list(
-            db=db,
-            account_id=str(selected_account.id) if selected_account else None,
-            status=None,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
+        payment = edit_state["payment"] if edit_state else None
+        selected_account = edit_state["selected_account"] if edit_state else None
+        deps = cast(dict[str, object], edit_state["deps"]) if edit_state else {}
+        error_state = web_billing_payment_forms_service.build_edit_error_context(
+            payment=payment,
+            payment_id=payment_id,
+            error=str(exc),
+            deps=deps,
+            selected_account=selected_account,
         )
-        invoices = _filter_open_invoices(invoices)
-        primary_invoice_id = _payment_primary_invoice_id(payment)
-        invoice_obj = None
-        if primary_invoice_id:
-            try:
-                invoice_obj = billing_service.invoices.get(
-                    db=db, invoice_id=primary_invoice_id
-                )
-                if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
-                    invoices = [invoice_obj, *invoices]
-            except Exception:
-                invoice_obj = None
-        balance_value, balance_display = _invoice_balance_info(invoice_obj)
-        from app.web.admin import get_sidebar_stats, get_current_user
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_form.html",
             {
                 "request": request,
-                "accounts": None,
-                "payment_methods": payment_methods,
-                "payment_method_types": payment_method_types,
-                "invoices": invoices,
-                "payment": payment,
-                "action_url": f"/admin/billing/payments/{payment_id}/edit",
-                "form_title": "Edit Payment",
-                "submit_label": "Save Changes",
-                "error": str(exc),
-                "active_page": "payments",
-                "active_menu": "billing",
+                **error_state,
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                "account_locked": True,
-                "account_label": _account_label(selected_account),
-                "account_number": selected_account.account_number if selected_account else None,
-                "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id) if payment else None,
-                "currency_locked": bool(primary_invoice_id) if payment else False,
-                "show_invoice_typeahead": False,
-                "selected_invoice_id": primary_invoice_id,
-                "balance_value": balance_value,
-                "balance_display": balance_display,
             },
             status_code=400,
         )
@@ -2451,7 +1239,7 @@ def payment_update(
 @router.get("/payments/import", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
 def payment_import_page(request: Request, db: Session = Depends(get_db)):
     """Bulk payment import page."""
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_import.html",
         {
@@ -2465,112 +1253,27 @@ def payment_import_page(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/payments/import", dependencies=[Depends(require_permission("billing:write"))])
-async def payment_import_submit(request: Request, db: Session = Depends(get_db)):
-    """Process bulk payment import from JSON (async for request.json())."""
+def payment_import_submit(
+    request: Request,
+    body: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    """Process bulk payment import from JSON."""
     from fastapi.responses import JSONResponse
+
     from app.web.admin import get_current_user
 
     try:
-        body = await request.json()
         payments_data = body.get("payments", [])
 
         if not payments_data:
             return JSONResponse({"message": "No payments to import"}, status_code=400)
 
-        # Get default currency from settings
-        default_currency = settings_spec.resolve_value(
-            db, SettingDomain.billing, "default_currency"
+        default_currency = web_billing_payments_service.resolve_default_currency(db)
+
+        imported_count, errors = web_billing_payments_service.import_payments(
+            db, payments_data, default_currency
         )
-        if default_currency is None:
-            default_currency = "NGN"
-
-        imported_count = 0
-        errors = []
-
-        for idx, row in enumerate(payments_data):
-            try:
-                # Resolve account by account_number or account_id
-                account_id = None
-                account_number = row.get("account_number")
-                account_id_str = row.get("account_id")
-
-                if account_number:
-                    # Look up account by number
-                    accounts = subscriber_service.accounts.list(
-                        db=db,
-                        subscriber_id=None,
-                        reseller_id=None,
-                        order_by="created_at",
-                        order_dir="desc",
-                        limit=10000,
-                        offset=0,
-                    )
-                    for acc in accounts:
-                        if acc.account_number == account_number:
-                            account_id = acc.id
-                            break
-                    if not account_id:
-                        errors.append(f"Row {idx + 1}: Account not found: {account_number}")
-                        continue
-                elif account_id_str:
-                    try:
-                        account_id = UUID(account_id_str)
-                    except ValueError:
-                        errors.append(f"Row {idx + 1}: Invalid account_id format")
-                        continue
-                else:
-                    errors.append(f"Row {idx + 1}: Missing account identifier")
-                    continue
-
-                # Parse amount
-                try:
-                    amount = Decimal(str(row.get("amount", "0")))
-                    if amount <= 0:
-                        errors.append(f"Row {idx + 1}: Amount must be positive")
-                        continue
-                except (ValueError, InvalidOperation):
-                    errors.append(f"Row {idx + 1}: Invalid amount")
-                    continue
-
-                # Parse date if provided
-                paid_at = None
-                date_str = row.get("date")
-                if date_str:
-                    try:
-                        paid_at = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        # Try alternate date formats
-                        for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"]:
-                            try:
-                                paid_at = datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
-                                break
-                            except ValueError:
-                                continue
-
-                # Get currency and reference
-                currency = row.get("currency", default_currency) or default_currency
-                reference = row.get("reference", "")
-
-                # Create payment
-                payload = PaymentCreate(
-                    account_id=account_id,
-                    amount=amount,
-                    currency=currency.upper(),
-                    status="completed",
-                    memo=f"Imported payment{': ' + reference if reference else ''}",
-                )
-                payment = billing_service.payments.create(db, payload)
-
-                # Update paid_at if provided
-                if paid_at:
-                    payment.paid_at = paid_at
-                    db.commit()
-
-                imported_count += 1
-
-            except Exception as exc:
-                errors.append(f"Row {idx + 1}: {str(exc)}")
-                continue
 
         # Log audit event
         current_user = get_current_user(request)
@@ -2584,11 +1287,12 @@ async def payment_import_submit(request: Request, db: Session = Depends(get_db))
             metadata={"imported": imported_count, "errors": len(errors)},
         )
 
-        return JSONResponse({
-            "imported": imported_count,
-            "errors": errors[:10] if errors else [],  # Return first 10 errors
-            "total_errors": len(errors),
-        })
+        return JSONResponse(
+            web_billing_payments_service.build_import_result_payload(
+                imported_count=imported_count,
+                errors=errors,
+            )
+        )
 
     except Exception as exc:
         return JSONResponse({"message": f"Import failed: {str(exc)}"}, status_code=500)
@@ -2599,12 +1303,8 @@ def payment_import_template():
     """Download CSV template for payment import."""
     from fastapi.responses import Response
 
-    csv_content = """account_number,amount,currency,reference,date
-ACC-001,15000,NGN,TRF-001,2024-01-15
-ACC-002,25000,NGN,TRF-002,2024-01-16
-"""
     return Response(
-        content=csv_content,
+        content=web_billing_payments_service.import_template_csv(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=payment_import_template.csv"},
     )
@@ -2619,35 +1319,15 @@ def accounts_list(
     db: Session = Depends(get_db),
 ):
     """List all billing accounts."""
-    offset = (page - 1) * per_page
-    accounts = []
-    total = 0
-    if customer_ref:
-        from app.models.subscriber import Subscriber
-        subscriber_ids = _subscriber_ids_for_customer(db, customer_ref)
-        if subscriber_ids:
-            query = (
-                db.query(Subscriber)
-                .filter(Subscriber.id.in_(subscriber_ids))
-                .order_by(Subscriber.created_at.desc())
-            )
-            total = query.count()
-            accounts = query.offset(offset).limit(per_page).all()
-    else:
-        accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
-        )
-        total = db.query(Subscriber).count()
-    total_pages = (total + per_page - 1) // per_page
+    state = web_billing_accounts_service.build_accounts_list_data(
+        db,
+        page=page,
+        per_page=per_page,
+        customer_ref=customer_ref,
+    )
 
     # Get sidebar stats and current user
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -2655,12 +1335,7 @@ def accounts_list(
         "admin/billing/accounts.html",
         {
             "request": request,
-            "accounts": accounts,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "customer_ref": customer_ref,
+            **state,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -2669,25 +1344,12 @@ def accounts_list(
 
 @router.get("/accounts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
 def account_new(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     customer_ref = request.query_params.get("customer_ref")
-    customer_label = _customer_label(db, customer_ref)
-    resellers = subscriber_service.resellers.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=500,
-        offset=0,
-    )
-    tax_rates = billing_service.tax_rates.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
+    form_data = web_billing_accounts_service.build_account_form_data(
+        db,
+        customer_ref=customer_ref,
     )
 
     return templates.TemplateResponse(
@@ -2701,10 +1363,7 @@ def account_new(request: Request, db: Session = Depends(get_db)):
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            "resellers": resellers,
-            "tax_rates": tax_rates,
-            "customer_ref": customer_ref,
-            "customer_label": customer_label,
+            **form_data,
         },
     )
 
@@ -2722,41 +1381,21 @@ def account_create(
     db: Session = Depends(get_db),
 ):
     try:
-        if not subscriber_id and customer_ref:
-            subscribers = _subscribers_for_customer(db, customer_ref)
-            if len(subscribers) == 1:
-                subscriber_id = subscribers[0]["id"]
-            elif len(subscribers) > 1:
-                raise ValueError("Multiple subscribers found; please choose one.")
-        if not subscriber_id:
-            raise ValueError("subscriber_id is required")
-        payload = SubscriberAccountCreate(
-            subscriber_id=_parse_uuid(subscriber_id, "subscriber_id"),
-            reseller_id=UUID(reseller_id) if reseller_id else None,
-            tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-            account_number=account_number.strip() if account_number else None,
-            status=status or "active",
-            notes=notes.strip() if notes else None,
+        account, selected_subscriber_id = web_billing_accounts_service.create_account_from_form(
+            db,
+            subscriber_id=subscriber_id,
+            customer_ref=customer_ref,
+            reseller_id=reseller_id,
+            tax_rate_id=tax_rate_id,
+            account_number=account_number,
+            status=status,
+            notes=notes,
         )
-        account = subscriber_service.accounts.create(db, payload)
     except Exception as exc:
-        from app.web.admin import get_sidebar_stats, get_current_user
-        # Fetch lookup data for dropdowns on error
-        resellers = subscriber_service.resellers.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=500,
-            offset=0,
-        )
-        tax_rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=100,
-            offset=0,
+        from app.web.admin import get_current_user, get_sidebar_stats
+        form_data = web_billing_accounts_service.build_account_form_data(
+            db,
+            customer_ref=customer_ref,
         )
         return templates.TemplateResponse(
             "admin/billing/account_form.html",
@@ -2770,11 +1409,8 @@ def account_create(
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                "resellers": resellers,
-                "tax_rates": tax_rates,
-                "customer_ref": customer_ref,
-                "customer_label": _customer_label(db, customer_ref),
-                "selected_subscriber_id": subscriber_id,
+                **form_data,
+                "selected_subscriber_id": selected_subscriber_id if "selected_subscriber_id" in locals() else subscriber_id,
             },
             status_code=400,
         )
@@ -2783,24 +1419,13 @@ def account_create(
 
 @router.get("/accounts/{account_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def account_detail(request: Request, account_id: UUID, db: Session = Depends(get_db)):
-    account = subscriber_service.accounts.get(db, str(account_id))
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=str(account_id),
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=50,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_accounts_service.build_account_detail_data(db, account_id=str(account_id))
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/account_detail.html",
         {
             "request": request,
-            "account": account,
-            "invoices": invoices,
+            **state,
             "active_page": "accounts",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -2811,20 +1436,13 @@ def account_detail(request: Request, account_id: UUID, db: Session = Depends(get
 
 @router.get("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def billing_tax_rates(request: Request, db: Session = Depends(get_db)):
-    rates = billing_service.tax_rates.list(
-        db=db,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=200,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_tax_rates_service.list_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/tax_rates.html",
         {
             "request": request,
-            "rates": rates,
+            **state,
             "active_page": "tax-rates",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -2851,20 +1469,13 @@ def billing_tax_rate_create(
         )
         billing_service.tax_rates.create(db, payload)
     except Exception as exc:
-        rates = billing_service.tax_rates.list(
-            db=db,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_tax_rates_service.list_data(db)
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/tax_rates.html",
             {
                 "request": request,
-                "rates": rates,
+                **state,
                 "error": str(exc),
                 "active_page": "tax-rates",
                 "active_menu": "billing",
@@ -2878,53 +1489,13 @@ def billing_tax_rate_create(
 
 @router.get("/ar-aging", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
 def billing_ar_aging(request: Request, db: Session = Depends(get_db)):
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="due_at",
-        order_dir="asc",
-        limit=1000,
-        offset=0,
-    )
-    today = datetime.now(timezone.utc).date()
-    buckets = {
-        "current": [],
-        "1_30": [],
-        "31_60": [],
-        "61_90": [],
-        "90_plus": [],
-    }
-    for invoice in invoices:
-        status = getattr(invoice, "status", None)
-        status_val = status.value if hasattr(status, "value") else str(status or "")
-        if status_val in {"paid", "void"}:
-            continue
-        due_at = invoice.due_at.date() if invoice.due_at else None
-        if not due_at or due_at >= today:
-            buckets["current"].append(invoice)
-            continue
-        days = (today - due_at).days
-        if days <= 30:
-            buckets["1_30"].append(invoice)
-        elif days <= 60:
-            buckets["31_60"].append(invoice)
-        elif days <= 90:
-            buckets["61_90"].append(invoice)
-        else:
-            buckets["90_plus"].append(invoice)
-    totals = {
-        key: sum(float(getattr(inv, "balance_due", 0) or 0) for inv in items)
-        for key, items in buckets.items()
-    }
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_overview_service.build_ar_aging_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/ar_aging.html",
         {
             "request": request,
-            "buckets": buckets,
-            "totals": totals,
+            **state,
             "active_page": "ar-aging",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -2941,79 +1512,18 @@ def billing_dunning(
     customer_ref: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    from app.models.collections import DunningCase, DunningCaseStatus
-    from app.web.admin import get_sidebar_stats, get_current_user
-
-    per_page = 50
-    offset = (page - 1) * per_page
-
-    account_ids = []
-    customer_filtered = bool(customer_ref)
-    if customer_ref:
-        account_ids = [UUID(item["id"]) for item in _accounts_for_customer(db, customer_ref)]
-
-    # Get status counts for filter badges
-    if customer_filtered and not account_ids:
-        status_counts = {
-            "open": 0,
-            "paused": 0,
-            "resolved": 0,
-            "closed": 0,
-        }
-    else:
-        status_query = db.query(DunningCase)
-        if account_ids:
-            status_query = status_query.filter(DunningCase.account_id.in_(account_ids))
-        status_counts = {
-            "open": status_query.filter(DunningCase.status == DunningCaseStatus.open).count(),
-            "paused": status_query.filter(DunningCase.status == DunningCaseStatus.paused).count(),
-            "resolved": status_query.filter(DunningCase.status == DunningCaseStatus.resolved).count(),
-            "closed": status_query.filter(DunningCase.status == DunningCaseStatus.closed).count(),
-        }
-
-    # Get total count for pagination
-    cases = []
-    total = 0
-    total_pages = 1
-    if account_ids:
-        count_query = db.query(DunningCase).filter(DunningCase.account_id.in_(account_ids))
-        if status:
-            count_query = count_query.filter(DunningCase.status == status)
-        total = count_query.count()
-        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-        cases = (
-            count_query.order_by(DunningCase.created_at.desc())
-            .offset(offset)
-            .limit(per_page)
-            .all()
-        )
-    elif not customer_filtered:
-        count_query = db.query(DunningCase)
-        if status:
-            count_query = count_query.filter(DunningCase.status == status)
-        total = count_query.count()
-        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-        cases = collections_service.dunning_cases.list(
-            db=db,
-            account_id=None,
-            status=status,
-            order_by="created_at",
-            order_dir="desc",
-            limit=per_page,
-            offset=offset,
-        )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    state = web_billing_dunning_service.build_listing_data(
+        db,
+        page=page,
+        status=status,
+        customer_ref=customer_ref,
+    )
     return templates.TemplateResponse(
         "admin/billing/dunning.html",
         {
             "request": request,
-            "cases": cases,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "status": status,
-            "status_counts": status_counts,
-            "customer_ref": customer_ref,
+            **state,
             "active_page": "dunning",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -3026,7 +1536,7 @@ def billing_dunning(
 def dunning_pause(request: Request, case_id: str, db: Session = Depends(get_db)):
     """Pause a dunning case."""
     from app.web.admin import get_current_user
-    collections_service.dunning_cases.pause(db=db, case_id=case_id)
+    web_billing_dunning_service.apply_case_action(db, case_id=case_id, action="pause")
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -3043,7 +1553,7 @@ def dunning_pause(request: Request, case_id: str, db: Session = Depends(get_db))
 def dunning_resume(request: Request, case_id: str, db: Session = Depends(get_db)):
     """Resume a paused dunning case."""
     from app.web.admin import get_current_user
-    collections_service.dunning_cases.resume(db=db, case_id=case_id)
+    web_billing_dunning_service.apply_case_action(db, case_id=case_id, action="resume")
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -3060,7 +1570,7 @@ def dunning_resume(request: Request, case_id: str, db: Session = Depends(get_db)
 def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db)):
     """Close a dunning case."""
     from app.web.admin import get_current_user
-    collections_service.dunning_cases.close(db=db, case_id=case_id)
+    web_billing_dunning_service.apply_case_action(db, case_id=case_id, action="close")
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -3078,23 +1588,20 @@ def dunning_bulk_pause(request: Request, case_ids: str = Form(...), db: Session 
     """Pause multiple dunning cases."""
     from app.web.admin import get_current_user
     current_user = get_current_user(request)
-    count = 0
-    for case_id in case_ids.split(","):
-        case_id = case_id.strip()
-        if case_id:
-            try:
-                collections_service.dunning_cases.pause(db=db, case_id=case_id)
-                log_audit_event(
-                    db=db,
-                    request=request,
-                    action="pause",
-                    entity_type="dunning_case",
-                    entity_id=case_id,
-                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-                )
-                count += 1
-            except Exception:
-                pass  # Skip errors for individual cases
+    processed_ids = web_billing_dunning_service.apply_bulk_action(
+        db,
+        case_ids_csv=case_ids,
+        action="pause",
+    )
+    for case_id in processed_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="pause",
+            entity_type="dunning_case",
+            entity_id=case_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        )
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
@@ -3103,23 +1610,20 @@ def dunning_bulk_resume(request: Request, case_ids: str = Form(...), db: Session
     """Resume multiple paused dunning cases."""
     from app.web.admin import get_current_user
     current_user = get_current_user(request)
-    count = 0
-    for case_id in case_ids.split(","):
-        case_id = case_id.strip()
-        if case_id:
-            try:
-                collections_service.dunning_cases.resume(db=db, case_id=case_id)
-                log_audit_event(
-                    db=db,
-                    request=request,
-                    action="resume",
-                    entity_type="dunning_case",
-                    entity_id=case_id,
-                    actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-                )
-                count += 1
-            except Exception:
-                pass  # Skip errors for individual cases
+    processed_ids = web_billing_dunning_service.apply_bulk_action(
+        db,
+        case_ids_csv=case_ids,
+        action="resume",
+    )
+    for case_id in processed_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="resume",
+            entity_type="dunning_case",
+            entity_id=case_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        )
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
@@ -3130,40 +1634,17 @@ def billing_ledger(
     db: Session = Depends(get_db),
 ):
     entry_type = request.query_params.get("entry_type")
-    account_ids = []
-    if customer_ref:
-        account_ids = [UUID(item["id"]) for item in _accounts_for_customer(db, customer_ref)]
-    entries = []
-    if account_ids:
-        query = db.query(LedgerEntry).filter(LedgerEntry.account_id.in_(account_ids))
-        if entry_type:
-            query = query.filter(
-                LedgerEntry.entry_type == validate_enum(entry_type, LedgerEntryType, "entry_type")
-            )
-        query = query.filter(LedgerEntry.is_active.is_(True))
-        entries = (
-            query.order_by(LedgerEntry.created_at.desc()).limit(200).offset(0).all()
-        )
-    elif not customer_ref:
-        entries = billing_service.ledger_entries.list(
-            db=db,
-            account_id=None,
-            entry_type=entry_type,
-            source=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_ledger_service.build_ledger_entries_data(
+        db,
+        customer_ref=customer_ref,
+        entry_type=entry_type,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/ledger.html",
         {
             "request": request,
-            "entries": entries,
-            "entry_type": entry_type,
-            "customer_ref": customer_ref,
+            **state,
             "active_page": "ledger",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -3182,22 +1663,16 @@ def collection_accounts_list(
     show_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=False if show_inactive else None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=500,
-        offset=0,
+    state = web_billing_collection_accounts_service.list_data(
+        db,
+        show_inactive=show_inactive,
     )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/collection_accounts.html",
         {
             "request": request,
-            "accounts": accounts,
-            "account_types": [item.value for item in CollectionAccountType],
-            "show_inactive": show_inactive,
+            **state,
             "active_page": "collection_accounts",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -3235,23 +1710,17 @@ def collection_accounts_create(
         )
         return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)
     except Exception as exc:
-        accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
+        state = web_billing_collection_accounts_service.list_data(
+            db,
+            show_inactive=False,
         )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/collection_accounts.html",
             {
                 "request": request,
-                "accounts": accounts,
-                "account_types": [item.value for item in CollectionAccountType],
+                **state,
                 "error": str(exc),
-                "show_inactive": False,
                 "active_page": "collection_accounts",
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
@@ -3267,20 +1736,19 @@ def collection_accounts_create(
     dependencies=[Depends(require_permission("billing:write"))],
 )
 def collection_accounts_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
-    account = billing_service.collection_accounts.get(db, str(account_id))
-    if not account:
+    state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Collection account not found"},
             status_code=404,
         )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/collection_account_form.html",
         {
             "request": request,
-            "account": account,
-            "account_types": [item.value for item in CollectionAccountType],
+            **state,
             "action_url": f"/admin/billing/collection-accounts/{account_id}/edit",
             "form_title": "Edit Collection Account",
             "submit_label": "Update Account",
@@ -3323,14 +1791,13 @@ def collection_accounts_update(
         )
         return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)
     except Exception as exc:
-        account = billing_service.collection_accounts.get(db, str(account_id))
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/collection_account_form.html",
             {
                 "request": request,
-                "account": account,
-                "account_types": [item.value for item in CollectionAccountType],
+                **(state or {}),
                 "action_url": f"/admin/billing/collection-accounts/{account_id}/edit",
                 "form_title": "Edit Collection Account",
                 "submit_label": "Update Account",
@@ -3374,39 +1841,13 @@ def collection_accounts_activate(account_id: UUID, db: Session = Depends(get_db)
     dependencies=[Depends(require_permission("billing:read"))],
 )
 def payment_channels_list(request: Request, db: Session = Depends(get_db)):
-    channels = billing_service.payment_channels.list(
-        db=db,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=500,
-        offset=0,
-    )
-    providers = billing_service.payment_providers.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    collection_accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_channels_service.list_payment_channels_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_channels.html",
         {
             "request": request,
-            "channels": channels,
-            "providers": providers,
-            "collection_accounts": collection_accounts,
-            "channel_types": [item.value for item in PaymentChannelType],
+            **state,
             "active_page": "payment_channels",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -3446,39 +1887,13 @@ def payment_channels_create(
         )
         return RedirectResponse(url="/admin/billing/payment-channels", status_code=303)
     except Exception as exc:
-        channels = billing_service.payment_channels.list(
-            db=db,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
-        )
-        providers = billing_service.payment_providers.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        collection_accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_channels_service.list_payment_channels_data(db)
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_channels.html",
             {
                 "request": request,
-                "channels": channels,
-                "providers": providers,
-                "collection_accounts": collection_accounts,
-                "channel_types": [item.value for item in PaymentChannelType],
+                **state,
                 "error": str(exc),
                 "active_page": "payment_channels",
                 "active_menu": "billing",
@@ -3495,38 +1910,19 @@ def payment_channels_create(
     dependencies=[Depends(require_permission("billing:write"))],
 )
 def payment_channels_edit(request: Request, channel_id: UUID, db: Session = Depends(get_db)):
-    channel = billing_service.payment_channels.get(db, str(channel_id))
-    if not channel:
+    state = web_billing_channels_service.load_payment_channel_edit_data(db, str(channel_id))
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Payment channel not found"},
             status_code=404,
         )
-    providers = billing_service.payment_providers.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    collection_accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_channel_form.html",
         {
             "request": request,
-            "channel": channel,
-            "providers": providers,
-            "collection_accounts": collection_accounts,
-            "channel_types": [item.value for item in PaymentChannelType],
+            **state,
             "action_url": f"/admin/billing/payment-channels/{channel_id}/edit",
             "form_title": "Edit Payment Channel",
             "submit_label": "Update Channel",
@@ -3571,32 +1967,13 @@ def payment_channels_update(
         )
         return RedirectResponse(url="/admin/billing/payment-channels", status_code=303)
     except Exception as exc:
-        channel = billing_service.payment_channels.get(db, str(channel_id))
-        providers = billing_service.payment_providers.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        collection_accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_channels_service.load_payment_channel_edit_data(db, str(channel_id))
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_channel_form.html",
             {
                 "request": request,
-                "channel": channel,
-                "providers": providers,
-                "collection_accounts": collection_accounts,
-                "channel_types": [item.value for item in PaymentChannelType],
+                **(state or {}),
                 "action_url": f"/admin/billing/payment-channels/{channel_id}/edit",
                 "form_title": "Edit Payment Channel",
                 "submit_label": "Update Channel",
@@ -3626,40 +2003,13 @@ def payment_channels_deactivate(channel_id: UUID, db: Session = Depends(get_db))
     dependencies=[Depends(require_permission("billing:read"))],
 )
 def payment_channel_accounts_list(request: Request, db: Session = Depends(get_db)):
-    mappings = billing_service.payment_channel_accounts.list(
-        db=db,
-        channel_id=None,
-        collection_account_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=500,
-        offset=0,
-    )
-    channels = billing_service.payment_channels.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    collection_accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    state = web_billing_channels_service.list_payment_channel_accounts_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_channel_accounts.html",
         {
             "request": request,
-            "mappings": mappings,
-            "channels": channels,
-            "collection_accounts": collection_accounts,
+            **state,
             "active_page": "payment_channel_accounts",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -3695,40 +2045,13 @@ def payment_channel_accounts_create(
         )
         return RedirectResponse(url="/admin/billing/payment-channel-accounts", status_code=303)
     except Exception as exc:
-        mappings = billing_service.payment_channel_accounts.list(
-            db=db,
-            channel_id=None,
-            collection_account_id=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
-        )
-        channels = billing_service.payment_channels.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        collection_accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_channels_service.list_payment_channel_accounts_data(db)
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_channel_accounts.html",
             {
                 "request": request,
-                "mappings": mappings,
-                "channels": channels,
-                "collection_accounts": collection_accounts,
+                **state,
                 "error": str(exc),
                 "active_page": "payment_channel_accounts",
                 "active_menu": "billing",
@@ -3745,37 +2068,19 @@ def payment_channel_accounts_create(
     dependencies=[Depends(require_permission("billing:write"))],
 )
 def payment_channel_accounts_edit(request: Request, mapping_id: UUID, db: Session = Depends(get_db)):
-    mapping = billing_service.payment_channel_accounts.get(db, str(mapping_id))
-    if not mapping:
+    state = web_billing_channels_service.load_payment_channel_account_edit_data(db, str(mapping_id))
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Payment channel mapping not found"},
             status_code=404,
         )
-    channels = billing_service.payment_channels.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    collection_accounts = billing_service.collection_accounts.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
-    )
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return templates.TemplateResponse(
         "admin/billing/payment_channel_account_form.html",
         {
             "request": request,
-            "mapping": mapping,
-            "channels": channels,
-            "collection_accounts": collection_accounts,
+            **state,
             "action_url": f"/admin/billing/payment-channel-accounts/{mapping_id}/edit",
             "form_title": "Edit Channel Mapping",
             "submit_label": "Update Mapping",
@@ -3816,31 +2121,13 @@ def payment_channel_accounts_update(
         )
         return RedirectResponse(url="/admin/billing/payment-channel-accounts", status_code=303)
     except Exception as exc:
-        mapping = billing_service.payment_channel_accounts.get(db, str(mapping_id))
-        channels = billing_service.payment_channels.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        collection_accounts = billing_service.collection_accounts.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
-        from app.web.admin import get_sidebar_stats, get_current_user
+        state = web_billing_channels_service.load_payment_channel_account_edit_data(db, str(mapping_id))
+        from app.web.admin import get_current_user, get_sidebar_stats
         return templates.TemplateResponse(
             "admin/billing/payment_channel_account_form.html",
             {
                 "request": request,
-                "mapping": mapping,
-                "channels": channels,
-                "collection_accounts": collection_accounts,
+                **(state or {}),
                 "action_url": f"/admin/billing/payment-channel-accounts/{mapping_id}/edit",
                 "form_title": "Edit Channel Mapping",
                 "submit_label": "Update Mapping",

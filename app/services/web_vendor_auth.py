@@ -129,6 +129,8 @@ def vendor_logout(request: Request):
 
 def vendor_refresh(request: Request):
     session_token = request.cookies.get(vendor_portal.SESSION_COOKIE_NAME)
+    if not session_token:
+        return Response(status_code=401)
 
     db = SessionLocal()
     try:

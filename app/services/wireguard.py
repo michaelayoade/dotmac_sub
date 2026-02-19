@@ -10,6 +10,7 @@ import ipaddress
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -44,6 +45,17 @@ from app.services.wireguard_crypto import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 
 
+def _ensure_utc_aware(dt: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC.
+
+    Some DB backends (notably SQLite) can round-trip tz-aware datetimes back as
+    naive, even when columns are declared with timezone=True.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _sanitize_interface_name(name: str, max_len: int = 15) -> str:
     """Create a RouterOS-safe interface name.
 
@@ -56,15 +68,16 @@ def _sanitize_interface_name(name: str, max_len: int = 15) -> str:
 
 
 def _get_default_vpn_address(db: Session) -> str:
-    setting = (
+    setting = cast(
+        DomainSetting | None,
         db.query(DomainSetting)
         .filter(DomainSetting.domain == SettingDomain.network)
         .filter(DomainSetting.key == "wireguard_default_vpn_address")
         .filter(DomainSetting.is_active.is_(True))
-        .first()
+        .first(),
     )
     if setting and setting.value_text:
-        value = setting.value_text.strip()
+        value = cast(str, setting.value_text).strip()
         if value and value.lower() != "none":
             return value
     return "10.10.0.1/24"
@@ -261,8 +274,9 @@ class WireGuardServerService:
     @staticmethod
     def get(db: Session, server_id: str | uuid.UUID) -> WireGuardServer:
         """Get a server by ID."""
-        server = (
-            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        server = cast(
+            WireGuardServer | None,
+            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first(),
         )
         if not server:
             raise HTTPException(status_code=404, detail="WireGuard server not found")
@@ -271,7 +285,10 @@ class WireGuardServerService:
     @staticmethod
     def get_by_name(db: Session, name: str) -> WireGuardServer | None:
         """Get a server by name."""
-        return db.query(WireGuardServer).filter(WireGuardServer.name == name).first()
+        return cast(
+            WireGuardServer | None,
+            db.query(WireGuardServer).filter(WireGuardServer.name == name).first(),
+        )
 
     @staticmethod
     def list(
@@ -284,7 +301,10 @@ class WireGuardServerService:
         query = db.query(WireGuardServer)
         if is_active is not None:
             query = query.filter(WireGuardServer.is_active == is_active)
-        return query.order_by(WireGuardServer.name).offset(offset).limit(limit).all()
+        return cast(
+            list[WireGuardServer],
+            query.order_by(WireGuardServer.name).offset(offset).limit(limit).all(),
+        )
 
     @staticmethod
     def update(
@@ -522,7 +542,10 @@ class WireGuardPeerService:
     @staticmethod
     def get(db: Session, peer_id: str | uuid.UUID) -> WireGuardPeer:
         """Get a peer by ID."""
-        peer = db.query(WireGuardPeer).filter(WireGuardPeer.id == peer_id).first()
+        peer = cast(
+            WireGuardPeer | None,
+            db.query(WireGuardPeer).filter(WireGuardPeer.id == peer_id).first(),
+        )
         if not peer:
             raise HTTPException(status_code=404, detail="WireGuard peer not found")
         return peer
@@ -545,7 +568,10 @@ class WireGuardPeerService:
         if status:
             query = query.filter(WireGuardPeer.status == status)
 
-        return query.order_by(WireGuardPeer.name).offset(offset).limit(limit).all()
+        return cast(
+            list[WireGuardPeer],
+            query.order_by(WireGuardPeer.name).offset(offset).limit(limit).all(),
+        )
 
     @staticmethod
     def update(
@@ -665,24 +691,29 @@ class WireGuardPeerService:
         db.commit()
         db.refresh(peer)
 
-        return token, peer.provision_token_expires_at
+        # Normalise for safe comparisons in callers/tests.
+        if peer.provision_token_expires_at is None:
+            raise HTTPException(status_code=500, detail="Provision token expiry missing")
+        return token, _ensure_utc_aware(peer.provision_token_expires_at)
 
     @staticmethod
     def verify_provision_token(db: Session, token: str) -> WireGuardPeer | None:
         """Verify a provisioning token and return the peer if valid."""
         token_hash = hash_token(token)
 
-        peer = (
+        peer = cast(
+            WireGuardPeer | None,
             db.query(WireGuardPeer)
             .filter(WireGuardPeer.provision_token_hash == token_hash)
-            .first()
+            .first(),
         )
 
         if not peer:
             return None
 
         if peer.provision_token_expires_at:
-            if peer.provision_token_expires_at < datetime.now(timezone.utc):
+            expires_at = _ensure_utc_aware(peer.provision_token_expires_at)
+            if expires_at < datetime.now(timezone.utc):
                 return None  # Token expired
 
         return peer
@@ -962,9 +993,11 @@ class MikroTikScriptService:
         allowed_addresses = [f"{network_addr}/{prefix_len}"]
         if network_addr_v6 and prefix_len_v6 is not None:
             allowed_addresses.append(f"{network_addr_v6}/{prefix_len_v6}")
-        routes = []
+        routes: list[str] = []
         if server.metadata_:
-            routes = server.metadata_.get("routes") or []
+            routes_obj: object = server.metadata_.get("routes")
+            if isinstance(routes_obj, list):
+                routes = [str(r) for r in routes_obj if r]
         for route in routes:
             if route and route not in allowed_addresses:
                 allowed_addresses.append(route)
@@ -1107,10 +1140,11 @@ class WireGuardConnectionLogService:
         reason: str | None = None,
     ) -> WireGuardConnectionLog:
         """Log a disconnection event."""
-        log = (
+        log = cast(
+            WireGuardConnectionLog | None,
             db.query(WireGuardConnectionLog)
             .filter(WireGuardConnectionLog.id == log_id)
-            .first()
+            .first(),
         )
         if not log:
             raise HTTPException(status_code=404, detail="Connection log not found")
@@ -1138,13 +1172,14 @@ class WireGuardConnectionLogService:
         offset: int = 0,
     ) -> list[WireGuardConnectionLog]:
         """List connection logs for a peer."""
-        return (
+        return cast(
+            list[WireGuardConnectionLog],
             db.query(WireGuardConnectionLog)
             .filter(WireGuardConnectionLog.peer_id == peer_id)
             .order_by(WireGuardConnectionLog.connected_at.desc())
             .offset(offset)
             .limit(limit)
-            .all()
+            .all(),
         )
 
     @staticmethod
@@ -1196,7 +1231,8 @@ class WireGuardConnectionLogService:
             Number of deleted records
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        result = (
+        result = cast(
+            int,
             db.query(WireGuardConnectionLog)
             .filter(WireGuardConnectionLog.connected_at < cutoff)
             .delete(synchronize_session=False)

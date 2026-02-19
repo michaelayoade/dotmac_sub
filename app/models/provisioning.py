@@ -67,6 +67,15 @@ class ProvisioningRunStatus(enum.Enum):
     failed = "failed"
 
 
+class ServiceOrderType(enum.Enum):
+    new_install = "new_install"
+    upgrade = "upgrade"
+    downgrade = "downgrade"
+    disconnect = "disconnect"
+    reconnect = "reconnect"
+    change_service = "change_service"
+
+
 class ServiceOrder(Base):
     __tablename__ = "service_orders"
 
@@ -82,7 +91,9 @@ class ServiceOrder(Base):
     status: Mapped[ServiceOrderStatus] = mapped_column(
         Enum(ServiceOrderStatus), default=ServiceOrderStatus.draft
     )
-    order_type: Mapped[str | None] = mapped_column(String(60))  # new_install, upgrade, downgrade, disconnect
+    order_type: Mapped[ServiceOrderType | None] = mapped_column(
+        Enum(ServiceOrderType, values_callable=lambda x: [e.value for e in x]),
+    )
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -100,6 +111,15 @@ class ServiceOrder(Base):
         "ServiceStateTransition", back_populates="service_order"
     )
     provisioning_runs = relationship("ProvisioningRun", back_populates="service_order")
+
+    @property
+    def account_id(self) -> uuid.UUID:
+        """Backwards-compat alias for subscriber_id."""
+        return self.subscriber_id
+
+    @account_id.setter
+    def account_id(self, value: uuid.UUID) -> None:
+        self.subscriber_id = value
 
 
 class InstallAppointment(Base):

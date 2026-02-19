@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.integration import (
     IntegrationJobCreate,
     IntegrationJobRead,
@@ -15,14 +15,6 @@ from app.schemas.integration import (
 from app.services import integration as integration_service
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.wireguard import WireGuardPeer, WireGuardServer
+from app.services.wireguard_system import WireGuardSystemService
 
 
 class VpnRoutingError(RuntimeError):
@@ -55,8 +56,6 @@ def ensure_vpn_ready(
     if not server.is_active:
         raise VpnRoutingError(f"Selected VPN '{server.name}' is inactive.")
 
-    from app.services.wireguard_system import WireGuardSystemService
-
     if WireGuardSystemService.is_interface_up(server.interface_name):
         return server
 
@@ -85,9 +84,11 @@ def sync_peer_routes_for_ip(
     if not ip.is_private:
         return False
 
-    known_subnets = []
+    known_subnets: list[str] = []
     if peer.metadata_:
-        known_subnets = peer.metadata_.get("known_subnets") or []
+        raw_known = peer.metadata_.get("known_subnets")
+        if isinstance(raw_known, list):
+            known_subnets = [str(item) for item in raw_known if item]
 
     known_networks = _normalize_networks(known_subnets)
     target_cidr = _select_target_cidr(ip, known_networks)
@@ -159,9 +160,11 @@ def sync_lan_subnets(
     Returns:
         True if any configuration changed
     """
-    lan_subnets = []
+    lan_subnets: list[str] = []
     if peer.metadata_:
-        lan_subnets = peer.metadata_.get("lan_subnets") or []
+        raw_lan = peer.metadata_.get("lan_subnets")
+        if isinstance(raw_lan, list):
+            lan_subnets = [str(item) for item in raw_lan if item]
 
     previous_subnets = previous_subnets or []
 
@@ -263,9 +266,11 @@ def configure_peer_lan_routing(
             return False, f"Invalid CIDR: {cidr}"
 
     # Update peer metadata
-    previous_subnets = []
+    previous_subnets: list[str] = []
     if peer.metadata_:
-        previous_subnets = peer.metadata_.get("lan_subnets") or []
+        raw_previous = peer.metadata_.get("lan_subnets")
+        if isinstance(raw_previous, list):
+            previous_subnets = [str(item) for item in raw_previous if item]
     peer.metadata_ = peer.metadata_ or {}
     peer.metadata_["lan_subnets"] = valid_subnets
 

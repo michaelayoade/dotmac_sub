@@ -10,6 +10,7 @@ Environment Variables:
 import json
 import os
 from datetime import timedelta
+from typing import Any, cast
 
 import redis
 
@@ -24,7 +25,16 @@ STATE_PREFIX = "oauth_state:"
 
 def _get_redis_client() -> redis.Redis:
     """Get a Redis client connection."""
-    return redis.from_url(REDIS_URL, decode_responses=True)
+    return cast(redis.Redis, redis.from_url(REDIS_URL, decode_responses=True))
+
+
+def _loads_dict(value: str) -> dict[str, Any] | None:
+    """Best-effort JSON->dict loader for state payloads."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def store_oauth_state(state: str, data: dict) -> None:
@@ -50,7 +60,7 @@ def store_oauth_state(state: str, data: dict) -> None:
         raise
 
 
-def get_and_delete_oauth_state(state: str) -> dict | None:
+def get_and_delete_oauth_state(state: str) -> dict[str, Any] | None:
     """Get and delete OAuth state (one-time use).
 
     This atomically retrieves and deletes the state, ensuring it can only
@@ -67,15 +77,16 @@ def get_and_delete_oauth_state(state: str) -> dict | None:
         key = f"{STATE_PREFIX}{state}"
 
         # Use pipeline for atomic get-then-delete
-        pipe = client.pipeline()
+        pipe = cast(Any, client.pipeline())
         pipe.get(key)
         pipe.delete(key)
-        results = pipe.execute()
+        results = cast(list[object], pipe.execute())
 
         data = results[0]
         if data:
             logger.debug("retrieved_oauth_state state=%s...", state[:8])
-            return json.loads(data)
+            if isinstance(data, str):
+                return _loads_dict(data)
 
         logger.warning("oauth_state_not_found state=%s...", state[:8])
         return None
@@ -85,7 +96,7 @@ def get_and_delete_oauth_state(state: str) -> dict | None:
         return None
 
 
-def verify_oauth_state(state: str) -> dict | None:
+def verify_oauth_state(state: str) -> dict[str, Any] | None:
     """Verify OAuth state exists without deleting it.
 
     Use this for verification checks before processing the callback.
@@ -100,10 +111,10 @@ def verify_oauth_state(state: str) -> dict | None:
     try:
         client = _get_redis_client()
         key = f"{STATE_PREFIX}{state}"
-        data = client.get(key)
+        data = cast(Any, client.get(key))
 
         if data:
-            return json.loads(data)
+            return _loads_dict(str(data))
         return None
 
     except redis.RedisError as exc:
@@ -123,7 +134,7 @@ def delete_oauth_state(state: str) -> bool:
     try:
         client = _get_redis_client()
         key = f"{STATE_PREFIX}{state}"
-        result = client.delete(key)
+        result = cast(int, client.delete(key))
         return result > 0
     except redis.RedisError as exc:
         logger.error("failed_to_delete_oauth_state error=%s", exc)

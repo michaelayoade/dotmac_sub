@@ -12,10 +12,9 @@ class ONTsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/network/onts") -> None:
         """Navigate to the ONTs list."""
-        super().goto("/admin/network/onts")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the ONTs page is loaded."""

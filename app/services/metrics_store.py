@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -67,8 +67,13 @@ class MetricsStore:
         if self._timeout is not None:
             return self._timeout
         # Try to get from settings (no db available in async context, use env fallback)
-        timeout = resolve_value(None, SettingDomain.bandwidth, "victoriametrics_timeout_seconds")
-        return float(timeout) if timeout else _DEFAULT_TIMEOUT
+        timeout_obj = resolve_value(
+            None, SettingDomain.bandwidth, "victoriametrics_timeout_seconds"
+        )
+        try:
+            return float(str(timeout_obj)) if timeout_obj is not None else _DEFAULT_TIMEOUT
+        except (TypeError, ValueError):
+            return _DEFAULT_TIMEOUT
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -247,10 +252,18 @@ class MetricsStore:
             response.raise_for_status()
             data = response.json()
 
+            if not isinstance(data, dict):
+                raise MetricsStoreError("Query failed: invalid response payload")
             if data.get("status") != "success":
                 raise MetricsStoreError(f"Query failed: {data.get('error', 'Unknown error')}")
 
-            return data.get("data", {}).get("result", [])
+            data_obj = data.get("data")
+            if not isinstance(data_obj, dict):
+                return []
+            result_obj = data_obj.get("result")
+            if not isinstance(result_obj, list):
+                return []
+            return cast(list[dict[str, Any]], result_obj)
 
         except httpx.HTTPError as e:
             logger.error(f"Failed to query VictoriaMetrics: {e}")

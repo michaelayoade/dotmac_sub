@@ -1,0 +1,109 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Provisioning - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Provisioning</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Service orders, appointments, and provisioning workflows</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/provisioning/appointments"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Appointments
+            </a>
+            <a href="/admin/provisioning/orders/new"
+               class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                New Order
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    {% if stats %}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
+            <div class="flex items-start justify-between">
+                <div>
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Orders</p>
+                    <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-700">
+                    <svg class="h-6 w-6 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
+            <div class="flex items-start justify-between">
+                <div>
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Pending</p>
+                    <p class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">{{ stats.pending }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Draft + Submitted</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/50">
+                    <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
+            <div class="flex items-start justify-between">
+                <div>
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">In Progress</p>
+                    <p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">{{ stats.in_progress }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Scheduled + Provisioning</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/50">
+                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
+            <div class="flex items-start justify-between">
+                <div>
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Completed</p>
+                    <p class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">{{ stats.completed }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active orders</p>
+                </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-100 dark:bg-green-900/50">
+                    <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Filter Bar -->
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <select class="filter-input rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                    hx-get="/admin/provisioning/orders"
+                    hx-target="#orders-table"
+                    hx-trigger="change"
+                    hx-include="[name='search']"
+                    name="status">
+                <option value="">All Statuses</option>
+                {% for s in statuses|default([]) %}
+                <option value="{{ s }}" {{ 'selected' if current_status == s else '' }}>{{ s|replace('_', ' ')|title }}</option>
+                {% endfor %}
+            </select>
+            <input type="text" name="search" placeholder="Search orders..."
+                   value="{{ search|default('') }}"
+                   class="filter-input rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                   hx-get="/admin/provisioning/orders"
+                   hx-target="#orders-table"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="[name='status']">
+        </div>
+    </div>
+
+    <!-- Orders Table -->
+    <div id="orders-table">
+        {% include "admin/provisioning/_table.html" %}
+    </div>
+</div>
+{% endblock %}

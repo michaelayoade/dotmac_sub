@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.qualification import (
     BuildoutApproveRequest,
@@ -25,14 +25,6 @@ from app.schemas.qualification import (
 from app.services import qualification as qualification_service
 
 router = APIRouter(prefix="/qualification", tags=["qualification"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

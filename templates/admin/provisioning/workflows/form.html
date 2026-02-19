@@ -1,0 +1,87 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if workflow else 'New' }} Workflow - Admin{% endblock %}
+
+{% block breadcrumbs %}
+<a href="/admin/provisioning" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Provisioning</a>
+<span class="mx-2 text-slate-400">/</span>
+<a href="/admin/provisioning/workflows" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Workflows</a>
+<span class="mx-2 text-slate-400">/</span>
+{% if workflow %}
+<a href="/admin/provisioning/workflows/{{ workflow.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ workflow.name }}</a>
+<span class="mx-2 text-slate-400">/</span>
+<span class="text-slate-600 dark:text-slate-300">Edit</span>
+{% else %}
+<span class="text-slate-600 dark:text-slate-300">New</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <!-- Header -->
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit' if workflow else 'New' }} Workflow</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {{ 'Update workflow configuration' if workflow else 'Create a new provisioning workflow' }}
+        </p>
+    </div>
+
+    <!-- Form -->
+    <form method="POST" action="{{ '/admin/provisioning/workflows/' ~ workflow.id ~ '/edit' if workflow else '/admin/provisioning/workflows' }}"
+          class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token|default('') }}">
+
+        <div class="space-y-6">
+            <!-- Name -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                <input type="text" name="name" required maxlength="160"
+                       value="{{ workflow.name if workflow else '' }}"
+                       placeholder="e.g. GPON New Install - Huawei"
+                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <!-- Vendor -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
+                <select name="vendor"
+                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for v in vendors %}
+                    <option value="{{ v }}" {{ 'selected' if workflow and workflow.vendor.value == v else '' }}>{{ v|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Description -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                <textarea name="description" rows="3" placeholder="Describe the workflow..."
+                          class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ workflow.description if workflow and workflow.description else '' }}</textarea>
+            </div>
+
+            <!-- Active -->
+            <div>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="is_active" value="true"
+                           {{ 'checked' if not workflow or workflow.is_active else '' }}
+                           class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                </label>
+                <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Inactive workflows cannot be selected for provisioning runs</p>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-6 flex items-center justify-end gap-3 border-t border-slate-200 pt-6 dark:border-slate-700">
+            <a href="{{ '/admin/provisioning/workflows/' ~ workflow.id if workflow else '/admin/provisioning/workflows' }}"
+               class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                Cancel
+            </a>
+            <button type="submit"
+                    class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                {{ 'Update Workflow' if workflow else 'Create Workflow' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -6,9 +6,12 @@ import logging
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.connector import ConnectorConfig
 from app.models.domain_settings import SettingDomain
+from app.services.common import coerce_uuid
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -19,7 +22,54 @@ _DEFAULT_TIMEOUT = 30.0  # fallback when settings unavailable
 def get_nextcloud_talk_timeout(db: Session | None = None) -> float:
     """Get the Nextcloud Talk API timeout from settings."""
     timeout = resolve_value(db, SettingDomain.comms, "nextcloud_talk_timeout_seconds") if db else None
-    return float(timeout) if timeout else _DEFAULT_TIMEOUT
+    if timeout is None:
+        return _DEFAULT_TIMEOUT
+    if isinstance(timeout, (int, float)):
+        return float(timeout)
+    if isinstance(timeout, str):
+        try:
+            return float(timeout)
+        except ValueError:
+            return _DEFAULT_TIMEOUT
+    return _DEFAULT_TIMEOUT
+
+
+def resolve_talk_client(
+    db: Session,
+    *,
+    base_url: str | None,
+    username: str | None,
+    app_password: str | None,
+    timeout_sec: float | None,
+    connector_config_id: str | None,
+) -> NextcloudTalkClient:
+    """Resolve credentials from payload and optional ConnectorConfig, return a client."""
+    if connector_config_id:
+        config = db.get(ConnectorConfig, coerce_uuid(connector_config_id))
+        if not config:
+            raise HTTPException(status_code=404, detail="Connector config not found")
+        auth_config = dict(config.auth_config or {})
+        base_url = base_url or config.base_url
+        username = username or auth_config.get("username")
+        app_password = (
+            app_password
+            or auth_config.get("app_password")
+            or auth_config.get("password")
+        )
+        timeout_sec = timeout_sec or config.timeout_sec or auth_config.get("timeout_sec")
+
+    if not base_url or not username or not app_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Nextcloud Talk credentials are incomplete.",
+        )
+
+    return NextcloudTalkClient(
+        base_url=base_url,
+        username=username,
+        app_password=app_password,
+        timeout=float(timeout_sec or 30.0),
+    )
 
 
 class NextcloudTalkError(Exception):

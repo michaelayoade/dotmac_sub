@@ -14,9 +14,9 @@ class ReportsPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/reports") -> None:
         """Navigate to reports page."""
-        super().goto("/admin/reports")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert reports page is loaded."""

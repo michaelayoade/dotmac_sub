@@ -1,11 +1,12 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.notification import (
     AlertNotificationLog,
     AlertNotificationPolicy,
@@ -19,13 +20,11 @@ from app.models.notification import (
     OnCallRotation,
     OnCallRotationMember,
 )
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.response import ListResponseMixin
 from app.schemas.notification import (
     AlertNotificationPolicyCreate,
-    AlertNotificationPolicyUpdate,
     AlertNotificationPolicyStepCreate,
     AlertNotificationPolicyStepUpdate,
+    AlertNotificationPolicyUpdate,
     NotificationBulkCreateRequest,
     NotificationCreate,
     NotificationDeliveryBulkUpdateRequest,
@@ -39,9 +38,12 @@ from app.schemas.notification import (
     OnCallRotationMemberUpdate,
     OnCallRotationUpdate,
 )
-
-
-
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 
 def _severity_rank(severity: AlertSeverity) -> int:
@@ -149,6 +151,37 @@ class Templates(ListResponseMixin):
             {"created_at": NotificationTemplate.created_at, "name": NotificationTemplate.name},
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def count(db: Session, channel: str | None = None) -> int:
+        """Count active templates, optionally filtered by channel."""
+        query = db.query(func.count(NotificationTemplate.id)).filter(
+            NotificationTemplate.is_active.is_(True)
+        )
+        if channel:
+            query = query.filter(
+                NotificationTemplate.channel
+                == validate_enum(channel, NotificationChannel, "channel")
+            )
+        return query.scalar() or 0
+
+    @staticmethod
+    def channel_counts(db: Session) -> dict[str, int]:
+        """Return per-channel counts of active templates."""
+        rows = (
+            db.query(NotificationTemplate.channel, func.count(NotificationTemplate.id))
+            .filter(NotificationTemplate.is_active.is_(True))
+            .group_by(NotificationTemplate.channel)
+            .all()
+        )
+        totals: dict[NotificationChannel, int] = {row[0]: row[1] for row in rows}
+        return {
+            "email": totals.get(NotificationChannel.email, 0),
+            "sms": totals.get(NotificationChannel.sms, 0),
+            "push": totals.get(NotificationChannel.push, 0),
+            "whatsapp": totals.get(NotificationChannel.whatsapp, 0),
+            "webhook": totals.get(NotificationChannel.webhook, 0),
+        }
 
     @staticmethod
     def update(db: Session, template_id: str, payload: NotificationTemplateUpdate):
@@ -260,6 +293,45 @@ class Notifications(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def count(
+        db: Session,
+        channel: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        """Count active notifications, optionally filtered."""
+        query = db.query(func.count(Notification.id)).filter(
+            Notification.is_active.is_(True)
+        )
+        if channel:
+            query = query.filter(
+                Notification.channel
+                == validate_enum(channel, NotificationChannel, "channel")
+            )
+        if status:
+            query = query.filter(
+                Notification.status
+                == validate_enum(status, NotificationStatus, "status")
+            )
+        return query.scalar() or 0
+
+    @staticmethod
+    def status_counts(db: Session) -> dict[str, int]:
+        """Return per-status counts of active notifications."""
+        rows = (
+            db.query(Notification.status, func.count(Notification.id))
+            .filter(Notification.is_active.is_(True))
+            .group_by(Notification.status)
+            .all()
+        )
+        totals: dict[NotificationStatus, int] = {row[0]: row[1] for row in rows}
+        return {
+            "queued": totals.get(NotificationStatus.queued, 0),
+            "sending": totals.get(NotificationStatus.sending, 0),
+            "delivered": totals.get(NotificationStatus.delivered, 0),
+            "failed": totals.get(NotificationStatus.failed, 0),
+        }
+
+    @staticmethod
     def update(db: Session, notification_id: str, payload: NotificationUpdate):
         notification = db.get(Notification, notification_id)
         if not notification:
@@ -331,6 +403,19 @@ class Deliveries(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def count(db: Session, status: str | None = None) -> int:
+        """Count active deliveries, optionally filtered by status."""
+        query = db.query(func.count(NotificationDelivery.id)).filter(
+            NotificationDelivery.is_active.is_(True)
+        )
+        if status:
+            query = query.filter(
+                NotificationDelivery.status
+                == validate_enum(status, DeliveryStatus, "status")
+            )
+        return query.scalar() or 0
 
     @staticmethod
     def update(db: Session, delivery_id: str, payload: NotificationDeliveryUpdate):
@@ -550,7 +635,7 @@ class AlertNotificationPolicies(ListResponseMixin):
                     )
                     if member:
                         recipient = member.contact
-                        member.last_used_at = datetime.now(timezone.utc)
+                        member.last_used_at = datetime.now(UTC)
                 if not recipient:
                     continue
                 subject = f"Alert {alert.severity.value}: {alert.metric_type.value}"
@@ -571,7 +656,7 @@ class AlertNotificationPolicies(ListResponseMixin):
                 if delay_minutes is None:
                     delay_minutes = default_delay_minutes
                 if delay_minutes and delay_minutes > 0:
-                    send_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+                    send_at = datetime.now(UTC) + timedelta(minutes=delay_minutes)
                 notification = Notification(
                     template_id=template_id,
                     channel=step.channel,

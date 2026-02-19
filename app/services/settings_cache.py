@@ -7,7 +7,7 @@ eliminating race conditions with in-memory caches in multi-worker environments.
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 import redis
 
@@ -61,7 +61,7 @@ class SettingsCache:
         try:
             r = get_settings_redis()
             cache_key = SettingsCache._cache_key(domain, key)
-            value = r.get(cache_key)
+            value = cast(str | None, r.get(cache_key))
             if value is not None:
                 return json.loads(value)
         except redis.RedisError as exc:
@@ -150,7 +150,7 @@ class SettingsCache:
         try:
             r = get_settings_redis()
             cache_keys = [SettingsCache._cache_key(domain, k) for k in keys]
-            values = r.mget(cache_keys)
+            values = cast(list[str | None], r.mget(cache_keys))
             for key, value in zip(keys, values):
                 if value is not None:
                     try:

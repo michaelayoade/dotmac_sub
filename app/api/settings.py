@@ -1,20 +1,12 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.settings import DomainSettingRead, DomainSettingUpdate
 from app.services import settings_api as settings_service
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/gis", response_model=ListResponse[DomainSettingRead], tags=["settings-gis"])

@@ -1,36 +1,26 @@
 """Admin usage dashboard web routes."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Optional
+from starlette.datastructures import FormData
 
 from app.csrf import get_csrf_token
-from app.db import SessionLocal
-from app.services import usage as usage_service
-from app.services import catalog as catalog_service
-from app.models.catalog import RadiusProfile, UsageAllowance
-from app.models.domain_settings import SettingDomain
-from app.models.usage import UsageChargeStatus, UsageRatingRunStatus
-from app.services import settings_spec
+from app.db import get_db
 from app.schemas.usage import UsageChargePostRequest, UsageRatingRunRequest
+from app.services import usage as usage_service
+from app.services import web_usage as web_usage_service
+from app.web.request_parsing import parse_form_data
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/usage", tags=["web-admin-usage"])
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def _base_context(request: Request, db: Session, active_page: str, usage_tab: str = ""):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return {
         "request": request,
         "active_page": active_page,
@@ -50,71 +40,9 @@ def _base_context(request: Request, db: Session, active_page: str, usage_tab: st
 @router.get("", response_class=HTMLResponse)
 def usage_dashboard_index(request: Request, db: Session = Depends(get_db)):
     """Usage dashboard overview with stats."""
-    # Get recent records count
-    records = usage_service.usage_records.list(
-        db=db,
-        subscription_id=None,
-        quota_bucket_id=None,
-        order_by="recorded_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
-    )
-
-    # Get charges by status
-    staged_charges = usage_service.usage_charges.list(
-        db=db,
-        subscription_id=None,
-        subscriber_id=None,
-        status="staged",
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
-    )
-    needs_review_charges = usage_service.usage_charges.list(
-        db=db,
-        subscription_id=None,
-        subscriber_id=None,
-        status="needs_review",
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
-    )
-    posted_charges = usage_service.usage_charges.list(
-        db=db,
-        subscription_id=None,
-        subscriber_id=None,
-        status="posted",
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
-    )
-
-    # Get recent rating runs
-    recent_runs = usage_service.usage_rating_runs.list(
-        db=db,
-        status=None,
-        order_by="run_at",
-        order_dir="desc",
-        limit=5,
-        offset=0,
-    )
-
-    # Calculate total billable from staged charges
-    total_staged_amount = sum(float(c.amount or 0) for c in staged_charges)
-
+    page_data = web_usage_service.get_dashboard_data(db)
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="dashboard")
-    context.update({
-        "records_count": len(records),
-        "staged_count": len(staged_charges),
-        "needs_review_count": len(needs_review_charges),
-        "posted_count": len(posted_charges),
-        "total_staged_amount": total_staged_amount,
-        "recent_runs": recent_runs,
-    })
+    context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/index.html", context)
 
 
@@ -126,30 +54,9 @@ def usage_dashboard_index(request: Request, db: Session = Depends(get_db)):
 @router.get("/fup-calculator", response_class=HTMLResponse)
 def fup_calculator(request: Request, db: Session = Depends(get_db)):
     """FUP (Fair Usage Policy) calculator for testing usage and throttling scenarios."""
-    usage_allowances = (
-        db.query(UsageAllowance)
-        .filter(UsageAllowance.is_active.is_(True))
-        .order_by(UsageAllowance.name)
-        .all()
-    )
-
-    radius_profiles = (
-        db.query(RadiusProfile)
-        .filter(RadiusProfile.is_active.is_(True))
-        .order_by(RadiusProfile.name)
-        .all()
-    )
-
-    currency_symbol = settings_spec.resolve_value(
-        db, SettingDomain.billing, "currency_symbol"
-    ) or "₦"
-
+    page_data = web_usage_service.get_calculator_data(db)
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="calculator")
-    context.update({
-        "usage_allowances": usage_allowances,
-        "radius_profiles": radius_profiles,
-        "currency_symbol": currency_symbol,
-    })
+    context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/fup_calculator.html", context)
 
 
@@ -161,49 +68,20 @@ def fup_calculator(request: Request, db: Session = Depends(get_db)):
 @router.get("/records", response_class=HTMLResponse)
 def usage_records_list(
     request: Request,
-    subscription_id: Optional[str] = None,
+    subscription_id: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List usage records."""
-    records = usage_service.usage_records.list(
-        db=db,
+    page_data = web_usage_service.get_records_page_data(
+        db,
         subscription_id=subscription_id,
-        quota_bucket_id=None,
-        order_by="recorded_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+        page=page,
+        per_page=per_page,
     )
-
-    total = len(records)
-    total_pages = (total + per_page - 1) // per_page if total else 1
-    offset = (page - 1) * per_page
-    records = records[offset:offset + per_page]
-
-    # Get subscriptions for filter dropdown
-    subscriptions = catalog_service.subscriptions.list(
-        db=db,
-        subscriber_id=None,
-        offer_id=None,
-        status=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=100,
-        offset=0,
-    )
-
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="records")
-    context.update({
-        "records": records,
-        "subscriptions": subscriptions,
-        "subscription_id": subscription_id,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-    })
+    context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/records.html", context)
 
 
@@ -215,45 +93,27 @@ def usage_records_list(
 @router.get("/charges", response_class=HTMLResponse)
 def usage_charges_list(
     request: Request,
-    status: Optional[str] = None,
-    subscription_id: Optional[str] = None,
+    status: str | None = None,
+    subscription_id: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List usage charges with bulk actions."""
-    charges = usage_service.usage_charges.list(
-        db=db,
-        subscription_id=subscription_id,
-        subscriber_id=None,
+    page_data = web_usage_service.get_charges_page_data(
+        db,
         status=status,
-        order_by="created_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+        subscription_id=subscription_id,
+        page=page,
+        per_page=per_page,
     )
-
-    total = len(charges)
-    total_pages = (total + per_page - 1) // per_page if total else 1
-    offset = (page - 1) * per_page
-    charges = charges[offset:offset + per_page]
-
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="charges")
-    context.update({
-        "charges": charges,
-        "status": status,
-        "subscription_id": subscription_id,
-        "charge_statuses": [item.value for item in UsageChargeStatus],
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-    })
+    context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/charges.html", context)
 
 
 @router.post("/charges/{charge_id}/post", response_class=HTMLResponse)
-async def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(get_db)):
+def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(get_db)):
     """Post a single usage charge."""
     try:
         usage_service.usage_charges.post(db=db, charge_id=charge_id, payload=UsageChargePostRequest())
@@ -263,25 +123,19 @@ async def usage_charge_post(request: Request, charge_id: str, db: Session = Depe
 
 
 @router.post("/charges/bulk-post", response_class=HTMLResponse)
-async def usage_charges_bulk_post(request: Request, db: Session = Depends(get_db)):
+def usage_charges_bulk_post(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
     """Bulk post staged charges."""
-    form = await request.form()
-    charge_ids = form.getlist("charge_ids")
-
-    for charge_id in charge_ids:
-        try:
-            usage_service.usage_charges.post(
-                db=db,
-                charge_id=charge_id,
-                payload=UsageChargePostRequest(),
-                commit=False,
-            )
-        except Exception:
-            pass
-
-    if charge_ids:
-        db.commit()
-
+    # FormData can include UploadFile items; this endpoint expects string IDs.
+    charge_ids = [
+        item.strip()
+        for item in form.getlist("charge_ids")
+        if isinstance(item, str) and item.strip()
+    ]
+    usage_service.usage_charges.bulk_post_by_ids(db=db, charge_ids=charge_ids)
     return RedirectResponse("/admin/catalog/usage/charges", status_code=303)
 
 
@@ -293,55 +147,34 @@ async def usage_charges_bulk_post(request: Request, db: Session = Depends(get_db
 @router.get("/rating", response_class=HTMLResponse)
 def rating_runs_list(
     request: Request,
-    status: Optional[str] = None,
+    status: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """List rating runs and trigger new run."""
-    runs = usage_service.usage_rating_runs.list(
-        db=db,
+    page_data = web_usage_service.get_rating_runs_page_data(
+        db,
         status=status,
-        order_by="run_at",
-        order_dir="desc",
-        limit=1000,
-        offset=0,
+        page=page,
+        per_page=per_page,
     )
-
-    total = len(runs)
-    total_pages = (total + per_page - 1) // per_page if total else 1
-    offset = (page - 1) * per_page
-    runs = runs[offset:offset + per_page]
-
-    # Calculate default period (current month)
-    now = datetime.now(timezone.utc)
-    default_period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    if now.month == 12:
-        default_period_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        default_period_end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="rating")
-    context.update({
-        "runs": runs,
-        "status": status,
-        "run_statuses": [item.value for item in UsageRatingRunStatus],
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "default_period_start": default_period_start.strftime("%Y-%m-%d"),
-        "default_period_end": default_period_end.strftime("%Y-%m-%d"),
-    })
+    context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/rating.html", context)
 
 
 @router.post("/rating/run", response_class=HTMLResponse)
-async def rating_run_trigger(request: Request, db: Session = Depends(get_db)):
+def rating_run_trigger(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
     """Trigger a new rating run."""
-    form = await request.form()
-    period_start_str = (form.get("period_start") or "").strip()
-    period_end_str = (form.get("period_end") or "").strip()
+    period_start_raw = form.get("period_start")
+    period_end_raw = form.get("period_end")
+    period_start_str = period_start_raw.strip() if isinstance(period_start_raw, str) else ""
+    period_end_str = period_end_raw.strip() if isinstance(period_end_raw, str) else ""
     dry_run = form.get("dry_run") == "true"
 
     period_start = None
@@ -349,13 +182,13 @@ async def rating_run_trigger(request: Request, db: Session = Depends(get_db)):
 
     if period_start_str:
         try:
-            period_start = datetime.strptime(period_start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            period_start = datetime.strptime(period_start_str, "%Y-%m-%d").replace(tzinfo=UTC)
         except ValueError:
             pass
 
     if period_end_str:
         try:
-            period_end = datetime.strptime(period_end_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            period_end = datetime.strptime(period_end_str, "%Y-%m-%d").replace(tzinfo=UTC)
         except ValueError:
             pass
 
@@ -387,7 +220,7 @@ def rating_run_detail(request: Request, run_id: str, db: Session = Depends(get_d
         return RedirectResponse("/admin/catalog/usage/rating", status_code=303)
 
     # Get charges created by this run (by period)
-    charges = usage_service.usage_charges.list(
+    run_charges = usage_service.usage_charges.list(
         db=db,
         subscription_id=None,
         subscriber_id=None,
@@ -396,12 +229,9 @@ def rating_run_detail(request: Request, run_id: str, db: Session = Depends(get_d
         order_dir="desc",
         limit=100,
         offset=0,
+        period_start=run.period_start,
+        period_end=run.period_end,
     )
-    # Filter to this run's period
-    run_charges = [
-        c for c in charges
-        if c.period_start == run.period_start and c.period_end == run.period_end
-    ]
 
     context = _base_context(request, db, active_page="catalog-usage", usage_tab="rating")
     context.update({

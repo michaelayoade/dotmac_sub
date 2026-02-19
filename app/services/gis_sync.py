@@ -55,8 +55,8 @@ class GeoSync(ListResponseMixin):
         sync_pops: bool,
         sync_addresses: bool,
         deactivate_missing: bool,
-    ) -> dict[str, dict[str, int]]:
-        results: dict[str, dict[str, int]] = {}
+    ) -> dict[str, object]:
+        results: dict[str, object] = {}
         if sync_pops:
             result = GeoSync.sync_pop_sites(db, deactivate_missing=deactivate_missing)
             results["pop_sites"] = {
@@ -79,7 +79,7 @@ class GeoSync(ListResponseMixin):
         sync_pops: bool,
         sync_addresses: bool,
         deactivate_missing: bool,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         def _run_sync() -> None:
             session = SessionLocal()
             try:

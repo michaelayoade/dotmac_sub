@@ -42,7 +42,18 @@ def api_post_form(
     follow_redirects: bool = False,
 ) -> APIResponse:
     merged = dict(headers or {})
+    form_payload: dict[str, str | float | bool] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool):
+            form_payload[key] = value
+        elif isinstance(value, (float, str)):
+            form_payload[key] = value
+        elif isinstance(value, int):
+            # Playwright's stubs don't accept int here; encode as str.
+            form_payload[key] = str(value)
+        else:
+            form_payload[key] = str(value)
     # Use form= parameter for form-encoded data (Playwright handles Content-Type)
     # Don't follow redirects by default for API tests (use max_redirects=0)
     max_redirects = 0 if not follow_redirects else 30
-    return context.post(url, form=payload, headers=merged, max_redirects=max_redirects)
+    return context.post(url, form=form_payload, headers=merged, max_redirects=max_redirects)

@@ -12,10 +12,9 @@ class LoginPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/auth/login") -> None:
         """Navigate to the login page."""
-        super().goto("/auth/login")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the login page is loaded."""

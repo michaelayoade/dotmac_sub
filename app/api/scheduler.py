@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.scheduler import (
     ScheduledTaskCreate,
@@ -11,14 +11,6 @@ from app.schemas.scheduler import (
 from app.services import scheduler as scheduler_service
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get("/tasks", response_model=ListResponse[ScheduledTaskRead])
@@ -70,7 +62,4 @@ def refresh_schedule():
 
 @router.post("/tasks/{task_id}/enqueue", status_code=status.HTTP_202_ACCEPTED)
 def enqueue_scheduled_task(task_id: str, db: Session = Depends(get_db)):
-    task = scheduler_service.scheduled_tasks.get(db, task_id)
-    return scheduler_service.enqueue_task(
-        task.task_name, task.args_json or [], task.kwargs_json or {}
-    )
+    return scheduler_service.enqueue_by_id(db, task_id)

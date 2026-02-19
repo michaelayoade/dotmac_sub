@@ -1,3 +1,6 @@
+import builtins
+from typing import Any
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -131,7 +134,7 @@ class DomainSettings(ListResponseMixin):
         key: str,
         value_type: SettingValueType,
         value_text: str | None = None,
-        value_json: dict | bool | int | None = None,
+        value_json: dict[str, Any] | builtins.list[Any] | bool | int | str | None = None,
         is_secret: bool = False,
     ):
         if not self.domain:
@@ -144,7 +147,8 @@ class DomainSettings(ListResponseMixin):
         )
         if existing:
             return existing
-        if value_type != SettingValueType.json:
+        # For non-string settings we commonly store the parsed value in value_json.
+        if value_type not in {SettingValueType.json, SettingValueType.boolean}:
             value_json = None
         payload = DomainSettingCreate(
             domain=self.domain,

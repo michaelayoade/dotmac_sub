@@ -1,6 +1,8 @@
 """Tests for Meta pages service (posting and comments)."""
 
+import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,13 +14,19 @@ from app.models.oauth_token import OAuthToken
 from app.services import meta_pages
 
 
+def _run_async(coro):
+    # Run coroutine in a dedicated thread to avoid nested event loops from anyio/pytest-asyncio.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
+
+
 # =============================================================================
 # Facebook Page Post Tests
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_create_page_post_success(db_session):
+def test_create_page_post_success(db_session):
     """Test creating a Facebook Page post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -50,18 +58,19 @@ async def test_create_page_post_success(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_page_post(
-            db=db_session,
-            page_id="page_123",
-            message="Hello from our page!",
+        result = _run_async(
+            meta_pages.create_page_post(
+                db=db_session,
+                page_id="page_123",
+                message="Hello from our page!",
+            )
         )
 
         assert result["id"] == "page_123_post_456"
         mock_instance.request.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_create_page_post_with_link(db_session):
+def test_create_page_post_with_link(db_session):
     """Test creating a Page post with link."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -93,11 +102,13 @@ async def test_create_page_post_with_link(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_page_post(
-            db=db_session,
-            page_id="page_link",
-            message="Check out this article!",
-            link="https://example.com/article",
+        result = _run_async(
+            meta_pages.create_page_post(
+                db=db_session,
+                page_id="page_link",
+                message="Check out this article!",
+                link="https://example.com/article",
+            )
         )
 
         assert result["id"] == "post_with_link"
@@ -106,21 +117,21 @@ async def test_create_page_post_with_link(db_session):
         assert "link" in str(call_args)
 
 
-@pytest.mark.asyncio
-async def test_create_page_post_no_token(db_session):
+def test_create_page_post_no_token(db_session):
     """Test creating Page post fails without token."""
     with pytest.raises(ValueError) as exc_info:
-        await meta_pages.create_page_post(
-            db=db_session,
-            page_id="nonexistent_page",
-            message="This should fail",
+        _run_async(
+            meta_pages.create_page_post(
+                db=db_session,
+                page_id="nonexistent_page",
+                message="This should fail",
+            )
         )
 
     assert "No active token" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_create_page_post_unpublished(db_session):
+def test_create_page_post_unpublished(db_session):
     """Test creating unpublished (draft) Page post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -152,11 +163,13 @@ async def test_create_page_post_unpublished(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_page_post(
-            db=db_session,
-            page_id="page_draft",
-            message="Draft post",
-            published=False,
+        result = _run_async(
+            meta_pages.create_page_post(
+                db=db_session,
+                page_id="page_draft",
+                message="Draft post",
+                published=False,
+            )
         )
 
         assert result["id"] == "draft_post_123"
@@ -167,8 +180,7 @@ async def test_create_page_post_unpublished(db_session):
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_create_page_photo_post(db_session):
+def test_create_page_photo_post(db_session):
     """Test creating a Facebook Page photo post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -200,11 +212,13 @@ async def test_create_page_photo_post(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_page_photo_post(
-            db=db_session,
-            page_id="page_photo",
-            photo_url="https://example.com/image.jpg",
-            caption="Check out this photo!",
+        result = _run_async(
+            meta_pages.create_page_photo_post(
+                db=db_session,
+                page_id="page_photo",
+                photo_url="https://example.com/image.jpg",
+                caption="Check out this photo!",
+            )
         )
 
         assert result["id"] == "photo_123"
@@ -215,8 +229,7 @@ async def test_create_page_photo_post(db_session):
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_reply_to_comment_success(db_session):
+def test_reply_to_comment_success(db_session):
     """Test replying to a Facebook comment."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -248,18 +261,19 @@ async def test_reply_to_comment_success(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.reply_to_comment(
-            db=db_session,
-            page_id="page_comment",
-            comment_id="comment_456",
-            message="Thanks for your comment!",
+        result = _run_async(
+            meta_pages.reply_to_comment(
+                db=db_session,
+                page_id="page_comment",
+                comment_id="comment_456",
+                message="Thanks for your comment!",
+            )
         )
 
         assert result["id"] == "reply_123"
 
 
-@pytest.mark.asyncio
-async def test_get_post_comments(db_session):
+def test_get_post_comments(db_session):
     """Test getting comments on a post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -306,10 +320,12 @@ async def test_get_post_comments(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.get_post_comments(
-            db=db_session,
-            page_id="page_get_comments",
-            post_id="post_123",
+        result = _run_async(
+            meta_pages.get_post_comments(
+                db=db_session,
+                page_id="page_get_comments",
+                post_id="post_123",
+            )
         )
 
         assert len(result) == 2
@@ -321,8 +337,7 @@ async def test_get_post_comments(db_session):
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_create_instagram_image_post(db_session):
+def test_create_instagram_image_post(db_session):
     """Test creating an Instagram image post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -362,11 +377,13 @@ async def test_create_instagram_image_post(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_instagram_image_post(
-            db=db_session,
-            ig_account_id="ig_123",
-            image_url="https://example.com/photo.jpg",
-            caption="Beautiful sunset #nature #photography",
+        result = _run_async(
+            meta_pages.create_instagram_image_post(
+                db=db_session,
+                ig_account_id="ig_123",
+                image_url="https://example.com/photo.jpg",
+                caption="Beautiful sunset #nature #photography",
+            )
         )
 
         assert result["id"] == "ig_media_123"
@@ -374,21 +391,21 @@ async def test_create_instagram_image_post(db_session):
         assert mock_instance.request.call_count == 2
 
 
-@pytest.mark.asyncio
-async def test_create_instagram_image_post_no_token(db_session):
+def test_create_instagram_image_post_no_token(db_session):
     """Test Instagram post fails without token."""
     with pytest.raises(ValueError) as exc_info:
-        await meta_pages.create_instagram_image_post(
-            db=db_session,
-            ig_account_id="nonexistent_ig",
-            image_url="https://example.com/photo.jpg",
+        _run_async(
+            meta_pages.create_instagram_image_post(
+                db=db_session,
+                ig_account_id="nonexistent_ig",
+                image_url="https://example.com/photo.jpg",
+            )
         )
 
     assert "No active token" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_create_instagram_carousel_post(db_session):
+def test_create_instagram_carousel_post(db_session):
     """Test creating an Instagram carousel post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -438,14 +455,16 @@ async def test_create_instagram_carousel_post(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.create_instagram_carousel_post(
-            db=db_session,
-            ig_account_id="ig_carousel",
-            media_urls=[
-                "https://example.com/photo1.jpg",
-                "https://example.com/photo2.jpg",
-            ],
-            caption="My carousel #slideshow",
+        result = _run_async(
+            meta_pages.create_instagram_carousel_post(
+                db=db_session,
+                ig_account_id="ig_carousel",
+                media_urls=[
+                    "https://example.com/photo1.jpg",
+                    "https://example.com/photo2.jpg",
+                ],
+                caption="My carousel #slideshow",
+            )
         )
 
         assert result["id"] == "ig_carousel_123"
@@ -453,8 +472,7 @@ async def test_create_instagram_carousel_post(db_session):
         assert mock_instance.request.call_count == 4
 
 
-@pytest.mark.asyncio
-async def test_create_instagram_carousel_invalid_count(db_session):
+def test_create_instagram_carousel_invalid_count(db_session):
     """Test carousel validation for image count."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -477,10 +495,12 @@ async def test_create_instagram_carousel_invalid_count(db_session):
 
     # Only 1 image - should fail
     with pytest.raises(ValueError) as exc_info:
-        await meta_pages.create_instagram_carousel_post(
-            db=db_session,
-            ig_account_id="ig_invalid_carousel",
-            media_urls=["https://example.com/single.jpg"],
+        _run_async(
+            meta_pages.create_instagram_carousel_post(
+                db=db_session,
+                ig_account_id="ig_invalid_carousel",
+                media_urls=["https://example.com/single.jpg"],
+            )
         )
 
     assert "between 2 and 10" in str(exc_info.value)
@@ -491,8 +511,7 @@ async def test_create_instagram_carousel_invalid_count(db_session):
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_reply_to_instagram_comment(db_session):
+def test_reply_to_instagram_comment(db_session):
     """Test replying to an Instagram comment."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -524,18 +543,19 @@ async def test_reply_to_instagram_comment(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.reply_to_instagram_comment(
-            db=db_session,
-            ig_account_id="ig_reply",
-            comment_id="ig_comment_456",
-            message="Thanks for your comment!",
+        result = _run_async(
+            meta_pages.reply_to_instagram_comment(
+                db=db_session,
+                ig_account_id="ig_reply",
+                comment_id="ig_comment_456",
+                message="Thanks for your comment!",
+            )
         )
 
         assert result["id"] == "ig_reply_123"
 
 
-@pytest.mark.asyncio
-async def test_get_instagram_media_comments(db_session):
+def test_get_instagram_media_comments(db_session):
     """Test getting comments on Instagram media."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -582,10 +602,12 @@ async def test_get_instagram_media_comments(db_session):
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await meta_pages.get_instagram_media_comments(
-            db=db_session,
-            ig_account_id="ig_get_comments",
-            media_id="ig_media_123",
+        result = _run_async(
+            meta_pages.get_instagram_media_comments(
+                db=db_session,
+                ig_account_id="ig_get_comments",
+                media_id="ig_media_123",
+            )
         )
 
         assert len(result) == 2
@@ -709,8 +731,7 @@ def test_get_connected_instagram_accounts(db_session):
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_create_post_http_error(db_session):
+def test_create_post_http_error(db_session):
     """Test handling HTTP error when creating post."""
     config = ConnectorConfig(
         name="Meta Connector",
@@ -744,8 +765,10 @@ async def test_create_post_http_error(db_session):
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)
 
         with pytest.raises(httpx.HTTPStatusError):
-            await meta_pages.create_page_post(
-                db=db_session,
-                page_id="page_error",
-                message="This will fail",
+            _run_async(
+                meta_pages.create_page_post(
+                    db=db_session,
+                    page_id="page_error",
+                    message="This will fail",
+                )
             )

@@ -6,14 +6,16 @@ CatalogOffers and AddOns via the OfferAddOn model.
 
 from __future__ import annotations
 
+import builtins
 import uuid
-from typing import Optional
+from typing import Any, Optional, cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import OfferAddOn, AddOn, CatalogOffer
 from app.services.common import apply_ordering, apply_pagination
+from app.services.query_builders import apply_optional_equals
 from app.services.response import ListResponseMixin
 
 
@@ -29,13 +31,16 @@ class OfferAddOns(ListResponseMixin):
         order_dir: str = "asc",
         limit: int = 100,
         offset: int = 0,
-    ) -> list[OfferAddOn]:
+    ) -> builtins.list[OfferAddOn]:
         """List offer-addon links with optional filters."""
         query = db.query(OfferAddOn).options(joinedload(OfferAddOn.add_on))
-        if offer_id:
-            query = query.filter(OfferAddOn.offer_id == offer_id)
-        if add_on_id:
-            query = query.filter(OfferAddOn.add_on_id == add_on_id)
+        query = apply_optional_equals(
+            query,
+            {
+                OfferAddOn.offer_id: offer_id,
+                OfferAddOn.add_on_id: add_on_id,
+            },
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -45,7 +50,7 @@ class OfferAddOns(ListResponseMixin):
                 "offer_id": OfferAddOn.offer_id,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return cast(list[OfferAddOn], apply_pagination(query, limit, offset).all())
 
     @staticmethod
     def get(db: Session, link_id: str) -> OfferAddOn:
@@ -150,9 +155,9 @@ class OfferAddOns(ListResponseMixin):
     def sync(
         db: Session,
         offer_id: str,
-        addon_configs: list[dict],
+        addon_configs: builtins.list[dict[str, Any]],
         commit: bool = True,
-    ) -> list[OfferAddOn]:
+    ) -> builtins.list[OfferAddOn]:
         """
         Sync offer-addon links based on provided configurations.
 

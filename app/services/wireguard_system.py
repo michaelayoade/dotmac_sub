@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -93,9 +94,11 @@ class WireGuardSystemService:
             "PostDown = sysctl -w net.ipv6.conf.all.forwarding=0",
         ])
 
-        routes = []
+        routes: list[str] = []
         if server.metadata_:
-            routes = server.metadata_.get("routes") or []
+            routes_obj = server.metadata_.get("routes")
+            if isinstance(routes_obj, list):
+                routes = [str(item).strip() for item in routes_obj if str(item).strip()]
 
         if routes:
             lines.append("")
@@ -390,12 +393,13 @@ class WireGuardSystemService:
         Returns:
             Dict with interface status and peer info
         """
-        status = {
+        peers: list[dict[str, Any]] = []
+        status: dict[str, Any] = {
             "interface": interface_name,
             "is_up": False,
             "public_key": None,
             "listen_port": None,
-            "peers": [],
+            "peers": peers,
         }
 
         try:
@@ -434,7 +438,7 @@ class WireGuardSystemService:
                             "tx_bytes": int(parts[6]),
                             "persistent_keepalive": int(parts[7]) if parts[7] != "off" else 0,
                         }
-                        status["peers"].append(peer)
+                        peers.append(peer)
 
         except Exception as e:
             logger.error(f"Failed to get interface status: {e}")

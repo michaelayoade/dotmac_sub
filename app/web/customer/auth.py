@@ -4,17 +4,9 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services import web_customer_auth as web_customer_auth_service
 router = APIRouter(prefix="/portal/auth", tags=["web-customer-auth"])
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
     """Get the current customer from request cookies."""
@@ -22,7 +14,7 @@ def get_current_customer_from_request(request: Request, db: Session) -> dict | N
 
 
 @router.get("/login", response_class=HTMLResponse)
-def customer_login_page(request: Request, error: str = None, next: str = None):
+def customer_login_page(request: Request, error: str | None = None, next: str | None = None):
     """Display the customer login page."""
     return web_customer_auth_service.customer_login_page(request, error, next)
 
@@ -33,7 +25,7 @@ def customer_login_submit(
     username: str = Form(...),
     password: str = Form(...),
     remember: bool = Form(False),
-    next: str = Form(None),
+    next: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Process customer login using local credentials or RADIUS authentication."""

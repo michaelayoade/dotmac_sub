@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 from app.schemas.common import ListResponse
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.services.auth_dependencies import require_permission
 from app.schemas.subscriber import (
     AddressCreate,
@@ -24,14 +24,6 @@ from app.schemas.subscriber import (
 from app.services import subscriber as subscriber_service
 
 router = APIRouter()
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

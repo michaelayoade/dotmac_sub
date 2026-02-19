@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.schemas.rbac import PermissionCreate, PersonRoleCreate, RoleCreate
+from app.schemas.rbac import PermissionCreate, RoleCreate, SubscriberRoleCreate
 from app.schemas.subscriber import SubscriberCreate
 from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
 from app.services import audit as audit_service
@@ -16,19 +16,22 @@ from app.services import webhook as webhook_service
 def test_subscriber_create_list(db_session, person):
     subscriber = subscriber_service.subscribers.create(
         db_session,
-        SubscriberCreate(person_id=person.id),
+        SubscriberCreate(
+            first_name="Extra",
+            last_name="Subscriber",
+            email=f"extra-{person.id}@example.com",
+        ),
     )
     items = subscriber_service.subscribers.list(
         db_session,
-        subscriber_type="person",
-        person_id=str(person.id),
         organization_id=None,
+        subscriber_type="person",
         order_by="created_at",
         order_dir="desc",
         limit=10,
         offset=0,
     )
-    assert items[0].id == subscriber.id
+    assert any(item.id == subscriber.id for item in items)
 
 
 def test_rbac_role_permission_link(db_session, person):
@@ -36,10 +39,10 @@ def test_rbac_role_permission_link(db_session, person):
     permission = rbac_service.permissions.create(
         db_session, PermissionCreate(key="tickets:read", name="Tickets Read")
     )
-    link = rbac_service.person_roles.create(
-        db_session, PersonRoleCreate(person_id=person.id, role_id=role.id)
+    link = rbac_service.subscriber_roles.create(
+        db_session, SubscriberRoleCreate(subscriber_id=person.id, role_id=role.id)
     )
-    assert link.person_id == person.id
+    assert link.subscriber_id == person.id
     assert permission.key == "tickets:read"
 
 

@@ -120,7 +120,10 @@ def get_system_health() -> dict[str, Any]:
     }
 
 
-def evaluate_health(health: dict[str, Any], thresholds: dict[str, float]) -> dict[str, Any]:
+def evaluate_health(
+    health: dict[str, Any],
+    thresholds: dict[str, float | None],
+) -> dict[str, Any]:
     status = "ok"
     issues: list[dict[str, str]] = []
 

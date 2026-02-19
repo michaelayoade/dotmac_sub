@@ -1,0 +1,144 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Provisioning Workflows - Admin{% endblock %}
+
+{% set vendor_colors = {
+    'mikrotik': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
+    'huawei': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
+    'zte': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+    'nokia': 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+    'genieacs': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300',
+    'other': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+} %}
+
+{% block breadcrumbs %}
+<a href="/admin/provisioning" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Provisioning</a>
+<span class="mx-2 text-slate-400">/</span>
+<span class="text-slate-600 dark:text-slate-300">Workflows</span>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Provisioning Workflows</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage automated provisioning workflows and steps</p>
+        </div>
+        <a href="/admin/provisioning/workflows/new"
+           class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New Workflow
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="GET" action="/admin/provisioning/workflows" class="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <select name="vendor" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Vendors</option>
+                {% for v in vendors %}
+                <option value="{{ v }}" {{ 'selected' if current_vendor == v else '' }}>{{ v|title }}</option>
+                {% endfor %}
+            </select>
+            <select name="active" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All States</option>
+                <option value="true" {{ 'selected' if current_active == 'true' else '' }}>Active Only</option>
+                <option value="false" {{ 'selected' if current_active == 'false' else '' }}>Inactive Only</option>
+            </select>
+            <button type="submit" class="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                Filter
+            </button>
+        </form>
+    </div>
+
+    <!-- Workflows Table -->
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-800/50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Steps</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Active</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for wf in workflows %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">
+                        <a href="/admin/provisioning/workflows/{{ wf.id }}" class="hover:text-primary-600 dark:hover:text-primary-400">{{ wf.name }}</a>
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm">
+                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ vendor_colors.get(wf.vendor.value, 'bg-slate-100 text-slate-700') }}">
+                            {{ wf.vendor.value|title }}
+                        </span>
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                        {{ (wf.steps|selectattr('is_active')|list|length) if wf.steps else 0 }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm">
+                        {% if wf.is_active %}
+                        <span class="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+                            <span class="h-2 w-2 rounded-full bg-green-500"></span> Active
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center gap-1 text-slate-400">
+                            <span class="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600"></span> Inactive
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                        {{ wf.created_at.strftime('%Y-%m-%d') if wf.created_at else '-' }}
+                    </td>
+                    <td class="whitespace-nowrap px-6 py-4 text-right text-sm">
+                        <a href="/admin/provisioning/workflows/{{ wf.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">View</a>
+                        <a href="/admin/provisioning/workflows/{{ wf.id }}/edit" class="ml-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Edit</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="px-6 py-12 text-center">
+                        <div class="flex flex-col items-center">
+                            <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                            <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No workflows found</p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a workflow to automate provisioning.</p>
+                            <a href="/admin/provisioning/workflows/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                New Workflow
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if workflows %}
+        <!-- Pagination -->
+        <div class="border-t border-slate-200 bg-slate-50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {{ workflows|length }} workflow{{ 's' if workflows|length != 1 else '' }}
+                </p>
+                <div class="flex gap-2">
+                    {% if has_prev %}
+                    <a href="/admin/provisioning/workflows?page={{ page - 1 }}{% if current_vendor %}&vendor={{ current_vendor }}{% endif %}{% if current_active %}&active={{ current_active }}{% endif %}"
+                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
+                    {% endif %}
+                    {% if has_next %}
+                    <a href="/admin/provisioning/workflows?page={{ page + 1 }}{% if current_vendor %}&vendor={{ current_vendor }}{% endif %}{% if current_active %}&active={{ current_active }}{% endif %}"
+                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

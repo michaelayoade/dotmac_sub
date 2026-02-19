@@ -1,19 +1,11 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import get_db
 from app.schemas.geocoding import GeocodePreviewRequest, GeocodePreviewResult
 from app.services import geocoding as geocoding_service
 
 router = APIRouter(prefix="/geocode", tags=["geocoding"])
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.post(

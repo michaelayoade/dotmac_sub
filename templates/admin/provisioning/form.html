@@ -1,0 +1,115 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if order else 'New' }} Service Order - Admin{% endblock %}
+
+{% block breadcrumbs %}
+<a href="/admin/provisioning" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Provisioning</a>
+<span class="mx-2 text-slate-400">/</span>
+{% if order %}
+<a href="/admin/provisioning/orders/{{ order.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ order.id|string|truncate(8, True, '') }}</a>
+<span class="mx-2 text-slate-400">/</span>
+<span class="text-slate-600 dark:text-slate-300">Edit</span>
+{% else %}
+<span class="text-slate-600 dark:text-slate-300">New Order</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <!-- Header -->
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit' if order else 'New' }} Service Order</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {{ 'Update service order details' if order else 'Create a new service order for provisioning' }}
+        </p>
+    </div>
+
+    <!-- Form -->
+    <form method="POST" action="{{ '/admin/provisioning/orders/' ~ order.id ~ '/edit' if order else '/admin/provisioning/orders' }}"
+          class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token|default('') }}">
+
+        <div class="space-y-6">
+            <!-- Subscriber -->
+            <div x-data='{
+                search: "{{ (order.subscriber.first_name ~ " " ~ order.subscriber.last_name)|trim if order and order.subscriber else "" }}",
+                selectedId: "{{ order.subscriber_id if order else "" }}",
+                showResults: false
+            }'>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
+                <input type="hidden" name="subscriber_id" :value="selectedId">
+                <input type="text" x-model="search" @focus="showResults = true" @click.away="showResults = false"
+                       placeholder="Search subscriber by name..."
+                       autocomplete="off"
+                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                       hx-get="/admin/subscribers?search={search}&format=json"
+                       hx-trigger="keyup changed delay:300ms"
+                       hx-target="#subscriber-results"
+                       :name="'subscriber_search'">
+                <div id="subscriber-results" x-show="showResults" x-cloak
+                     class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                </div>
+                {% if order and order.subscriber %}
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Current: {{ (order.subscriber.first_name ~ " " ~ order.subscriber.last_name)|trim }} ({{ order.subscriber_id|string|truncate(8, True, '') }})
+                </p>
+                {% endif %}
+            </div>
+
+            <!-- Subscription ID (optional) -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription ID</label>
+                <input type="text" name="subscription_id"
+                       value="{{ order.subscription_id if order and order.subscription_id else '' }}"
+                       placeholder="Optional - paste subscription UUID"
+                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave empty if the order is not linked to a specific subscription</p>
+            </div>
+
+            <!-- Order Type -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Order Type</label>
+                <select name="order_type"
+                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select type...</option>
+                    {% for t in order_types %}
+                    <option value="{{ t }}" {{ 'selected' if order and order.order_type == t else '' }}>{{ t|replace('_', ' ')|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            {% if order %}
+            <!-- Status (edit only) -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                <select name="status"
+                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for s in statuses %}
+                    <option value="{{ s }}" {{ 'selected' if order.status.value == s else '' }}>{{ s|replace('_', ' ')|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <!-- Notes -->
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                <textarea name="notes" rows="3" placeholder="Additional notes..."
+                          class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ order.notes if order and order.notes else '' }}</textarea>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-6 flex items-center justify-end gap-3 border-t border-slate-200 pt-6 dark:border-slate-700">
+            <a href="{{ '/admin/provisioning/orders/' ~ order.id if order else '/admin/provisioning' }}"
+               class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                Cancel
+            </a>
+            <button type="submit"
+                    class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                {{ 'Update Order' if order else 'Create Order' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

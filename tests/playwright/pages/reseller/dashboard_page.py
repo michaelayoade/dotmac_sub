@@ -13,9 +13,9 @@ class ResellerDashboardPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/reseller/dashboard") -> None:
         """Navigate to the reseller dashboard."""
-        super().goto("/reseller/dashboard")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""

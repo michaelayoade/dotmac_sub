@@ -112,8 +112,9 @@ class NotificationHandler:
                 return account.email
 
         # Check if email is in payload
-        if "email" in event.payload:
-            return event.payload["email"]
+        email = event.payload.get("email")
+        if isinstance(email, str) and email:
+            return email
 
         return None
 

@@ -52,7 +52,7 @@ class EventDispatcher:
         )
 
         # 1. Persist event before processing
-        event_record = EventStore(
+        event_record: EventStore | None = EventStore(
             event_id=event.event_id,
             event_type=event.event_type.value,
             payload=event.payload,
@@ -76,7 +76,7 @@ class EventDispatcher:
             event_record = None
 
         # 2. Process all handlers, tracking failures
-        failed_handlers: list[dict] = []
+        failed_handlers: list[dict[str, str]] = []
         for handler in self._handlers:
             try:
                 handler.handle(db, event)

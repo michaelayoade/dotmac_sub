@@ -51,8 +51,10 @@ def _extract_actor_id_from_jwt(token: str | None) -> str | None:
 
 def _request_path(request: Request) -> str:
     route = request.scope.get("route")
-    if route and hasattr(route, "path"):
-        return route.path
+    if route is not None:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            return path
     return request.url.path
 
 

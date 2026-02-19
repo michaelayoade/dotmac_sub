@@ -41,7 +41,7 @@ def reseller_login_submit(
             response = RedirectResponse(url="/reseller/auth/mfa", status_code=303)
             response.set_cookie(
                 key="reseller_mfa_pending",
-                value=result.get("mfa_token", ""),
+                value=str(result.get("mfa_token") or ""),
                 httponly=True,
                 secure=True,
                 samesite="lax",
@@ -58,6 +58,8 @@ def reseller_login_submit(
             return response
 
         session_token = result.get("session_token")
+        if not isinstance(session_token, str) or not session_token:
+            raise RuntimeError("Missing session token")
         response = RedirectResponse(url="/reseller/dashboard", status_code=303)
         max_age = reseller_portal.get_remember_max_age(db) if remember else reseller_portal.get_session_max_age(db)
         response.set_cookie(
@@ -69,6 +71,12 @@ def reseller_login_submit(
             max_age=max_age,
         )
         return response
+    except RuntimeError:
+        return templates.TemplateResponse(
+            "reseller/auth/login.html",
+            {"request": request, "error": "Session service unavailable. Please try again."},
+            status_code=503,
+        )
     except Exception as exc:
         error_msg = str(exc) if str(exc) else "Invalid credentials"
         return templates.TemplateResponse(
@@ -102,6 +110,8 @@ def reseller_mfa_submit(
         remember = request.cookies.get("reseller_mfa_remember") == "1"
         result = reseller_portal.verify_mfa(db, mfa_token, code, request, remember)
         session_token = result.get("session_token")
+        if not isinstance(session_token, str) or not session_token:
+            raise RuntimeError("Missing session token")
         response = RedirectResponse(url="/reseller/dashboard", status_code=303)
         response.delete_cookie("reseller_mfa_pending")
         response.delete_cookie("reseller_mfa_remember")
@@ -114,6 +124,12 @@ def reseller_mfa_submit(
             max_age=reseller_portal.get_remember_max_age(db) if remember else reseller_portal.get_session_max_age(db),
         )
         return response
+    except RuntimeError:
+        return templates.TemplateResponse(
+            "reseller/auth/mfa.html",
+            {"request": request, "error": "Session service unavailable. Please try again."},
+            status_code=503,
+        )
     except Exception:
         return templates.TemplateResponse(
             "reseller/auth/mfa.html",
@@ -136,6 +152,8 @@ def reseller_logout(request: Request):
 
 def reseller_refresh(request: Request):
     session_token = request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
+    if not session_token:
+        return Response(status_code=401)
 
     db = SessionLocal()
     try:

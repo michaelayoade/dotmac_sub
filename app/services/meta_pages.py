@@ -11,7 +11,7 @@ Uses the Meta Graph API.
 
 import asyncio
 import httpx
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from sqlalchemy.orm import Session
 
@@ -81,13 +81,16 @@ def _get_meta_graph_base_url(db: Session) -> str:
 
 def _get_page_token_record(db: Session, page_id: str) -> OAuthToken | None:
     """Get the access token for a specific Facebook Page."""
-    return (
-        db.query(OAuthToken)
-        .filter(OAuthToken.provider == "meta")
-        .filter(OAuthToken.account_type == "page")
-        .filter(OAuthToken.external_account_id == page_id)
-        .filter(OAuthToken.is_active.is_(True))
-        .first()
+    return cast(
+        OAuthToken | None,
+        (
+            db.query(OAuthToken)
+            .filter(OAuthToken.provider == "meta")
+            .filter(OAuthToken.account_type == "page")
+            .filter(OAuthToken.external_account_id == page_id)
+            .filter(OAuthToken.is_active.is_(True))
+            .first()
+        ),
     )
 
 
@@ -101,13 +104,16 @@ def _get_instagram_token_record(db: Session, ig_account_id: str) -> OAuthToken |
 
     Instagram uses the parent Page's token for API access.
     """
-    return (
-        db.query(OAuthToken)
-        .filter(OAuthToken.provider == "meta")
-        .filter(OAuthToken.account_type == "instagram_business")
-        .filter(OAuthToken.external_account_id == ig_account_id)
-        .filter(OAuthToken.is_active.is_(True))
-        .first()
+    return cast(
+        OAuthToken | None,
+        (
+            db.query(OAuthToken)
+            .filter(OAuthToken.provider == "meta")
+            .filter(OAuthToken.account_type == "instagram_business")
+            .filter(OAuthToken.external_account_id == ig_account_id)
+            .filter(OAuthToken.is_active.is_(True))
+            .first()
+        ),
     )
 
 
@@ -164,7 +170,7 @@ async def create_page_post(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
     logger.info(
         "fb_page_post_created page_id=%s post_id=%s",
@@ -214,7 +220,7 @@ async def create_page_photo_post(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
     logger.info(
         "fb_page_photo_posted page_id=%s photo_id=%s",
@@ -263,7 +269,7 @@ async def reply_to_comment(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
     logger.info(
         "fb_comment_reply_created page_id=%s parent_comment=%s reply_id=%s",
@@ -309,9 +315,9 @@ async def get_post_comments(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
-    return result.get("data", [])
+    return cast(list[dict[str, Any]], result.get("data", []))
 
 
 async def get_page_posts(
@@ -337,9 +343,9 @@ async def get_page_posts(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
-    return result.get("data", [])
+    return cast(list[dict[str, Any]], result.get("data", []))
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +400,7 @@ async def create_instagram_image_post(
             timeout=60.0,
         )
         response.raise_for_status()
-        container_result = response.json()
+        container_result = cast(dict[str, Any], response.json())
         container_id = container_result.get("id")
 
         if not container_id:
@@ -415,7 +421,7 @@ async def create_instagram_image_post(
             timeout=60.0,
         )
         response.raise_for_status()
-        publish_result = response.json()
+        publish_result = cast(dict[str, Any], response.json())
 
     logger.info(
         "ig_image_posted account_id=%s media_id=%s",
@@ -471,7 +477,7 @@ async def create_instagram_carousel_post(
                 timeout=120.0,
             )
             response.raise_for_status()
-            container_result = response.json()
+            container_result = cast(dict[str, Any], response.json())
             container_id = container_result.get("id")
             if not container_id:
                 raise ValueError("Failed to create Instagram carousel container")
@@ -495,7 +501,7 @@ async def create_instagram_carousel_post(
             timeout=120.0,
         )
         response.raise_for_status()
-        carousel_result = response.json()
+        carousel_result = cast(dict[str, Any], response.json())
         carousel_id = carousel_result.get("id")
         if not carousel_id:
             raise ValueError("Failed to create Instagram carousel")
@@ -515,7 +521,7 @@ async def create_instagram_carousel_post(
             timeout=120.0,
         )
         response.raise_for_status()
-        publish_result = response.json()
+        publish_result = cast(dict[str, Any], response.json())
 
     logger.info(
         "ig_carousel_posted account_id=%s media_id=%s images=%d",
@@ -565,7 +571,7 @@ async def reply_to_instagram_comment(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
     logger.info(
         "ig_comment_reply_created account_id=%s parent_comment=%s reply_id=%s",
@@ -611,9 +617,9 @@ async def get_instagram_media_comments(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
-    return result.get("data", [])
+    return cast(list[dict[str, Any]], result.get("data", []))
 
 
 async def get_instagram_media(
@@ -639,9 +645,9 @@ async def get_instagram_media(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
         response.raise_for_status()
-        result = response.json()
+        result = cast(dict[str, Any], response.json())
 
-    return result.get("data", [])
+    return cast(list[dict[str, Any]], result.get("data", []))
 
 
 # ---------------------------------------------------------------------------

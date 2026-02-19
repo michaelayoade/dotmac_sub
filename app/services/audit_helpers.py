@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from collections.abc import Mapping
+from datetime import UTC, date, datetime
 from enum import Enum
+from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
-from zoneinfo import ZoneInfo
 
 from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
-
 
 SENSITIVE_FIELDS = {
     "password",
@@ -44,7 +45,7 @@ def _to_audit_timezone(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value.astimezone(AUDIT_TIMEZONE)
 
 
@@ -111,12 +112,14 @@ def format_changes(changes: dict | None, max_items: int = 3) -> str | None:
     return "; ".join(items) + suffix
 
 
-def extract_changes(metadata: dict | None, action: str | None = None) -> dict | None:
+def extract_changes(
+    metadata: Mapping[str, Any] | None, action: str | None = None
+) -> dict[str, Any] | None:
     if not metadata:
         return None
     changes = metadata.get("changes")
-    if changes:
-        return changes
+    if isinstance(changes, dict) and changes:
+        return dict(changes)
     if "from" in metadata and "to" in metadata:
         field = "value"
         if action == "status_change":
@@ -198,6 +201,133 @@ def log_audit_event(
         metadata_=metadata_payload or None,
     )
     audit_service.audit_events.create(db=db, payload=payload)
+
+
+def build_audit_activities(
+    db: Session,
+    entity_type: str,
+    entity_id: str,
+    limit: int = 10,
+) -> list[dict]:
+    """Build activity feed for a single entity type + id."""
+    events = audit_service.audit_events.list(
+        db=db,
+        actor_id=None,
+        actor_type=None,
+        action=None,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        request_id=None,
+        is_success=None,
+        status_code=None,
+        is_active=None,
+        order_by="occurred_at",
+        order_dir="desc",
+        limit=limit,
+        offset=0,
+    )
+    return _events_to_activities(db, events)
+
+
+def build_audit_activities_for_types(
+    db: Session,
+    entity_types: list[str],
+    limit: int = 10,
+) -> list[dict]:
+    """Build activity feed across multiple entity types."""
+    if not entity_types:
+        return []
+    from app.models.audit import AuditEvent
+
+    events = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.entity_type.in_(entity_types))
+        .filter(AuditEvent.is_active.is_(True))
+        .order_by(AuditEvent.occurred_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return _events_to_activities(db, events, include_entity_label=True)
+
+
+def _events_to_activities(
+    db: Session,
+    events: list,
+    include_entity_label: bool = False,
+) -> list[dict]:
+    """Shared logic: resolve actors and build activity dicts from audit events."""
+    if not events:
+        return []
+    actor_ids = {
+        str(event.actor_id)
+        for event in events
+        if getattr(event, "actor_id", None)
+    }
+    people: dict[str, Subscriber] = {}
+    if actor_ids:
+        people = {
+            str(person.id): person
+            for person in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
+        }
+    activities: list[dict] = []
+    for event in events:
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip()
+            if actor
+            else "System"
+        )
+        metadata = getattr(event, "metadata_", None) or {}
+        changes = extract_changes(metadata, getattr(event, "action", None))
+        change_summary = format_changes(changes, max_items=2)
+        action_label = (event.action or "Activity").replace("_", " ").title()
+        if include_entity_label:
+            entity_label = (
+                (event.entity_type or "Activity").replace("_", " ").title()
+            )
+            title = f"{entity_label} {action_label}"
+        else:
+            title = action_label
+        activities.append(
+            {
+                "title": title,
+                "description": f"{actor_name}"
+                + (f" · {change_summary}" if change_summary else ""),
+                "occurred_at": event.occurred_at,
+            }
+        )
+    return activities
+
+
+def log_update(
+    db: Session,
+    request,
+    entity_type: str,
+    entity_id: str,
+    before_obj,
+    after_obj,
+    actor_id: str | None,
+    exclude_fields: set[str] | None = None,
+) -> None:
+    """Snapshot before/after, compute diff, and log an audit event in one call."""
+    meta = build_changes_metadata(
+        before_obj, after_obj, exclude=exclude_fields
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        actor_id=actor_id,
+        metadata=meta,
+    )
 
 
 def _is_user_actor(actor_type) -> bool:

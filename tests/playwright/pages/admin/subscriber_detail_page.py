@@ -13,9 +13,16 @@ class SubscriberDetailPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, subscriber_id: str) -> None:
+    def goto(self, path: str = "/admin/subscribers") -> None:
         """Navigate to a specific subscriber's detail page."""
-        super().goto(f"/admin/subscribers/{subscriber_id}")
+        # Backwards compatible with existing tests: `goto(subscriber_id)`.
+        if path and not path.startswith("/"):
+            super().goto(f"/admin/subscribers/{path}")
+            return
+        super().goto(path)
+
+    def goto_subscriber(self, subscriber_id: str) -> None:
+        self.goto(subscriber_id)
 
     def expect_loaded(self) -> None:
         """Assert the detail page is loaded."""

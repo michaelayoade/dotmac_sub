@@ -88,6 +88,7 @@ warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+mypy_path = "stubs"
 
 [tool.bandit]
 exclude_dirs = ["tests", "alembic", "scripts"]

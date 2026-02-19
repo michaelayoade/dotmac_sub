@@ -1,5 +1,6 @@
 """Offer validation service."""
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -61,6 +62,7 @@ class OfferValidation(ListResponseMixin):
         one_time_total = Decimal("0.00")
         usage_total = Decimal("0.00")
 
+        offer_prices: Sequence[OfferPrice | OfferVersionPrice]
         if payload.offer_version_id:
             offer_prices = (
                 db.query(OfferVersionPrice)
@@ -78,25 +80,25 @@ class OfferValidation(ListResponseMixin):
             )
             source = "offer"
 
-        for price in offer_prices:
-            if price.billing_cycle and price.billing_cycle != billing_cycle:
+        for offer_price in offer_prices:
+            if offer_price.billing_cycle and offer_price.billing_cycle != billing_cycle:
                 continue
-            extended = Decimal(str(price.amount))
+            extended = Decimal(str(offer_price.amount))
             prices.append(
                 OfferValidationPrice(
                     source=source,
-                    price_type=price.price_type,
-                    amount=price.amount,
-                    currency=price.currency,
-                    billing_cycle=price.billing_cycle,
-                    unit=price.unit,
-                    description=price.description,
+                    price_type=offer_price.price_type,
+                    amount=offer_price.amount,
+                    currency=offer_price.currency,
+                    billing_cycle=offer_price.billing_cycle,
+                    unit=offer_price.unit,
+                    description=offer_price.description,
                     extended_amount=extended,
                 )
             )
-            if price.price_type == PriceType.recurring:
+            if offer_price.price_type == PriceType.recurring:
                 recurring_total += extended
-            elif price.price_type == PriceType.one_time:
+            elif offer_price.price_type == PriceType.one_time:
                 one_time_total += extended
             else:
                 usage_total += extended
@@ -115,27 +117,27 @@ class OfferValidation(ListResponseMixin):
                 .filter(AddOnPrice.is_active.is_(True))
                 .all()
             )
-            for price in add_on_prices:
-                if price.billing_cycle and price.billing_cycle != billing_cycle:
+            for add_on_price in add_on_prices:
+                if add_on_price.billing_cycle and add_on_price.billing_cycle != billing_cycle:
                     continue
-                extended = Decimal(str(price.amount)) * Decimal(add_on.quantity)
+                extended = Decimal(str(add_on_price.amount)) * Decimal(add_on.quantity)
                 prices.append(
                     OfferValidationPrice(
                         source="add_on",
-                        price_type=price.price_type,
-                        amount=price.amount,
-                        currency=price.currency,
-                        billing_cycle=price.billing_cycle,
-                        unit=price.unit,
-                        description=price.description,
+                        price_type=add_on_price.price_type,
+                        amount=add_on_price.amount,
+                        currency=add_on_price.currency,
+                        billing_cycle=add_on_price.billing_cycle,
+                        unit=add_on_price.unit,
+                        description=add_on_price.description,
                         add_on_id=add_on.add_on_id,
                         quantity=add_on.quantity,
                         extended_amount=extended,
                     )
                 )
-                if price.price_type == PriceType.recurring:
+                if add_on_price.price_type == PriceType.recurring:
                     recurring_total += extended
-                elif price.price_type == PriceType.one_time:
+                elif add_on_price.price_type == PriceType.one_time:
                     one_time_total += extended
                 else:
                     usage_total += extended

@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db import Base
 from app.models.subscription_engine import SettingValueType
@@ -51,14 +51,6 @@ class SubscriberStatus(enum.Enum):
 
 # --- Deprecated aliases for backwards compatibility ---
 AccountStatus = SubscriberStatus  # Alias for legacy code
-
-
-class AccountRoleType(enum.Enum):
-    """Deprecated - account roles removed during consolidation."""
-    primary = "primary"
-    billing = "billing"
-    technical = "technical"
-    support = "support"
 
 
 class AddressType(enum.Enum):
@@ -218,8 +210,9 @@ class Subscriber(Base):
 
     # === Common Fields ===
     notes: Mapped[str | None] = mapped_column(Text)
+    splynx_customer_id: Mapped[int | None] = mapped_column(Integer)
     metadata_: Mapped[dict | None] = mapped_column(
-        "metadata", MutableDict.as_mutable(JSON)
+        "metadata", MutableDict.as_mutable(JSON())
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -275,7 +268,7 @@ class SubscriberChannel(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metadata_: Mapped[dict | None] = mapped_column("metadata", MutableDict.as_mutable(JSON))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", MutableDict.as_mutable(JSON()))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -359,13 +352,16 @@ class Address(Base):
     tax_rate = relationship("TaxRate")
 
 
-# --- Deprecated aliases for backwards compatibility ---
-# SubscriberAccount was consolidated into Subscriber
-SubscriberAccount = Subscriber  # Alias for legacy code that references SubscriberAccount
+# --- Compatibility aliases ---
+# SubscriberAccount is now represented by Subscriber.
+SubscriberAccount = Subscriber
 
 
 class ResellerUser(Base):
-    """Deprecated stub - reseller users functionality removed during consolidation."""
+    """Reseller user linkage model.
+
+    Uses the legacy table name for migration compatibility.
+    """
     __tablename__ = "reseller_users_deprecated"
     __table_args__ = {"extend_existing": True}
 
@@ -373,28 +369,10 @@ class ResellerUser(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Backwards-compatible alias used by older code/tests.
+    person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     reseller_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-
-# AccountRole stub class for backwards compatibility
-class AccountRole(Base):
-    """Deprecated stub - account roles removed during consolidation."""
-    __tablename__ = "account_roles_deprecated"
-    __table_args__ = {"extend_existing": True}
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -58,7 +58,7 @@ def require_audit_auth(
     authorization: str | None = Header(default=None),
     x_session_token: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
     token = _extract_bearer_token(authorization) or x_session_token
@@ -115,7 +115,7 @@ def require_audit_auth(
 
 def require_user_auth(
     authorization: str | None = Header(default=None),
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
     token = _extract_bearer_token(authorization)
@@ -151,6 +151,7 @@ def require_user_auth(
         request.state.actor_type = "user"
     return {
         "subscriber_id": str(subscriber_id),
+        "person_id": str(subscriber_id),
         "session_id": str(session_id),
         "roles": roles,
         "scopes": scopes,

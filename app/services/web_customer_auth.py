@@ -21,6 +21,15 @@ from app.services.settings_spec import resolve_value
 
 templates = Jinja2Templates(directory="templates")
 
+def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> int:
+    raw = resolve_value(db, domain, key)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return default
+
 
 def get_current_customer_from_request(request: Request, db: Session) -> Optional[dict]:
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
@@ -74,8 +83,12 @@ def customer_login_submit(
                 raise ValueError("Account locked. Please try again later.")
             if not verify_password(password, local_credential.password_hash):
                 local_credential.failed_login_attempts += 1
-                max_attempts = resolve_value(db, SettingDomain.auth, "customer_login_max_attempts") or 5
-                lockout_minutes = resolve_value(db, SettingDomain.auth, "customer_lockout_minutes") or 15
+                max_attempts = _setting_int(
+                    db, SettingDomain.auth, "customer_login_max_attempts", 5
+                )
+                lockout_minutes = _setting_int(
+                    db, SettingDomain.auth, "customer_lockout_minutes", 15
+                )
                 if local_credential.failed_login_attempts >= max_attempts:
                     local_credential.locked_until = now + timedelta(minutes=lockout_minutes)
                 db.commit()
@@ -90,13 +103,8 @@ def customer_login_submit(
             db.commit()
             authenticated_locally = True
 
-            subscriber = (
-                db.query(Subscriber)
-                .filter(Subscriber.person_id == local_credential.person_id)
-                .filter(Subscriber.is_active.is_(True))
-                .first()
-            )
-            if subscriber:
+            subscriber = db.get(Subscriber, local_credential.subscriber_id)
+            if subscriber and subscriber.is_active:
                 subscriber_id = subscriber.id
                 account_id = subscriber.id
 
@@ -111,9 +119,10 @@ def customer_login_submit(
             )
 
             if radius_user:
-                account_id = radius_user.account_id
+                account_id = radius_user.subscriber_id
                 subscription_id = radius_user.subscription_id
-                if radius_user.subscription_id:
+                subscriber_id = radius_user.subscriber_id
+                if radius_user.subscription_id and not subscriber_id:
                     from app.models.catalog import Subscription
                     subscription = db.get(Subscription, radius_user.subscription_id)
                     if subscription and subscription.subscriber_id:
@@ -164,6 +173,13 @@ def customer_login_submit(
 
         return response
 
+    except RuntimeError:
+        error_msg = "Session service unavailable. Please try again."
+        return templates.TemplateResponse(
+            "customer/auth/login.html",
+            {"request": request, "error": error_msg, "next": next_url, "username": username},
+            status_code=503,
+        )
     except Exception as exc:
         error_msg = "Invalid username or password"
         message = str(exc).lower()

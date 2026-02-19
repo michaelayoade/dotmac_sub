@@ -12,10 +12,9 @@ class RolesPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/system/roles") -> None:
         """Navigate to the roles list."""
-        super().goto("/admin/system/roles")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the roles page is loaded."""

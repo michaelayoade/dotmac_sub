@@ -13,9 +13,9 @@ class OffersPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self) -> None:
+    def goto(self, path: str = "/admin/catalog") -> None:
         """Navigate to the services list."""
-        super().goto("/admin/catalog")
+        super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the services page is loaded."""

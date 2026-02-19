@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 from datetime import datetime, timezone
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -37,6 +38,8 @@ from app.models.provisioning import (
 from app.models.tr069 import Tr069CpeDevice
 from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 from app.services.events import emit_event
@@ -130,16 +133,19 @@ def _resolve_pool_for_version(
             pool_uuid = coerce_uuid(pool_id)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="Invalid pool_id.") from exc
-        pool = db.get(IpPool, pool_uuid)
+        pool = cast(IpPool | None, db.get(IpPool, pool_uuid))
         if not pool or pool.ip_version != ip_version:
             raise HTTPException(status_code=404, detail="IP pool not found.")
         return pool
-    return (
-        db.query(IpPool)
-        .filter(IpPool.ip_version == ip_version)
-        .filter(IpPool.is_active.is_(True))
-        .order_by(IpPool.name.asc())
-        .first()
+    return cast(
+        IpPool | None,
+        (
+            db.query(IpPool)
+            .filter(IpPool.ip_version == ip_version)
+            .filter(IpPool.is_active.is_(True))
+            .order_by(IpPool.name.asc())
+            .first()
+        ),
     )
 
 
@@ -147,7 +153,10 @@ def _get_or_create_address_by_value(
     db: Session, ip_version: IPVersion, value: str, pool: IpPool | None
 ) -> IPv4Address | IPv6Address:
     model = IPv4Address if ip_version == IPVersion.ipv4 else IPv6Address
-    address = db.query(model).filter(model.address == value).first()
+    address = cast(
+        IPv4Address | IPv6Address | None,
+        db.query(model).filter(model.address == value).first(),
+    )
     if address:
         return address
     address = model(address=value, pool_id=pool.id if pool else None)
@@ -165,7 +174,7 @@ def _get_address_by_id(
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Invalid address_id.") from exc
     model = IPv4Address if ip_version == IPVersion.ipv4 else IPv6Address
-    address = db.get(model, address_uuid)
+    address = cast(IPv4Address | IPv6Address | None, db.get(model, address_uuid))
     if not address:
         raise HTTPException(status_code=404, detail="IP address not found.")
     return address
@@ -175,23 +184,29 @@ def _find_available_address(
     db: Session, ip_version: IPVersion, pool_id: str
 ) -> IPv4Address | IPv6Address | None:
     if ip_version == IPVersion.ipv4:
-        return (
-            db.query(IPv4Address)
-            .outerjoin(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
-            .filter(IPv4Address.pool_id == pool_id)
-            .filter(IPv4Address.is_reserved.is_(False))
-            .filter(IPAssignment.id.is_(None))
-            .order_by(IPv4Address.address.asc())
-            .first()
+        return cast(
+            IPv4Address | None,
+            (
+                db.query(IPv4Address)
+                .outerjoin(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+                .filter(IPv4Address.pool_id == pool_id)
+                .filter(IPv4Address.is_reserved.is_(False))
+                .filter(IPAssignment.id.is_(None))
+                .order_by(IPv4Address.address.asc())
+                .first()
+            ),
         )
-    return (
-        db.query(IPv6Address)
-        .outerjoin(IPAssignment, IPAssignment.ipv6_address_id == IPv6Address.id)
-        .filter(IPv6Address.pool_id == pool_id)
-        .filter(IPv6Address.is_reserved.is_(False))
-        .filter(IPAssignment.id.is_(None))
-        .order_by(IPv6Address.address.asc())
-        .first()
+    return cast(
+        IPv6Address | None,
+        (
+            db.query(IPv6Address)
+            .outerjoin(IPAssignment, IPAssignment.ipv6_address_id == IPv6Address.id)
+            .filter(IPv6Address.pool_id == pool_id)
+            .filter(IPv6Address.is_reserved.is_(False))
+            .filter(IPAssignment.id.is_(None))
+            .order_by(IPv6Address.address.asc())
+            .first()
+        ),
     )
 
 
@@ -281,10 +296,10 @@ def _ensure_ip_assignment_for_version(
             ip_version=ip_version,
             ipv4_address_id=address.id if ip_version == IPVersion.ipv4 else None,
             ipv6_address_id=address.id if ip_version == IPVersion.ipv6 else None,
-            prefix_length=_pool_prefix_length(address.pool or pool),
-            gateway=(address.pool or pool).gateway if (address.pool or pool) else None,
-            dns_primary=(address.pool or pool).dns_primary if (address.pool or pool) else None,
-            dns_secondary=(address.pool or pool).dns_secondary if (address.pool or pool) else None,
+            prefix_length=_pool_prefix_length(pool_to_use := (cast(IpPool | None, address.pool) or pool)),
+            gateway=pool_to_use.gateway if pool_to_use else None,
+            dns_primary=pool_to_use.dns_primary if pool_to_use else None,
+            dns_secondary=pool_to_use.dns_secondary if pool_to_use else None,
         )
         assignment = network_service.ip_assignments.create(db, assignment_payload)
 
@@ -399,7 +414,9 @@ def resolve_workflow_for_service_order(
             logger.warning("Invalid provisioning default_workflow_id setting value.")
             workflow_uuid = None
         if workflow_uuid:
-            workflow = db.get(ProvisioningWorkflow, workflow_uuid)
+            workflow = cast(
+                ProvisioningWorkflow | None, db.get(ProvisioningWorkflow, workflow_uuid)
+            )
             if workflow and workflow.is_active:
                 return workflow
             logger.warning(
@@ -419,21 +436,27 @@ def resolve_workflow_for_service_order(
     query = db.query(ProvisioningWorkflow).filter(ProvisioningWorkflow.is_active.is_(True))
     if vendor:
         query = query.filter(ProvisioningWorkflow.vendor == vendor)
-    return query.order_by(ProvisioningWorkflow.created_at.asc()).first()
+    return cast(
+        ProvisioningWorkflow | None,
+        query.order_by(ProvisioningWorkflow.created_at.asc()).first(),
+    )
 
 
-class ServiceOrders(ListResponseMixin):
+class ServiceOrders(CRUDManager[ServiceOrder]):
+    model = ServiceOrder
+    not_found_detail = "Service order not found"
+
     @staticmethod
     def create(db: Session, payload: ServiceOrderCreate):
+        requested_by_contact_id = payload.requested_by_contact_id
         provisioning_validators.validate_service_order_links(
             db,
             str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
-            str(payload.requested_by_contact_id)
-            if payload.requested_by_contact_id
-            else None,
+            str(requested_by_contact_id) if requested_by_contact_id else None,
         )
-        data = payload.model_dump()
+        # The ServiceOrder model does not include requested_by_contact_id or project_type.
+        data = payload.model_dump(exclude={"requested_by_contact_id", "project_type"})
         fields_set = payload.model_fields_set
         if "status" not in fields_set:
             default_status = settings_spec.resolve_value(
@@ -465,28 +488,71 @@ class ServiceOrders(ListResponseMixin):
         return order
 
     @staticmethod
-    def get(db: Session, order_id: str):
+    def dashboard_stats(db: Session) -> dict:
+        """Return aggregated stats for the provisioning dashboard."""
+        orders = (
+            db.query(ServiceOrder)
+            .order_by(ServiceOrder.created_at.desc())
+            .limit(200)
+            .all()
+        )
+        total = len(orders)
+        pending = sum(
+            1
+            for o in orders
+            if o.status in (ServiceOrderStatus.draft, ServiceOrderStatus.submitted)
+        )
+        in_progress = sum(
+            1
+            for o in orders
+            if o.status
+            in (ServiceOrderStatus.scheduled, ServiceOrderStatus.provisioning)
+        )
+        completed = sum(
+            1 for o in orders if o.status == ServiceOrderStatus.active
+        )
+        return {
+            "total": total,
+            "pending": pending,
+            "in_progress": in_progress,
+            "completed": completed,
+            "recent_orders": orders[:10],
+        }
+
+    @staticmethod
+    def run_for_order(db: Session, order_id: str, workflow_id: str) -> ProvisioningRun:
+        """Run a provisioning workflow for a service order."""
         order = db.get(ServiceOrder, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Service order not found")
-        return order
+        start_payload = ProvisioningRunStart(
+            service_order_id=order.id,
+            subscription_id=order.subscription_id,
+        )
+        return provisioning_runs.run(db, workflow_id, start_payload)
 
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
-        subscription_id: str | None,
-        status: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 20,
+        offset: int = 0,
+        subscriber_id: str | None = None,
+        account_id: str | None = None,
+        subscription_id: str | None = None,
+        status: str | None = None,
     ):
         query = db.query(ServiceOrder)
-        if subscriber_id:
-            query = query.filter(ServiceOrder.subscriber_id == subscriber_id)
-        if subscription_id:
-            query = query.filter(ServiceOrder.subscription_id == subscription_id)
+        if account_id and not subscriber_id:
+            subscriber_id = account_id
+        query = apply_optional_equals(
+            query,
+            {
+                ServiceOrder.subscriber_id: subscriber_id,
+                ServiceOrder.subscription_id: subscription_id,
+            },
+        )
         if status:
             query = query.filter(
                 ServiceOrder.status
@@ -509,9 +575,10 @@ class ServiceOrders(ListResponseMixin):
         data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", order.subscriber_id))
         subscription_id = data.get("subscription_id", order.subscription_id)
-        requested_by_contact_id = data.get(
-            "requested_by_contact_id", order.requested_by_contact_id
-        )
+        # The ServiceOrder model does not include requested_by_contact_id.
+        requested_by_contact_id = data.pop("requested_by_contact_id", None)
+        # The ServiceOrder model does not include project_type.
+        data.pop("project_type", None)
         provisioning_validators.validate_service_order_links(
             db,
             subscriber_id,
@@ -538,22 +605,31 @@ class ServiceOrders(ListResponseMixin):
                 "subscription_id": order.subscription_id,
             }
             if new_status == ServiceOrderStatus.active:
-                emit_event(db, EventType.service_order_completed, event_payload, **context)
+                emit_event(
+                    db,
+                    EventType.service_order_completed,
+                    event_payload,
+                    service_order_id=order.id,
+                    account_id=order.subscriber_id,
+                    subscription_id=order.subscription_id,
+                )
             elif new_status == ServiceOrderStatus.provisioning:
-                emit_event(db, EventType.service_order_assigned, event_payload, **context)
+                emit_event(
+                    db,
+                    EventType.service_order_assigned,
+                    event_payload,
+                    service_order_id=order.id,
+                    account_id=order.subscriber_id,
+                    subscription_id=order.subscription_id,
+                )
 
         return order
 
-    @staticmethod
-    def delete(db: Session, order_id: str):
-        order = db.get(ServiceOrder, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Service order not found")
-        db.delete(order)
-        db.commit()
 
+class InstallAppointments(CRUDManager[InstallAppointment]):
+    model = InstallAppointment
+    not_found_detail = "Install appointment not found"
 
-class InstallAppointments(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: InstallAppointmentCreate):
         provisioning_validators.validate_install_appointment_links(
@@ -576,13 +652,6 @@ class InstallAppointments(ListResponseMixin):
         return appointment
 
     @staticmethod
-    def get(db: Session, appointment_id: str):
-        appointment = db.get(InstallAppointment, appointment_id)
-        if not appointment:
-            raise HTTPException(status_code=404, detail="Install appointment not found")
-        return appointment
-
-    @staticmethod
     def list(
         db: Session,
         service_order_id: str | None,
@@ -593,8 +662,10 @@ class InstallAppointments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(InstallAppointment)
-        if service_order_id:
-            query = query.filter(InstallAppointment.service_order_id == service_order_id)
+        query = apply_optional_equals(
+            query,
+            {InstallAppointment.service_order_id: service_order_id},
+        )
         if status:
             query = query.filter(
                 InstallAppointment.status
@@ -627,16 +698,11 @@ class InstallAppointments(ListResponseMixin):
         db.refresh(appointment)
         return appointment
 
-    @staticmethod
-    def delete(db: Session, appointment_id: str):
-        appointment = db.get(InstallAppointment, appointment_id)
-        if not appointment:
-            raise HTTPException(status_code=404, detail="Install appointment not found")
-        db.delete(appointment)
-        db.commit()
 
+class ProvisioningTasks(CRUDManager[ProvisioningTask]):
+    model = ProvisioningTask
+    not_found_detail = "Provisioning task not found"
 
-class ProvisioningTasks(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ProvisioningTaskCreate):
         provisioning_validators.validate_provisioning_task_links(
@@ -659,13 +725,6 @@ class ProvisioningTasks(ListResponseMixin):
         return task
 
     @staticmethod
-    def get(db: Session, task_id: str):
-        task = db.get(ProvisioningTask, task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Provisioning task not found")
-        return task
-
-    @staticmethod
     def list(
         db: Session,
         service_order_id: str | None,
@@ -676,8 +735,10 @@ class ProvisioningTasks(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ProvisioningTask)
-        if service_order_id:
-            query = query.filter(ProvisioningTask.service_order_id == service_order_id)
+        query = apply_optional_equals(
+            query,
+            {ProvisioningTask.service_order_id: service_order_id},
+        )
         if status:
             query = query.filter(
                 ProvisioningTask.status == validate_enum(status, TaskStatus, "status")
@@ -706,16 +767,11 @@ class ProvisioningTasks(ListResponseMixin):
         db.refresh(task)
         return task
 
-    @staticmethod
-    def delete(db: Session, task_id: str):
-        task = db.get(ProvisioningTask, task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Provisioning task not found")
-        db.delete(task)
-        db.commit()
 
+class ServiceStateTransitions(CRUDManager[ServiceStateTransition]):
+    model = ServiceStateTransition
+    not_found_detail = "State transition not found"
 
-class ServiceStateTransitions(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ServiceStateTransitionCreate):
         provisioning_validators.validate_state_transition_links(
@@ -728,13 +784,6 @@ class ServiceStateTransitions(ListResponseMixin):
         return transition
 
     @staticmethod
-    def get(db: Session, transition_id: str):
-        transition = db.get(ServiceStateTransition, transition_id)
-        if not transition:
-            raise HTTPException(status_code=404, detail="State transition not found")
-        return transition
-
-    @staticmethod
     def list(
         db: Session,
         service_order_id: str | None,
@@ -744,10 +793,10 @@ class ServiceStateTransitions(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ServiceStateTransition)
-        if service_order_id:
-            query = query.filter(
-                ServiceStateTransition.service_order_id == service_order_id
-            )
+        query = apply_optional_equals(
+            query,
+            {ServiceStateTransition.service_order_id: service_order_id},
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -775,16 +824,13 @@ class ServiceStateTransitions(ListResponseMixin):
         db.refresh(transition)
         return transition
 
-    @staticmethod
-    def delete(db: Session, transition_id: str):
-        transition = db.get(ServiceStateTransition, transition_id)
-        if not transition:
-            raise HTTPException(status_code=404, detail="State transition not found")
-        db.delete(transition)
-        db.commit()
 
+class ProvisioningWorkflows(CRUDManager[ProvisioningWorkflow]):
+    model = ProvisioningWorkflow
+    not_found_detail = "Provisioning workflow not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
-class ProvisioningWorkflows(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ProvisioningWorkflowCreate):
         data = payload.model_dump()
@@ -804,13 +850,6 @@ class ProvisioningWorkflows(ListResponseMixin):
         return workflow
 
     @staticmethod
-    def get(db: Session, workflow_id: str):
-        workflow = db.get(ProvisioningWorkflow, workflow_id)
-        if not workflow:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
-        return workflow
-
-    @staticmethod
     def list(
         db: Session,
         vendor: str | None,
@@ -826,10 +865,7 @@ class ProvisioningWorkflows(ListResponseMixin):
                 ProvisioningWorkflow.vendor
                 == validate_enum(vendor, ProvisioningVendor, "vendor")
             )
-        if is_active is None:
-            query = query.filter(ProvisioningWorkflow.is_active.is_(True))
-        else:
-            query = query.filter(ProvisioningWorkflow.is_active == is_active)
+        query = apply_active_state(query, ProvisioningWorkflow.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -849,16 +885,13 @@ class ProvisioningWorkflows(ListResponseMixin):
         db.refresh(workflow)
         return workflow
 
-    @staticmethod
-    def delete(db: Session, workflow_id: str):
-        workflow = db.get(ProvisioningWorkflow, workflow_id)
-        if not workflow:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
-        workflow.is_active = False
-        db.commit()
 
+class ProvisioningSteps(CRUDManager[ProvisioningStep]):
+    model = ProvisioningStep
+    not_found_detail = "Provisioning step not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
-class ProvisioningSteps(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ProvisioningStepCreate):
         workflow = db.get(ProvisioningWorkflow, payload.workflow_id)
@@ -868,13 +901,6 @@ class ProvisioningSteps(ListResponseMixin):
         db.add(step)
         db.commit()
         db.refresh(step)
-        return step
-
-    @staticmethod
-    def get(db: Session, step_id: str):
-        step = db.get(ProvisioningStep, step_id)
-        if not step:
-            raise HTTPException(status_code=404, detail="Provisioning step not found")
         return step
 
     @staticmethod
@@ -889,17 +915,16 @@ class ProvisioningSteps(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ProvisioningStep)
-        if workflow_id:
-            query = query.filter(ProvisioningStep.workflow_id == workflow_id)
+        query = apply_optional_equals(
+            query,
+            {ProvisioningStep.workflow_id: workflow_id},
+        )
         if step_type:
             query = query.filter(
                 ProvisioningStep.step_type
                 == validate_enum(step_type, ProvisioningStepType, "step_type")
             )
-        if is_active is None:
-            query = query.filter(ProvisioningStep.is_active.is_(True))
-        else:
-            query = query.filter(ProvisioningStep.is_active == is_active)
+        query = apply_active_state(query, ProvisioningStep.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -927,16 +952,11 @@ class ProvisioningSteps(ListResponseMixin):
         db.refresh(step)
         return step
 
-    @staticmethod
-    def delete(db: Session, step_id: str):
-        step = db.get(ProvisioningStep, step_id)
-        if not step:
-            raise HTTPException(status_code=404, detail="Provisioning step not found")
-        step.is_active = False
-        db.commit()
 
+class ProvisioningRuns(CRUDManager[ProvisioningRun]):
+    model = ProvisioningRun
+    not_found_detail = "Provisioning run not found"
 
-class ProvisioningRuns(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ProvisioningRunCreate):
         workflow = db.get(ProvisioningWorkflow, payload.workflow_id)
@@ -946,13 +966,6 @@ class ProvisioningRuns(ListResponseMixin):
         db.add(run)
         db.commit()
         db.refresh(run)
-        return run
-
-    @staticmethod
-    def get(db: Session, run_id: str):
-        run = db.get(ProvisioningRun, run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Provisioning run not found")
         return run
 
     @staticmethod
@@ -966,8 +979,10 @@ class ProvisioningRuns(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ProvisioningRun)
-        if workflow_id:
-            query = query.filter(ProvisioningRun.workflow_id == workflow_id)
+        query = apply_optional_equals(
+            query,
+            {ProvisioningRun.workflow_id: workflow_id},
+        )
         if status:
             query = query.filter(
                 ProvisioningRun.status
@@ -998,7 +1013,9 @@ class ProvisioningRuns(ListResponseMixin):
         return run
 
     @staticmethod
-    def run(db: Session, workflow_id: str, payload: ProvisioningRunStart | None = None):
+    def run(
+        db: Session, workflow_id: str, payload: ProvisioningRunStart | None = None
+    ) -> ProvisioningRun:
         workflow = db.get(ProvisioningWorkflow, workflow_id)
         if not workflow or not workflow.is_active:
             raise HTTPException(status_code=404, detail="Provisioning workflow not found")
@@ -1017,7 +1034,9 @@ class ProvisioningRuns(ListResponseMixin):
         db.refresh(run)
 
         context = dict(payload.input_payload or {})
-        _extend_provisioning_context(db, payload.subscription_id, context)
+        _extend_provisioning_context(
+            db, str(payload.subscription_id) if payload.subscription_id else None, context
+        )
 
         emit_event(
             db,
@@ -1037,7 +1056,13 @@ class ProvisioningRuns(ListResponseMixin):
             subscription_id=run.subscription_id,
         )
         try:
-            context.update(_ensure_ip_assignments(db, payload.subscription_id, context))
+            context.update(
+                _ensure_ip_assignments(
+                    db,
+                    str(payload.subscription_id) if payload.subscription_id else None,
+                    context,
+                )
+            )
         except Exception as exc:
             error_message = str(getattr(exc, "detail", exc))
             run.status = ProvisioningRunStatus.failed
@@ -1076,7 +1101,7 @@ class ProvisioningRuns(ListResponseMixin):
         provisioner = get_provisioner(workflow.vendor)
         results: list[dict] = []
         status = ProvisioningRunStatus.success
-        error_message = None
+        step_error_message: str | None = None
         for step in steps:
             step_context = dict(context)
             connector_context = _resolve_connector_context(db, step.config or {})
@@ -1104,19 +1129,19 @@ class ProvisioningRuns(ListResponseMixin):
                     context.update(result.payload)
             except Exception as exc:
                 status = ProvisioningRunStatus.failed
-                error_message = str(exc)
+                step_error_message = str(exc)
                 results.append(
                     {
                         "step_id": str(step.id),
                         "step_type": step.step_type.value,
                         "status": "failed",
-                        "detail": error_message,
+                        "detail": step_error_message,
                     }
                 )
                 break
         run.status = status
         run.output_payload = {"results": results}
-        run.error_message = error_message
+        run.error_message = step_error_message
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(run)
@@ -1128,16 +1153,24 @@ class ProvisioningRuns(ListResponseMixin):
             "status": status.value,
             "service_order_id": str(run.service_order_id) if run.service_order_id else None,
             "subscription_id": str(run.subscription_id) if run.subscription_id else None,
-            "error_message": error_message,
-        }
-        context = {
-            "service_order_id": run.service_order_id,
-            "subscription_id": run.subscription_id,
+            "error_message": step_error_message,
         }
         if status == ProvisioningRunStatus.success:
-            emit_event(db, EventType.provisioning_completed, event_payload, **context)
+            emit_event(
+                db,
+                EventType.provisioning_completed,
+                event_payload,
+                service_order_id=run.service_order_id,
+                subscription_id=run.subscription_id,
+            )
         elif status == ProvisioningRunStatus.failed:
-            emit_event(db, EventType.provisioning_failed, event_payload, **context)
+            emit_event(
+                db,
+                EventType.provisioning_failed,
+                event_payload,
+                service_order_id=run.service_order_id,
+                subscription_id=run.subscription_id,
+            )
 
         return run
 

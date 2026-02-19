@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.models.catalog import (
     AccessType,
@@ -14,7 +14,9 @@ from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,
     ContractTerm,
+    DiscountType,
     DunningAction,
+    ExecutionMethod,
     GuaranteedSpeedType,
     NasDeviceStatus,
     NasVendor,
@@ -24,6 +26,7 @@ from app.models.catalog import (
     PriceUnit,
     ProrationPolicy,
     ProvisioningAction,
+    ProvisioningLogStatus,
     RefundPolicy,
     ServiceType,
     SubscriptionStatus,
@@ -383,7 +386,8 @@ class SubscriptionAddOnUpdate(BaseModel):
 
 class SubscriptionBase(BaseModel):
     subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+        validation_alias=AliasChoices("account_id", "subscriber_id"),
+        serialization_alias="account_id",
     )
     offer_id: UUID
     offer_version_id: UUID | None = None
@@ -404,7 +408,7 @@ class SubscriptionBase(BaseModel):
     unit_price: Decimal | None = None
     discount: bool = False
     discount_value: Decimal | None = None
-    discount_type: str | None = Field(default=None, max_length=40)
+    discount_type: DiscountType | None = None
     service_status_raw: str | None = Field(default=None, max_length=40)
     login: str | None = Field(default=None, max_length=120)
     ipv4_address: str | None = Field(default=None, max_length=64)
@@ -420,7 +424,9 @@ class SubscriptionCreate(SubscriptionBase):
 
 class SubscriptionUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias=AliasChoices("account_id", "subscriber_id"),
+        serialization_alias="account_id",
     )
     offer_id: UUID | None = None
     offer_version_id: UUID | None = None
@@ -441,7 +447,7 @@ class SubscriptionUpdate(BaseModel):
     unit_price: Decimal | None = None
     discount: bool | None = None
     discount_value: Decimal | None = None
-    discount_type: str | None = Field(default=None, max_length=40)
+    discount_type: DiscountType | None = None
     service_status_raw: str | None = Field(default=None, max_length=40)
     login: str | None = Field(default=None, max_length=120)
     ipv4_address: str | None = Field(default=None, max_length=64)
@@ -829,7 +835,8 @@ class NasDeviceRead(NasDeviceBase):
 
 class AccessCredentialBase(BaseModel):
     subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+        validation_alias=AliasChoices("account_id", "subscriber_id"),
+        serialization_alias="account_id",
     )
     username: str = Field(min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
@@ -844,7 +851,9 @@ class AccessCredentialCreate(AccessCredentialBase):
 
 class AccessCredentialUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias=AliasChoices("account_id", "subscriber_id"),
+        serialization_alias="account_id",
     )
     username: str | None = Field(default=None, min_length=1, max_length=120)
     secret_hash: str | None = Field(default=None, max_length=255)
@@ -944,7 +953,7 @@ class ProvisioningTemplateBase(BaseModel):
     template_content: str
     description: str | None = None
     placeholders: list[str] | None = None
-    execution_method: str | None = Field(default=None, max_length=40)
+    execution_method: ExecutionMethod | None = None
     expected_output: str | None = None
     timeout_seconds: int | None = 30
     is_active: bool = True
@@ -964,7 +973,7 @@ class ProvisioningTemplateUpdate(BaseModel):
     template_content: str | None = None
     description: str | None = None
     placeholders: list[str] | None = None
-    execution_method: str | None = Field(default=None, max_length=40)
+    execution_method: ExecutionMethod | None = None
     expected_output: str | None = None
     timeout_seconds: int | None = None
     is_active: bool | None = None
@@ -990,7 +999,7 @@ class ProvisioningLogBase(BaseModel):
     action: ProvisioningAction
     command_sent: str | None = None
     response_received: str | None = None
-    status: str = "pending"
+    status: ProvisioningLogStatus = ProvisioningLogStatus.pending
     error_message: str | None = None
     execution_time_ms: int | None = None
     triggered_by: str | None = Field(default=None, max_length=120)

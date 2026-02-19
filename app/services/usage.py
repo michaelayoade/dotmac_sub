@@ -1,12 +1,15 @@
-from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from __future__ import annotations
+
+import builtins
+from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
+from typing import cast
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.catalog import CatalogOffer, OfferVersion, Subscription, UsageAllowance
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
@@ -19,22 +22,23 @@ from app.models.usage import (
     UsageRatingRunStatus,
     UsageRecord,
 )
-from app.services import settings_spec
-from app.services.response import ListResponseMixin
 from app.schemas.usage import (
     QuotaBucketCreate,
     QuotaBucketUpdate,
     RadiusAccountingSessionCreate,
     RadiusAccountingSessionUpdate,
-    UsageChargePostRequest,
     UsageChargePostBatchRequest,
-    UsageRecordCreate,
-    UsageRecordUpdate,
+    UsageChargePostRequest,
     UsageRatingRunRequest,
     UsageRatingRunResponse,
+    UsageRecordCreate,
+    UsageRecordUpdate,
 )
+from app.services import settings_spec
+from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.response import ListResponseMixin
 
 
 def _round_money(value: Decimal) -> Decimal:
@@ -50,31 +54,31 @@ def _round_bucket_gb(value: Decimal) -> Decimal:
 
 
 def _period_bounds(payload: UsageRatingRunRequest) -> tuple[datetime, datetime]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if payload.period_start and payload.period_end:
         return payload.period_start, payload.period_end
-    start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    start = datetime(now.year, now.month, 1, tzinfo=UTC)
     if now.month == 12:
-        end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        end = datetime(now.year + 1, 1, 1, tzinfo=UTC)
     else:
-        end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        end = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
     return payload.period_start or start, payload.period_end or end
 
 
 def _resolve_allowance(subscription: Subscription) -> UsageAllowance | None:
     if subscription.offer_version and subscription.offer_version.usage_allowance_id:
-        return subscription.offer_version.usage_allowance
+        return cast(UsageAllowance | None, subscription.offer_version.usage_allowance)
     if subscription.offer and subscription.offer.usage_allowance_id:
-        return subscription.offer.usage_allowance
+        return cast(UsageAllowance | None, subscription.offer.usage_allowance)
     return None
 
 
 def _period_bounds_for_record(recorded_at: datetime) -> tuple[datetime, datetime]:
-    start = datetime(recorded_at.year, recorded_at.month, 1, tzinfo=timezone.utc)
+    start = datetime(recorded_at.year, recorded_at.month, 1, tzinfo=UTC)
     if recorded_at.month == 12:
-        end = datetime(recorded_at.year + 1, 1, 1, tzinfo=timezone.utc)
+        end = datetime(recorded_at.year + 1, 1, 1, tzinfo=UTC)
     else:
-        end = datetime(recorded_at.year, recorded_at.month + 1, 1, tzinfo=timezone.utc)
+        end = datetime(recorded_at.year, recorded_at.month + 1, 1, tzinfo=UTC)
     return start, end
 
 
@@ -139,8 +143,11 @@ def _emit_usage_events(
     included = Decimal(str(bucket.included_gb or 0))
     if included <= 0:
         return
+    thresholds_raw = settings_spec.resolve_value(
+        db, SettingDomain.usage, "usage_warning_thresholds"
+    )
     thresholds = _parse_warning_thresholds(
-        settings_spec.resolve_value(db, SettingDomain.usage, "usage_warning_thresholds")
+        str(thresholds_raw) if thresholds_raw is not None else None
     )
     if thresholds:
         previous_ratio = previous_used / included if included else Decimal("0")
@@ -457,6 +464,8 @@ class UsageCharges(ListResponseMixin):
         order_dir: str,
         limit: int,
         offset: int,
+        period_start: object | None = None,
+        period_end: object | None = None,
     ):
         query = db.query(UsageCharge)
         if subscription_id:
@@ -468,6 +477,10 @@ class UsageCharges(ListResponseMixin):
                 UsageCharge.status
                 == validate_enum(status, UsageChargeStatus, "status")
             )
+        if period_start is not None:
+            query = query.filter(UsageCharge.period_start == period_start)
+        if period_end is not None:
+            query = query.filter(UsageCharge.period_end == period_end)
         query = apply_ordering(
             query,
             order_by,
@@ -553,6 +566,25 @@ class UsageCharges(ListResponseMixin):
             db.commit()
         return posted
 
+    @staticmethod
+    def bulk_post_by_ids(db: Session, charge_ids: builtins.list[str]) -> int:
+        """Post multiple staged charges by their IDs."""
+        posted = 0
+        for charge_id in charge_ids:
+            try:
+                UsageCharges.post(
+                    db,
+                    charge_id,
+                    UsageChargePostRequest(),
+                    commit=False,
+                )
+                posted += 1
+            except Exception:
+                pass
+        if posted:
+            db.commit()
+        return posted
+
 
 class UsageRatingRuns(ListResponseMixin):
     @staticmethod
@@ -588,7 +620,7 @@ class UsageRatingRuns(ListResponseMixin):
     @staticmethod
     def run(db: Session, payload: UsageRatingRunRequest) -> UsageRatingRunResponse:
         period_start, period_end = _period_bounds(payload)
-        run_at = datetime.now(timezone.utc)
+        run_at = datetime.now(UTC)
         default_run_status = settings_spec.resolve_value(
             db, SettingDomain.usage, "default_rating_run_status"
         )

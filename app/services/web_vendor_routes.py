@@ -1,5 +1,8 @@
 """Service helpers for vendor portal routes."""
 
+from typing import Any, cast
+from uuid import UUID
+
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.responses import RedirectResponse
@@ -8,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.services import vendor as vendor_service
 from app.services import vendor_portal
-from app.models.rbac import PersonRole, Role
+from app.models.rbac import Role, SubscriberRole
+from app.services.common import coerce_uuid
+from app.web.request_parsing import parse_json_body_sync
 
 templates = Jinja2Templates(directory="templates")
 
@@ -31,9 +36,9 @@ def _has_vendor_role(db: Session, person_id: str, vendor_role: str | None) -> bo
     if not role:
         return False
     return (
-        db.query(PersonRole)
-        .filter(PersonRole.person_id == person_id)
-        .filter(PersonRole.role_id == role.id)
+        db.query(SubscriberRole)
+        .filter(SubscriberRole.subscriber_id == coerce_uuid(person_id))
+        .filter(SubscriberRole.role_id == role.id)
         .first()
         is not None
     )
@@ -157,6 +162,19 @@ def vendor_fiber_map(request: Request, db: Session):
     from app.services import settings_spec
     from app.models.domain_settings import SettingDomain
 
+    def _resolve_float_setting(domain: SettingDomain, key: str, default: float) -> float:
+        raw = settings_spec.resolve_value(db, domain, key)
+        if raw is None or isinstance(raw, bool):
+            return default
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        if isinstance(raw, str):
+            try:
+                return float(raw)
+            except ValueError:
+                return default
+        return default
+
     features = []
 
     # FDH Cabinets
@@ -165,15 +183,14 @@ def vendor_fiber_map(request: Request, db: Session):
         FdhCabinet.latitude.isnot(None),
         FdhCabinet.longitude.isnot(None)
     ).all()
-    splitter_counts = {}
+    splitter_counts: dict[UUID, int] = {}
     if fdh_cabinets:
         fdh_ids = [fdh.id for fdh in fdh_cabinets]
-        splitter_counts = dict(
-            db.query(Splitter.fdh_id, func.count(Splitter.id))
-            .filter(Splitter.fdh_id.in_(fdh_ids))
-            .group_by(Splitter.fdh_id)
-            .all()
-        )
+        rows = db.query(Splitter.fdh_id, func.count(Splitter.id)).filter(
+            Splitter.fdh_id.in_(fdh_ids)
+        ).group_by(Splitter.fdh_id).all()
+        typed_rows = cast(list[tuple[UUID | None, int]], rows)
+        splitter_counts = {fdh_id: count for fdh_id, count in typed_rows if fdh_id is not None}
     for fdh in fdh_cabinets:
         splitter_count = splitter_counts.get(fdh.id, 0)
         features.append({
@@ -194,22 +211,21 @@ def vendor_fiber_map(request: Request, db: Session):
         FiberSpliceClosure.latitude.isnot(None),
         FiberSpliceClosure.longitude.isnot(None)
     ).all()
-    splice_counts = {}
-    tray_counts = {}
+    splice_counts: dict[UUID, int] = {}
+    tray_counts: dict[UUID, int] = {}
     if closures:
         closure_ids = [closure.id for closure in closures]
-        splice_counts = dict(
-            db.query(FiberSplice.closure_id, func.count(FiberSplice.id))
-            .filter(FiberSplice.closure_id.in_(closure_ids))
-            .group_by(FiberSplice.closure_id)
-            .all()
-        )
-        tray_counts = dict(
-            db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id))
-            .filter(FiberSpliceTray.closure_id.in_(closure_ids))
-            .group_by(FiberSpliceTray.closure_id)
-            .all()
-        )
+        splice_rows = db.query(FiberSplice.closure_id, func.count(FiberSplice.id)).filter(
+            FiberSplice.closure_id.in_(closure_ids)
+        ).group_by(FiberSplice.closure_id).all()
+        typed_splice_rows = cast(list[tuple[UUID, int]], splice_rows)
+        splice_counts = {closure_id: count for closure_id, count in typed_splice_rows}
+
+        tray_rows = db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id)).filter(
+            FiberSpliceTray.closure_id.in_(closure_ids)
+        ).group_by(FiberSpliceTray.closure_id).all()
+        typed_tray_rows = cast(list[tuple[UUID, int]], tray_rows)
+        tray_counts = {closure_id: count for closure_id, count in typed_tray_rows}
     for closure in closures:
         splice_count = splice_counts.get(closure.id, 0)
         tray_count = tray_counts.get(closure.id, 0)
@@ -261,12 +277,14 @@ def vendor_fiber_map(request: Request, db: Session):
         "segments": len(segments),
     }
 
+    currency_raw = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    currency = currency_raw if isinstance(currency_raw, str) and currency_raw else "NGN"
     cost_settings = {
-        "drop_cable_per_meter": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_drop_cable_cost_per_meter") or "2.50"),
-        "labor_per_meter": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_labor_cost_per_meter") or "1.50"),
-        "ont_device": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_ont_device_cost") or "85.00"),
-        "installation_base": float(settings_spec.resolve_value(db, SettingDomain.network, "fiber_installation_base_fee") or "50.00"),
-        "currency": settings_spec.resolve_value(db, SettingDomain.billing, "default_currency") or "NGN",
+        "drop_cable_per_meter": _resolve_float_setting(SettingDomain.network, "fiber_drop_cable_cost_per_meter", 2.50),
+        "labor_per_meter": _resolve_float_setting(SettingDomain.network, "fiber_labor_cost_per_meter", 1.50),
+        "ont_device": _resolve_float_setting(SettingDomain.network, "fiber_ont_device_cost", 85.00),
+        "installation_base": _resolve_float_setting(SettingDomain.network, "fiber_installation_base_fee", 50.00),
+        "currency": currency,
     }
 
     return templates.TemplateResponse(
@@ -283,7 +301,7 @@ def vendor_fiber_map(request: Request, db: Session):
     )
 
 
-async def vendor_fiber_map_update_position(request: Request, db: Session):
+def vendor_fiber_map_update_position(request: Request, db: Session):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -292,21 +310,34 @@ async def vendor_fiber_map_update_position(request: Request, db: Session):
     from app.services import fiber_change_requests as change_request_service
     from app.models.fiber_change_request import FiberChangeRequestOperation
 
-    try:
-        data = await request.json()
-        asset_type = data.get("type")
-        asset_id = data.get("id")
-        latitude = data.get("latitude")
-        longitude = data.get("longitude")
+    def _float_from_obj(value: object | None) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
 
-        if not all([asset_type, asset_id, latitude is not None, longitude is not None]):
+    try:
+        data = parse_json_body_sync(request)
+        asset_type_obj = data.get("type")
+        asset_id_obj = data.get("id")
+        latitude = _float_from_obj(data.get("latitude"))
+        longitude = _float_from_obj(data.get("longitude"))
+
+        if not isinstance(asset_type_obj, str) or not asset_type_obj:
+            return JSONResponse({"error": "Missing required fields"}, status_code=400)
+        if not isinstance(asset_id_obj, str) or not asset_id_obj:
+            return JSONResponse({"error": "Missing required fields"}, status_code=400)
+        if latitude is None or longitude is None:
             return JSONResponse({"error": "Missing required fields"}, status_code=400)
 
-        try:
-            latitude = float(latitude)
-            longitude = float(longitude)
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "Invalid coordinates"}, status_code=400)
+        asset_type = asset_type_obj
+        asset_id = asset_id_obj
 
         if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
             return JSONResponse({"error": "Coordinates out of range"}, status_code=400)
@@ -333,31 +364,31 @@ async def vendor_fiber_map_update_position(request: Request, db: Session):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
-async def vendor_fiber_map_nearest_cabinet(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_nearest_cabinet(request: Request, lat: float, lng: float, db: Session):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
-    return await admin_network.find_nearest_cabinet(request, lat, lng, db)
+    return admin_network.find_nearest_cabinet(request, lat, lng, db)
 
 
-async def vendor_fiber_map_plan_options(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_plan_options(request: Request, lat: float, lng: float, db: Session):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
-    return await admin_network.plan_options(request, lat, lng, db)
+    return admin_network.plan_options(request, lat, lng, db)
 
 
-async def vendor_fiber_map_route(request: Request, lat: float, lng: float, cabinet_id: str, db: Session):
+def vendor_fiber_map_route(request: Request, lat: float, lng: float, cabinet_id: str, db: Session):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
-    return await admin_network.plan_route(request, lat, lng, cabinet_id, db)
+    return admin_network.plan_route(request, lat, lng, cabinet_id, db)

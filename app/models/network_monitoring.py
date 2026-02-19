@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.catalog import HealthStatus
 
 
 class DeviceRole(enum.Enum):
@@ -106,10 +107,10 @@ class PopSite(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     devices = relationship("NetworkDevice", back_populates="pop_site")
@@ -155,6 +156,7 @@ class NetworkDevice(Base):
     last_snmp_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_snmp_ok: Mapped[bool | None] = mapped_column(Boolean)
     notes: Mapped[str | None] = mapped_column(Text)
+    splynx_monitoring_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Capacity tracking
@@ -162,14 +164,17 @@ class NetworkDevice(Base):
     current_subscriber_count: Mapped[int] = mapped_column(Integer, default=0)
 
     # Health tracking
-    health_status: Mapped[str] = mapped_column(String(20), default="unknown")
+    health_status: Mapped[HealthStatus] = mapped_column(
+        Enum(HealthStatus, values_callable=lambda x: [e.value for e in x]),
+        default=HealthStatus.unknown,
+    )
     last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     pop_site = relationship("PopSite", back_populates="devices")
@@ -198,10 +203,10 @@ class DeviceInterface(Base):
     mac_address: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     device = relationship("NetworkDevice", back_populates="interfaces")
@@ -225,12 +230,12 @@ class DeviceMetric(Base):
     metric_type: Mapped[MetricType] = mapped_column(
         Enum(MetricType), default=MetricType.custom
     )
-    value: Mapped[int] = mapped_column(Integer, default=0)
+    value: Mapped[float] = mapped_column(Float, default=0)
     unit: Mapped[str | None] = mapped_column(String(40))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
     device = relationship("NetworkDevice", back_populates="metrics")
@@ -263,10 +268,10 @@ class AlertRule(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
     device = relationship("NetworkDevice", back_populates="alert_rules")
@@ -298,14 +303,14 @@ class Alert(Base):
         Enum(AlertSeverity), default=AlertSeverity.warning
     )
     triggered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
     rule = relationship("AlertRule", back_populates="alerts")
@@ -328,7 +333,7 @@ class AlertEvent(Base):
     )
     message: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
     alert = relationship("Alert", back_populates="events")

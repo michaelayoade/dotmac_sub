@@ -3,6 +3,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timezone
+from typing import cast
 
 from fastapi import HTTPException, Request
 import redis
@@ -96,6 +97,11 @@ def _ensure_subscriber(db: Session, subscriber_id: str):
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
 
+def _ensure_person(db: Session, person_id: str):
+    """Backwards-compatible helper: people are subscribers in this codebase."""
+    _ensure_subscriber(db, person_id)
+
+
 def _ensure_radius_server(db: Session, server_id: str):
     server = db.get(RadiusServer, coerce_uuid(server_id))
     if not server:
@@ -134,7 +140,9 @@ class UserCredentials(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
+        *,
+        subscriber_id: str | None = None,
+        person_id: str | None = None,
         provider: str | None,
         is_active: bool | None,
         order_by: str,
@@ -143,8 +151,11 @@ class UserCredentials(ListResponseMixin):
         offset: int,
     ):
         query = db.query(UserCredential)
-        if subscriber_id:
-            query = query.filter(UserCredential.subscriber_id == coerce_uuid(subscriber_id))
+        resolved_subscriber_id = subscriber_id or person_id
+        if resolved_subscriber_id:
+            query = query.filter(
+                UserCredential.subscriber_id == coerce_uuid(resolved_subscriber_id)
+            )
         if provider:
             query = query.filter(
                 UserCredential.provider
@@ -223,7 +234,9 @@ class MFAMethods(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
+        *,
+        subscriber_id: str | None = None,
+        person_id: str | None = None,
         method_type: str | None,
         is_primary: bool | None,
         enabled: bool | None,
@@ -234,8 +247,11 @@ class MFAMethods(ListResponseMixin):
         offset: int,
     ):
         query = db.query(MFAMethod)
-        if subscriber_id:
-            query = query.filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
+        resolved_subscriber_id = subscriber_id or person_id
+        if resolved_subscriber_id:
+            query = query.filter(
+                MFAMethod.subscriber_id == coerce_uuid(resolved_subscriber_id)
+            )
         if method_type:
             query = query.filter(
                 MFAMethod.method_type
@@ -330,7 +346,9 @@ class Sessions(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
+        *,
+        subscriber_id: str | None = None,
+        person_id: str | None = None,
         status: str | None,
         order_by: str,
         order_dir: str,
@@ -338,8 +356,11 @@ class Sessions(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AuthSession)
-        if subscriber_id:
-            query = query.filter(AuthSession.subscriber_id == coerce_uuid(subscriber_id))
+        resolved_subscriber_id = subscriber_id or person_id
+        if resolved_subscriber_id:
+            query = query.filter(
+                AuthSession.subscriber_id == coerce_uuid(resolved_subscriber_id)
+            )
         if status:
             query = query.filter(
                 AuthSession.status
@@ -402,7 +423,8 @@ class ApiKeys(ListResponseMixin):
         window = max(window_seconds, 1)
         key = f"api_key_rl:{client_ip}:{int(time.time() // window)}"
         try:
-            count = redis_client.incr(key)
+            # redis-py stubs currently type incr() as Any/Awaitable[Any] in some cases.
+            count = cast(int, redis_client.incr(key))
             if count == 1:
                 redis_client.expire(key, window)
             if count > max(max_per_window, 1):
@@ -451,7 +473,9 @@ class ApiKeys(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        subscriber_id: str | None,
+        *,
+        subscriber_id: str | None = None,
+        person_id: str | None = None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
@@ -459,8 +483,11 @@ class ApiKeys(ListResponseMixin):
         offset: int,
     ):
         query = db.query(ApiKey)
-        if subscriber_id:
-            query = query.filter(ApiKey.subscriber_id == coerce_uuid(subscriber_id))
+        resolved_subscriber_id = subscriber_id or person_id
+        if resolved_subscriber_id:
+            query = query.filter(
+                ApiKey.subscriber_id == coerce_uuid(resolved_subscriber_id)
+            )
         if is_active is None:
             query = query.filter(ApiKey.is_active.is_(True))
         else:

@@ -22,7 +22,8 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.response import ListResponseMixin
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services import settings_spec
 from app.schemas.catalog import (
     CatalogOfferCreate,
@@ -36,7 +37,10 @@ from app.schemas.catalog import (
 )
 
 
-class Offers(ListResponseMixin):
+class Offers(CRUDManager[CatalogOffer]):
+    model = CatalogOffer
+    not_found_detail = "Offer not found"
+
     @staticmethod
     def create(db: Session, payload: CatalogOfferCreate):
         data = payload.model_dump()
@@ -79,8 +83,8 @@ class Offers(ListResponseMixin):
         db.refresh(offer)
         return offer
 
-    @staticmethod
-    def get(db: Session, offer_id: str):
+    @classmethod
+    def get(cls, db: Session, offer_id: str):
         offer = db.get(
             CatalogOffer,
             offer_id,
@@ -129,10 +133,7 @@ class Offers(ListResponseMixin):
             query = query.filter(
                 CatalogOffer.status == validate_enum(status, OfferStatus, "status")
             )
-        if is_active is None:
-            query = query.filter(CatalogOffer.is_active.is_(True))
-        else:
-            query = query.filter(CatalogOffer.is_active == is_active)
+        query = apply_active_state(query, CatalogOffer.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -141,16 +142,9 @@ class Offers(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, offer_id: str, payload: CatalogOfferUpdate):
-        offer = db.get(CatalogOffer, offer_id)
-        if not offer:
-            raise HTTPException(status_code=404, detail="Offer not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(offer, key, value)
-        db.commit()
-        db.refresh(offer)
-        return offer
+    @classmethod
+    def update(cls, db: Session, offer_id: str, payload: CatalogOfferUpdate):
+        return super().update(db, offer_id, payload)
 
     @staticmethod
     def delete(db: Session, offer_id: str):
@@ -162,7 +156,12 @@ class Offers(ListResponseMixin):
         db.commit()
 
 
-class OfferPrices(ListResponseMixin):
+class OfferPrices(CRUDManager[OfferPrice]):
+    model = OfferPrice
+    not_found_detail = "Offer price not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: OfferPriceCreate):
         data = payload.model_dump()
@@ -187,12 +186,9 @@ class OfferPrices(ListResponseMixin):
         db.refresh(price)
         return price
 
-    @staticmethod
-    def get(db: Session, price_id: str):
-        price = db.get(OfferPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Offer price not found")
-        return price
+    @classmethod
+    def get(cls, db: Session, price_id: str):
+        return super().get(db, price_id)
 
     @staticmethod
     def list(
@@ -205,12 +201,8 @@ class OfferPrices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OfferPrice)
-        if offer_id:
-            query = query.filter(OfferPrice.offer_id == offer_id)
-        if is_active is None:
-            query = query.filter(OfferPrice.is_active.is_(True))
-        else:
-            query = query.filter(OfferPrice.is_active == is_active)
+        query = apply_optional_equals(query, {OfferPrice.offer_id: offer_id})
+        query = apply_active_state(query, OfferPrice.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -219,27 +211,21 @@ class OfferPrices(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, price_id: str, payload: OfferPriceUpdate):
-        price = db.get(OfferPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Offer price not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(price, key, value)
-        db.commit()
-        db.refresh(price)
-        return price
+    @classmethod
+    def update(cls, db: Session, price_id: str, payload: OfferPriceUpdate):
+        return super().update(db, price_id, payload)
 
-    @staticmethod
-    def delete(db: Session, price_id: str):
-        price = db.get(OfferPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Offer price not found")
-        price.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, price_id: str):
+        return super().delete(db, price_id)
 
 
-class OfferVersions(ListResponseMixin):
+class OfferVersions(CRUDManager[OfferVersion]):
+    model = OfferVersion
+    not_found_detail = "Offer version not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: OfferVersionCreate):
         offer = db.get(CatalogOffer, payload.offer_id)
@@ -277,12 +263,9 @@ class OfferVersions(ListResponseMixin):
         db.refresh(version)
         return version
 
-    @staticmethod
-    def get(db: Session, version_id: str):
-        version = db.get(OfferVersion, version_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Offer version not found")
-        return version
+    @classmethod
+    def get(cls, db: Session, version_id: str):
+        return super().get(db, version_id)
 
     @staticmethod
     def list(
@@ -295,12 +278,8 @@ class OfferVersions(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OfferVersion)
-        if offer_id:
-            query = query.filter(OfferVersion.offer_id == offer_id)
-        if is_active is None:
-            query = query.filter(OfferVersion.is_active.is_(True))
-        else:
-            query = query.filter(OfferVersion.is_active == is_active)
+        query = apply_optional_equals(query, {OfferVersion.offer_id: offer_id})
+        query = apply_active_state(query, OfferVersion.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -325,16 +304,17 @@ class OfferVersions(ListResponseMixin):
         db.refresh(version)
         return version
 
-    @staticmethod
-    def delete(db: Session, version_id: str):
-        version = db.get(OfferVersion, version_id)
-        if not version:
-            raise HTTPException(status_code=404, detail="Offer version not found")
-        version.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, version_id: str):
+        return super().delete(db, version_id)
 
 
-class OfferVersionPrices(ListResponseMixin):
+class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
+    model = OfferVersionPrice
+    not_found_detail = "Offer version price not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: OfferVersionPriceCreate):
         version = db.get(OfferVersion, payload.offer_version_id)
@@ -362,12 +342,9 @@ class OfferVersionPrices(ListResponseMixin):
         db.refresh(price)
         return price
 
-    @staticmethod
-    def get(db: Session, price_id: str):
-        price = db.get(OfferVersionPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Offer version price not found")
-        return price
+    @classmethod
+    def get(cls, db: Session, price_id: str):
+        return super().get(db, price_id)
 
     @staticmethod
     def list(
@@ -380,12 +357,11 @@ class OfferVersionPrices(ListResponseMixin):
         offset: int,
     ):
         query = db.query(OfferVersionPrice)
-        if offer_version_id:
-            query = query.filter(OfferVersionPrice.offer_version_id == offer_version_id)
-        if is_active is None:
-            query = query.filter(OfferVersionPrice.is_active.is_(True))
-        else:
-            query = query.filter(OfferVersionPrice.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {OfferVersionPrice.offer_version_id: offer_version_id},
+        )
+        query = apply_active_state(query, OfferVersionPrice.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -410,10 +386,6 @@ class OfferVersionPrices(ListResponseMixin):
         db.refresh(price)
         return price
 
-    @staticmethod
-    def delete(db: Session, price_id: str):
-        price = db.get(OfferVersionPrice, price_id)
-        if not price:
-            raise HTTPException(status_code=404, detail="Offer version price not found")
-        price.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, price_id: str):
+        return super().delete(db, price_id)

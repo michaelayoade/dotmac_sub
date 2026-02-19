@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Enum, Integer, JSON, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.db import Base
 
@@ -42,6 +42,8 @@ class EtaUpdate(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     service_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Backwards-compatible alias.
+    work_order_id: Mapped[uuid.UUID] = synonym("service_order_id")
     eta_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -74,6 +76,9 @@ class SurveyResponse(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     survey_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Optional linkage fields (used by legacy workflows/tests).
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    ticket_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     responses: Mapped[dict | None] = mapped_column(JSON)
     rating: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(

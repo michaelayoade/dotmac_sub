@@ -62,7 +62,7 @@ class EventStore(Base):
     service_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # Tracking handlers that failed
-    failed_handlers: Mapped[dict | None] = mapped_column(JSONB)
+    failed_handlers: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

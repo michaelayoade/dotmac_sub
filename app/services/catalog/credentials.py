@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.models.catalog import AccessCredential, RadiusProfile
 from app.models.subscriber import Subscriber
 from app.services.common import apply_ordering, apply_pagination
-from app.services.response import ListResponseMixin
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.schemas.catalog import AccessCredentialCreate, AccessCredentialUpdate
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,12 @@ def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> Non
         logger.warning(f"Failed to sync credential {credential.username} to RADIUS: {exc}")
 
 
-class AccessCredentials(ListResponseMixin):
+class AccessCredentials(CRUDManager[AccessCredential]):
+    model = AccessCredential
+    not_found_detail = "Access credential not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: AccessCredentialCreate):
         subscriber = db.get(Subscriber, payload.subscriber_id)
@@ -44,12 +50,9 @@ class AccessCredentials(ListResponseMixin):
 
         return credential
 
-    @staticmethod
-    def get(db: Session, credential_id: str):
-        credential = db.get(AccessCredential, credential_id)
-        if not credential:
-            raise HTTPException(status_code=404, detail="Access credential not found")
-        return credential
+    @classmethod
+    def get(cls, db: Session, credential_id: str):
+        return super().get(db, credential_id)
 
     @staticmethod
     def list(
@@ -62,12 +65,8 @@ class AccessCredentials(ListResponseMixin):
         offset: int,
     ):
         query = db.query(AccessCredential)
-        if subscriber_id:
-            query = query.filter(AccessCredential.subscriber_id == subscriber_id)
-        if is_active is None:
-            query = query.filter(AccessCredential.is_active.is_(True))
-        else:
-            query = query.filter(AccessCredential.is_active == is_active)
+        query = apply_optional_equals(query, {AccessCredential.subscriber_id: subscriber_id})
+        query = apply_active_state(query, AccessCredential.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
@@ -100,10 +99,6 @@ class AccessCredentials(ListResponseMixin):
 
         return credential
 
-    @staticmethod
-    def delete(db: Session, credential_id: str):
-        credential = db.get(AccessCredential, credential_id)
-        if not credential:
-            raise HTTPException(status_code=404, detail="Access credential not found")
-        credential.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, credential_id: str):
+        return super().delete(db, credential_id)

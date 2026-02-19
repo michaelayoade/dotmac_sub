@@ -29,7 +29,7 @@ def get_encryption_key() -> bytes | None:
     """
     global _encryption_warning_logged
 
-    key_str = None
+    key_str: str | bytes | None = None
 
     # Try to get from settings system first
     try:
@@ -39,7 +39,9 @@ def get_encryption_key() -> bytes | None:
 
         session = SessionLocal()
         try:
-            key_str = resolve_value(session, SettingDomain.security, "credential_encryption_key")
+            raw = resolve_value(session, SettingDomain.auth, "credential_encryption_key")
+            if isinstance(raw, str):
+                key_str = raw
         finally:
             session.close()
     except Exception:
@@ -58,11 +60,12 @@ def get_encryption_key() -> bytes | None:
             _encryption_warning_logged = True
         return None
 
-    try:
-        # Key should be URL-safe base64 encoded 32-byte key
-        return key_str.encode("ascii")
-    except Exception:
+    if isinstance(key_str, bytes):
+        return key_str
+    if not isinstance(key_str, str):
         return None
+    # Key should be URL-safe base64 encoded 32-byte key
+    return key_str.encode("ascii")
 
 
 def generate_encryption_key() -> str:

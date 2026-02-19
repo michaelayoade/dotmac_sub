@@ -15,27 +15,31 @@ from app.models.network import (
 from app.schemas.network import (
     IPAssignmentCreate,
     IPAssignmentUpdate,
-    IpBlockCreate,
     IpBlockUpdate,
     IpPoolCreate,
     IpPoolUpdate,
-    IPv4AddressCreate,
     IPv4AddressUpdate,
-    IPv6AddressCreate,
     IPv6AddressUpdate,
 )
 from app.services import settings_spec
 from app.services.common import coerce_uuid
+from app.services.crud import CRUDManager
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
 )
+from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin
 from app.validators import network as network_validators
 
 
-class IPAssignments(ListResponseMixin):
+class IPAssignments(CRUDManager[IPAssignment]):
+    model = IPAssignment
+    not_found_detail = "IP assignment not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: IPAssignmentCreate):
         network_validators.validate_ip_assignment_links(
@@ -51,12 +55,9 @@ class IPAssignments(ListResponseMixin):
         db.refresh(assignment)
         return assignment
 
-    @staticmethod
-    def get(db: Session, assignment_id: str):
-        assignment = db.get(IPAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="IP assignment not found")
-        return assignment
+    @classmethod
+    def get(cls, db: Session, assignment_id: str):
+        return super().get(db, assignment_id)
 
     @staticmethod
     def list(
@@ -70,14 +71,14 @@ class IPAssignments(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IPAssignment)
-        if subscriber_id:
-            query = query.filter(IPAssignment.subscriber_id == subscriber_id)
-        if subscription_id:
-            query = query.filter(IPAssignment.subscription_id == subscription_id)
-        if is_active is None:
-            query = query.filter(IPAssignment.is_active.is_(True))
-        else:
-            query = query.filter(IPAssignment.is_active == is_active)
+        query = apply_optional_equals(
+            query,
+            {
+                IPAssignment.subscriber_id: subscriber_id,
+                IPAssignment.subscription_id: subscription_id,
+            },
+        )
+        query = apply_active_state(query, IPAssignment.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -113,16 +114,17 @@ class IPAssignments(ListResponseMixin):
         db.refresh(assignment)
         return assignment
 
-    @staticmethod
-    def delete(db: Session, assignment_id: str):
-        assignment = db.get(IPAssignment, assignment_id)
-        if not assignment:
-            raise HTTPException(status_code=404, detail="IP assignment not found")
-        assignment.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, assignment_id: str):
+        return super().delete(db, assignment_id)
 
 
-class IpPools(ListResponseMixin):
+class IpPools(CRUDManager[IpPool]):
+    model = IpPool
+    not_found_detail = "IP pool not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
+
     @staticmethod
     def create(db: Session, payload: IpPoolCreate):
         data = payload.model_dump()
@@ -141,12 +143,9 @@ class IpPools(ListResponseMixin):
         db.refresh(pool)
         return pool
 
-    @staticmethod
-    def get(db: Session, pool_id: str):
-        pool = db.get(IpPool, coerce_uuid(pool_id))
-        if not pool:
-            raise HTTPException(status_code=404, detail="IP pool not found")
-        return pool
+    @classmethod
+    def get(cls, db: Session, pool_id: str):
+        return cls._get_or_404(db, coerce_uuid(pool_id))
 
     @staticmethod
     def list(
@@ -159,12 +158,8 @@ class IpPools(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IpPool)
-        if ip_version:
-            query = query.filter(IpPool.ip_version == ip_version)
-        if is_active is None:
-            query = query.filter(IpPool.is_active.is_(True))
-        else:
-            query = query.filter(IpPool.is_active == is_active)
+        query = apply_optional_equals(query, {IpPool.ip_version: ip_version})
+        query = apply_active_state(query, IpPool.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -173,42 +168,20 @@ class IpPools(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, pool_id: str, payload: IpPoolUpdate):
-        pool = db.get(IpPool, pool_id)
-        if not pool:
-            raise HTTPException(status_code=404, detail="IP pool not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(pool, key, value)
-        db.commit()
-        db.refresh(pool)
-        return pool
+    @classmethod
+    def update(cls, db: Session, pool_id: str, payload: IpPoolUpdate):
+        return super().update(db, pool_id, payload)
 
-    @staticmethod
-    def delete(db: Session, pool_id: str):
-        pool = db.get(IpPool, pool_id)
-        if not pool:
-            raise HTTPException(status_code=404, detail="IP pool not found")
-        pool.is_active = False
-        db.commit()
+    @classmethod
+    def delete(cls, db: Session, pool_id: str):
+        return super().delete(db, pool_id)
 
 
-class IpBlocks(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: IpBlockCreate):
-        data = payload.model_dump()
-        block = IpBlock(**data)
-        db.add(block)
-        db.commit()
-        db.refresh(block)
-        return block
-
-    @staticmethod
-    def get(db: Session, block_id: str):
-        block = db.get(IpBlock, block_id)
-        if not block:
-            raise HTTPException(status_code=404, detail="IP block not found")
-        return block
+class IpBlocks(CRUDManager[IpBlock]):
+    model = IpBlock
+    not_found_detail = "IP block not found"
+    soft_delete_field = "is_active"
+    soft_delete_value = False
 
     @staticmethod
     def list(
@@ -221,12 +194,8 @@ class IpBlocks(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IpBlock)
-        if pool_id:
-            query = query.filter(IpBlock.pool_id == pool_id)
-        if is_active is None:
-            query = query.filter(IpBlock.is_active.is_(True))
-        else:
-            query = query.filter(IpBlock.is_active == is_active)
+        query = apply_optional_equals(query, {IpBlock.pool_id: pool_id})
+        query = apply_active_state(query, IpBlock.is_active, is_active)
         query = _apply_ordering(
             query,
             order_by,
@@ -235,41 +204,22 @@ class IpBlocks(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, block_id: str, payload: IpBlockUpdate):
-        block = db.get(IpBlock, block_id)
-        if not block:
-            raise HTTPException(status_code=404, detail="IP block not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(block, key, value)
-        db.commit()
-        db.refresh(block)
-        return block
+    @classmethod
+    def get(cls, db: Session, block_id: str):
+        return super().get(db, block_id)
 
-    @staticmethod
-    def delete(db: Session, block_id: str):
-        block = db.get(IpBlock, block_id)
-        if not block:
-            raise HTTPException(status_code=404, detail="IP block not found")
-        block.is_active = False
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, block_id: str, payload: IpBlockUpdate):
+        return super().update(db, block_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, block_id: str):
+        return super().delete(db, block_id)
 
 
-class IPv4Addresses(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: IPv4AddressCreate):
-        address = IPv4Address(**payload.model_dump())
-        db.add(address)
-        db.commit()
-        db.refresh(address)
-        return address
-
-    @staticmethod
-    def get(db: Session, address_id: str):
-        address = db.get(IPv4Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv4 address not found")
-        return address
+class IPv4Addresses(CRUDManager[IPv4Address]):
+    model = IPv4Address
+    not_found_detail = "IPv4 address not found"
 
     @staticmethod
     def list(
@@ -282,10 +232,13 @@ class IPv4Addresses(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IPv4Address)
-        if pool_id:
-            query = query.filter(IPv4Address.pool_id == pool_id)
-        if is_reserved is not None:
-            query = query.filter(IPv4Address.is_reserved == is_reserved)
+        query = apply_optional_equals(
+            query,
+            {
+                IPv4Address.pool_id: pool_id,
+                IPv4Address.is_reserved: is_reserved,
+            },
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -294,41 +247,22 @@ class IPv4Addresses(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, address_id: str, payload: IPv4AddressUpdate):
-        address = db.get(IPv4Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv4 address not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(address, key, value)
-        db.commit()
-        db.refresh(address)
-        return address
+    @classmethod
+    def get(cls, db: Session, address_id: str):
+        return super().get(db, address_id)
 
-    @staticmethod
-    def delete(db: Session, address_id: str):
-        address = db.get(IPv4Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv4 address not found")
-        db.delete(address)
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, address_id: str, payload: IPv4AddressUpdate):
+        return super().update(db, address_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, address_id: str):
+        return super().delete(db, address_id)
 
 
-class IPv6Addresses(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: IPv6AddressCreate):
-        address = IPv6Address(**payload.model_dump())
-        db.add(address)
-        db.commit()
-        db.refresh(address)
-        return address
-
-    @staticmethod
-    def get(db: Session, address_id: str):
-        address = db.get(IPv6Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv6 address not found")
-        return address
+class IPv6Addresses(CRUDManager[IPv6Address]):
+    model = IPv6Address
+    not_found_detail = "IPv6 address not found"
 
     @staticmethod
     def list(
@@ -341,10 +275,13 @@ class IPv6Addresses(ListResponseMixin):
         offset: int,
     ):
         query = db.query(IPv6Address)
-        if pool_id:
-            query = query.filter(IPv6Address.pool_id == pool_id)
-        if is_reserved is not None:
-            query = query.filter(IPv6Address.is_reserved == is_reserved)
+        query = apply_optional_equals(
+            query,
+            {
+                IPv6Address.pool_id: pool_id,
+                IPv6Address.is_reserved: is_reserved,
+            },
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -353,24 +290,17 @@ class IPv6Addresses(ListResponseMixin):
         )
         return _apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, address_id: str, payload: IPv6AddressUpdate):
-        address = db.get(IPv6Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv6 address not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(address, key, value)
-        db.commit()
-        db.refresh(address)
-        return address
+    @classmethod
+    def get(cls, db: Session, address_id: str):
+        return super().get(db, address_id)
 
-    @staticmethod
-    def delete(db: Session, address_id: str):
-        address = db.get(IPv6Address, address_id)
-        if not address:
-            raise HTTPException(status_code=404, detail="IPv6 address not found")
-        db.delete(address)
-        db.commit()
+    @classmethod
+    def update(cls, db: Session, address_id: str, payload: IPv6AddressUpdate):
+        return super().update(db, address_id, payload)
+
+    @classmethod
+    def delete(cls, db: Session, address_id: str):
+        return super().delete(db, address_id)
 
 
 ip_assignments = IPAssignments()

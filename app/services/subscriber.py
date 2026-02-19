@@ -2,6 +2,8 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.billing import TaxRate
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import (
     Address,
     AddressType,
@@ -9,12 +11,7 @@ from app.models.subscriber import (
     Reseller,
     Subscriber,
     SubscriberCustomField,
-    SubscriberStatus,
 )
-from app.models.domain_settings import SettingDomain
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.response import ListResponseMixin
-from app.models.billing import TaxRate
 from app.schemas.subscriber import (
     AddressCreate,
     AddressUpdate,
@@ -29,12 +26,17 @@ from app.schemas.subscriber import (
     SubscriberCustomFieldUpdate,
     SubscriberUpdate,
 )
-from app.validators import subscriber as subscriber_validators
-from app.services import settings_spec
-from app.services import numbering
 from app.services import geocoding as geocoding_service
+from app.services import numbering, settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.response import ListResponseMixin
 
 _validate_enum = validate_enum
 
@@ -155,6 +157,33 @@ class Resellers(ListResponseMixin):
 class Subscribers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriberCreate):
+        # Backwards-compat: some callers provide `person_id` to target an existing
+        # subscriber row and just apply numbering/defaults.
+        person_id = getattr(payload, "person_id", None)
+        if person_id:
+            subscriber = db.get(Subscriber, str(person_id))
+            if not subscriber:
+                raise HTTPException(status_code=404, detail="Subscriber not found")
+            data = payload.model_dump(exclude_unset=True, exclude={"person_id"})
+            data.pop("organization_id", None)
+            for key, value in data.items():
+                setattr(subscriber, key, value)
+            if not subscriber.subscriber_number:
+                generated = numbering.generate_number(
+                    db,
+                    SettingDomain.subscriber,
+                    "subscriber_number",
+                    "subscriber_number_enabled",
+                    "subscriber_number_prefix",
+                    "subscriber_number_padding",
+                    "subscriber_number_start",
+                )
+                if generated:
+                    subscriber.subscriber_number = generated
+            db.commit()
+            db.refresh(subscriber)
+            return subscriber
+
         data = payload.model_dump()
         data.pop("organization_id", None)
         if not data.get("subscriber_number"):
@@ -209,10 +238,14 @@ class Subscribers(ListResponseMixin):
         order_dir: str,
         limit: int,
         offset: int,
+        person_id: str | None = None,
     ):
         query = db.query(Subscriber).options(
             selectinload(Subscriber.addresses),
         )
+        # Backwards-compat: allow filtering by legacy "person_id" keyword.
+        if person_id:
+            query = query.filter(Subscriber.id == coerce_uuid(person_id))
         if organization_id:
             query = query.filter(Subscriber.organization_id == coerce_uuid(organization_id))
         if subscriber_type:
@@ -296,6 +329,26 @@ class Subscribers(ListResponseMixin):
             "organizations": organizations,
         }
 
+    @staticmethod
+    def count(
+        db: Session,
+        subscriber_type: str | None = None,
+        organization_id: str | None = None,
+    ) -> int:
+        """Return total count of subscribers matching filters."""
+        query = db.query(func.count(Subscriber.id))
+        if organization_id:
+            query = query.filter(
+                Subscriber.organization_id == coerce_uuid(organization_id)
+            )
+        if subscriber_type:
+            normalized = subscriber_type.strip().lower()
+            if normalized == "person":
+                query = query.filter(Subscriber.organization_id.is_(None))
+            elif normalized == "organization":
+                query = query.filter(Subscriber.organization_id.is_not(None))
+        return query.scalar() or 0
+
 
 class Accounts(ListResponseMixin):
     """Compatibility layer: accounts are now subscribers."""
@@ -307,6 +360,20 @@ class Accounts(ListResponseMixin):
         subscriber = db.get(Subscriber, payload.subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        if not subscriber.account_number:
+            generated = numbering.generate_number(
+                db,
+                SettingDomain.subscriber,
+                "account_number",
+                "account_number_enabled",
+                "account_number_prefix",
+                "account_number_padding",
+                "account_number_start",
+            )
+            if generated:
+                subscriber.account_number = generated
+                db.commit()
+                db.refresh(subscriber)
         return subscriber
 
     @staticmethod
@@ -356,30 +423,6 @@ class Accounts(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Subscriber not found")
         db.delete(subscriber)
         db.commit()
-
-
-class AccountRoles(ListResponseMixin):
-    """Deprecated compatibility layer - account roles removed."""
-
-    @staticmethod
-    def create(*_args, **_kwargs):
-        return None
-
-    @staticmethod
-    def get(*_args, **_kwargs):
-        return None
-
-    @staticmethod
-    def list(*_args, **_kwargs):
-        return []
-
-    @staticmethod
-    def update(*_args, **_kwargs):
-        return None
-
-    @staticmethod
-    def delete(*_args, **_kwargs):
-        return None
 
 
 class Addresses(ListResponseMixin):
@@ -565,6 +608,5 @@ organizations = Organizations()
 resellers = Resellers()
 subscribers = Subscribers()
 accounts = Accounts()
-account_roles = AccountRoles()
 addresses = Addresses()
 subscriber_custom_fields = SubscriberCustomFields()

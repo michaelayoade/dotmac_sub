@@ -2,8 +2,11 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.scheduler import ScheduledTask, ScheduleType
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.schemas.scheduler import ScheduledTaskCreate, ScheduledTaskUpdate
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+)
 from app.services.response import ListResponseMixin
 
 
@@ -96,3 +99,9 @@ def enqueue_task(task_name: str, args: list | None, kwargs: dict | None) -> dict
 
     async_result = celery_app.send_task(task_name, args=args or [], kwargs=kwargs or {})
     return {"queued": True, "task_id": str(async_result.id)}
+
+
+def enqueue_by_id(db: Session, task_id: str) -> dict:
+    """Look up a scheduled task and enqueue it."""
+    task = scheduled_tasks.get(db, task_id)
+    return enqueue_task(task.task_name, task.args_json or [], task.kwargs_json or {})

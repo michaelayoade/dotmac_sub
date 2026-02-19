@@ -245,20 +245,20 @@ class ServiceQualifications(ListResponseMixin):
         candidates = query.order_by(CoverageArea.priority.desc(), CoverageArea.created_at.desc()).all()
 
         matches: list[CoverageArea] = []
-        for area in candidates:
+        for candidate in candidates:
             if (
-                area.min_latitude is not None
-                and area.max_latitude is not None
-                and area.min_longitude is not None
-                and area.max_longitude is not None
+                candidate.min_latitude is not None
+                and candidate.max_latitude is not None
+                and candidate.min_longitude is not None
+                and candidate.max_longitude is not None
             ):
-                if not (area.min_latitude <= lat <= area.max_latitude):
+                if not (candidate.min_latitude <= lat <= candidate.max_latitude):
                     continue
-                if not (area.min_longitude <= lon <= area.max_longitude):
+                if not (candidate.min_longitude <= lon <= candidate.max_longitude):
                     continue
-            polygon = _extract_polygon(area.geometry_geojson)
+            polygon = _extract_polygon(candidate.geometry_geojson)
             if _point_in_polygon(lon, lat, polygon):
-                matches.append(area)
+                matches.append(candidate)
 
         reasons: list[str] = []
         status = QualificationStatus.ineligible

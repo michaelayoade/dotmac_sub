@@ -40,16 +40,18 @@ def _setting_bool(db: Session, domain: SettingDomain, key: str, default: bool) -
 
 
 def _radius_dictionary_path(db: Session) -> str | None:
-    return (
-        settings_spec.resolve_value(db, SettingDomain.radius, "coa_dictionary_path")
-        or settings_spec.resolve_value(db, SettingDomain.radius, "auth_dictionary_path")
-    )
+    value = settings_spec.resolve_value(db, SettingDomain.radius, "coa_dictionary_path")
+    if value is None:
+        value = settings_spec.resolve_value(
+            db, SettingDomain.radius, "auth_dictionary_path"
+        )
+    return None if value is None else str(value)
 
 
 def _radius_timeout_sec(db: Session) -> float:
     timeout = settings_spec.resolve_value(db, SettingDomain.radius, "coa_timeout_sec")
     try:
-        return float(timeout) if timeout is not None else 3.0
+        return float(str(timeout)) if timeout is not None else 3.0
     except (TypeError, ValueError):
         return 3.0
 
@@ -61,7 +63,7 @@ def _coa_enabled(db: Session) -> bool:
 def _coa_retries(db: Session) -> int:
     retries = settings_spec.resolve_value(db, SettingDomain.radius, "coa_retries")
     try:
-        return int(retries) if retries is not None else 1
+        return int(str(retries)) if retries is not None else 1
     except (TypeError, ValueError):
         return 1
 
@@ -75,9 +77,10 @@ def _address_list_block_enabled(db: Session) -> bool:
 
 
 def _default_address_list(db: Session) -> str | None:
-    return settings_spec.resolve_value(
+    value = settings_spec.resolve_value(
         db, SettingDomain.network, "default_mikrotik_address_list"
     )
+    return None if value is None else str(value)
 
 
 def _resolve_effective_profile(
@@ -136,6 +139,9 @@ def _send_coa_disconnect(
         return False
     # Decrypt the shared secret before use
     decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    if decrypted_secret is None:
+        logger.warning("Missing NAS shared secret for CoA disconnect.")
+        return False
     client = Client(
         server=host,
         secret=decrypted_secret.encode("utf-8"),
