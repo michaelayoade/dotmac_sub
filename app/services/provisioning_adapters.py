@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-
-import io
 from urllib.parse import urlparse
 
 import paramiko
@@ -71,7 +70,7 @@ def _resolve_connection(context: dict) -> dict:
         "private_key_path": auth_config.get("private_key_path"),
         "timeout_sec": auth_config.get("timeout_sec") or connector.get("timeout_sec"),
         "use_ssl": auth_config.get("use_ssl", False),
-        "hostkey_verify": auth_config.get("hostkey_verify", False),
+        "hostkey_verify": auth_config.get("hostkey_verify", True),
     }
 
 
@@ -79,7 +78,8 @@ def _ssh_client(conn: dict) -> paramiko.SSHClient:
     if not conn.get("host"):
         raise ValueError("SSH host is required")
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     pkey = None
     if conn.get("private_key"):
         pkey = paramiko.RSAKey.from_private_key(

@@ -1,90 +1,90 @@
 import secrets
-from fastapi import Depends, FastAPI, Request
-from time import monotonic
 from threading import Lock
-from starlette.responses import Response
+from time import monotonic
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from sqlalchemy.orm import Session
+from starlette.responses import Response
 
-from app.csrf import (
-    CSRF_COOKIE_NAME,
-    CSRF_HEADER_NAME,
-    CSRF_TOKEN_NAME,
-    get_csrf_token,
-    set_csrf_cookie,
-    generate_csrf_token,
-)
-
+from app.api.analytics import router as analytics_router
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.auth_flow import router as auth_flow_router
-from app.api.rbac import router as rbac_router
-from app.api.notifications import router as notifications_router
-from app.api.comms import router as comms_router
-from app.api.analytics import router as analytics_router
-from app.api.external import router as external_router
-from app.api.catalog import router as catalog_router
-from app.api.billing import router as billing_router
-from app.api.domains import router as domains_router
-from app.api.gis import router as gis_router
-from app.api.geocoding import router as geocoding_router
-from app.api.qualification import router as qualification_router
-from app.api.settings import router as settings_router
-from app.api.imports import router as imports_router
-from app.api.webhooks import router as webhooks_router
-from app.api.connectors import router as connectors_router
-from app.api.integrations import router as integrations_router
-from app.api.customers import router as customers_router
-from app.api.subscribers import router as subscriber_router
-from app.api.search import router as search_router
-from app.api.scheduler import router as scheduler_router
-from app.api.fiber_plant import router as fiber_plant_router
-from app.api.nextcloud_talk import router as nextcloud_talk_router
-from app.api.wireguard import router as wireguard_router, public_router as wireguard_public_router
-from app.api.nas import router as nas_router
-from app.api.provisioning import router as provisioning_api_router
 from app.api.bandwidth import router as bandwidth_router
-from app.api.validation import router as validation_router
+from app.api.billing import router as billing_router
+from app.api.catalog import router as catalog_router
+from app.api.comms import router as comms_router
+from app.api.connectors import router as connectors_router
+from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
-from app.web_home import router as web_home_router
-from app.web_domains import router as web_domains_router
-from app.web import router as web_router
+from app.api.deps import require_role, require_user_auth
+from app.api.domains import router as domains_router
+from app.api.external import router as external_router
+from app.api.fiber_plant import router as fiber_plant_router
+from app.api.geocoding import router as geocoding_router
+from app.api.gis import router as gis_router
+from app.api.imports import router as imports_router
+from app.api.integrations import router as integrations_router
+from app.api.nas import router as nas_router
+from app.api.nextcloud_talk import router as nextcloud_talk_router
+from app.api.notifications import router as notifications_router
+from app.api.provisioning import router as provisioning_api_router
+from app.api.qualification import router as qualification_router
+from app.api.rbac import router as rbac_router
+from app.api.scheduler import router as scheduler_router
+from app.api.search import router as search_router
+from app.api.settings import router as settings_router
+from app.api.subscribers import router as subscriber_router
+from app.api.validation import router as validation_router
+from app.api.webhooks import router as webhooks_router
+from app.api.wireguard import public_router as wireguard_public_router
+from app.api.wireguard import router as wireguard_router
+from app.csrf import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    generate_csrf_token,
+    set_csrf_cookie,
+)
 from app.db import SessionLocal
-from app.services import audit as audit_service
-from app.api.deps import require_permission, require_role, require_user_auth
+from app.errors import register_error_handlers
+from app.logging import configure_logging
 from app.models.domain_settings import DomainSetting, SettingDomain
-from sqlalchemy.orm import Session
+from app.observability import ObservabilityMiddleware
+from app.services import audit as audit_service
 from app.services.settings_seed import (
     seed_audit_settings,
-    seed_auth_settings,
     seed_auth_policy_settings,
+    seed_auth_settings,
     seed_billing_settings,
     seed_catalog_settings,
     seed_collections_policy_settings,
-    seed_comms_settings,
     seed_collections_settings,
+    seed_comms_settings,
     seed_geocoding_settings,
     seed_gis_settings,
     seed_imports_settings,
     seed_lifecycle_settings,
-    seed_network_policy_settings,
     seed_network_monitoring_settings,
+    seed_network_policy_settings,
     seed_network_settings,
     seed_notification_settings,
-    seed_radius_settings,
-    seed_radius_policy_settings,
-    seed_scheduler_settings,
     seed_provisioning_settings,
-    seed_tr069_settings,
-    seed_usage_settings,
-    seed_usage_policy_settings,
+    seed_radius_policy_settings,
+    seed_radius_settings,
+    seed_scheduler_settings,
     seed_subscriber_settings,
+    seed_tr069_settings,
+    seed_usage_policy_settings,
+    seed_usage_settings,
     seed_wireguard_settings,
 )
-from app.logging import configure_logging
-from app.observability import ObservabilityMiddleware
 from app.telemetry import setup_otel
-from app.errors import register_error_handlers
+from app.web import router as web_router
+from app.web_domains import router as web_domains_router
+from app.web_home import router as web_home_router
+from app.websocket.router import router as ws_router
 
 app = FastAPI(title="dotmac_sm API")
 
@@ -165,25 +165,25 @@ async def csrf_middleware(request: Request, call_next):
 
     # For state-changing methods, validate CSRF token
     if method in ("POST", "PUT", "DELETE", "PATCH"):
+        from fastapi.responses import HTMLResponse
+
+        def _csrf_forbidden(message: str) -> HTMLResponse:
+            return HTMLResponse(
+                content=f"<h1>403 Forbidden</h1><p>{message}</p>",
+                status_code=403,
+            )
+
         cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
 
         if not cookie_token:
             # No CSRF cookie - reject request
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(
-                content="<h1>403 Forbidden</h1><p>CSRF token missing. Please refresh the page and try again.</p>",
-                status_code=403,
-            )
+            return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
 
         # Check header first (for HTMX/fetch requests)
         header_token = request.headers.get(CSRF_HEADER_NAME)
         if header_token:
             if not secrets.compare_digest(cookie_token, header_token):
-                from fastapi.responses import HTMLResponse
-                return HTMLResponse(
-                    content="<h1>403 Forbidden</h1><p>CSRF token invalid. Please refresh the page and try again.</p>",
-                    status_code=403,
-                )
+                return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
         else:
             # For form submissions, check form data
             content_type = request.headers.get("content-type", "")
@@ -193,15 +193,14 @@ async def csrf_middleware(request: Request, call_next):
 
                 # Parse form data to get CSRF token
                 from urllib.parse import parse_qs
+                form_token: str | None = None
                 try:
                     if "multipart/form-data" in content_type:
                         # Parse multipart form data properly using email.parser
-                        form_token = None
-                        from email.parser import BytesParser
-                        from email.policy import HTTP
-
                         # Extract boundary from content-type header
                         import re
+                        from email.parser import BytesParser
+                        from email.policy import HTTP
                         boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
                         if boundary_match:
                             boundary = boundary_match.group(1).strip('"')
@@ -228,19 +227,20 @@ async def csrf_middleware(request: Request, call_next):
                         form_data = parse_qs(body.decode('utf-8'))
                         form_token = form_data.get("_csrf_token", [None])[0]
 
-                    if form_token and not secrets.compare_digest(cookie_token, form_token):
-                        from fastapi.responses import HTMLResponse
-                        return HTMLResponse(
-                            content="<h1>403 Forbidden</h1><p>CSRF token invalid. Please refresh the page and try again.</p>",
-                            status_code=403,
-                        )
+                    if not form_token:
+                        return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+                    if not secrets.compare_digest(cookie_token, form_token):
+                        return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
                 except Exception:
-                    pass  # If parsing fails, continue (token validation happens elsewhere)
+                    return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
 
                 # Reconstruct request with body for downstream handlers
                 async def receive():
                     return {"type": "http.request", "body": body}
                 request = Request(scope=request.scope, receive=receive)
+            else:
+                # Non-form state-changing requests must use header token.
+                return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
 
     response = await call_next(request)
 
@@ -367,7 +367,6 @@ app.include_router(web_home_router)
 app.include_router(web_domains_router)
 app.include_router(web_router)
 
-from app.websocket.router import router as ws_router
 app.include_router(ws_router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

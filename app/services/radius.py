@@ -1,12 +1,12 @@
 import hashlib
-from datetime import datetime, timezone
+import re
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.metrics import observe_job
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
@@ -15,8 +15,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.services.response import ListResponseMixin
 from app.models.connector import ConnectorConfig
+from app.models.domain_settings import SettingDomain
 from app.models.radius import (
     RadiusClient,
     RadiusServer,
@@ -25,18 +25,24 @@ from app.models.radius import (
     RadiusSyncStatus,
     RadiusUser,
 )
-from app.models.domain_settings import SettingDomain
-from app.services.credential_crypto import decrypt_credential
-from app.services.secrets import resolve_secret
 from app.schemas.radius import (
     RadiusClientCreate,
     RadiusClientUpdate,
-    RadiusSyncJobCreate,
-    RadiusSyncJobUpdate,
     RadiusServerCreate,
     RadiusServerUpdate,
+    RadiusSyncJobCreate,
+    RadiusSyncJobUpdate,
 )
 from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+from app.services.credential_crypto import decrypt_credential
+from app.services.response import ListResponseMixin
+from app.services.secrets import resolve_secret
 
 
 def _coerce_int_setting(value: object) -> int | None:
@@ -197,6 +203,20 @@ def _hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_SQL_IDENT_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _sanitize_table_identifier(raw: object, fallback: str) -> str:
+    name = str(raw).strip() if raw is not None else fallback
+    if not name:
+        name = fallback
+    parts = name.split(".")
+    if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
+        raise ValueError(f"Invalid SQL table identifier: {name!r}")
+    # Identifiers are validated strictly above; quoting prevents keyword collisions.
+    return ".".join(f'"{part}"' for part in parts)
+
+
 def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
     if not job.connector_config_id:
         return None
@@ -221,10 +241,16 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
         db_url = f"{driver}://{username}:{password}@{host}{port_part}/{database}"
     return {
         "db_url": db_url,
-        "radcheck_table": metadata.get("radcheck_table", "radcheck"),
-        "radreply_table": metadata.get("radreply_table", "radreply"),
-        "radusergroup_table": metadata.get("radusergroup_table", "radusergroup"),
-        "nas_table": metadata.get("nas_table", "nas"),
+        "radcheck_table": _sanitize_table_identifier(
+            metadata.get("radcheck_table"), "radcheck"
+        ),
+        "radreply_table": _sanitize_table_identifier(
+            metadata.get("radreply_table"), "radreply"
+        ),
+        "radusergroup_table": _sanitize_table_identifier(
+            metadata.get("radusergroup_table"), "radusergroup"
+        ),
+        "nas_table": _sanitize_table_identifier(metadata.get("nas_table"), "nas"),
         "password_attribute": metadata.get("password_attribute", "Cleartext-Password"),
         "password_op": metadata.get("password_op", ":="),
         "use_group": bool(metadata.get("use_group", False)),
@@ -265,18 +291,15 @@ def _external_sync_users(
             if not subscription:
                 continue
             username = credential.username
-            conn.execute(text(f"DELETE FROM {radcheck} WHERE username = :u"), {"u": username})
-            conn.execute(text(f"DELETE FROM {radreply} WHERE username = :u"), {"u": username})
+            conn.execute(text(f"DELETE FROM {radcheck} WHERE username = :u"), {"u": username})  # noqa: S608
+            conn.execute(text(f"DELETE FROM {radreply} WHERE username = :u"), {"u": username})  # noqa: S608
             if use_group:
                 conn.execute(
-                    text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}
+                    text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}  # noqa: S608
                 )
             if credential.secret_hash:
                 conn.execute(
-                    text(
-                        f"INSERT INTO {radcheck} (username, attribute, op, value) "
-                        "VALUES (:u, :attr, :op, :val)"
-                    ),
+                    text(f"INSERT INTO {radcheck} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
                     {
                         "u": username,
                         "attr": password_attr,
@@ -299,10 +322,7 @@ def _external_sync_users(
                 profile, attributes = profile_cache[cache_key]
                 if use_group and profile:
                     conn.execute(
-                        text(
-                            f"INSERT INTO {radusergroup} (username, groupname, priority) "
-                            "VALUES (:u, :g, :p)"
-                        ),
+                        text(f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"),  # noqa: S608
                         {"u": username, "g": profile.name, "p": group_priority},
                     )
                 if profile and profile.mikrotik_address_list:
@@ -312,10 +332,7 @@ def _external_sync_users(
                     )
                     if not has_address_list:
                         conn.execute(
-                            text(
-                                f"INSERT INTO {radreply} (username, attribute, op, value) "
-                                "VALUES (:u, :attr, :op, :val)"
-                            ),
+                            text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
                             {
                                 "u": username,
                                 "attr": "Mikrotik-Address-List",
@@ -325,10 +342,7 @@ def _external_sync_users(
                         )
                 for attr in attributes:
                     conn.execute(
-                        text(
-                            f"INSERT INTO {radreply} (username, attribute, op, value) "
-                            "VALUES (:u, :attr, :op, :val)"
-                        ),
+                        text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
                         {
                             "u": username,
                             "attr": attr.attribute,
@@ -357,14 +371,11 @@ def _external_sync_nas(
             if not secret:
                 continue
             conn.execute(
-                text(f"DELETE FROM {nas_table} WHERE nasname = :ip"),
+                text(f"DELETE FROM {nas_table} WHERE nasname = :ip"),  # noqa: S608
                 {"ip": device.ip_address},
             )
             conn.execute(
-                text(
-                    f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) "
-                    "VALUES (:ip, :name, :type, :secret, :desc)"
-                ),
+                text(f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"),  # noqa: S608
                 {
                     "ip": device.ip_address,
                     "name": device.name,
@@ -521,7 +532,7 @@ class RadiusSyncJobs(ListResponseMixin):
         db.commit()
         db.refresh(run)
 
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         users_created = users_updated = clients_created = clients_updated = 0
         status = RadiusSyncStatus.success
         details: dict[str, object] = {}
@@ -597,7 +608,7 @@ class RadiusSyncJobs(ListResponseMixin):
                         existing_user.secret_hash = credential.secret_hash
                         existing_user.radius_profile_id = credential.radius_profile_id
                         existing_user.is_active = True
-                        existing_user.last_sync_at = datetime.now(timezone.utc)
+                        existing_user.last_sync_at = datetime.now(UTC)
                         users_updated += 1
                     else:
                         user = RadiusUser(
@@ -608,7 +619,7 @@ class RadiusSyncJobs(ListResponseMixin):
                             secret_hash=credential.secret_hash,
                             radius_profile_id=credential.radius_profile_id,
                             is_active=True,
-                            last_sync_at=datetime.now(timezone.utc),
+                            last_sync_at=datetime.now(UTC),
                         )
                         db.add(user)
                         users_created += 1
@@ -622,7 +633,7 @@ class RadiusSyncJobs(ListResponseMixin):
             details["error"] = str(exc)
             raise
         finally:
-            finished_at = datetime.now(timezone.utc)
+            finished_at = datetime.now(UTC)
             run.status = status
             run.finished_at = finished_at
             run.users_created = users_created

@@ -153,12 +153,12 @@ class SubscriberCreate(SubscriberBase):
     person_id: UUID | None = Field(default=None, exclude=True)
 
     # If person_id is provided these can be omitted; service will update the existing row.
-    first_name: str | None = Field(default=None, min_length=1, max_length=80)
-    last_name: str | None = Field(default=None, min_length=1, max_length=80)
+    first_name: str | None = Field(default=None, min_length=1, max_length=80)  # type: ignore[assignment]
+    last_name: str | None = Field(default=None, min_length=1, max_length=80)  # type: ignore[assignment]
     email: EmailStr | None = None
 
     @model_validator(mode="after")
-    def _require_identity_when_creating_new(self) -> "SubscriberCreate":
+    def _require_identity_when_creating_new(self) -> SubscriberCreate:
         if self.person_id:
             return self
         if not self.first_name or not self.last_name or not self.email:
@@ -231,9 +231,9 @@ class SubscriberRead(SubscriberBase):
     created_at: datetime
     updated_at: datetime
 
-    addresses: list["AddressRead"] = Field(default_factory=list)
-    channels: list["SubscriberChannelRead"] = Field(default_factory=list)
-    custom_fields: list["SubscriberCustomFieldRead"] = Field(default_factory=list)
+    addresses: list[AddressRead] = Field(default_factory=list)
+    channels: list[SubscriberChannelRead] = Field(default_factory=list)
+    custom_fields: list[SubscriberCustomFieldRead] = Field(default_factory=list)
 
 
 class SubscriberChannelBase(BaseModel):

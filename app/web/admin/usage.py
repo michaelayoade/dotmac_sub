@@ -1,5 +1,6 @@
 """Admin usage dashboard web routes."""
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -15,6 +16,7 @@ from app.services import usage as usage_service
 from app.services import web_usage as web_usage_service
 from app.web.request_parsing import parse_form_data
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/usage", tags=["web-admin-usage"])
 
@@ -118,8 +120,9 @@ def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(ge
     try:
         usage_service.usage_charges.post(db=db, charge_id=charge_id, payload=UsageChargePostRequest())
     except Exception:
-        pass
-    return RedirectResponse("/admin/catalog/usage/charges", status_code=303)
+        logger.exception("Failed to post usage charge %s", charge_id)
+        return RedirectResponse("/admin/catalog/usage/charges?error=post_failed", status_code=303)
+    return RedirectResponse("/admin/catalog/usage/charges?success=posted", status_code=303)
 
 
 @router.post("/charges/bulk-post", response_class=HTMLResponse)
