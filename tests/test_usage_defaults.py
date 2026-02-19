@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.catalog import AccessType, PriceBasis, ServiceType
@@ -48,8 +48,8 @@ def test_usage_charge_defaults_use_settings(db_session, subscriber_account):
             offer_id=offer.id,
         ),
     )
-    period_start = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    period_end = datetime(2024, 2, 1, tzinfo=timezone.utc)
+    period_start = datetime(2024, 1, 1, tzinfo=UTC)
+    period_end = datetime(2024, 2, 1, tzinfo=UTC)
     usage_service.usage_records.create(
         db_session,
         UsageRecordCreate(

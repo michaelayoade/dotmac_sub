@@ -7,19 +7,18 @@ insert samples into PostgreSQL, and push aggregates to VictoriaMetrics.
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 import redis
-from celery import shared_task
 from sqlalchemy import delete, func
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
 from app.models.domain_settings import SettingDomain
-from app.services.metrics_store import BandwidthPoint, get_metrics_store
+from app.services.metrics_store import get_metrics_store
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -186,7 +185,7 @@ def cleanup_hot_data():
     """
     db = SessionLocal()
     retention_hours = _get_hot_retention_hours(db)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
 
     try:
         result = db.execute(
@@ -218,7 +217,7 @@ def aggregate_to_metrics():
 
     try:
         # Calculate aggregates for the last minute
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         minute_start = now.replace(second=0, microsecond=0)
         minute_end = minute_start + timedelta(minutes=1)
 

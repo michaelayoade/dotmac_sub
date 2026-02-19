@@ -1,16 +1,13 @@
 """Service layer for legal document management."""
 
 import os
-import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models.legal import LegalDocument, LegalDocumentType
 from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
-
 
 UPLOAD_DIR = "uploads/legal"
 
@@ -21,9 +18,9 @@ class LegalDocumentService:
     def list(
         self,
         db: Session,
-        document_type: Optional[LegalDocumentType] = None,
-        is_published: Optional[bool] = None,
-        is_current: Optional[bool] = None,
+        document_type: LegalDocumentType | None = None,
+        is_published: bool | None = None,
+        is_current: bool | None = None,
         order_by: str = "created_at",
         order_dir: str = "desc",
         limit: int = 100,
@@ -52,8 +49,8 @@ class LegalDocumentService:
         self,
         db: Session,
         *,
-        document_type: Optional[LegalDocumentType] = None,
-        is_published: Optional[bool] = None,
+        document_type: LegalDocumentType | None = None,
+        is_published: bool | None = None,
     ) -> dict[str, int]:
         """Return total/published/draft counts for list page filters."""
         count_query = db.query(func.count(LegalDocument.id))
@@ -81,17 +78,17 @@ class LegalDocumentService:
             "draft": draft_query.scalar() or 0,
         }
 
-    def get(self, db: Session, document_id: str) -> Optional[LegalDocument]:
+    def get(self, db: Session, document_id: str) -> LegalDocument | None:
         """Get a legal document by ID."""
         return db.get(LegalDocument, document_id)
 
-    def get_by_slug(self, db: Session, slug: str) -> Optional[LegalDocument]:
+    def get_by_slug(self, db: Session, slug: str) -> LegalDocument | None:
         """Get a legal document by slug."""
         return db.query(LegalDocument).filter(LegalDocument.slug == slug).first()
 
     def get_current_by_type(
         self, db: Session, document_type: LegalDocumentType
-    ) -> Optional[LegalDocument]:
+    ) -> LegalDocument | None:
         """Get the current published version of a document type."""
         return (
             db.query(LegalDocument)
@@ -119,7 +116,7 @@ class LegalDocumentService:
         )
 
         if payload.is_published:
-            document.published_at = datetime.now(timezone.utc)
+            document.published_at = datetime.now(UTC)
             # Mark other documents of same type as not current
             self._set_as_current(db, document)
 
@@ -130,7 +127,7 @@ class LegalDocumentService:
 
     def update(
         self, db: Session, document_id: str, payload: LegalDocumentUpdate
-    ) -> Optional[LegalDocument]:
+    ) -> LegalDocument | None:
         """Update a legal document."""
         document = self.get(db, document_id)
         if not document:
@@ -141,7 +138,7 @@ class LegalDocumentService:
         # Handle publishing
         if "is_published" in update_data and update_data["is_published"]:
             if not document.is_published:
-                update_data["published_at"] = datetime.now(timezone.utc)
+                update_data["published_at"] = datetime.now(UTC)
 
         for field, value in update_data.items():
             setattr(document, field, value)
@@ -178,7 +175,7 @@ class LegalDocumentService:
         file_content: bytes,
         file_name: str,
         mime_type: str,
-    ) -> Optional[LegalDocument]:
+    ) -> LegalDocument | None:
         """Upload a file for a legal document."""
         document = self.get(db, document_id)
         if not document:
@@ -213,7 +210,7 @@ class LegalDocumentService:
         db.refresh(document)
         return document
 
-    def delete_file(self, db: Session, document_id: str) -> Optional[LegalDocument]:
+    def delete_file(self, db: Session, document_id: str) -> LegalDocument | None:
         """Delete the file associated with a legal document."""
         document = self.get(db, document_id)
         if not document:

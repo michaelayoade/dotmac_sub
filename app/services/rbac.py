@@ -1,23 +1,29 @@
 from __future__ import annotations
 
-from typing import List
+import builtins
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    SubscriberPermission,
+    SubscriberRole,
+)
 from app.models.subscriber import Subscriber
-from app.models.rbac import Permission, SubscriberPermission, SubscriberRole, Role, RolePermission
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionUpdate,
-    SubscriberPermissionCreate,
-    SubscriberPermissionUpdate,
-    SubscriberRoleCreate,
-    SubscriberRoleUpdate,
     RoleCreate,
     RolePermissionCreate,
     RolePermissionUpdate,
     RoleUpdate,
+    SubscriberPermissionCreate,
+    SubscriberPermissionUpdate,
+    SubscriberRoleCreate,
+    SubscriberRoleUpdate,
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
@@ -343,7 +349,7 @@ class SubscriberPermissions(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def list_for_subscriber(db: Session, subscriber_id: str) -> List[SubscriberPermission]:
+    def list_for_subscriber(db: Session, subscriber_id: str) -> builtins.list[SubscriberPermission]:
         """Get all direct permissions for a subscriber."""
         return (
             db.query(SubscriberPermission)

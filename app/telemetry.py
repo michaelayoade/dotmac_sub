@@ -1,6 +1,5 @@
-import os
 import logging
-
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +19,7 @@ def setup_otel(app) -> None:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
         from app.db import get_engine
     except Exception:
         logger.exception("OpenTelemetry dependencies not available.")

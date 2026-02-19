@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
-from app.models.network import FiberAccessPoint, FiberSegment, FiberSpliceClosure, FdhCabinet, Splitter
+from app.models.network import (
+    FdhCabinet,
+    FiberAccessPoint,
+    FiberSegment,
+    FiberSpliceClosure,
+    Splitter,
+)
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession

@@ -14,7 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.wireguard import WireGuardPeerStatus, WireGuardServer, WireGuardPeer
+from app.models.wireguard import WireGuardPeer, WireGuardPeerStatus, WireGuardServer
 from app.services.wireguard_crypto import decrypt_private_key
 
 logger = logging.getLogger(__name__)

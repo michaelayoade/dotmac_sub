@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.billing import Payment
+from app.models.billing import CreditNoteStatus, Payment
 from app.models.catalog import BillingCycle
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
@@ -48,7 +48,6 @@ from app.services.audit_helpers import build_changes_metadata, log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.services.billing import configuration as billing_config_service
 from app.web.request_parsing import parse_json_body
-from app.models.billing import CreditNoteStatus
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])

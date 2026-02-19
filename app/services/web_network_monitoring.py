@@ -135,7 +135,12 @@ def monitoring_page_data(db: Session, *, format_duration, format_bps) -> dict[st
 
 def alarms_page_data(db: Session, *, severity: str | None, status: str | None) -> dict[str, object]:
     """Return payload for monitoring alarms page."""
-    from app.models.network_monitoring import Alert, AlertRule, AlertSeverity, AlertStatus
+    from app.models.network_monitoring import (
+        Alert,
+        AlertRule,
+        AlertSeverity,
+        AlertStatus,
+    )
 
     alarms_query = db.query(Alert).order_by(Alert.triggered_at.desc())
     if status:

@@ -4,8 +4,8 @@ This module provides validation and calculation helpers shared across
 billing service modules.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
-from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -239,7 +239,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     if invoice.balance_due <= 0:
         invoice.status = InvoiceStatus.paid
         if not invoice.paid_at:
-            invoice.paid_at = datetime.now(timezone.utc)
+            invoice.paid_at = datetime.now(UTC)
     elif paid_amount > 0 or credit_amount > 0:
         invoice.status = InvoiceStatus.partially_paid
 

@@ -9,7 +9,7 @@ Events are persisted before dispatching to enable retry of failed handlers.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -100,7 +100,7 @@ class EventDispatcher:
                     event_record.error = json.dumps([fh["error"] for fh in failed_handlers])
                 else:
                     event_record.status = EventStatus.completed
-                event_record.processed_at = datetime.now(timezone.utc)
+                event_record.processed_at = datetime.now(UTC)
                 db.commit()
             except Exception as update_exc:
                 logger.warning(
@@ -171,7 +171,7 @@ class EventDispatcher:
             event_record.status = EventStatus.completed
             event_record.failed_handlers = None
             event_record.error = None
-        event_record.processed_at = datetime.now(timezone.utc)
+        event_record.processed_at = datetime.now(UTC)
         db.commit()
 
         return len(new_failures) == 0
@@ -192,11 +192,11 @@ def get_dispatcher() -> EventDispatcher:
 
 def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     """Initialize and register all event handlers."""
-    from app.services.events.handlers.webhook import WebhookHandler
+    from app.services.events.handlers.enforcement import EnforcementHandler
     from app.services.events.handlers.lifecycle import LifecycleHandler
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.provisioning import ProvisioningHandler
-    from app.services.events.handlers.enforcement import EnforcementHandler
+    from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
     dispatcher.register_handler(LifecycleHandler())

@@ -2,8 +2,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
 from app.services.response import ListResponseMixin
 
 

@@ -1,7 +1,6 @@
 """Mock utilities for testing external dependencies."""
 
 from typing import Any
-from unittest.mock import MagicMock
 
 
 class FakeSMTP:
@@ -114,8 +113,7 @@ class FakePyRadClient:
     def SendPacket(self, packet: FakePyRadPacket) -> FakePyRadPacket:
         self.packets_sent.append(packet)
         if self.should_timeout:
-            import socket
-            raise socket.timeout("Connection timed out")
+            raise TimeoutError("Connection timed out")
         response = FakePyRadPacket()
         response.code = self.AccessAccept if self.should_accept else self.AccessReject
         return response

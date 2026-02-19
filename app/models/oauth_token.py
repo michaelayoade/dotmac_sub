@@ -1,9 +1,17 @@
 """OAuth Token model for storing Meta (Facebook/Instagram) and other OAuth tokens."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,12 +75,12 @@ class OAuthToken(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
@@ -82,7 +90,7 @@ class OAuthToken(Base):
         """Check if the access token has expired."""
         if not self.token_expires_at:
             return False
-        return datetime.now(timezone.utc) >= self.token_expires_at
+        return datetime.now(UTC) >= self.token_expires_at
 
     def should_refresh(self, buffer_days: int = 7) -> bool:
         """Check if token should be proactively refreshed.
@@ -97,13 +105,13 @@ class OAuthToken(Base):
         if not self.token_expires_at:
             return False
         buffer = timedelta(days=buffer_days)
-        return datetime.now(timezone.utc) >= (self.token_expires_at - buffer)
+        return datetime.now(UTC) >= (self.token_expires_at - buffer)
 
     def days_until_expiry(self) -> int | None:
         """Return number of days until token expires, or None if no expiry set."""
         if not self.token_expires_at:
             return None
-        delta = self.token_expires_at - datetime.now(timezone.utc)
+        delta = self.token_expires_at - datetime.now(UTC)
         return max(0, delta.days)
 
     def __repr__(self) -> str:

@@ -1,14 +1,18 @@
 """Tests for SNMP service."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.models.snmp import SnmpVersion, SnmpAuthProtocol, SnmpPrivProtocol
+from app.models.snmp import SnmpAuthProtocol, SnmpPrivProtocol, SnmpVersion
 from app.schemas.snmp import (
-    SnmpCredentialCreate, SnmpCredentialUpdate,
-    SnmpTargetCreate, SnmpTargetUpdate,
-    SnmpOidCreate, SnmpOidUpdate,
-    SnmpPollerCreate, SnmpPollerUpdate,
+    SnmpCredentialCreate,
+    SnmpCredentialUpdate,
+    SnmpOidCreate,
+    SnmpOidUpdate,
+    SnmpPollerCreate,
+    SnmpPollerUpdate,
     SnmpReadingCreate,
+    SnmpTargetCreate,
+    SnmpTargetUpdate,
 )
 from app.services import snmp as snmp_service
 
@@ -465,7 +469,7 @@ def test_create_snmp_reading(db_session):
         SnmpReadingCreate(
             poller_id=poller.id,
             value=12345,
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
     assert reading.poller_id == poller.id
@@ -502,7 +506,7 @@ def test_list_snmp_readings_by_poller(db_session):
         SnmpReadingCreate(
             poller_id=poller.id,
             value=100,
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
     snmp_service.snmp_readings.create(
@@ -510,7 +514,7 @@ def test_list_snmp_readings_by_poller(db_session):
         SnmpReadingCreate(
             poller_id=poller.id,
             value=200,
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
 

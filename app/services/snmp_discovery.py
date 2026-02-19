@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+import os
 import re
 import subprocess
-import os
 import time
+from dataclasses import dataclass
 
-from app.models.network_monitoring import DeviceInterface, InterfaceStatus, NetworkDevice
+from app.models.network_monitoring import (
+    DeviceInterface,
+    InterfaceStatus,
+    NetworkDevice,
+)
 
 logger = logging.getLogger(__name__)
 

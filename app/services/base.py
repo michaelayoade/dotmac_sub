@@ -5,14 +5,13 @@ inherited by specific services to reduce code duplication and ensure
 consistent behavior across the codebase.
 """
 
-from typing import Any, Generic, TypeVar, Type
+from typing import Any, Generic, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.services.common import coerce_uuid
-
 
 T = TypeVar("T")
 
@@ -30,7 +29,7 @@ class BaseCRUDService(Generic[T]):
         id_field: Name of the ID field (default: 'id')
     """
 
-    model_class: Type[T]
+    model_class: type[T]
     not_found_message: str = "Resource not found"
     id_field: str = "id"
 

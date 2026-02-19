@@ -1,24 +1,23 @@
 """Pydantic schemas for contract signatures."""
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class ContractSignatureCreate(BaseModel):
     """Schema for creating a contract signature."""
 
     account_id: UUID
-    service_order_id: Optional[UUID] = None
-    document_id: Optional[UUID] = None
+    service_order_id: UUID | None = None
+    document_id: UUID | None = None
     signer_name: str = Field(..., min_length=1, max_length=200)
     signer_email: EmailStr
     ip_address: str = Field(..., min_length=1, max_length=45)
-    user_agent: Optional[str] = Field(None, max_length=500)
+    user_agent: str | None = Field(None, max_length=500)
     agreement_text: str = Field(..., min_length=1)
-    signed_at: Optional[datetime] = None  # Defaults to now if not provided
+    signed_at: datetime | None = None  # Defaults to now if not provided
 
 
 class ContractSignatureRead(BaseModel):
@@ -26,13 +25,13 @@ class ContractSignatureRead(BaseModel):
 
     id: UUID
     account_id: UUID
-    service_order_id: Optional[UUID]
-    document_id: Optional[UUID]
+    service_order_id: UUID | None
+    document_id: UUID | None
     signer_name: str
     signer_email: str
     signed_at: datetime
     ip_address: str
-    user_agent: Optional[str]
+    user_agent: str | None
     agreement_text: str
     is_active: bool
     created_at: datetime

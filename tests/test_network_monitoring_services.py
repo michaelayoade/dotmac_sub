@@ -1,16 +1,17 @@
 """Tests for network monitoring service."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.models.network_monitoring import MetricType, AlertStatus, AlertSeverity
+from app.models.network_monitoring import AlertSeverity, AlertStatus, MetricType
 from app.schemas.network_monitoring import (
-    PopSiteCreate, PopSiteUpdate,
-    NetworkDeviceCreate, NetworkDeviceUpdate,
-    DeviceInterfaceCreate,
-    DeviceMetricCreate,
-    AlertRuleCreate,
     AlertAcknowledgeRequest,
     AlertResolveRequest,
+    AlertRuleCreate,
+    DeviceInterfaceCreate,
+    DeviceMetricCreate,
+    NetworkDeviceCreate,
+    PopSiteCreate,
+    PopSiteUpdate,
 )
 from app.services import network_monitoring as monitoring_service
 
@@ -127,7 +128,7 @@ def test_create_device_interface(db_session, network_device):
 
 def test_create_device_metric(db_session, network_device):
     """Test creating a device metric."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     metric = monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(
@@ -174,7 +175,7 @@ def test_alert_triggered_by_metric(db_session, network_device):
     )
 
     # Create a metric that violates the rule
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(
@@ -215,7 +216,7 @@ def test_alert_acknowledge(db_session, network_device):
             device_id=network_device.id,
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(
@@ -264,7 +265,7 @@ def test_alert_resolve(db_session, network_device):
             device_id=network_device.id,
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(
@@ -313,7 +314,7 @@ def test_list_alerts_by_status(db_session, network_device):
             device_id=network_device.id,
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(
@@ -352,7 +353,7 @@ def test_list_alerts_by_severity(db_session, network_device):
             device_id=network_device.id,
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     monitoring_service.device_metrics.create(
         db_session,
         DeviceMetricCreate(

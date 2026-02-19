@@ -1,15 +1,11 @@
 """Tests for GIS sync services."""
 
-import uuid
 from unittest.mock import MagicMock
-
-import pytest
 
 from app.models.gis import GeoLocation, GeoLocationType
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address
 from app.services import gis_sync
-
 
 # =============================================================================
 # Helper Function Tests

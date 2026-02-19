@@ -2,14 +2,13 @@
 
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from app.services import auth_dependencies
-
 
 # =============================================================================
 # Helper Function Tests
@@ -72,14 +71,14 @@ class TestAsUtc:
         """Test with naive datetime."""
         naive = datetime(2024, 1, 15, 12, 0, 0)
         result = auth_dependencies._as_utc(naive)
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
         assert result.year == 2024
         assert result.month == 1
         assert result.day == 15
 
     def test_aware_datetime(self):
         """Test with already aware datetime."""
-        aware = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        aware = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
         result = auth_dependencies._as_utc(aware)
         assert result is aware
 
@@ -189,9 +188,10 @@ class TestRequireAuditAuth:
 
     def test_jwt_without_audit_scope(self, db_session, person):
         """Test with JWT that lacks audit scope."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"jwt-token").hexdigest()
 
         auth_session = AuthSession(
@@ -224,9 +224,10 @@ class TestRequireAuditAuth:
 
     def test_jwt_with_audit_scope_success(self, db_session, person):
         """Test with valid JWT that has audit scope."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"jwt-token").hexdigest()
 
         auth_session = AuthSession(
@@ -282,9 +283,10 @@ class TestRequireAuditAuth:
 
     def test_jwt_session_revoked(self, db_session, person):
         """Test with revoked session."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"jwt-token").hexdigest()
 
         auth_session = AuthSession(
@@ -316,9 +318,10 @@ class TestRequireAuditAuth:
 
     def test_jwt_session_expired(self, db_session, person):
         """Test with expired session."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         expired_at = now_naive - timedelta(hours=1)  # Already expired
         token_hash = hashlib.sha256(b"jwt-token").hexdigest()
 
@@ -372,10 +375,11 @@ class TestRequireAuditAuth:
 
     def test_session_token_valid(self, db_session, person):
         """Test with valid session token (non-JWT)."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
         session_token = "plain-session-token"
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         with patch.object(auth_dependencies, "hash_session_token") as mock_hash:
             mock_hash.return_value = "hashed-token"
@@ -404,10 +408,11 @@ class TestRequireAuditAuth:
 
     def test_session_token_expired(self, db_session, person):
         """Test with expired session token."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
         session_token = "plain-session-token"
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         expired_at = now_naive - timedelta(hours=1)
 
         with patch.object(auth_dependencies, "hash_session_token") as mock_hash:
@@ -439,7 +444,7 @@ class TestRequireAuditAuth:
         from app.models.auth import ApiKey
 
         api_key_value = "test-api-key-123"
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
             mock_hash.return_value = "hashed-api-key"
@@ -527,7 +532,7 @@ class TestRequireAuditAuth:
         from app.models.auth import ApiKey
 
         api_key_value = "test-api-key-123"
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         with patch.object(auth_dependencies, "hash_api_key") as mock_hash:
             mock_hash.return_value = "hashed-api-key"
@@ -628,9 +633,10 @@ class TestRequireUserAuth:
 
     def test_session_expired(self, db_session, person):
         """Test with expired session."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         expired_at = now_naive - timedelta(hours=1)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
@@ -660,9 +666,10 @@ class TestRequireUserAuth:
 
     def test_success_with_roles_and_scopes(self, db_session, person):
         """Test successful auth with roles and scopes."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -698,9 +705,10 @@ class TestRequireUserAuth:
 
     def test_success_empty_roles_and_scopes(self, db_session, person):
         """Test successful auth with no roles/scopes."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -739,9 +747,10 @@ class TestRequireRole:
 
     def test_role_in_jwt_payload(self, db_session, person):
         """Test when role is already in JWT payload."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -777,10 +786,11 @@ class TestRequireRole:
 
     def test_role_in_database(self, db_session, person):
         """Test when role is assigned via database."""
-        from app.models.auth import Session as AuthSession, SessionStatus
-        from app.models.rbac import Role, PersonRole
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
+        from app.models.rbac import PersonRole, Role
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -821,9 +831,10 @@ class TestRequireRole:
 
     def test_role_not_found(self, db_session, person):
         """Test when role doesn't exist in database."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -858,10 +869,11 @@ class TestRequireRole:
 
     def test_user_lacks_role(self, db_session, person):
         """Test when user doesn't have required role."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
         from app.models.rbac import Role
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -909,9 +921,10 @@ class TestRequirePermission:
 
     def test_admin_role_grants_any_permission(self, db_session, person):
         """Test admin role grants any permission."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -943,9 +956,10 @@ class TestRequirePermission:
 
     def test_permission_in_scopes(self, db_session, person):
         """Test permission granted via scopes."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -977,10 +991,11 @@ class TestRequirePermission:
 
     def test_permission_via_role_in_database(self, db_session, person):
         """Test permission granted via role-permission link in database."""
-        from app.models.auth import Session as AuthSession, SessionStatus
-        from app.models.rbac import Role, Permission, PersonRole, RolePermission
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
+        from app.models.rbac import Permission, PersonRole, Role, RolePermission
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -1031,9 +1046,10 @@ class TestRequirePermission:
 
     def test_permission_not_found(self, db_session, person):
         """Test when permission doesn't exist."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(
@@ -1069,10 +1085,11 @@ class TestRequirePermission:
 
     def test_user_lacks_permission(self, db_session, person):
         """Test when user doesn't have required permission."""
-        from app.models.auth import Session as AuthSession, SessionStatus
+        from app.models.auth import Session as AuthSession
+        from app.models.auth import SessionStatus
         from app.models.rbac import Permission
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
         token_hash = hashlib.sha256(b"test-token").hexdigest()
 
         auth_session = AuthSession(

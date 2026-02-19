@@ -1,17 +1,18 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.auth import Session as AuthSession, SessionStatus
+import app.services.auth_flow as auth_flow_service
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
-import app.services.auth_flow as auth_flow_service
-from app.services import customer_portal
 from app.services import catalog as catalog_service
+from app.services import customer_portal
 from app.services.common import coerce_uuid
 from app.services.session_store import delete_session, load_session, store_session
 from app.services.settings_spec import resolve_value
@@ -26,7 +27,7 @@ _RESELLER_SESSION_PREFIX = "session:reseller_portal"
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _initials(subscriber: Subscriber) -> str:

@@ -1,6 +1,12 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from app.models.network_monitoring import Alert, AlertRule, MetricType, NetworkDevice, PopSite
+from app.models.network_monitoring import (
+    Alert,
+    AlertRule,
+    MetricType,
+    NetworkDevice,
+    PopSite,
+)
 from app.schemas.network_monitoring import UptimeReportRequest
 from app.services import network_monitoring as monitoring_service
 
@@ -15,7 +21,7 @@ def test_uptime_report_by_device(db_session):
     rule = AlertRule(name="Uptime", metric_type=MetricType.uptime, threshold=0)
     db_session.add(rule)
     db_session.flush()
-    period_start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    period_start = datetime(2024, 1, 1, tzinfo=UTC)
     period_end = period_start + timedelta(hours=1)
     alert = Alert(
         rule_id=rule.id,

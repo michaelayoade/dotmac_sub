@@ -7,9 +7,8 @@ and billing reporting.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import patch
 from typing import cast
 
 import pytest
@@ -21,18 +20,13 @@ from app.models.billing import (
     BillingRunStatus,
     CollectionAccountType,
     Invoice,
-    InvoiceLine,
     InvoiceStatus,
-    LedgerEntry,
     LedgerEntryType,
     LedgerSource,
-    Payment,
-    PaymentAllocation,
     PaymentChannelType,
     PaymentProviderType,
     PaymentStatus,
     TaxApplication,
-    TaxRate,
 )
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
@@ -47,7 +41,6 @@ from app.schemas.billing import (
     LedgerEntryCreate,
     LedgerEntryUpdate,
     PaymentAllocationApply,
-    PaymentAllocationCreate,
     PaymentChannelCreate,
     PaymentChannelUpdate,
     PaymentCreate,
@@ -66,7 +59,6 @@ from app.services.billing._common import (
 )
 from app.services.billing.configuration import _parse_bool, _parse_json
 from app.services.billing.reporting import BillingReporting
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1492,9 +1484,9 @@ class TestBillingRun:
 
     def test_get_billing_run(self, db_session):
         run = BillingRun(
-            run_at=datetime.now(timezone.utc),
+            run_at=datetime.now(UTC),
             status=BillingRunStatus.success,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db_session.add(run)
         db_session.commit()
@@ -1506,9 +1498,9 @@ class TestBillingRun:
 
     def test_list_billing_runs_filter_by_status(self, db_session):
         run = BillingRun(
-            run_at=datetime.now(timezone.utc),
+            run_at=datetime.now(UTC),
             status=BillingRunStatus.success,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         db_session.add(run)
         db_session.commit()

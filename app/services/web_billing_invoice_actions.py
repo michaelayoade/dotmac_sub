@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def html_notice(message: str) -> str:
@@ -27,4 +27,4 @@ def void_message(invoice_id) -> str:
 
 
 def batch_today_str() -> str:
-    return datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+    return datetime.now(UTC).date().strftime("%Y-%m-%d")

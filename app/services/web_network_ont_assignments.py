@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -105,7 +105,7 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
             if values.get("service_address_id")
             else None
         ),
-        assigned_at=datetime.now(timezone.utc),
+        assigned_at=datetime.now(UTC),
         active=True,
         notes=str(values.get("notes")) if values.get("notes") else None,
     )

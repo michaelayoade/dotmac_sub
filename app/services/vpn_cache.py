@@ -10,11 +10,11 @@ Caching reduces database load and speeds up configuration downloads.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from app.models.domain_settings import SettingDomain
 from app.services.settings_spec import resolve_value

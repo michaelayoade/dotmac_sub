@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,7 @@ def create_api_key(
     expires_at = None
     if expires_in:
         days = int(expires_in)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+        expires_at = datetime.now(UTC) + timedelta(days=days)
 
     api_key = ApiKey(
         subscriber_id=coerce_uuid(subscriber_id),

@@ -1,17 +1,14 @@
 """Tests for avatar services."""
 
 import asyncio
-import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, UploadFile
 
 from app.services import avatar
-
 
 # =============================================================================
 # Helper Function Tests

@@ -7,7 +7,7 @@ using VictoriaMetrics' Prometheus-compatible API.
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import httpx
@@ -216,7 +216,7 @@ class MetricsStore:
             for result in data.get("data", {}).get("result", []):
                 values = [
                     TimeSeriesPoint(
-                        timestamp=datetime.fromtimestamp(ts, tz=timezone.utc),
+                        timestamp=datetime.fromtimestamp(ts, tz=UTC),
                         value=float(val),
                     )
                     for ts, val in result.get("values", [])

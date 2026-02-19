@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,7 +43,6 @@ from app.services.wireguard_crypto import (
     validate_key,
     verify_token,
 )
-
 
 # ============================================================================
 # Helpers
@@ -643,7 +642,7 @@ class TestWireGuardPeerService:
             db_session, peer.id, expires_in_hours=48
         )
         assert len(token) > 0
-        assert expires_at > datetime.now(timezone.utc)
+        assert expires_at > datetime.now(UTC)
 
     @patch("app.services.wireguard.WireGuardPeerService._auto_deploy")
     def test_verify_provision_token_valid(self, mock_deploy, db_session):
@@ -673,7 +672,7 @@ class TestWireGuardPeerService:
         peer = _make_peer(db_session, server, name=f"exp-{uuid.uuid4().hex[:8]}")
         token = generate_provision_token()
         peer.provision_token_hash = hash_token(token)
-        peer.provision_token_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        peer.provision_token_expires_at = datetime.now(UTC) - timedelta(hours=1)
         db_session.commit()
 
         result = WireGuardPeerService.verify_provision_token(db_session, token)
@@ -735,7 +734,7 @@ class TestWireGuardPeerService:
         # Set up a valid provision token
         token = generate_provision_token()
         peer.provision_token_hash = hash_token(token)
-        peer.provision_token_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        peer.provision_token_expires_at = datetime.now(UTC) + timedelta(hours=24)
         db_session.commit()
 
         # Device generates its own keypair
@@ -842,7 +841,7 @@ class TestConnectionLogService:
         # Create an old log entry manually
         old_log = WireGuardConnectionLog(
             peer_id=peer.id,
-            connected_at=datetime.now(timezone.utc) - timedelta(days=100),
+            connected_at=datetime.now(UTC) - timedelta(days=100),
             endpoint_ip="9.9.9.9",
             peer_address="10.10.0.2",
         )
@@ -1193,8 +1192,9 @@ class TestVpnRouting:
         assert changed is False
 
     def test_blocked_lan_subnet(self):
-        from app.services.vpn_routing import _is_blocked_lan_subnet
         from ipaddress import ip_network
+
+        from app.services.vpn_routing import _is_blocked_lan_subnet
 
         # Default blocked is 172.20.0.0/16
         assert _is_blocked_lan_subnet(ip_network("172.20.1.0/24")) is True

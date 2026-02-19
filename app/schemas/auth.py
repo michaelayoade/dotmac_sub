@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    model_validator,
+)
 
 from app.models.auth import AuthProvider, MFAMethodType, SessionStatus
 
@@ -25,7 +32,7 @@ class UserCredentialCreate(UserCredentialBase):
     password_hash: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
-    def _validate_local_credentials(self) -> "UserCredentialCreate":
+    def _validate_local_credentials(self) -> UserCredentialCreate:
         if self.provider == AuthProvider.local:
             if not self.username or not self.password_hash:
                 raise ValueError("Local credentials require username and password_hash.")
@@ -48,7 +55,7 @@ class UserCredentialUpdate(BaseModel):
     is_active: bool | None = None
 
     @model_validator(mode="after")
-    def _validate_local_credentials(self) -> "UserCredentialUpdate":
+    def _validate_local_credentials(self) -> UserCredentialUpdate:
         fields_set = self.model_fields_set
         if "provider" in fields_set and self.provider == AuthProvider.local:
             if "username" not in fields_set or not self.username:

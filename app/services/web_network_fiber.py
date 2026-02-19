@@ -6,10 +6,10 @@ import heapq
 import json
 import math
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func
+from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -29,7 +29,6 @@ from app.models.network import (
 from app.models.subscriber import Address, Subscriber
 from app.services import fiber_change_requests as change_request_service
 from app.services import settings_spec
-from sqlalchemy.inspection import inspect
 
 
 def _coerce_float(value: object, default: float) -> float:

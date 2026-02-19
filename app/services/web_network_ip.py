@@ -6,8 +6,8 @@ from pydantic import ValidationError
 
 from app.models.network import IPv4Address, IPv6Address
 from app.schemas.network import IpBlockCreate, IpPoolCreate, IpPoolUpdate
-from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services import network as network_service
+from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
 
 

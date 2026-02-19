@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import UTC, datetime
 
 import pyotp
 import pytest
@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from jose import jwt
 from starlette.requests import Request
 
-from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, Session as AuthSession, SessionStatus, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, UserCredential
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.auth_flow import LogoutResponse, TokenResponse
@@ -113,7 +113,7 @@ def test_setting_value_empty_text(db_session):
 
 
 def test_as_utc_and_ttl_defaults(monkeypatch):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert auth_flow_service._as_utc(now) == now
     monkeypatch.delenv("JWT_ACCESS_TTL_MINUTES", raising=False)
     monkeypatch.delenv("JWT_REFRESH_TTL_DAYS", raising=False)
@@ -253,7 +253,7 @@ def test_response_cookie_helpers(monkeypatch):
     assert "refresh_token=" in response.headers.get("set-cookie", "")
 
     cleared = auth_flow_service.AuthFlow._response_clear_refresh_cookie(
-        None, {"revoked_at": datetime.now(timezone.utc)}, LogoutResponse
+        None, {"revoked_at": datetime.now(UTC)}, LogoutResponse
     )
     assert "refresh_token=" in cleared.headers.get("set-cookie", "")
 

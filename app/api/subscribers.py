@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
-from app.schemas.common import ListResponse
 
 from app.db import get_db
-from app.services.auth_dependencies import require_permission
+from app.schemas.common import ListResponse
 from app.schemas.subscriber import (
     AddressCreate,
     AddressRead,
@@ -22,6 +21,7 @@ from app.schemas.subscriber import (
     SubscriberUpdate,
 )
 from app.services import subscriber as subscriber_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 

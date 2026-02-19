@@ -10,12 +10,12 @@ For new code, prefer importing from the package:
 
 # Re-export everything from the package for backwards compatibility
 from app.services.collections._core import (
-    DunningCases,
     DunningActionLogs,
+    DunningCases,
     DunningWorkflow,
     PrepaidEnforcement,
-    dunning_cases,
     dunning_action_logs,
+    dunning_cases,
     dunning_workflow,
     prepaid_enforcement,
     restore_account_services,

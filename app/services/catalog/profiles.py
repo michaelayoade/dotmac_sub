@@ -6,14 +6,14 @@ Provides services for RegionZones, UsageAllowances, and SlaProfiles.
 from sqlalchemy.orm import Session
 
 from app.models.catalog import RegionZone, SlaProfile, UsageAllowance
-from app.services.common import apply_ordering, apply_pagination
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_active_state
 from app.schemas.catalog import (
     RegionZoneUpdate,
     SlaProfileUpdate,
     UsageAllowanceUpdate,
 )
+from app.services.common import apply_ordering, apply_pagination
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state
 
 
 class RegionZones(CRUDManager[RegionZone]):

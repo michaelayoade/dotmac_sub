@@ -9,7 +9,6 @@ Covers CRUD operations and utility functions for:
 """
 
 import uuid
-from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -20,17 +19,17 @@ from app.schemas.catalog import NasDeviceCreate, NasDeviceUpdate
 from app.schemas.network import (
     CPEDeviceCreate,
     CPEDeviceUpdate,
+    IpPoolCreate,
+    IpPoolUpdate,
     IPv4AddressCreate,
     IPv4AddressUpdate,
     IPv6AddressCreate,
     IPv6AddressUpdate,
-    IpPoolCreate,
-    IpPoolUpdate,
-    OLTDeviceCreate,
-    OLTDeviceUpdate,
     OltCardCreate,
     OltCardPortCreate,
     OltCardUpdate,
+    OLTDeviceCreate,
+    OLTDeviceUpdate,
     OltPowerUnitCreate,
     OltPowerUnitUpdate,
     OltSfpModuleCreate,
@@ -53,7 +52,6 @@ from app.schemas.network import (
 from app.services import nas as nas_service
 from app.services import network as network_service
 from app.services.nas import _redact_sensitive
-
 
 # =============================================================================
 # CPE Device CRUD Tests

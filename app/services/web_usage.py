@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -201,12 +201,12 @@ def get_rating_runs_page_data(
         .limit(per_page)
     ).scalars().all()
 
-    now = datetime.now(timezone.utc)
-    default_period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    now = datetime.now(UTC)
+    default_period_start = datetime(now.year, now.month, 1, tzinfo=UTC)
     if now.month == 12:
-        default_period_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        default_period_end = datetime(now.year + 1, 1, 1, tzinfo=UTC)
     else:
-        default_period_end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        default_period_end = datetime(now.year, now.month + 1, 1, tzinfo=UTC)
 
     return {
         "runs": runs,

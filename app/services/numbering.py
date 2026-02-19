@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
-from app.models.sequence import DocumentSequence
 from app.models.domain_settings import SettingDomain
+from app.models.sequence import DocumentSequence
 from app.services import settings_spec
 
 

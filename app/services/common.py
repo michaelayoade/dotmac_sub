@@ -12,8 +12,8 @@ This module provides reusable utilities for:
 from __future__ import annotations
 
 import uuid
-from decimal import Decimal, ROUND_HALF_UP
-from typing import TYPE_CHECKING, Any, TypeVar
+from decimal import ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING, TypeVar
 
 from fastapi import HTTPException
 
@@ -112,7 +112,7 @@ def apply_is_active_filter(query, model, is_active: bool | None):
     return query.filter(model.is_active == is_active)
 
 
-def get_or_404(db: "Session", model: type[T], id: str, detail: str | None = None, **options) -> T:
+def get_or_404(db: Session, model: type[T], id: str, detail: str | None = None, **options) -> T:
     """Get entity by ID or raise 404.
 
     Args:
@@ -137,7 +137,7 @@ def get_or_404(db: "Session", model: type[T], id: str, detail: str | None = None
     return entity
 
 
-def get_by_id(db: "Session", model: type[T], value, **kwargs) -> T | None:
+def get_by_id(db: Session, model: type[T], value, **kwargs) -> T | None:
     """Get entity by ID, returning None if not found or value is None.
 
     Args:
@@ -154,7 +154,7 @@ def get_by_id(db: "Session", model: type[T], value, **kwargs) -> T | None:
     return db.get(model, coerce_uuid(value), **kwargs)
 
 
-def ensure_exists(db: "Session", model: type[T], id: str, detail: str) -> T:
+def ensure_exists(db: Session, model: type[T], id: str, detail: str) -> T:
     """Ensure entity exists, raise 404 if not.
 
     Args:

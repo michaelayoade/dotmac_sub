@@ -14,15 +14,15 @@ from app.models.catalog import (
     SuspensionAction,
 )
 from app.models.domain_settings import SettingDomain
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.response import ListResponseMixin
-from app.services import settings_spec
 from app.schemas.catalog import (
     PolicyDunningStepCreate,
     PolicyDunningStepUpdate,
     PolicySetCreate,
     PolicySetUpdate,
 )
+from app.services import settings_spec
+from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.response import ListResponseMixin
 
 
 class PolicySets(ListResponseMixin):

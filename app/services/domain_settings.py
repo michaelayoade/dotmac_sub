@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingCreate, DomainSettingUpdate
-from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+)
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 

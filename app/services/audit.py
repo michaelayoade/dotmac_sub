@@ -1,9 +1,9 @@
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditEvent, AuditActorType
+from app.models.audit import AuditActorType, AuditEvent
 from app.schemas.audit import AuditEventCreate
-from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 
 

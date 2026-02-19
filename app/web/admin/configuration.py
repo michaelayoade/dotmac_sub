@@ -13,7 +13,7 @@ router = APIRouter(prefix="/configuration", tags=["web-admin-configuration"])
 
 
 def _base_context(request: Request, db: Session, active_page: str):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
         "request": request,

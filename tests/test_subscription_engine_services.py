@@ -7,13 +7,12 @@ from fastapi import HTTPException
 
 from app.schemas.subscription_engine import (
     SubscriptionEngineCreate,
-    SubscriptionEngineUpdate,
     SubscriptionEngineSettingCreate,
     SubscriptionEngineSettingUpdate,
+    SubscriptionEngineUpdate,
 )
 from app.services import subscription_engine
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-
+from app.services.common import apply_ordering
 
 # =============================================================================
 # Helper Functions Tests

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.schemas.comms import (
     CustomerNotificationCreate,
@@ -14,7 +14,7 @@ def test_eta_and_survey(db_session, work_order, ticket):
         db_session,
         EtaUpdateCreate(
             work_order_id=work_order.id,
-            eta_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            eta_at=datetime(2099, 1, 1, tzinfo=UTC),
         ),
     )
     assert eta.work_order_id == work_order.id

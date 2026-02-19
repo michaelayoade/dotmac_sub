@@ -1,7 +1,7 @@
 """Tests for qualification service."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -35,7 +35,6 @@ from app.schemas.qualification import (
 )
 from app.services import qualification as qualification_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-
 
 # Valid polygon for testing (simple square)
 VALID_POLYGON = {
@@ -1164,7 +1163,7 @@ class TestBuildoutRequestsApprove:
         db_session.commit()
 
         payload = BuildoutApproveRequest(
-            target_ready_date=datetime.now(timezone.utc) + timedelta(days=30),
+            target_ready_date=datetime.now(UTC) + timedelta(days=30),
             notes="Approved for buildout",
         )
         result = qualification_service.buildout_requests.approve(db_session, str(request.id), payload)

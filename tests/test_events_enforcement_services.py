@@ -14,18 +14,13 @@ Covers:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
 from app.models.provisioning import ProvisioningVendor
-from app.services.events.types import (
-    Event,
-    EventType,
-    SUBSCRIPTION_LIFECYCLE_MAP,
-)
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -38,14 +33,18 @@ from app.services.events.handlers.webhook import (
     EVENT_TYPE_TO_WEBHOOK,
     WebhookHandler,
 )
+from app.services.events.types import (
+    SUBSCRIPTION_LIFECYCLE_MAP,
+    Event,
+    EventType,
+)
 from app.services.provisioning_adapters import (
     ProvisioningResult,
     StubProvisioner,
+    _resolve_connection,
     get_provisioner,
     register_provisioner,
-    _resolve_connection,
 )
-
 
 # ---------------------------------------------------------------------------
 # EventType enum tests
@@ -1046,8 +1045,8 @@ class TestEnforcementServiceHelpers:
         assert result is False
 
     def test_setting_bool_true_values(self, monkeypatch):
-        from app.services.enforcement import _setting_bool
         from app.models.domain_settings import SettingDomain
+        from app.services.enforcement import _setting_bool
 
         monkeypatch.setattr(
             "app.services.enforcement.settings_spec.resolve_value",
@@ -1056,8 +1055,8 @@ class TestEnforcementServiceHelpers:
         assert _setting_bool(None, SettingDomain.radius, "test", False) is True
 
     def test_setting_bool_false_values(self, monkeypatch):
-        from app.services.enforcement import _setting_bool
         from app.models.domain_settings import SettingDomain
+        from app.services.enforcement import _setting_bool
 
         monkeypatch.setattr(
             "app.services.enforcement.settings_spec.resolve_value",
@@ -1066,8 +1065,8 @@ class TestEnforcementServiceHelpers:
         assert _setting_bool(None, SettingDomain.radius, "test", True) is False
 
     def test_setting_bool_none_uses_default(self, monkeypatch):
-        from app.services.enforcement import _setting_bool
         from app.models.domain_settings import SettingDomain
+        from app.services.enforcement import _setting_bool
 
         monkeypatch.setattr(
             "app.services.enforcement.settings_spec.resolve_value",
@@ -1077,8 +1076,8 @@ class TestEnforcementServiceHelpers:
         assert _setting_bool(None, SettingDomain.radius, "test", False) is False
 
     def test_setting_bool_with_actual_bool(self, monkeypatch):
-        from app.services.enforcement import _setting_bool
         from app.models.domain_settings import SettingDomain
+        from app.services.enforcement import _setting_bool
 
         monkeypatch.setattr(
             "app.services.enforcement.settings_spec.resolve_value",

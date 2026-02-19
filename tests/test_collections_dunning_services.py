@@ -1,11 +1,12 @@
 """Tests for collections and dunning service."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.models.collections import DunningCase, DunningCaseStatus, DunningAction
+from app.models.collections import DunningAction, DunningCase, DunningCaseStatus
 from app.schemas.collections import (
-    DunningCaseCreate, DunningCaseUpdate,
     DunningActionLogCreate,
+    DunningCaseCreate,
+    DunningCaseUpdate,
 )
 from app.services import collections as collections_service
 
@@ -50,7 +51,7 @@ def test_dunning_case_status_transitions(db_session, subscriber_account):
         str(case.id),
         DunningCaseUpdate(
             status=DunningCaseStatus.resolved,
-            resolved_at=datetime.now(timezone.utc),
+            resolved_at=datetime.now(UTC),
         ),
     )
     assert resolved.status == DunningCaseStatus.resolved
@@ -221,7 +222,7 @@ def test_dunning_case_resolution(db_session, subscriber_account):
         str(case.id),
         DunningCaseUpdate(
             status=DunningCaseStatus.resolved,
-            resolved_at=datetime.now(timezone.utc),
+            resolved_at=datetime.now(UTC),
             notes="Payment received",
         ),
     )

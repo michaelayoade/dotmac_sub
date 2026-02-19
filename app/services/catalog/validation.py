@@ -1,7 +1,7 @@
 """Offer validation service."""
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -16,13 +16,13 @@ from app.models.catalog import (
     OfferVersionPrice,
     PriceType,
 )
-from app.services.response import ListResponseMixin
-from app.validators import catalog as catalog_validators
 from app.schemas.catalog import (
     OfferValidationPrice,
     OfferValidationRequest,
     OfferValidationResponse,
 )
+from app.services.response import ListResponseMixin
+from app.validators import catalog as catalog_validators
 
 
 class OfferValidation(ListResponseMixin):
@@ -41,7 +41,7 @@ class OfferValidation(ListResponseMixin):
                     db,
                     str(payload.offer_version_id),
                     str(payload.offer_id),
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                 )
             except HTTPException as exc:
                 errors.append(str(exc.detail))

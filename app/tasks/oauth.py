@@ -3,9 +3,8 @@
 Handles automatic refresh of expiring OAuth tokens to maintain integrations.
 """
 
-import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -37,7 +36,7 @@ def refresh_expiring_tokens(buffer_days: int = 7):
 
     try:
         # Find tokens expiring within buffer period
-        expiry_threshold = datetime.now(timezone.utc) + timedelta(days=buffer_days)
+        expiry_threshold = datetime.now(UTC) + timedelta(days=buffer_days)
 
         expiring_tokens = (
             session.query(OAuthToken)
@@ -109,6 +108,7 @@ def _refresh_meta_token(session, token: OAuthToken) -> None:
         Exception: If API call fails
     """
     import asyncio
+
     from app.services import meta_oauth
 
     # Get settings from database (falls back to env vars)
@@ -139,7 +139,7 @@ def _refresh_meta_token(session, token: OAuthToken) -> None:
     # Update token with new values
     token.access_token = result.get("access_token")
     token.token_expires_at = result.get("expires_at")
-    token.last_refreshed_at = datetime.now(timezone.utc)
+    token.last_refreshed_at = datetime.now(UTC)
     token.refresh_error = None
 
     session.commit()
@@ -159,7 +159,7 @@ def check_token_health():
     session = SessionLocal()
 
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Count tokens by status
         total = session.query(OAuthToken).filter(OAuthToken.is_active.is_(True)).count()

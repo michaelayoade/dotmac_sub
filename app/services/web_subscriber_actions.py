@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -30,17 +29,17 @@ def deactivate_subscriber(db: Session, subscriber_id: UUID):
 def create_subscriber_from_form(
     db: Session,
     *,
-    customer_ref: Optional[str],
-    customer_search: Optional[str],
-    subscriber_type: Optional[str],
-    person_id: Optional[str],
-    organization_id: Optional[str],
-    subscriber_number: Optional[str],
-    notes: Optional[str],
-    is_active: Optional[str],
-    create_user: Optional[str],
-    user_username: Optional[str],
-    user_password: Optional[str],
+    customer_ref: str | None,
+    customer_search: str | None,
+    subscriber_type: str | None,
+    person_id: str | None,
+    organization_id: str | None,
+    subscriber_number: str | None,
+    notes: str | None,
+    is_active: str | None,
+    create_user: str | None,
+    user_username: str | None,
+    user_password: str | None,
 ):
     resolved_type, person_uuid, org_uuid = resolve_form_customer_ids(
         db=db,
@@ -68,16 +67,16 @@ def create_subscriber_from_form(
 
 def build_subscriber_create_form_values(
     *,
-    customer_ref: Optional[str],
-    customer_search: Optional[str],
-    subscriber_type: Optional[str],
-    person_id: Optional[str],
-    organization_id: Optional[str],
-    subscriber_number: Optional[str],
-    notes: Optional[str],
-    is_active: Optional[str],
-    create_user: Optional[str],
-    user_username: Optional[str],
+    customer_ref: str | None,
+    customer_search: str | None,
+    subscriber_type: str | None,
+    person_id: str | None,
+    organization_id: str | None,
+    subscriber_number: str | None,
+    notes: str | None,
+    is_active: str | None,
+    create_user: str | None,
+    user_username: str | None,
 ) -> dict:
     return {
         "customer_ref": customer_ref or "",
@@ -97,14 +96,14 @@ def update_subscriber_from_form(
     db: Session,
     *,
     subscriber_id: UUID,
-    customer_ref: Optional[str],
-    customer_search: Optional[str],
-    subscriber_type: Optional[str],
-    person_id: Optional[str],
-    organization_id: Optional[str],
-    subscriber_number: Optional[str],
-    notes: Optional[str],
-    is_active: Optional[str],
+    customer_ref: str | None,
+    customer_search: str | None,
+    subscriber_type: str | None,
+    person_id: str | None,
+    organization_id: str | None,
+    subscriber_number: str | None,
+    notes: str | None,
+    is_active: str | None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
     resolved_type, _, org_uuid = resolve_form_customer_ids(

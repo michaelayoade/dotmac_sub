@@ -1,11 +1,18 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
-from app.models.auth import ApiKey, Session as AuthSession, SessionStatus
-from app.models.rbac import Permission, SubscriberPermission, SubscriberRole, Role, RolePermission
+from app.models.auth import ApiKey, SessionStatus
+from app.models.auth import Session as AuthSession
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    SubscriberPermission,
+    SubscriberRole,
+)
 from app.services.auth import hash_api_key
 from app.services.auth_flow import decode_access_token, hash_session_token
 
@@ -23,7 +30,7 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -62,7 +69,7 @@ def require_audit_auth(
     db: Session = Depends(_get_db),
 ):
     token = _extract_bearer_token(authorization) or x_session_token
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if token:
         if _is_jwt(token):
             payload = decode_access_token(db, token)
@@ -129,7 +136,7 @@ def require_user_auth(
     if not subscriber_id or not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)

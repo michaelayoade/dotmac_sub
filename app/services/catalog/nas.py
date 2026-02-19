@@ -5,10 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, NasDeviceStatus, NasVendor
 from app.models.domain_settings import SettingDomain
+from app.schemas.catalog import NasDeviceCreate, NasDeviceUpdate
+from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.response import ListResponseMixin
-from app.services import settings_spec
-from app.schemas.catalog import NasDeviceCreate, NasDeviceUpdate
 
 
 class NasDevices(ListResponseMixin):

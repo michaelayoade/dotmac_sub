@@ -3,9 +3,9 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
-from app.web.customer.routes import router as portal_router
 from app.web.customer.auth import router as auth_router
 from app.web.customer.contracts import router as contracts_router
+from app.web.customer.routes import router as portal_router
 
 router = APIRouter()
 

@@ -1,7 +1,8 @@
 """CSRF protection utilities using double-submit cookie pattern."""
 
 import secrets
-from fastapi import Request, HTTPException
+
+from fastapi import HTTPException, Request
 from starlette.responses import Response
 
 CSRF_TOKEN_NAME = "csrf_token"

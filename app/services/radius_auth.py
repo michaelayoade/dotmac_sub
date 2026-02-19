@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import socket
-
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
-
-from app.models.radius import RadiusServer
-from app.models.domain_settings import DomainSetting, SettingDomain
 from pyrad.client import Client
 from pyrad.dictionary import Dictionary
 from pyrad.packet import AccessRequest
+from sqlalchemy.orm import Session
+
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.radius import RadiusServer
 
 
 def _setting_value(db: Session, key: str) -> str | None:
@@ -65,7 +63,7 @@ def authenticate(
     req["User-Password"] = req.PwCrypt(password)
     try:
         reply = client.SendPacket(req)
-    except socket.timeout as exc:
+    except TimeoutError as exc:
         raise HTTPException(status_code=502, detail="Radius auth timeout") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Radius auth failed") from exc

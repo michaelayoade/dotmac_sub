@@ -14,7 +14,7 @@ router = APIRouter(prefix="/reports", tags=["web-admin-reports"])
 
 
 def _base_context(request: Request, db: Session, active_page: str, heading: str, description: str):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     return {
         "request": request,
         "active_page": active_page,
@@ -31,7 +31,7 @@ def _base_context(request: Request, db: Session, active_page: str, heading: str,
 
 @router.get("/revenue", response_class=HTMLResponse)
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     report_data = web_reports_service.get_revenue_report_data(db)
 
@@ -65,7 +65,7 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
 
 @router.get("/subscribers", response_class=HTMLResponse)
 def reports_subscribers(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     report_data = web_reports_service.get_subscribers_report_data(db)
 
@@ -100,7 +100,7 @@ def reports_subscribers_export(days: int | None = None, db: Session = Depends(ge
 
 @router.get("/churn", response_class=HTMLResponse)
 def reports_churn(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     report_data = web_reports_service.get_churn_report_data(db)
 
@@ -133,7 +133,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 
 @router.get("/network", response_class=HTMLResponse)
 def reports_network(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     report_data = web_reports_service.get_network_report_data(db=db)
 
@@ -172,7 +172,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 
 @router.get("/technician", response_class=HTMLResponse)
 def reports_technician(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
     report_data = web_reports_service.get_technician_report_data(db)
 
     context = {

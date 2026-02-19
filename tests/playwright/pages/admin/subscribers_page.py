@@ -57,4 +57,4 @@ class SubscribersPage(BasePage):
 
     def expect_page_active(self, page_num: int) -> None:
         """Assert a pagination page is active."""
-        expect(self.page.locator(f"[aria-current='page']").filter(has_text=str(page_num))).to_be_visible()
+        expect(self.page.locator("[aria-current='page']").filter(has_text=str(page_num))).to_be_visible()

@@ -1,12 +1,15 @@
 """Tests for TR-069 service."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.tr069 import Tr069Event, Tr069JobStatus
 from app.schemas.tr069 import (
-    Tr069AcsServerCreate, Tr069AcsServerUpdate,
-    Tr069CpeDeviceCreate, Tr069CpeDeviceUpdate,
-    Tr069JobCreate, Tr069JobUpdate,
+    Tr069AcsServerCreate,
+    Tr069AcsServerUpdate,
+    Tr069CpeDeviceCreate,
+    Tr069CpeDeviceUpdate,
+    Tr069JobCreate,
+    Tr069JobUpdate,
     Tr069ParameterCreate,
     Tr069SessionCreate,
 )
@@ -189,7 +192,7 @@ def test_create_tr069_parameter(db_session, acs_server):
             device_id=device.id,
             name="Device.DeviceInfo.Manufacturer",
             value="TestVendor",
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
         ),
     )
     assert param.device_id == device.id
@@ -206,7 +209,7 @@ def test_list_parameters_by_device(db_session, acs_server):
             serial_number="LIST-PARAM-CPE",
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tr069_service.parameters.create(
         db_session,
         Tr069ParameterCreate(
@@ -252,7 +255,7 @@ def test_create_tr069_session(db_session, acs_server):
         Tr069SessionCreate(
             device_id=device.id,
             event_type=Tr069Event.periodic,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         ),
     )
     assert session.device_id == device.id
@@ -268,7 +271,7 @@ def test_list_sessions_by_device(db_session, acs_server):
             serial_number="LIST-SESS-CPE",
         ),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tr069_service.sessions.create(
         db_session,
         Tr069SessionCreate(

@@ -457,7 +457,7 @@ class SubscriptionUpdate(BaseModel):
     radius_profile_id: UUID | None = None
 
     @model_validator(mode="after")
-    def _validate_status_timestamps(self) -> "SubscriptionUpdate":
+    def _validate_status_timestamps(self) -> SubscriptionUpdate:
         fields_set = self.model_fields_set
         if "status" in fields_set and self.status == SubscriptionStatus.canceled:
             if "canceled_at" not in fields_set or self.canceled_at is None:

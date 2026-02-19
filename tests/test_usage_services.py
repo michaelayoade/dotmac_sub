@@ -1,13 +1,12 @@
 """Tests for usage service."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import uuid
 
-from app.models.usage import UsageSource, AccountingStatus
+from app.models.usage import UsageSource
 from app.schemas.usage import (
-    QuotaBucketCreate, QuotaBucketUpdate,
-    RadiusAccountingSessionCreate,
+    QuotaBucketCreate,
+    QuotaBucketUpdate,
     UsageRecordCreate,
 )
 from app.services import usage as usage_service
@@ -20,8 +19,8 @@ def test_create_quota_bucket(db_session, subscription):
         QuotaBucketCreate(
             subscription_id=subscription.id,
             included_gb=Decimal("100"),
-            period_start=datetime.now(timezone.utc),
-            period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            period_start=datetime.now(UTC),
+            period_end=datetime.now(UTC) + timedelta(days=30),
         ),
     )
     assert bucket.subscription_id == subscription.id
@@ -35,8 +34,8 @@ def test_list_quota_buckets_by_subscription(db_session, subscription):
         QuotaBucketCreate(
             subscription_id=subscription.id,
             included_gb=Decimal("50"),
-            period_start=datetime.now(timezone.utc),
-            period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            period_start=datetime.now(UTC),
+            period_end=datetime.now(UTC) + timedelta(days=30),
         ),
     )
 
@@ -60,8 +59,8 @@ def test_update_quota_bucket_usage(db_session, subscription):
             subscription_id=subscription.id,
             included_gb=Decimal("100"),
             used_gb=Decimal("0"),
-            period_start=datetime.now(timezone.utc),
-            period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            period_start=datetime.now(UTC),
+            period_end=datetime.now(UTC) + timedelta(days=30),
         ),
     )
     updated = usage_service.quota_buckets.update(
@@ -99,7 +98,7 @@ def test_create_usage_record(db_session, subscription):
             input_gb=Decimal("5.25"),
             output_gb=Decimal("1.75"),
             total_gb=Decimal("7.00"),
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
     assert record.subscription_id == subscription.id
@@ -114,7 +113,7 @@ def test_list_usage_records_by_subscription(db_session, subscription):
             subscription_id=subscription.id,
             source=UsageSource.radius,
             input_gb=Decimal("10.0"),
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
     usage_service.usage_records.create(
@@ -123,7 +122,7 @@ def test_list_usage_records_by_subscription(db_session, subscription):
             subscription_id=subscription.id,
             source=UsageSource.snmp,
             input_gb=Decimal("5.0"),
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
 
@@ -150,7 +149,7 @@ def test_usage_record_source_types(db_session, subscription):
                 subscription_id=subscription.id,
                 source=source,
                 input_gb=Decimal("1.0"),
-                recorded_at=datetime.now(timezone.utc),
+                recorded_at=datetime.now(UTC),
             ),
         )
         assert record.source == source
@@ -163,8 +162,8 @@ def test_get_quota_bucket(db_session, subscription):
         QuotaBucketCreate(
             subscription_id=subscription.id,
             included_gb=Decimal("200"),
-            period_start=datetime.now(timezone.utc),
-            period_end=datetime.now(timezone.utc) + timedelta(days=30),
+            period_start=datetime.now(UTC),
+            period_end=datetime.now(UTC) + timedelta(days=30),
         ),
     )
     fetched = usage_service.quota_buckets.get(db_session, str(bucket.id))
@@ -184,7 +183,7 @@ def test_delete_usage_record(db_session, subscription):
             subscription_id=subscription.id,
             source=UsageSource.api,
             input_gb=Decimal("10.0"),
-            recorded_at=datetime.now(timezone.utc),
+            recorded_at=datetime.now(UTC),
         ),
     )
     record_id = record.id

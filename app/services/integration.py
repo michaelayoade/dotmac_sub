@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
-from app.models.connector import ConnectorConfig, ConnectorType
+from app.models.connector import ConnectorConfig
 from app.models.integration import (
     IntegrationJob,
     IntegrationJobType,
@@ -14,14 +14,19 @@ from app.models.integration import (
     IntegrationTarget,
     IntegrationTargetType,
 )
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.response import ListResponseMixin
 from app.schemas.integration import (
     IntegrationJobCreate,
     IntegrationJobUpdate,
     IntegrationTargetCreate,
     IntegrationTargetUpdate,
 )
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 logger = get_logger(__name__)
 
@@ -255,7 +260,7 @@ class IntegrationJobs(ListResponseMixin):
             run.error = str(exc)
             raise
         finally:
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             job.last_run_at = run.finished_at
             db.commit()
             db.refresh(run)

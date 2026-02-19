@@ -14,7 +14,7 @@ Configuration via environment variables or DomainSettings:
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -290,7 +290,7 @@ def send_sms(
     # Update notification status
     if notification:
         notification.status = NotificationStatus.delivered if success else NotificationStatus.failed
-        notification.sent_at = datetime.now(timezone.utc) if success else None
+        notification.sent_at = datetime.now(UTC) if success else None
 
         # Create delivery record
         delivery = NotificationDelivery(
@@ -298,7 +298,7 @@ def send_sms(
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
             status=DeliveryStatus.delivered if success else DeliveryStatus.failed,
-            occurred_at=datetime.now(timezone.utc),
+            occurred_at=datetime.now(UTC),
             external_id=external_id,
             error_message=error_message,
         )

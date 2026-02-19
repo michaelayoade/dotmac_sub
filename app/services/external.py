@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -10,7 +10,12 @@ from app.schemas.external import (
     ExternalReferenceSync,
     ExternalReferenceUpdate,
 )
-from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.response import ListResponseMixin
 
 
@@ -122,12 +127,12 @@ def sync_reference(db: Session, payload: ExternalReferenceSync) -> ExternalRefer
     if ref:
         for key, value in data.items():
             setattr(ref, key, value)
-        ref.last_synced_at = datetime.now(timezone.utc)
+        ref.last_synced_at = datetime.now(UTC)
         db.commit()
         db.refresh(ref)
         return ref
     ref = ExternalReference(**data)
-    ref.last_synced_at = datetime.now(timezone.utc)
+    ref.last_synced_at = datetime.now(UTC)
     db.add(ref)
     db.commit()
     db.refresh(ref)

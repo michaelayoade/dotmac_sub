@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 
-from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource, InvoiceStatus
+from app.models.billing import InvoiceStatus, LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.catalog import BillingMode, DunningAction, SubscriptionStatus
 from app.models.subscriber import AccountStatus
 from app.schemas.billing import InvoiceCreate
@@ -72,7 +72,7 @@ def test_prepaid_enforcement_accounts_for_open_invoice_balance(
             status=InvoiceStatus.issued,
             total=Decimal("4.00"),
             balance_due=Decimal("4.00"),
-            issued_at=datetime.now(timezone.utc),
+            issued_at=datetime.now(UTC),
         ),
     )
     assert invoice.balance_due == Decimal("4.00")
@@ -91,7 +91,7 @@ def test_prepaid_enforcement_accounts_for_open_invoice_balance(
 
     collections_service.prepaid_enforcement.run(
         db_session,
-        PrepaidEnforcementRunRequest(run_at=datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)),
+        PrepaidEnforcementRunRequest(run_at=datetime(2026, 1, 2, 12, 0, tzinfo=UTC)),
     )
 
     db_session.refresh(subscriber_account)

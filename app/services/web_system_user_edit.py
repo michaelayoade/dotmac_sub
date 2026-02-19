@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -138,7 +138,7 @@ def apply_user_edit(
             {
                 "password_hash": hash_password(new_password),
                 "must_change_password": require_password_change,
-                "password_updated_at": datetime.now(timezone.utc),
+                "password_updated_at": datetime.now(UTC),
             }
         )
         if not updated:

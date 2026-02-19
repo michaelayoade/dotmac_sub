@@ -1,6 +1,6 @@
 """Payment provider and event management services."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -16,6 +16,19 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.schemas.billing import (
+    PaymentProviderCreate,
+    PaymentProviderEventIngest,
+    PaymentProviderUpdate,
+)
+from app.services import settings_spec
+from app.services.billing._common import (
+    _resolve_collection_account,
+    _resolve_payment_channel,
+    _validate_account,
+    _validate_invoice_currency,
+    _validate_payment_provider,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -23,20 +36,6 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.response import ListResponseMixin
-from app.services import settings_spec
-from app.schemas.billing import (
-    PaymentProviderCreate,
-    PaymentProviderEventIngest,
-    PaymentProviderUpdate,
-)
-from app.services.billing._common import (
-    _validate_account,
-    _validate_payment_provider,
-    _validate_invoice_currency,
-    _resolve_collection_account,
-    _resolve_payment_channel,
-    _recalculate_invoice_totals,
-)
 
 
 class PaymentProviders(ListResponseMixin):
@@ -271,14 +270,14 @@ class PaymentProviderEvents(ListResponseMixin):
         if new_status and payment:
             Payments.mark_status(db, str(payment.id), new_status)
             event.status = PaymentProviderEventStatus.processed
-            event.processed_at = datetime.now(timezone.utc)
+            event.processed_at = datetime.now(UTC)
         elif new_status and not payment:
             event.status = PaymentProviderEventStatus.failed
             event.error = "Payment not found for event"
-            event.processed_at = datetime.now(timezone.utc)
+            event.processed_at = datetime.now(UTC)
         else:
             event.status = PaymentProviderEventStatus.processed
-            event.processed_at = datetime.now(timezone.utc)
+            event.processed_at = datetime.now(UTC)
         db.commit()
         db.refresh(event)
         return event

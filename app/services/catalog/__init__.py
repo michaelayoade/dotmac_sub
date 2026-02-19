@@ -10,15 +10,24 @@ All existing import patterns are preserved for backward compatibility:
     from app.services.catalog import Offers, offers
 """
 
-from app.services.catalog.offers import Offers, OfferPrices, OfferVersions, OfferVersionPrices
-from app.services.catalog.subscriptions import Subscriptions, SubscriptionAddOns
-from app.services.catalog.add_ons import AddOns, AddOnPrices
-from app.services.catalog.offer_addons import OfferAddOns
-from app.services.catalog.profiles import RegionZones, UsageAllowances, SlaProfiles
-from app.services.catalog.policies import PolicySets, PolicyDunningSteps
-from app.services.catalog.radius import RadiusProfiles, RadiusAttributes, OfferRadiusProfiles
-from app.services.catalog.nas import NasDevices
+from app.services.catalog.add_ons import AddOnPrices, AddOns
 from app.services.catalog.credentials import AccessCredentials
+from app.services.catalog.nas import NasDevices
+from app.services.catalog.offer_addons import OfferAddOns
+from app.services.catalog.offers import (
+    OfferPrices,
+    Offers,
+    OfferVersionPrices,
+    OfferVersions,
+)
+from app.services.catalog.policies import PolicyDunningSteps, PolicySets
+from app.services.catalog.profiles import RegionZones, SlaProfiles, UsageAllowances
+from app.services.catalog.radius import (
+    OfferRadiusProfiles,
+    RadiusAttributes,
+    RadiusProfiles,
+)
+from app.services.catalog.subscriptions import SubscriptionAddOns, Subscriptions
 from app.services.catalog.validation import OfferValidation
 
 # Singleton instances for service access

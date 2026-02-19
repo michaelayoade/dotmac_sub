@@ -3,13 +3,13 @@ from __future__ import annotations
 import os
 import resource
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
 def _read_first_line(path: str) -> str | None:
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.readline().strip()
     except OSError:
         return None
@@ -18,7 +18,7 @@ def _read_first_line(path: str) -> str | None:
 def _parse_meminfo() -> dict[str, int]:
     meminfo = {}
     try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
             for line in handle:
                 if ":" not in line:
                     continue
@@ -59,7 +59,7 @@ def _format_duration(seconds: float | int | None) -> str:
 
 
 def get_system_health() -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     uptime_seconds = None
     uptime_line = _read_first_line("/proc/uptime")

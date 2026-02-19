@@ -6,7 +6,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.logging import get_logger
 from app.websocket.auth import authenticate_websocket
-from app.websocket.events import EventType, InboundMessage, InboundMessageType, WebSocketEvent
+from app.websocket.events import (
+    EventType,
+    InboundMessage,
+    InboundMessageType,
+    WebSocketEvent,
+)
 from app.websocket.manager import get_connection_manager
 
 logger = get_logger(__name__)

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.reseller import (
-    ResellerLoginPage,
-    ResellerDashboardPage,
     ResellerAccountsPage,
+    ResellerDashboardPage,
+    ResellerLoginPage,
 )
 
 

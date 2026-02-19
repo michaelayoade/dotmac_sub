@@ -13,7 +13,7 @@ SRTM_SAMPLES_PER_DEGREE = 3600
 SRTM_VOID_VALUE = -32768
 SRTM_SOURCE = "srtm_30m"
 SRTM_CACHE_SIZE = 1000
-_ELEVATION_CACHE: "OrderedDict[tuple[str, int, int], dict]" = OrderedDict()
+_ELEVATION_CACHE: OrderedDict[tuple[str, int, int], dict] = OrderedDict()
 
 
 def _clamp(value: int, lower: int, upper: int) -> int:

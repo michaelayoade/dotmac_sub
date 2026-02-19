@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
 from app.services.enforcement import (
@@ -15,7 +16,6 @@ from app.services.enforcement import (
 )
 from app.services.events import emit_event
 from app.services.events.types import Event, EventType
-from app.models.catalog import Subscription, SubscriptionStatus
 
 logger = logging.getLogger(__name__)
 

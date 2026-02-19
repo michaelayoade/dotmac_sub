@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_customer_auth as web_customer_auth_service
+
 router = APIRouter(prefix="/portal/auth", tags=["web-customer-auth"])
 
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:

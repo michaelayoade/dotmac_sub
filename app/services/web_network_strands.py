@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
 from typing import cast
+
+from sqlalchemy.orm import Session
 
 from app.schemas.network import FiberStrandCreate, FiberStrandUpdate
 from app.services import network as network_service

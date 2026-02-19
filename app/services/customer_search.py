@@ -1,7 +1,7 @@
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Subscriber, Organization
+from app.models.subscriber import Organization, Subscriber
 from app.services.response import list_response
 
 

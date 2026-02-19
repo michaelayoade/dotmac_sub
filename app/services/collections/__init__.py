@@ -11,14 +11,14 @@ for backwards compatibility.
 
 # Re-export from core module
 from app.services.collections._core import (
+    DunningActionLogs,
     # Classes
     DunningCases,
-    DunningActionLogs,
     DunningWorkflow,
     PrepaidEnforcement,
+    dunning_action_logs,
     # Service instances
     dunning_cases,
-    dunning_action_logs,
     dunning_workflow,
     prepaid_enforcement,
     # Public functions

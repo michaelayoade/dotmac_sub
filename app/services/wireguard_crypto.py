@@ -10,7 +10,6 @@ import base64
 import logging
 import os
 import secrets
-from typing import Any
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization

@@ -3,11 +3,11 @@ from __future__ import annotations
 import builtins
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
-from typing import cast
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
 from app.models.catalog import CatalogOffer, OfferVersion, Subscription, UsageAllowance

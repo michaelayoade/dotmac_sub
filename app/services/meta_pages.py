@@ -10,18 +10,16 @@ Uses the Meta Graph API.
 """
 
 import asyncio
-import httpx
-from typing import Any, Optional, cast
+from typing import Any, cast
 
+import httpx
 from sqlalchemy.orm import Session
 
-from app.logging import get_logger
 from app.config import settings
-from app.services.settings_spec import resolve_value
+from app.logging import get_logger
 from app.models.domain_settings import SettingDomain
-from app.models.connector import ConnectorConfig, ConnectorType
-from app.models.integration import IntegrationTarget, IntegrationTargetType
 from app.models.oauth_token import OAuthToken
+from app.services.settings_spec import resolve_value
 
 logger = get_logger(__name__)
 
@@ -94,7 +92,7 @@ def _get_page_token_record(db: Session, page_id: str) -> OAuthToken | None:
     )
 
 
-def _get_page_token(db: Session, page_id: str) -> Optional[str]:
+def _get_page_token(db: Session, page_id: str) -> str | None:
     token = _get_page_token_record(db, page_id)
     return token.access_token if token else None
 
@@ -117,7 +115,7 @@ def _get_instagram_token_record(db: Session, ig_account_id: str) -> OAuthToken |
     )
 
 
-def _get_instagram_token(db: Session, ig_account_id: str) -> Optional[str]:
+def _get_instagram_token(db: Session, ig_account_id: str) -> str | None:
     token = _get_instagram_token_record(db, ig_account_id)
     return token.access_token if token else None
 
@@ -131,7 +129,7 @@ async def create_page_post(
     db: Session,
     page_id: str,
     message: str,
-    link: Optional[str] = None,
+    link: str | None = None,
     published: bool = True,
 ) -> dict[str, Any]:
     """Create a post on a Facebook Page.
@@ -185,7 +183,7 @@ async def create_page_photo_post(
     db: Session,
     page_id: str,
     photo_url: str,
-    caption: Optional[str] = None,
+    caption: str | None = None,
     published: bool = True,
 ) -> dict[str, Any]:
     """Create a photo post on a Facebook Page.
@@ -357,7 +355,7 @@ async def create_instagram_image_post(
     db: Session,
     ig_account_id: str,
     image_url: str,
-    caption: Optional[str] = None,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     """Create an image post on Instagram.
 
@@ -436,7 +434,7 @@ async def create_instagram_carousel_post(
     db: Session,
     ig_account_id: str,
     media_urls: list[str],
-    caption: Optional[str] = None,
+    caption: str | None = None,
 ) -> dict[str, Any]:
     """Create a carousel (multi-image) post on Instagram.
 

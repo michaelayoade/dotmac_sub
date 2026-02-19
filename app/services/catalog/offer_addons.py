@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import builtins
 import uuid
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.catalog import OfferAddOn, AddOn, CatalogOffer
+from app.models.catalog import AddOn, CatalogOffer, OfferAddOn
 from app.services.common import apply_ordering, apply_pagination
 from app.services.query_builders import apply_optional_equals
 from app.services.response import ListResponseMixin
@@ -25,8 +25,8 @@ class OfferAddOns(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        offer_id: Optional[str] = None,
-        add_on_id: Optional[str] = None,
+        offer_id: str | None = None,
+        add_on_id: str | None = None,
         order_by: str = "add_on_id",
         order_dir: str = "asc",
         limit: int = 100,
@@ -63,7 +63,7 @@ class OfferAddOns(ListResponseMixin):
     @staticmethod
     def get_by_offer_and_addon(
         db: Session, offer_id: str, add_on_id: str
-    ) -> Optional[OfferAddOn]:
+    ) -> OfferAddOn | None:
         """Get a link by offer and addon IDs."""
         return (
             db.query(OfferAddOn)
@@ -78,8 +78,8 @@ class OfferAddOns(ListResponseMixin):
         offer_id: str,
         add_on_id: str,
         is_required: bool = False,
-        min_quantity: Optional[int] = None,
-        max_quantity: Optional[int] = None,
+        min_quantity: int | None = None,
+        max_quantity: int | None = None,
         commit: bool = True,
     ) -> OfferAddOn:
         """Create a new offer-addon link."""
@@ -118,9 +118,9 @@ class OfferAddOns(ListResponseMixin):
     def update(
         db: Session,
         link_id: str,
-        is_required: Optional[bool] = None,
-        min_quantity: Optional[int] = None,
-        max_quantity: Optional[int] = None,
+        is_required: bool | None = None,
+        min_quantity: int | None = None,
+        max_quantity: int | None = None,
         commit: bool = True,
     ) -> OfferAddOn:
         """Update an offer-addon link."""

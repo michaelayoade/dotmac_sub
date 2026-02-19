@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.network import (
     FdhCabinet,
     FiberSegment,
@@ -23,21 +24,19 @@ from app.models.network import (
     FiberStrand,
     FiberStrandStatus,
     FiberTerminationPoint,
+    ODNEndpointType,
     PonPortSplitterLink,
     Splitter,
     SplitterPort,
     SplitterPortAssignment,
     SplitterPortType,
-    FiberEndpointType,
-    ODNEndpointType,
 )
-from app.models.domain_settings import SettingDomain
 from app.schemas.network import (
     FdhCabinetUpdate,
     FiberSegmentUpdate,
     FiberSpliceClosureUpdate,
-    FiberSpliceUpdate,
     FiberSpliceTrayUpdate,
+    FiberSpliceUpdate,
     FiberStrandCreate,
     FiberStrandUpdate,
     FiberTerminationPointUpdate,
@@ -47,14 +46,18 @@ from app.schemas.network import (
     SplitterUpdate,
 )
 from app.services import settings_spec
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.crud import CRUDManager
 from app.services.query_builders import (
     apply_active_state,
     apply_optional_equals,
     apply_optional_ilike,
 )
-from app.services.response import ListResponseMixin
 
 
 class FdhCabinets(CRUDManager[FdhCabinet]):

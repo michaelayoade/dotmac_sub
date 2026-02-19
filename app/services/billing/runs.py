@@ -4,7 +4,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.billing import BillingRun, BillingRunStatus
-from app.services.common import apply_ordering, apply_pagination, get_by_id, validate_enum
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    get_by_id,
+    validate_enum,
+)
 from app.services.response import ListResponseMixin
 
 

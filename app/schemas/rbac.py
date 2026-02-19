@@ -6,7 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 # Permission key format: domain:action or domain:entity:action
 # Each part: starts with lowercase letter, contains only lowercase letters, numbers, underscores
 PERMISSION_KEY_PATTERN = re.compile(r'^[a-z][a-z0-9_]*(?:[:.][a-z][a-z0-9_]*){1,2}$')
@@ -58,7 +57,7 @@ class PermissionCreate(PermissionBase):
     name: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
-    def _apply_name(self) -> "PermissionCreate":
+    def _apply_name(self) -> PermissionCreate:
         if self.description is None and self.name:
             self.description = self.name
         return self

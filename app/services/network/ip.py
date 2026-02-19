@@ -6,11 +6,11 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.models.network import (
     IPAssignment,
-    IPVersion,
     IpBlock,
     IpPool,
     IPv4Address,
     IPv6Address,
+    IPVersion,
 )
 from app.schemas.network import (
     IPAssignmentCreate,
@@ -30,7 +30,6 @@ from app.services.network._common import (
     _validate_enum,
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services.response import ListResponseMixin
 from app.validators import network as network_validators
 
 

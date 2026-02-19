@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page
 
 from tests.playwright.pages.customer import (
-    CustomerDashboardPage,
     CustomerBillingPage,
+    CustomerDashboardPage,
+    CustomerProfilePage,
     CustomerServicesPage,
     CustomerSupportPage,
     CustomerTicketPage,
     CustomerUsagePage,
-    CustomerProfilePage,
 )
 
 

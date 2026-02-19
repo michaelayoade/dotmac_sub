@@ -19,10 +19,10 @@ from app.models.provisioning import (
     TaskStatus,
 )
 from app.models.snmp import SnmpAuthProtocol, SnmpPrivProtocol, SnmpVersion
+from app.models.subscriber import SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.models.tr069 import Tr069Event, Tr069JobStatus
 from app.models.usage import AccountingStatus, UsageSource
-from app.models.subscriber import SubscriberStatus
 
 
 class CSVRowModel(BaseModel):

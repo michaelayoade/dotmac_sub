@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from playwright.sync_api import APIRequestContext, APIResponse
-
 
 JSON_HEADERS = {"Content-Type": "application/json"}
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}

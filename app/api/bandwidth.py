@@ -6,8 +6,8 @@ and usage statistics. Supports both admin and customer portal access.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Optional, cast
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 import anyio
@@ -45,7 +45,7 @@ class BandwidthStats(BaseModel):
 class TopUserEntry(BaseModel):
     subscription_id: str
     total_bps: float
-    account_name: Optional[str] = None
+    account_name: str | None = None
 
 
 class BandwidthSeriesResponse(BaseModel):
@@ -58,8 +58,8 @@ class BandwidthSeriesResponse(BaseModel):
 @router.get("/series/{subscription_id}", response_model=BandwidthSeriesResponse)
 def get_bandwidth_series(
     subscription_id: UUID,
-    start_at: Optional[datetime] = None,
-    end_at: Optional[datetime] = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
     interval: str = Query(default="auto", pattern="^(auto|1s|1m|5m|1h)$"),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -136,7 +136,7 @@ def get_live_bandwidth(
             try:
                 # Get current bandwidth from VictoriaMetrics
                 current = await metrics_store.get_current_bandwidth(str(subscription_id))
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
 
                 yield {
                     "event": "bandwidth",
@@ -190,8 +190,8 @@ def get_top_users(
 # Customer portal endpoints (own data only)
 @router.get("/my/series", response_model=BandwidthSeriesResponse)
 def get_my_bandwidth_series(
-    start_at: Optional[datetime] = None,
-    end_at: Optional[datetime] = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
     interval: str = Query(default="auto", pattern="^(auto|1m|5m|1h)$"),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),

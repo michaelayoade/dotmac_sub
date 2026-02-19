@@ -1,17 +1,18 @@
 """Tests for RADIUS service."""
 
-import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from app.models.radius import RadiusServer
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.radius import RadiusServer
 from app.models.subscription_engine import SettingValueType
 from app.schemas.radius import (
-    RadiusServerCreate, RadiusServerUpdate,
-    RadiusClientCreate, RadiusClientUpdate,
+    RadiusClientCreate,
+    RadiusClientUpdate,
+    RadiusServerCreate,
+    RadiusServerUpdate,
     RadiusSyncJobCreate,
 )
 from app.services import radius as radius_service
@@ -377,7 +378,7 @@ class TestRadiusAuthenticate:
 
         mock_dict = MagicMock()
         mock_client = MagicMock()
-        mock_client.SendPacket.side_effect = socket.timeout("Timeout")
+        mock_client.SendPacket.side_effect = TimeoutError("Timeout")
 
         with patch("app.services.radius_auth.Dictionary", return_value=mock_dict):
             with patch("app.services.radius_auth.Client", return_value=mock_client):

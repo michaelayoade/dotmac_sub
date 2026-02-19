@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import WebSocket, status
+from fastapi import WebSocket
 
 from app.db import SessionLocal
 from app.services.auth_flow import decode_access_token

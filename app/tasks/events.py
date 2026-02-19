@@ -4,7 +4,7 @@ Handles retry of failed events and cleanup of old event records.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -29,7 +29,7 @@ def retry_failed_events():
 
     session = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_EVENT_AGE_HOURS)
+        cutoff = datetime.now(UTC) - timedelta(hours=MAX_EVENT_AGE_HOURS)
 
         # Find failed events eligible for retry
         failed_events = (
@@ -101,7 +101,7 @@ def cleanup_old_events(retention_days: int = 30):
 
     session = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
         # Delete old completed events
         deleted_count = (
@@ -137,7 +137,7 @@ def mark_stale_processing_events(stale_minutes: int = 30):
 
     session = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+        cutoff = datetime.now(UTC) - timedelta(minutes=stale_minutes)
 
         # Find and mark stuck processing events
         stuck_events = (

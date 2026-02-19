@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -28,9 +28,8 @@ class WebSocketEvent(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         if self.timestamp is None:
-            from datetime import timezone
 
-            object.__setattr__(self, "timestamp", datetime.now(timezone.utc))
+            object.__setattr__(self, "timestamp", datetime.now(UTC))
 
 
 class InboundMessageType(str, Enum):

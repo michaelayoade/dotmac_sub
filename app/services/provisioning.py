@@ -1,12 +1,11 @@
 import ipaddress
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-
-from urllib.parse import urlparse
 
 from app.models.catalog import Subscription
 from app.models.connector import ConnectorConfig
@@ -15,12 +14,13 @@ from app.models.network import (
     CPEDevice,
     DeviceStatus,
     IPAssignment,
-    IPVersion,
     IpPool,
     IPv4Address,
     IPv6Address,
+    IPVersion,
 )
 from app.models.provisioning import (
+    AppointmentStatus,
     InstallAppointment,
     ProvisioningRun,
     ProvisioningRunStatus,
@@ -30,20 +30,12 @@ from app.models.provisioning import (
     ProvisioningVendor,
     ProvisioningWorkflow,
     ServiceOrder,
-    ServiceStateTransition,
-    AppointmentStatus,
     ServiceOrderStatus,
+    ServiceStateTransition,
     TaskStatus,
 )
 from app.models.tr069 import Tr069CpeDevice
-from app.services import settings_spec
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services.response import ListResponseMixin
-from app.services.secrets import resolve_secret
-from app.services.events import emit_event
-from app.services.events.types import EventType
+from app.schemas.network import IPAssignmentCreate
 from app.schemas.provisioning import (
     InstallAppointmentCreate,
     InstallAppointmentUpdate,
@@ -61,9 +53,20 @@ from app.schemas.provisioning import (
     ServiceStateTransitionCreate,
     ServiceStateTransitionUpdate,
 )
-from app.schemas.network import IPAssignmentCreate
 from app.services import network as network_service
+from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+from app.services.crud import CRUDManager
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.provisioning_adapters import get_provisioner
+from app.services.query_builders import apply_active_state, apply_optional_equals
+from app.services.secrets import resolve_secret
 from app.validators import provisioning as provisioning_validators
 
 logger = logging.getLogger(__name__)
@@ -1026,7 +1029,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             service_order_id=payload.service_order_id,
             subscription_id=payload.subscription_id,
             status=ProvisioningRunStatus.running,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             input_payload=payload.input_payload,
         )
         db.add(run)
@@ -1068,7 +1071,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             run.status = ProvisioningRunStatus.failed
             run.output_payload = {"results": []}
             run.error_message = error_message
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
             db.commit()
             db.refresh(run)
             emit_event(
@@ -1142,7 +1145,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
         run.status = status
         run.output_payload = {"results": results}
         run.error_message = step_error_message
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
         db.commit()
         db.refresh(run)
 

@@ -1,10 +1,13 @@
 """Tests for GIS service."""
 
-from app.models.gis import GeoLocationType, GeoLayerType, GeoAreaType
+from app.models.gis import GeoAreaType, GeoLayerType, GeoLocationType
 from app.schemas.gis import (
-    GeoLocationCreate, GeoLocationUpdate,
-    GeoLayerCreate, GeoLayerUpdate,
-    GeoAreaCreate, GeoAreaUpdate,
+    GeoAreaCreate,
+    GeoAreaUpdate,
+    GeoLayerCreate,
+    GeoLayerUpdate,
+    GeoLocationCreate,
+    GeoLocationUpdate,
 )
 from app.services import gis as gis_service
 

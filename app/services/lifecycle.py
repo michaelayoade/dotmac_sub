@@ -1,15 +1,19 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.domain_settings import SettingDomain
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.schemas.lifecycle import (
     SubscriptionLifecycleEventCreate,
     SubscriptionLifecycleEventUpdate,
 )
-from app.services.response import ListResponseMixin
 from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 
 class SubscriptionLifecycleEvents(ListResponseMixin):

@@ -8,8 +8,7 @@ from fastapi import HTTPException
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.schemas.scheduler import ScheduledTaskCreate, ScheduledTaskUpdate
 from app.services import scheduler as scheduler_service
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-
+from app.services.common import apply_ordering, apply_pagination
 
 # =============================================================================
 # Helper Function Tests

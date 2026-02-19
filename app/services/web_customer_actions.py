@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import csv
 import io
-from typing import Any, Optional, cast
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request
@@ -13,7 +13,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import ApiKey, MFAMethod, Session as AuthSession, UserCredential
+from app.models.auth import ApiKey, MFAMethod, UserCredential
+from app.models.auth import Session as AuthSession
 from app.models.catalog import Subscription
 from app.models.subscriber import (
     AddressType,
@@ -43,7 +44,7 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
     try:
         parsed = datetime.strptime(value.strip(), "%Y-%m-%d")
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -219,7 +220,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
         if not ingest_metadata.get("ingest"):
             ingest_metadata["ingest"] = {
                 "source": "admin/customers/wizard",
-                "received_at": datetime.now(timezone.utc).isoformat(),
+                "received_at": datetime.now(UTC).isoformat(),
                 "raw": dict(data),
                 "cleaning_version": "v1",
             }
@@ -398,7 +399,7 @@ def create_impersonation_session(
     customer_type: str,
     customer_id: str,
     account_id: str,
-    subscription_id: Optional[str],
+    subscription_id: str | None,
     auth: dict,
 ) -> str:
     subscribers = []
@@ -492,27 +493,27 @@ def update_person_customer(
     *,
     first_name: str,
     last_name: str,
-    display_name: Optional[str],
-    avatar_url: Optional[str],
-    email: Optional[str],
-    email_verified: Optional[str],
-    phone: Optional[str],
-    date_of_birth: Optional[str],
-    gender: Optional[str],
-    preferred_contact_method: Optional[str],
-    locale: Optional[str],
-    timezone_value: Optional[str],
-    address_line1: Optional[str],
-    address_line2: Optional[str],
-    city: Optional[str],
-    region: Optional[str],
-    postal_code: Optional[str],
-    country_code: Optional[str],
-    status: Optional[str],
-    is_active: Optional[str],
-    marketing_opt_in: Optional[str],
-    notes: Optional[str],
-    account_start_date: Optional[str],
+    display_name: str | None,
+    avatar_url: str | None,
+    email: str | None,
+    email_verified: str | None,
+    phone: str | None,
+    date_of_birth: str | None,
+    gender: str | None,
+    preferred_contact_method: str | None,
+    locale: str | None,
+    timezone_value: str | None,
+    address_line1: str | None,
+    address_line2: str | None,
+    city: str | None,
+    region: str | None,
+    postal_code: str | None,
+    country_code: str | None,
+    status: str | None,
+    is_active: str | None,
+    marketing_opt_in: str | None,
+    notes: str | None,
+    account_start_date: str | None,
     metadata_json: dict | None,
 ):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
@@ -563,12 +564,12 @@ def update_organization_customer(
     customer_id: str,
     *,
     name: str,
-    legal_name: Optional[str],
-    tax_id: Optional[str],
-    domain: Optional[str],
-    website: Optional[str],
-    org_notes: Optional[str],
-    org_account_start_date: Optional[str],
+    legal_name: str | None,
+    tax_id: str | None,
+    domain: str | None,
+    website: str | None,
+    org_notes: str | None,
+    org_account_start_date: str | None,
 ):
     before = subscriber_service.organizations.get(db=db, organization_id=customer_id)
     payload = OrganizationUpdate(
@@ -756,8 +757,8 @@ def export_customers_csv(
     db: Session,
     *,
     ids: str,
-    search: Optional[str],
-    customer_type: Optional[str],
+    search: str | None,
+    customer_type: str | None,
 ) -> tuple[str, str]:
     customers: list[dict[str, str]] = []
     if ids == "all":
@@ -865,7 +866,7 @@ def convert_contact_to_subscriber(
     db: Session,
     *,
     person_id: UUID,
-    account_status: Optional[str],
+    account_status: str | None,
 ) -> tuple[Subscriber, bool]:
     person = db.get(Subscriber, person_id)
     if not person:
@@ -882,14 +883,14 @@ def create_customer_address(
     *,
     subscriber_id: str,
     address_type: str,
-    label: Optional[str],
+    label: str | None,
     address_line1: str,
-    address_line2: Optional[str],
-    city: Optional[str],
-    region: Optional[str],
-    postal_code: Optional[str],
-    country_code: Optional[str],
-    is_primary: Optional[str],
+    address_line2: str | None,
+    city: str | None,
+    region: str | None,
+    postal_code: str | None,
+    country_code: str | None,
+    is_primary: str | None,
 ) -> None:
     addr_type_map = {
         "service": AddressType.service,
@@ -922,10 +923,10 @@ def create_customer_contact(
     first_name: str,
     last_name: str,
     role: str,
-    title: Optional[str],
-    email: Optional[str],
-    phone: Optional[str],
-    is_primary: Optional[str],
+    title: str | None,
+    email: str | None,
+    phone: str | None,
+    is_primary: str | None,
 ) -> None:
     row = {
         "first_name": first_name,

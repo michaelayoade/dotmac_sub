@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 import pytest
 
 from app.services.auth_flow import hash_password
-
-import re
-
 from tests.playwright.helpers.api import (
     api_get,
     api_post_form,

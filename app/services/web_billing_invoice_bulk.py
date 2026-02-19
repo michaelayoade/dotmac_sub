@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.billing import InvoiceStatus
 from app.services import billing as billing_service
@@ -21,7 +21,7 @@ def bulk_issue(db, invoice_ids_csv: str) -> list[str]:
             invoice = billing_service.invoices.get(db, invoice_id)
             if invoice and invoice.status == InvoiceStatus.draft:
                 invoice.status = InvoiceStatus.issued
-                invoice.issued_at = datetime.now(timezone.utc)
+                invoice.issued_at = datetime.now(UTC)
                 db.commit()
                 updated.append(invoice_id)
         except Exception:

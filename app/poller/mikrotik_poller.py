@@ -5,14 +5,14 @@ High-frequency polling service that collects bandwidth samples from MikroTik
 devices using the RouterOS API and publishes them to a Redis stream.
 """
 import asyncio
-import json
 import logging
 import os
 import signal
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional, cast
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 import redis.asyncio as redis
@@ -75,7 +75,7 @@ class MikroTikConnection:
         self.username = username
         self.password = password
         self.port = port
-        self._pool: Optional[RouterOsApiPool] = None
+        self._pool: RouterOsApiPool | None = None
         self._connection: Any | None = None
         self._last_connected: datetime | None = None
         self._consecutive_failures: int = 0
@@ -101,7 +101,7 @@ class MikroTikConnection:
             self._connection = await loop.run_in_executor(
                 None, lambda: pool.get_api()
             )
-            self._last_connected = datetime.now(timezone.utc)
+            self._last_connected = datetime.now(UTC)
             self._consecutive_failures = 0
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
             return True
@@ -196,7 +196,7 @@ class MikroTikConnection:
         if backoff_seconds > 60:
             backoff_seconds = 60
         if self._last_connected:
-            elapsed = (datetime.now(timezone.utc) - self._last_connected).total_seconds()
+            elapsed = (datetime.now(UTC) - self._last_connected).total_seconds()
             return bool(elapsed >= backoff_seconds)
         return True
 
@@ -212,7 +212,7 @@ class DevicePool:
         self._connections: dict[UUID, MikroTikConnection] = {}
         self._queue_mappings: dict[UUID, dict[str, UUID]] = {}
         self._refresh_interval = refresh_interval
-        self._last_refresh: Optional[datetime] = None
+        self._last_refresh: datetime | None = None
 
     async def refresh_devices(self):
         """Refresh the list of devices from the database."""
@@ -262,7 +262,7 @@ class DevicePool:
                     await conn.disconnect()
                 self._queue_mappings.pop(device_id, None)
 
-            self._last_refresh = datetime.now(timezone.utc)
+            self._last_refresh = datetime.now(UTC)
             logger.info(f"Device pool refreshed: {len(self._connections)} devices")
 
         finally:
@@ -271,7 +271,7 @@ class DevicePool:
     def _should_refresh(self) -> bool:
         if not self._last_refresh:
             return True
-        elapsed = (datetime.now(timezone.utc) - self._last_refresh).total_seconds()
+        elapsed = (datetime.now(UTC) - self._last_refresh).total_seconds()
         return elapsed >= self._refresh_interval
 
     async def poll_all(self) -> AsyncIterator[tuple[UUID, list[QueueStats]]]:
@@ -308,7 +308,7 @@ class DevicePool:
             if stats:
                 yield device_id, stats
 
-    def resolve_subscription(self, device_id: UUID, queue_name: str) -> Optional[UUID]:
+    def resolve_subscription(self, device_id: UUID, queue_name: str) -> UUID | None:
         """Resolve a queue name to a subscription ID."""
         mappings = self._queue_mappings.get(device_id, {})
         return mappings.get(queue_name)
@@ -331,7 +331,7 @@ class BandwidthPoller:
     def __init__(self, poll_interval_ms: int = POLL_INTERVAL_MS):
         self.poll_interval_ms = poll_interval_ms
         self.device_pool = DevicePool()
-        self._redis: Optional[redis.Redis] = None
+        self._redis: redis.Redis | None = None
         self._running = False
         self._poll_count = 0
         self._sample_count = 0
@@ -364,7 +364,7 @@ class BandwidthPoller:
 
     async def _poll_once(self):
         """Execute a single polling cycle."""
-        sample_time = datetime.now(timezone.utc)
+        sample_time = datetime.now(UTC)
         samples = []
 
         async for device_id, queue_stats in self.device_pool.poll_all():

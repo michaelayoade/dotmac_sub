@@ -1,1 +1,7 @@
-from app.validators import bulk, catalog, network, provisioning, subscriber  # noqa: F401
+from app.validators import (  # noqa: F401
+    bulk,
+    catalog,
+    network,
+    provisioning,
+    subscriber,
+)

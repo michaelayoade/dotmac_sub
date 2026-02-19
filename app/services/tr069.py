@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -12,9 +12,6 @@ from app.models.tr069 import (
     Tr069Parameter,
     Tr069Session,
 )
-from app.services.genieacs import GenieACSClient, GenieACSError
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.response import ListResponseMixin
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
@@ -27,6 +24,13 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
     Tr069SessionUpdate,
 )
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
+from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +175,7 @@ class CpeDevices(ListResponseMixin):
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
 
         created, updated = 0, 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for device_data in devices:
             device_id = device_data.get("_id")
@@ -436,7 +440,7 @@ class Jobs(ListResponseMixin):
 
         # Mark job as running
         job.status = Tr069JobStatus.running
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         job.error = None
         db.commit()
 
@@ -471,7 +475,7 @@ class Jobs(ListResponseMixin):
             job.error = str(e)
             logger.exception(f"Job {job_id} failed with unexpected error")
 
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
         db.commit()
         db.refresh(job)
         return job
@@ -498,7 +502,7 @@ class Jobs(ListResponseMixin):
             )
 
         job.status = Tr069JobStatus.canceled
-        job.completed_at = datetime.now(timezone.utc)
+        job.completed_at = datetime.now(UTC)
         db.commit()
         db.refresh(job)
         return job

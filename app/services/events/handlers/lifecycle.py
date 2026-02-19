@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import SubscriptionStatus
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
-from app.services.events.types import Event, EventType, SUBSCRIPTION_LIFECYCLE_MAP
+from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP, Event
 
 logger = logging.getLogger(__name__)
 

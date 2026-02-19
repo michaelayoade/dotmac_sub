@@ -1,9 +1,7 @@
 """Tests for Meta pages service (posting and comments)."""
 
 import asyncio
-import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

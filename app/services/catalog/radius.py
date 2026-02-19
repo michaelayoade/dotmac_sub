@@ -11,10 +11,6 @@ from app.models.catalog import (
     RadiusProfile,
 )
 from app.models.domain_settings import SettingDomain
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services import settings_spec
 from app.schemas.catalog import (
     OfferRadiusProfileCreate,
     OfferRadiusProfileUpdate,
@@ -23,6 +19,10 @@ from app.schemas.catalog import (
     RadiusProfileCreate,
     RadiusProfileUpdate,
 )
+from app.services import settings_spec
+from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 
 
 class RadiusProfiles(CRUDManager[RadiusProfile]):

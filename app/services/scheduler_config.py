@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from app.db import SessionLocal
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.scheduler import ScheduleType, ScheduledTask
+from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import integration as integration_service
 from app.services.settings_spec import resolve_value
 

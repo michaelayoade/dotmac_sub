@@ -6,7 +6,8 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import MFAMethod, UserCredential
-from app.models.rbac import Role, SubscriberRole as SubscriberRoleModel
+from app.models.rbac import Role
+from app.models.rbac import SubscriberRole as SubscriberRoleModel
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.services import billing_automation as billing_automation_service
@@ -35,7 +35,7 @@ def preview_batch(
     """Run dry-run invoice preview and return JSON payload."""
     run_date = None
     if billing_date:
-        run_date = datetime.strptime(billing_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        run_date = datetime.strptime(billing_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
     summary = billing_automation_service.run_invoice_cycle(
         db=db,

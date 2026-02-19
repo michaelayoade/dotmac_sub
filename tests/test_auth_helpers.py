@@ -1,10 +1,17 @@
-import os
 import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+from starlette.requests import Request
 
-from app.models.auth import ApiKey, AuthProvider, MFAMethodType, SessionStatus, UserCredential
+from app.models.auth import (
+    ApiKey,
+    AuthProvider,
+    MFAMethodType,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscription_engine import SettingValueType
@@ -19,8 +26,6 @@ from app.schemas.auth import (
     UserCredentialCreate,
     UserCredentialUpdate,
 )
-from sqlalchemy.exc import IntegrityError
-from starlette.requests import Request
 from app.services import auth as auth_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 

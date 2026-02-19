@@ -2,7 +2,7 @@
 payment_arrangements, and subscription_changes services."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -32,6 +32,7 @@ from app.services.audit_helpers import (
     humanize_entity,
     model_to_dict,
 )
+from app.services.contracts import contract_signatures
 from app.services.credential_crypto import (
     ENCRYPTED_CREDENTIAL_FIELDS,
     decrypt_credential,
@@ -40,14 +41,12 @@ from app.services.credential_crypto import (
     generate_encryption_key,
     is_encrypted,
 )
-from app.services.contracts import contract_signatures
 from app.services.payment_arrangements import (
-    payment_arrangements,
     _calculate_end_date,
     _calculate_next_due_date,
+    payment_arrangements,
 )
 from app.services.subscription_changes import subscription_change_requests
-
 
 # ============================================================================
 # credential_crypto tests
@@ -486,7 +485,7 @@ class TestContracts:
             ip_address="127.0.0.1",
             user_agent="TestAgent/1.0",
             agreement_text="I agree to terms.",
-            signed_at=datetime.now(timezone.utc),
+            signed_at=datetime.now(UTC),
         )
         db_session.add(sig)
         db_session.commit()
@@ -909,7 +908,7 @@ class TestSubscriptionChanges:
 
     def _create_second_offer(self, db_session):
         """Create a second catalog offer for change requests."""
-        from app.models.catalog import CatalogOffer, ServiceType, AccessType, PriceBasis
+        from app.models.catalog import AccessType, CatalogOffer, PriceBasis, ServiceType
 
         offer = CatalogOffer(
             name="Premium Internet",

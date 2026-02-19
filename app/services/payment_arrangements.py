@@ -1,12 +1,12 @@
 """Service for managing payment arrangements."""
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from typing import cast
 
 from app.models.payment_arrangement import (
     ArrangementStatus,
@@ -257,7 +257,7 @@ class PaymentArrangements(ListResponseMixin):
                 detail=f"Cannot approve arrangement with status {arrangement.status.value}",
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         arrangement.status = ArrangementStatus.active
         arrangement.approved_at = now
         if approver_id:
@@ -304,7 +304,7 @@ class PaymentArrangements(ListResponseMixin):
                 status_code=400, detail="Installment already paid"
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         installment.status = InstallmentStatus.paid
         installment.paid_at = now
         if payment_id:

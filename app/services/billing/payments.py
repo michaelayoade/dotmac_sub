@@ -1,6 +1,6 @@
 """Payment and payment method management services."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -28,6 +28,33 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.schemas.billing import (
+    BankAccountCreate,
+    BankAccountUpdate,
+    CollectionAccountCreate,
+    CollectionAccountUpdate,
+    PaymentAllocationCreate,
+    PaymentChannelAccountCreate,
+    PaymentChannelAccountUpdate,
+    PaymentChannelCreate,
+    PaymentChannelUpdate,
+    PaymentCreate,
+    PaymentMethodCreate,
+    PaymentMethodUpdate,
+    PaymentUpdate,
+)
+from app.services import settings_spec
+from app.services.billing._common import (
+    _recalculate_invoice_totals,
+    _resolve_collection_account,
+    _resolve_payment_channel,
+    _validate_account,
+    _validate_collection_account,
+    _validate_invoice_currency,
+    _validate_payment_channel,
+    _validate_payment_linkages,
+    _validate_payment_provider,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -35,36 +62,9 @@ from app.services.common import (
     round_money,
     validate_enum,
 )
-from app.services.response import ListResponseMixin
-from app.services import settings_spec
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.schemas.billing import (
-    BankAccountCreate,
-    BankAccountUpdate,
-    CollectionAccountCreate,
-    CollectionAccountUpdate,
-    PaymentCreate,
-    PaymentAllocationCreate,
-    PaymentChannelAccountCreate,
-    PaymentChannelAccountUpdate,
-    PaymentChannelCreate,
-    PaymentChannelUpdate,
-    PaymentMethodCreate,
-    PaymentMethodUpdate,
-    PaymentUpdate,
-)
-from app.services.billing._common import (
-    _validate_account,
-    _validate_payment_linkages,
-    _validate_payment_provider,
-    _validate_invoice_currency,
-    _recalculate_invoice_totals,
-    _resolve_collection_account,
-    _resolve_payment_channel,
-    _validate_collection_account,
-    _validate_payment_channel,
-)
+from app.services.response import ListResponseMixin
 
 
 class PaymentMethods(ListResponseMixin):
@@ -342,7 +342,7 @@ def _primary_allocation_invoice_id(payment: Payment) -> str | None:
         return None
     allocation = min(
         payment.allocations,
-        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=UTC),
     )
     return str(allocation.invoice_id)
 
@@ -710,7 +710,7 @@ class Payments(ListResponseMixin):
             raise HTTPException(status_code=400, detail="Invalid status")
         payment.status = normalized
         if normalized == PaymentStatus.succeeded:
-            payment.paid_at = datetime.now(timezone.utc)
+            payment.paid_at = datetime.now(UTC)
         for allocation in payment.allocations:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:

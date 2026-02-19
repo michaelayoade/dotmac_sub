@@ -1,6 +1,5 @@
 """Tests for customer_search service."""
 
-import pytest
 
 from app.models.subscriber import Organization
 from app.services import customer_search as customer_search_service

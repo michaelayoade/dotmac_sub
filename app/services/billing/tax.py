@@ -4,9 +4,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.billing import TaxRate
+from app.schemas.billing import TaxRateCreate, TaxRateUpdate
 from app.services.common import apply_ordering, apply_pagination, get_by_id
 from app.services.response import ListResponseMixin
-from app.schemas.billing import TaxRateCreate, TaxRateUpdate
 
 
 class TaxRates(ListResponseMixin):

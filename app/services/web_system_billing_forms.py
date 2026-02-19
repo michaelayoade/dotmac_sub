@@ -83,7 +83,9 @@ def build_bank_account_error_context(
     error: str | None,
     message: str,
 ) -> dict:
-    from app.services import web_system_settings_views as web_system_settings_views_service
+    from app.services import (
+        web_system_settings_views as web_system_settings_views_service,
+    )
 
     settings_context = web_system_settings_views_service.build_settings_context(db, "billing")
     return web_system_settings_views_service.build_settings_page_context(

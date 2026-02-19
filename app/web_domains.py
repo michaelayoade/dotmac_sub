@@ -5,32 +5,82 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import (
-    audit as audit_service,
     analytics as analytics_service,
+)
+from app.services import (
+    audit as audit_service,
+)
+from app.services import (
     bandwidth as bandwidth_service,
+)
+from app.services import (
     billing as billing_service,
+)
+from app.services import (
     catalog as catalog_service,
+)
+from app.services import (
     collections as collections_service,
+)
+from app.services import (
     connector as connector_service,
+)
+from app.services import (
     external as external_service,
+)
+from app.services import (
     gis as gis_service,
+)
+from app.services import (
     integration as integration_service,
+)
+from app.services import (
     lifecycle as lifecycle_service,
+)
+from app.services import (
     network as network_service,
+)
+from app.services import (
     network_monitoring as monitoring_service,
+)
+from app.services import (
     notification as notification_service,
+)
+from app.services import (
     provisioning as provisioning_service,
+)
+from app.services import (
     qualification as qualification_service,
+)
+from app.services import (
     radius as radius_service,
+)
+from app.services import (
     rbac as rbac_service,
+)
+from app.services import (
     scheduler as scheduler_service,
+)
+from app.services import (
     settings_api as settings_api_service,
+)
+from app.services import (
     snmp as snmp_service,
-    subscription_engine as subscription_engine_service,
-    tr069 as tr069_service,
-    usage as usage_service,
-    webhook as webhook_service,
+)
+from app.services import (
     subscriber as subscriber_service,
+)
+from app.services import (
+    subscription_engine as subscription_engine_service,
+)
+from app.services import (
+    tr069 as tr069_service,
+)
+from app.services import (
+    usage as usage_service,
+)
+from app.services import (
+    webhook as webhook_service,
 )
 
 templates = Jinja2Templates(directory="templates")

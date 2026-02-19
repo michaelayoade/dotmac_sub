@@ -4,16 +4,16 @@ Provides services for Subscriptions and SubscriptionAddOns.
 """
 
 from calendar import monthrange
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
     BillingCycle,
+    BillingMode,
     CatalogOffer,
     ContractTerm,
-    BillingMode,
     OfferPrice,
     OfferVersionPrice,
     PriceType,
@@ -22,20 +22,20 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_optional_equals
-from app.services.response import ListResponseMixin
-from app.services import settings_spec
-from app.services.events import emit_event
-from app.services.events.types import EventType
-from app.validators import catalog as catalog_validators
 from app.schemas.catalog import (
     SubscriptionAddOnCreate,
     SubscriptionAddOnUpdate,
     SubscriptionCreate,
     SubscriptionUpdate,
 )
+from app.services import settings_spec
+from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.crud import CRUDManager
+from app.services.events import emit_event
+from app.services.events.types import EventType
+from app.services.query_builders import apply_optional_equals
+from app.services.response import ListResponseMixin
+from app.validators import catalog as catalog_validators
 
 
 def _add_months(value: datetime, months: int) -> datetime:
@@ -209,9 +209,9 @@ def _emit_subscription_status_event(
 
 def _create_service_order_for_subscription(db: Session, subscription: Subscription):
     """Create a service order for a new subscription that needs provisioning."""
-    from app.services import provisioning as provisioning_service
-    from app.schemas.provisioning import ServiceOrderCreate
     from app.models.provisioning import ServiceOrderStatus
+    from app.schemas.provisioning import ServiceOrderCreate
+    from app.services import provisioning as provisioning_service
 
     # Account roles removed during consolidation; no contact linkage available here.
     requested_by_contact_id = None
@@ -241,7 +241,7 @@ class Subscriptions(ListResponseMixin):
             str(payload.service_address_id) if payload.service_address_id else None,
         )
         catalog_validators.validate_offer_active(db, str(payload.offer_id))
-        reference_at = payload.start_at or datetime.now(timezone.utc)
+        reference_at = payload.start_at or datetime.now(UTC)
         if payload.offer_version_id:
             catalog_validators.validate_offer_version_active(
                 db,
@@ -283,7 +283,7 @@ class Subscriptions(ListResponseMixin):
                 offer.billing_mode if offer and offer.billing_mode else BillingMode.prepaid
             )
         if "start_at" not in fields_set and data.get("status") == SubscriptionStatus.active:
-            data["start_at"] = datetime.now(timezone.utc)
+            data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
         if "next_billing_at" not in fields_set and start_at and data.get("status") == SubscriptionStatus.active:
             offer_version_id = data.get("offer_version_id")
@@ -340,7 +340,7 @@ class Subscriptions(ListResponseMixin):
             if value is None:
                 return None
             if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
+                return value.replace(tzinfo=UTC)
             return value
 
         subscription.start_at = _ensure_utc(subscription.start_at)
@@ -430,7 +430,7 @@ class Subscriptions(ListResponseMixin):
         end_at = data.get("end_at", subscription.end_at)
         next_billing_at = data.get("next_billing_at", subscription.next_billing_at)
         canceled_at = data.get("canceled_at", subscription.canceled_at)
-        reference_at = start_at or datetime.now(timezone.utc)
+        reference_at = start_at or datetime.now(UTC)
         if offer_version_id:
             catalog_validators.validate_offer_version_active(
                 db,
@@ -449,7 +449,7 @@ class Subscriptions(ListResponseMixin):
             db, subscriber_id, status, subscription_id
         )
         if status == SubscriptionStatus.active and not start_at:
-            start_at = datetime.now(timezone.utc)
+            start_at = datetime.now(UTC)
             data["start_at"] = start_at
         if status == SubscriptionStatus.active and start_at and "next_billing_at" not in data:
             cycle = _resolve_billing_cycle(
@@ -503,7 +503,7 @@ class Subscriptions(ListResponseMixin):
         Returns:
             Summary dict with counts
         """
-        run_at = run_at or datetime.now(timezone.utc)
+        run_at = run_at or datetime.now(UTC)
 
         # Find subscriptions that should be expired
         subscriptions_to_expire = (

@@ -6,7 +6,6 @@ pages and systems.
 
 from __future__ import annotations
 
-import pytest
 from playwright.sync_api import Page, expect
 
 
@@ -29,7 +28,9 @@ class TestSubscriptionActivation:
 
     def test_service_order_creation_from_subscriber(self, admin_page: Page, settings):
         """Should be able to create service order from subscriber context."""
-        from tests.playwright.pages.admin.operations.service_orders_page import ServiceOrdersPage
+        from tests.playwright.pages.admin.operations.service_orders_page import (
+            ServiceOrdersPage,
+        )
 
         orders = ServiceOrdersPage(admin_page, settings.base_url)
         orders.goto()
@@ -103,7 +104,9 @@ class TestWorkOrderExecution:
 
     def test_work_order_dispatch_flow(self, admin_page: Page, settings):
         """Complete flow: Create work order -> Dispatch -> Execute -> Complete."""
-        from tests.playwright.pages.admin.operations.work_orders_page import WorkOrdersPage
+        from tests.playwright.pages.admin.operations.work_orders_page import (
+            WorkOrdersPage,
+        )
 
         work_orders = WorkOrdersPage(admin_page, settings.base_url)
         work_orders.goto()
@@ -137,7 +140,9 @@ class TestNetworkProvisioning:
 
     def test_ip_assignment_flow(self, admin_page: Page, settings):
         """Should be able to assign IPs from pools."""
-        from tests.playwright.pages.admin.network.ip_management_page import IPManagementPage
+        from tests.playwright.pages.admin.network.ip_management_page import (
+            IPManagementPage,
+        )
 
         ip_mgmt = IPManagementPage(admin_page, settings.base_url)
         ip_mgmt.goto()
@@ -149,9 +154,11 @@ class TestCustomerOnboarding:
 
     def test_full_onboarding_visibility(self, admin_page: Page, settings):
         """All steps for customer onboarding should be accessible."""
-        from tests.playwright.pages.admin.subscribers_page import SubscribersPage
         from tests.playwright.pages.admin.billing.invoices_page import InvoicesPage
-        from tests.playwright.pages.admin.operations.service_orders_page import ServiceOrdersPage
+        from tests.playwright.pages.admin.operations.service_orders_page import (
+            ServiceOrdersPage,
+        )
+        from tests.playwright.pages.admin.subscribers_page import SubscribersPage
 
         # Step 1: Subscribers accessible
         subscribers = SubscribersPage(admin_page, settings.base_url)

@@ -6,18 +6,18 @@ including strands, segments, splices, splice closures, trays, and termination po
 
 # Re-export fiber-related services from the legacy module
 from app.services.network._legacy import (
-    fiber_strands,
+    FiberSegments,
+    FiberSpliceClosures,
+    FiberSplices,
+    FiberSpliceTrays,
+    FiberStrands,
+    FiberTerminationPoints,
     fiber_segments,
     fiber_splice_closures,
     fiber_splice_trays,
     fiber_splices,
+    fiber_strands,
     fiber_termination_points,
-    FiberStrands,
-    FiberSegments,
-    FiberSpliceClosures,
-    FiberSpliceTrays,
-    FiberSplices,
-    FiberTerminationPoints,
 )
 
 __all__ = [

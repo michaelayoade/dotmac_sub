@@ -2,15 +2,13 @@
 
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from app.services import reseller_portal
-
 
 # =============================================================================
 # Test Fixtures
@@ -288,7 +286,7 @@ def test_get_session_expired():
     )
 
     # Manually expire the session (use naive datetime as SQLite does)
-    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    past = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     reseller_portal._RESELLER_SESSIONS[token]["expires_at"] = past
 
     session = reseller_portal._get_session(token)
@@ -389,10 +387,11 @@ def test_login_no_access_token(db_session):
 
 def test_login_success(db_session, person, reseller_user):
     """Test successful login."""
-    from app.models.auth import Session as AuthSession, SessionStatus
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
 
     # Create auth session
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     expires_naive = now_naive + timedelta(hours=24)
     token_hash = hashlib.sha256(b"test-token").hexdigest()
 
@@ -454,9 +453,10 @@ def test_verify_mfa_no_access_token(db_session):
 
 def test_verify_mfa_success(db_session, person, reseller_user):
     """Test successful MFA verification."""
-    from app.models.auth import Session as AuthSession, SessionStatus
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
 
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     expires_naive = now_naive + timedelta(hours=24)
     token_hash = hashlib.sha256(b"mfa-token").hexdigest()
 
@@ -536,9 +536,10 @@ def test_session_from_access_token_auth_session_not_found(db_session):
 
 def test_session_from_access_token_session_inactive(db_session, person):
     """Test _session_from_access_token with inactive session."""
-    from app.models.auth import Session as AuthSession, SessionStatus
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
 
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     token_hash = hashlib.sha256(b"token").hexdigest()
 
     auth_session = AuthSession(
@@ -564,9 +565,10 @@ def test_session_from_access_token_session_inactive(db_session, person):
 
 def test_session_from_access_token_session_expired(db_session, person):
     """Test _session_from_access_token with expired session."""
-    from app.models.auth import Session as AuthSession, SessionStatus
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
 
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     expired_naive = now_naive - timedelta(hours=1)  # Already expired
     token_hash = hashlib.sha256(b"token").hexdigest()
 
@@ -596,9 +598,10 @@ def test_session_from_access_token_session_expired(db_session, person):
 
 def test_session_from_access_token_not_reseller_user(db_session, person):
     """Test _session_from_access_token when person is not reseller user."""
-    from app.models.auth import Session as AuthSession, SessionStatus
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
 
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
     token_hash = hashlib.sha256(b"token").hexdigest()
 
     auth_session = AuthSession(
@@ -740,6 +743,7 @@ def test_list_accounts_success(db_session, reseller_account, reseller):
 def test_list_accounts_with_invoices(db_session, reseller_account, reseller):
     """Test list_accounts includes invoice balances."""
     from decimal import Decimal
+
     from app.models.billing import Invoice, InvoiceStatus
 
     invoice = Invoice(
@@ -765,15 +769,16 @@ def test_list_accounts_with_invoices(db_session, reseller_account, reseller):
 
 def test_list_accounts_with_payments(db_session, reseller_account, reseller):
     """Test list_accounts includes last payment date."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from decimal import Decimal
+
     from app.models.billing import Payment, PaymentStatus
 
     payment = Payment(
         account_id=reseller_account.id,
         amount=Decimal("50.00"),
         status=PaymentStatus.succeeded,
-        paid_at=datetime.now(timezone.utc),
+        paid_at=datetime.now(UTC),
     )
     db_session.add(payment)
     db_session.commit()
@@ -851,6 +856,7 @@ def test_get_dashboard_summary_empty(db_session, reseller):
 def test_get_dashboard_summary_with_data(db_session, reseller_account, reseller):
     """Test get_dashboard_summary with account data."""
     from decimal import Decimal
+
     from app.models.billing import Invoice, InvoiceStatus
 
     invoice = Invoice(
@@ -923,9 +929,9 @@ def test_create_impersonation_session_success_no_subscriptions(db_session, resel
 
 def test_create_impersonation_session_with_active_subscription(db_session, reseller, subscriber):
     """Test impersonation session with active subscription."""
+    from app.models.subscriber import Subscriber
     from app.schemas.catalog import SubscriptionCreate
     from app.services import catalog as catalog_service
-    from app.models.subscriber import Subscriber
 
     # Create account linked to reseller
     account = Subscriber(
@@ -938,8 +944,8 @@ def test_create_impersonation_session_with_active_subscription(db_session, resel
     db_session.commit()
 
     # Create an offer
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
     from app.schemas.catalog import CatalogOfferCreate
-    from app.models.catalog import ServiceType, AccessType, PriceBasis
 
     offer = catalog_service.offers.create(
         db_session,
@@ -984,9 +990,9 @@ def test_create_impersonation_session_with_active_subscription(db_session, resel
 
 def test_create_impersonation_session_with_pending_subscription(db_session, reseller, subscriber):
     """Test impersonation session with non-active subscription (fallback path)."""
+    from app.models.subscriber import Subscriber
     from app.schemas.catalog import SubscriptionCreate
     from app.services import catalog as catalog_service
-    from app.models.subscriber import Subscriber
 
     # Create account linked to reseller
     account = Subscriber(
@@ -999,8 +1005,8 @@ def test_create_impersonation_session_with_pending_subscription(db_session, rese
     db_session.commit()
 
     # Create an offer
+    from app.models.catalog import AccessType, PriceBasis, ServiceType
     from app.schemas.catalog import CatalogOfferCreate
-    from app.models.catalog import ServiceType, AccessType, PriceBasis
 
     offer = catalog_service.offers.create(
         db_session,

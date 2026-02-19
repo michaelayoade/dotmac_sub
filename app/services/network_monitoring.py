@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import builtins
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import UTC, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.network import FdhCabinet
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
@@ -21,12 +22,10 @@ from app.models.network_monitoring import (
     NetworkDevice,
     PopSite,
 )
-from app.models.network import FdhCabinet
-from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
-from app.services.response import ListResponseMixin
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,
+    AlertRuleBulkUpdateRequest,
     AlertRuleCreate,
     AlertRuleUpdate,
     DeviceInterfaceCreate,
@@ -37,11 +36,17 @@ from app.schemas.network_monitoring import (
     NetworkDeviceUpdate,
     PopSiteCreate,
     PopSiteUpdate,
-    AlertRuleBulkUpdateRequest,
+    UptimeReportItem,
     UptimeReportRequest,
     UptimeReportResponse,
-    UptimeReportItem,
 )
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 
 def _round_percent(value: Decimal) -> Decimal:
@@ -66,8 +71,8 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _alert_intervals_by_device(
@@ -319,7 +324,7 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
                 measured_value=float(metric.value),
                 status=AlertStatus.open,
                 severity=rule.severity or AlertSeverity.warning,
-                triggered_at=metric.recorded_at or datetime.now(timezone.utc),
+                triggered_at=metric.recorded_at or datetime.now(UTC),
             )
             db.add(alert)
             db.flush()
@@ -337,7 +342,7 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
         else:
             if existing:
                 existing.status = AlertStatus.resolved
-                existing.resolved_at = datetime.now(timezone.utc)
+                existing.resolved_at = datetime.now(UTC)
                 event = AlertEvent(
                     alert_id=existing.id,
                     status=AlertStatus.resolved,
@@ -726,7 +731,7 @@ class Alerts(ListResponseMixin):
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
         alert.status = AlertStatus.acknowledged
-        alert.acknowledged_at = datetime.now(timezone.utc)
+        alert.acknowledged_at = datetime.now(UTC)
         event = AlertEvent(
             alert_id=alert.id,
             status=AlertStatus.acknowledged,
@@ -743,7 +748,7 @@ class Alerts(ListResponseMixin):
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
         alert.status = AlertStatus.resolved
-        alert.resolved_at = datetime.now(timezone.utc)
+        alert.resolved_at = datetime.now(UTC)
         event = AlertEvent(
             alert_id=alert.id,
             status=AlertStatus.resolved,
@@ -764,7 +769,7 @@ class Alerts(ListResponseMixin):
         alerts = db.query(Alert).filter(Alert.id.in_(ids)).all()
         if len(alerts) != len(ids):
             raise HTTPException(status_code=404, detail="One or more alerts not found")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for alert in alerts:
             alert.status = AlertStatus.acknowledged
             alert.acknowledged_at = now
@@ -794,7 +799,7 @@ class Alerts(ListResponseMixin):
         alerts = db.query(Alert).filter(Alert.id.in_(ids)).all()
         if len(alerts) != len(ids):
             raise HTTPException(status_code=404, detail="One or more alerts not found")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for alert in alerts:
             alert.status = AlertStatus.resolved
             alert.resolved_at = now

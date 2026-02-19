@@ -9,13 +9,14 @@ from __future__ import annotations
 import ipaddress
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.wireguard import (
     WireGuardConnectionLog,
     WireGuardPeer,
@@ -42,7 +43,6 @@ from app.services.wireguard_crypto import (
     hash_token,
     validate_key,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain
 
 
 def _ensure_utc_aware(dt: datetime) -> datetime:
@@ -52,8 +52,8 @@ def _ensure_utc_aware(dt: datetime) -> datetime:
     naive, even when columns are declared with timezone=True.
     """
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _sanitize_interface_name(name: str, max_len: int = 15) -> str:
@@ -402,7 +402,7 @@ class WireGuardServerService:
         active_peers = sum(1 for p in peers if p.status == WireGuardPeerStatus.active)
 
         # Count peers with recent handshake (within 3 minutes)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         connected_peers = sum(
             1
             for p in peers
@@ -505,7 +505,7 @@ class WireGuardPeerService:
         # Generate provisioning token
         provision_token = generate_provision_token()
         token_hash = hash_token(provision_token)
-        token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        token_expires = datetime.now(UTC) + timedelta(hours=24)
 
         peer = WireGuardPeer(
             server_id=server.id,
@@ -684,7 +684,7 @@ class WireGuardPeerService:
 
         token = generate_provision_token()
         peer.provision_token_hash = hash_token(token)
-        peer.provision_token_expires_at = datetime.now(timezone.utc) + timedelta(
+        peer.provision_token_expires_at = datetime.now(UTC) + timedelta(
             hours=expires_in_hours
         )
 
@@ -713,7 +713,7 @@ class WireGuardPeerService:
 
         if peer.provision_token_expires_at:
             expires_at = _ensure_utc_aware(peer.provision_token_expires_at)
-            if expires_at < datetime.now(timezone.utc):
+            if expires_at < datetime.now(UTC):
                 return None  # Token expired
 
         return peer
@@ -778,7 +778,7 @@ class WireGuardPeerService:
 
         lines = [
             "# WireGuard Peer Configuration",
-            f"# Add this [Peer] section to your WireGuard interface",
+            "# Add this [Peer] section to your WireGuard interface",
             "",
             "[Peer]",
             f"PublicKey = {server.public_key}",
@@ -839,7 +839,7 @@ class WireGuardPeerService:
             "# WireGuard Configuration",
             f"# Peer: {peer.name}",
             f"# Server: {server.name}",
-            f"# Generated: {datetime.now(timezone.utc).isoformat()}",
+            f"# Generated: {datetime.now(UTC).isoformat()}",
             "",
             "[Interface]",
             f"PrivateKey = {private_key}",
@@ -1007,7 +1007,7 @@ class MikroTikScriptService:
             "# WireGuard Configuration for MikroTik RouterOS 7+",
             f"# Peer: {peer.name}",
             f"# Server: {server.name}",
-            f"# Generated: {datetime.now(timezone.utc).isoformat()}",
+            f"# Generated: {datetime.now(UTC).isoformat()}",
             "#",
             "# Run this script on your MikroTik device via terminal or Winbox",
             "",
@@ -1020,7 +1020,7 @@ class MikroTikScriptService:
             "# Create WireGuard interface",
             f'/interface/wireguard/add name="{iface_name}" \\',
             f'    private-key="{private_key}" \\',
-            f"    listen-port=0 \\",
+            "    listen-port=0 \\",
             f"    mtu={server.mtu}",
             "",
             "# Add IP address",
@@ -1044,14 +1044,14 @@ class MikroTikScriptService:
             "    /interface/wireguard/peers/remove $serverPeer",
             "}",
             "",
-            f"/interface/wireguard/peers/add \\",
+            "/interface/wireguard/peers/add \\",
             f'    interface="{iface_name}" \\',
             f'    public-key="{server.public_key}" \\',
             f'    endpoint-address="{host}" \\',
             f"    endpoint-port={port} \\",
             f'    allowed-address="{",".join(allowed_addresses)}" \\',
             f"    persistent-keepalive={peer.persistent_keepalive}s"
-            + (f' \\' if preshared_key else ''),
+            + (' \\' if preshared_key else ''),
         ])
 
         if preshared_key:
@@ -1115,7 +1115,7 @@ class WireGuardConnectionLogService:
         """Log a connection event."""
         log = WireGuardConnectionLog(
             peer_id=peer_id if isinstance(peer_id, uuid.UUID) else uuid.UUID(peer_id),
-            connected_at=datetime.now(timezone.utc),
+            connected_at=datetime.now(UTC),
             endpoint_ip=endpoint_ip,
             peer_address=peer_address,
         )
@@ -1149,7 +1149,7 @@ class WireGuardConnectionLogService:
         if not log:
             raise HTTPException(status_code=404, detail="Connection log not found")
 
-        log.disconnected_at = datetime.now(timezone.utc)
+        log.disconnected_at = datetime.now(UTC)
         log.rx_bytes = rx_bytes
         log.tx_bytes = tx_bytes
         log.disconnect_reason = reason
@@ -1230,7 +1230,7 @@ class WireGuardConnectionLogService:
         Returns:
             Number of deleted records
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         result = cast(
             int,
             db.query(WireGuardConnectionLog)

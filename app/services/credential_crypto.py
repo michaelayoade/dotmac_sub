@@ -155,7 +155,7 @@ def decrypt_credential(value: str | None) -> str | None:
             decrypted = fernet.decrypt(value[4:].encode("ascii"))
             return decrypted.decode("utf-8")
         except InvalidToken as e:
-            raise ValueError(f"Failed to decrypt credential: invalid token") from e
+            raise ValueError("Failed to decrypt credential: invalid token") from e
         except Exception as e:
             raise ValueError(f"Failed to decrypt credential: {e}") from e
 

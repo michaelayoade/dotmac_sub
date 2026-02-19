@@ -21,10 +21,6 @@ from app.models.catalog import (
     ServiceType,
 )
 from app.models.domain_settings import SettingDomain
-from app.services.common import apply_ordering, apply_pagination, validate_enum
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services import settings_spec
 from app.schemas.catalog import (
     CatalogOfferCreate,
     CatalogOfferUpdate,
@@ -35,6 +31,10 @@ from app.schemas.catalog import (
     OfferVersionPriceUpdate,
     OfferVersionUpdate,
 )
+from app.services import settings_spec
+from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
 
 
 class Offers(CRUDManager[CatalogOffer]):

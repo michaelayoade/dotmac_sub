@@ -3,7 +3,13 @@ from __future__ import annotations
 import builtins
 
 from fastapi import HTTPException
-from geoalchemy2.functions import ST_Contains, ST_Distance, ST_DWithin, ST_MakePoint, ST_SetSRID
+from geoalchemy2.functions import (
+    ST_Contains,
+    ST_Distance,
+    ST_DWithin,
+    ST_MakePoint,
+    ST_SetSRID,
+)
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -16,10 +22,6 @@ from app.models.gis import (
     GeoLocation,
     GeoLocationType,
 )
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
-from app.services.crud import CRUDManager
-from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services.response import ListResponseMixin, list_response
 from app.schemas.gis import (
     GeoAreaUpdate,
     GeoFeatureCollectionRead,
@@ -27,7 +29,14 @@ from app.schemas.gis import (
     GeoLayerUpdate,
     GeoLocationUpdate,
 )
-
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
+from app.services.crud import CRUDManager
+from app.services.query_builders import apply_active_state, apply_optional_equals
+from app.services.response import ListResponseMixin, list_response
 
 
 class GeoLocations(CRUDManager[GeoLocation]):

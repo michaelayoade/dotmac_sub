@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pyotp
 import pytest
@@ -9,8 +9,8 @@ from fastapi.routing import APIRoute
 from starlette.requests import Request
 
 from app.api.auth_flow import router as auth_flow_router
-from app.models.auth import Session as AuthSession, SessionStatus, UserCredential
-from app.models.auth import AuthProvider
+from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import Session as AuthSession
 from app.services.auth_dependencies import require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password
 
@@ -188,7 +188,7 @@ def test_refresh_expired_token_marks_session(db_session, person):
         person_id=person.id,
         status=SessionStatus.active,
         token_hash=hashlib.sha256(refresh_token.encode("utf-8")).hexdigest(),
-        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
     )
     db_session.add(session)
     db_session.commit()

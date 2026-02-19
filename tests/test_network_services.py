@@ -1,16 +1,17 @@
 """Tests for network service."""
 
 import pytest
+
 from app.models.network import IPVersion
 from app.schemas.network import (
+    FdhCabinetCreate,
+    FiberSegmentCreate,
+    FiberSpliceClosureCreate,
     IpPoolCreate,
     OLTDeviceCreate,
     PonPortCreate,
-    FdhCabinetCreate,
     SplitterCreate,
     SplitterPortCreate,
-    FiberSpliceClosureCreate,
-    FiberSegmentCreate,
 )
 from app.services import network as network_service
 
@@ -166,52 +167,42 @@ def test_create_fiber_segment(db_session):
 # =============================================================================
 
 import uuid
+
 from fastapi import HTTPException
+
 from app.schemas.network import (
-    IpPoolUpdate,
-    OLTDeviceUpdate,
     FdhCabinetUpdate,
-    SplitterUpdate,
-    SplitterPortUpdate,
-    FiberSpliceClosureUpdate,
     FiberSegmentUpdate,
-    VlanCreate,
-    VlanUpdate,
+    FiberSpliceClosureUpdate,
+    FiberSpliceCreate,
+    FiberSpliceTrayCreate,
+    FiberSpliceTrayUpdate,
+    FiberSpliceUpdate,
+    FiberStrandCreate,
+    FiberStrandUpdate,
+    FiberTerminationPointCreate,
+    FiberTerminationPointUpdate,
+    IpBlockCreate,
+    IpBlockUpdate,
+    IpPoolUpdate,
+    OltCardCreate,
+    OltCardPortCreate,
+    OltCardPortUpdate,
+    OltCardUpdate,
+    OLTDeviceUpdate,
+    OltShelfCreate,
+    OltShelfUpdate,
+    OntUnitCreate,
+    OntUnitUpdate,
+    PonPortUpdate,
     PortCreate,
     PortUpdate,
     PortVlanCreate,
     PortVlanUpdate,
-    IpBlockCreate,
-    IpBlockUpdate,
-    IPv4AddressCreate,
-    IPv4AddressUpdate,
-    IPv6AddressCreate,
-    IPv6AddressUpdate,
-    OntUnitCreate,
-    OntUnitUpdate,
-    OltShelfCreate,
-    OltShelfUpdate,
-    OltCardCreate,
-    OltCardUpdate,
-    OltCardPortCreate,
-    OltCardPortUpdate,
-    PonPortUpdate,
-    FiberStrandCreate,
-    FiberStrandUpdate,
-    FiberSpliceCreate,
-    FiberSpliceUpdate,
-    FiberSpliceTrayCreate,
-    FiberSpliceTrayUpdate,
-    FiberTerminationPointCreate,
-    FiberTerminationPointUpdate,
-    SplitterPortAssignmentCreate,
-    SplitterPortAssignmentUpdate,
-    PonPortSplitterLinkCreate,
-    PonPortSplitterLinkUpdate,
-    OltPowerUnitCreate,
-    OltPowerUnitUpdate,
-    OltSfpModuleCreate,
-    OltSfpModuleUpdate,
+    SplitterPortUpdate,
+    SplitterUpdate,
+    VlanCreate,
+    VlanUpdate,
 )
 
 

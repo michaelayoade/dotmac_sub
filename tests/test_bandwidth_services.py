@@ -1,6 +1,6 @@
 """Tests for bandwidth service."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services import bandwidth as bandwidth_service
@@ -14,7 +14,7 @@ def test_create_bandwidth_sample(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=1000000,
             tx_bps=500000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     assert sample.subscription_id == subscription.id
@@ -30,7 +30,7 @@ def test_list_bandwidth_samples_by_subscription(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=100000,
             tx_bps=50000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     bandwidth_service.bandwidth_samples.create(
@@ -39,7 +39,7 @@ def test_list_bandwidth_samples_by_subscription(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=200000,
             tx_bps=100000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
 
@@ -65,7 +65,7 @@ def test_update_bandwidth_sample(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=100000,
             tx_bps=50000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     updated = bandwidth_service.bandwidth_samples.update(
@@ -85,13 +85,13 @@ def test_delete_bandwidth_sample(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=100000,
             tx_bps=50000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     bandwidth_service.bandwidth_samples.delete(db_session, str(sample.id))
     # Bandwidth samples use hard delete, not soft delete
-    from fastapi import HTTPException
     import pytest
+    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
         bandwidth_service.bandwidth_samples.get(db_session, str(sample.id))
     assert exc_info.value.status_code == 404
@@ -105,7 +105,7 @@ def test_get_bandwidth_sample(db_session, subscription):
             subscription_id=subscription.id,
             rx_bps=500000,
             tx_bps=250000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     fetched = bandwidth_service.bandwidth_samples.get(db_session, str(sample.id))
@@ -123,7 +123,7 @@ def test_bandwidth_sample_with_device(db_session, subscription, network_device):
             device_id=network_device.id,
             rx_bps=2000000,
             tx_bps=1000000,
-            sample_at=datetime.now(timezone.utc),
+            sample_at=datetime.now(UTC),
         ),
     )
     assert sample.device_id == network_device.id
@@ -131,7 +131,7 @@ def test_bandwidth_sample_with_device(db_session, subscription, network_device):
 
 def test_list_bandwidth_samples_order_by_sample_at(db_session, subscription):
     """Test listing bandwidth samples ordered by sample_at."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     bandwidth_service.bandwidth_samples.create(
         db_session,
         BandwidthSampleCreate(

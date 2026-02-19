@@ -1,22 +1,22 @@
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from jose import jwt
 from fastapi import HTTPException
+from jose import jwt
 from starlette.requests import Request
 
-from app.models.auth import ApiKey, Session as AuthSession, SessionStatus
+from app.models.auth import ApiKey, AuthProvider, SessionStatus, UserCredential
+from app.models.auth import Session as AuthSession
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
+from app.services import auth_dependencies as auth_dep
+from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
-from app.services.auth import hash_api_key
-from app.services import auth_dependencies as auth_dep
-from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
-from app.models.auth import AuthProvider, UserCredential
 
 
 def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None = None, roles: list[str] | None = None):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": person_id,
         "session_id": session_id,
@@ -66,7 +66,7 @@ def test_require_user_auth_rejects_expired_session(db_session, person, monkeypat
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -84,7 +84,7 @@ def test_require_audit_auth_accepts_api_key(db_session, person):
         label="test",
         key_hash=hash_api_key(raw_key),
         is_active=True,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(api_key)
     db_session.commit()
@@ -104,7 +104,7 @@ def test_require_audit_auth_requires_scope(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -121,7 +121,7 @@ def test_require_audit_auth_accepts_scope(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -138,7 +138,7 @@ def test_require_audit_auth_accepts_session_token(db_session, person):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash=hash_session_token(refresh_token),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -158,7 +158,7 @@ def test_extract_bearer_and_scope_helpers():
     assert auth_dep._has_audit_scope({"scopes": ["other"]}) is False
     naive = datetime.now()
     assert auth_dep._as_utc(naive).tzinfo is not None
-    aware = datetime.now(timezone.utc)
+    aware = datetime.now(UTC)
     assert auth_dep._as_utc(aware) == aware
     assert auth_dep._as_utc(None) is None
     assert auth_dep._has_audit_scope({"role": "admin"}) is True
@@ -170,7 +170,7 @@ def test_require_role_and_permission(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -231,8 +231,8 @@ def test_require_audit_auth_revoked_session(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        revoked_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -247,7 +247,7 @@ def test_require_audit_auth_sets_actor_id(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -264,7 +264,7 @@ def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash=hash_session_token(refresh_token),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -283,7 +283,7 @@ def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
         label="test",
         key_hash=hash_api_key(raw_key),
         is_active=True,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(api_key)
     db_session.commit()
@@ -301,7 +301,7 @@ def test_require_role_missing_role(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -319,7 +319,7 @@ def test_require_role_short_circuit(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -335,7 +335,7 @@ def test_require_permission_missing_permission(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()
@@ -353,7 +353,7 @@ def test_require_permission_short_circuit(db_session, person, monkeypatch):
         subscriber_id=person.id,
         status=SessionStatus.active,
         token_hash="hash",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
     db_session.commit()

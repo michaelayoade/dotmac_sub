@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
-from uuid import UUID
 from typing import cast
+from uuid import UUID
 
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
 from app.schemas.webhook import WebhookEndpointCreate, WebhookSubscriptionCreate
+from app.services import billing as billing_service
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import webhook as webhook_service
-from app.services import billing as billing_service
 from app.services.common import validate_enum
 
 
@@ -38,7 +38,7 @@ def _parse_json(value: str | None, field: str) -> dict | None:
 
 
 def connector_form_options() -> dict[str, object]:
-    from app.models.connector import ConnectorType, ConnectorAuthType
+    from app.models.connector import ConnectorAuthType, ConnectorType
 
     return {
         "connector_types": [t.value for t in ConnectorType],

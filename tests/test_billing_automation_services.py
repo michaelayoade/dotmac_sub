@@ -1,13 +1,10 @@
 """Tests for billing automation services."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-
-import pytest
 
 from app.models.catalog import BillingCycle
 from app.services import billing_automation
-
 
 # =============================================================================
 # _add_months Tests
@@ -118,8 +115,13 @@ class TestResolvePrice:
     def test_price_from_offer_version(self, db_session, subscription):
         """Test getting price from offer version."""
         from app.models.catalog import (
-            OfferVersion, OfferVersionPrice, PriceType, BillingCycle,
-            ServiceType, AccessType, PriceBasis
+            AccessType,
+            BillingCycle,
+            OfferVersion,
+            OfferVersionPrice,
+            PriceBasis,
+            PriceType,
+            ServiceType,
         )
 
         # Create offer version with price
@@ -154,7 +156,7 @@ class TestResolvePrice:
 
     def test_price_from_offer(self, db_session, subscription):
         """Test getting price from offer when no version price."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle
+        from app.models.catalog import BillingCycle, OfferPrice, PriceType
 
         # Create offer price
         offer_price = OfferPrice(
@@ -192,9 +194,9 @@ class TestResolveTaxRateId:
 
     def test_tax_rate_from_service_address(self, db_session, subscription, subscriber):
         """Test getting tax rate from service address."""
-        from app.models.subscriber import Address
+
         from app.models.billing import TaxRate
-        import uuid
+        from app.models.subscriber import Address
 
         # Create tax rate
         tax_rate = TaxRate(
@@ -339,11 +341,16 @@ class TestRunInvoiceCycle:
 
     def test_dry_run_no_changes(self, db_session, subscription, subscriber_account):
         """Test dry run doesn't create invoices."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
         # Use naive datetime (SQLite stores naive)
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         # Ensure subscription and account are active
         subscription.status = SubscriptionStatus.active
@@ -373,11 +380,16 @@ class TestRunInvoiceCycle:
 
     def test_creates_invoice_for_active_subscription(self, db_session, subscription, subscriber_account):
         """Test creates invoice for active subscription."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
-        from app.models.subscriber import AccountStatus
         from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         # Setup active subscription
         subscription.status = SubscriptionStatus.active
@@ -420,7 +432,7 @@ class TestRunInvoiceCycle:
         from app.models.catalog import SubscriptionStatus
         from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
@@ -436,10 +448,15 @@ class TestRunInvoiceCycle:
 
     def test_skips_future_billing_date(self, db_session, subscription, subscriber_account):
         """Test skips subscription with future billing date."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
@@ -465,7 +482,12 @@ class TestRunInvoiceCycle:
 
     def test_skips_inactive_subscription(self, db_session, subscription, subscriber_account):
         """Test skips inactive subscription."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
         subscription.status = SubscriptionStatus.canceled  # Inactive
@@ -490,7 +512,12 @@ class TestRunInvoiceCycle:
 
     def test_skips_inactive_account(self, db_session, subscription, subscriber_account):
         """Test skips subscription with inactive account."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
         subscription.status = SubscriptionStatus.active
@@ -514,10 +541,15 @@ class TestRunInvoiceCycle:
 
     def test_filter_by_billing_cycle(self, db_session, subscription, subscriber_account):
         """Test filtering by billing cycle."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
@@ -549,10 +581,15 @@ class TestRunInvoiceCycle:
 
     def test_skips_ended_subscription(self, db_session, subscription, subscriber_account):
         """Test skips subscription that has ended."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
@@ -578,10 +615,15 @@ class TestRunInvoiceCycle:
 
     def test_updates_next_billing_at(self, db_session, subscription, subscriber_account):
         """Test updates next_billing_at after invoicing."""
-        from app.models.catalog import OfferPrice, PriceType, BillingCycle, SubscriptionStatus
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
         from app.models.subscriber import AccountStatus
 
-        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
 
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active

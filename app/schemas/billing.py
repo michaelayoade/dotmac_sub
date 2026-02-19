@@ -62,7 +62,7 @@ class InvoiceUpdate(BaseModel):
     is_active: bool | None = None
 
     @model_validator(mode="after")
-    def _validate_status_timestamps(self) -> "InvoiceUpdate":
+    def _validate_status_timestamps(self) -> InvoiceUpdate:
         fields_set = self.model_fields_set
         if "status" in fields_set and self.status == InvoiceStatus.paid:
             if "paid_at" not in fields_set or self.paid_at is None:
@@ -300,7 +300,7 @@ class PaymentBase(BaseModel):
 
 
 class PaymentCreate(PaymentBase):
-    allocations: list["PaymentAllocationApply"] | None = None
+    allocations: list[PaymentAllocationApply] | None = None
 
 
 class PaymentUpdate(BaseModel):
@@ -324,7 +324,7 @@ class PaymentRead(PaymentBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
-    allocations: list["PaymentAllocationRead"] = Field(default_factory=list)
+    allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
 
 class PaymentAllocationBase(BaseModel):

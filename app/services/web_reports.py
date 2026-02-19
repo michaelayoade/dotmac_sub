@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -22,7 +22,7 @@ def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -125,7 +125,7 @@ def get_network_report_data(db: Session, hours: int | None = None) -> dict:
         offset=0,
     )
     if hours:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff = datetime.now(UTC) - timedelta(hours=hours)
         onts = [
             ont
             for ont in onts
@@ -228,8 +228,9 @@ def _account_display_name(account: object | None) -> str:
     name = f"{getattr(account, 'first_name', '')} {getattr(account, 'last_name', '')}".strip()
     if name:
         return name
-    if getattr(account, "display_name", None):
-        return str(getattr(account, "display_name"))
+    display_name = getattr(account, "display_name", None)
+    if display_name:
+        return str(display_name)
     return getattr(account, "account_number", "") or str(getattr(account, "id", ""))
 
 
@@ -238,7 +239,7 @@ def _payment_primary_invoice_id(payment) -> str | None:
         return None
     allocation = min(
         payment.allocations,
-        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=UTC),
     )
     return str(allocation.invoice_id)
 
@@ -316,7 +317,7 @@ def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
         offset=0,
     )
     if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         payments = [p for p in payments if p.paid_at and p.paid_at >= cutoff]
     output = io.StringIO()
     writer = csv.writer(output)
@@ -381,7 +382,7 @@ def get_subscribers_report_data(db: Session) -> dict:
         key=lambda x: x.created_at if x.created_at else datetime.min,
         reverse=True,
     )[:10]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     new_this_month = len(
         [
@@ -414,7 +415,7 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
         offset=0,
     )
     if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         all_subscribers = [
             sub
             for sub in all_subscribers
@@ -503,7 +504,7 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
     for sub in all_subscribers:
         sub.status = _derive_subscriber_status(sub)
     if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         all_subscribers = [
             sub
             for sub in all_subscribers
@@ -605,7 +606,7 @@ def build_technician_export_csv(db: Session, days: int | None = None) -> str:
         offset=0,
     )
     if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         all_orders = [
             order for order in all_orders if order.created_at and order.created_at >= cutoff
         ]

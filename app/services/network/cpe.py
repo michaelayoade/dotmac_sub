@@ -25,15 +25,14 @@ from app.schemas.network import (
     VlanUpdate,
 )
 from app.services import settings_spec
+from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
 )
-from app.services.common import coerce_uuid
 from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services.response import ListResponseMixin
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)

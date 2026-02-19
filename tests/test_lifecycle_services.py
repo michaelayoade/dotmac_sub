@@ -1,7 +1,10 @@
 """Tests for lifecycle service."""
 
 from app.models.lifecycle import LifecycleEventType
-from app.schemas.lifecycle import SubscriptionLifecycleEventCreate, SubscriptionLifecycleEventUpdate
+from app.schemas.lifecycle import (
+    SubscriptionLifecycleEventCreate,
+    SubscriptionLifecycleEventUpdate,
+)
 from app.services import lifecycle as lifecycle_service
 
 

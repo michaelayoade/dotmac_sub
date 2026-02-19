@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 
 from starlette.requests import Request
 from starlette.responses import Response

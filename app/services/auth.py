@@ -2,29 +2,28 @@ import hashlib
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
 
-from fastapi import HTTPException, Request
 import redis
-from sqlalchemy.orm import Session
+from fastapi import HTTPException, Request
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.models.auth import (
     ApiKey,
     AuthProvider,
     MFAMethod,
     MFAMethodType,
-    Session as AuthSession,
     SessionStatus,
     UserCredential,
 )
-from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
-from app.services.response import ListResponseMixin
-from app.models.radius import RadiusServer
+from app.models.auth import (
+    Session as AuthSession,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.radius import RadiusServer
 from app.models.subscriber import Subscriber
-from app.services import settings_spec
 from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
@@ -36,6 +35,14 @@ from app.schemas.auth import (
     UserCredentialCreate,
     UserCredentialUpdate,
 )
+from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 
 def hash_api_key(value: str) -> str:
@@ -398,7 +405,7 @@ class Sessions(ListResponseMixin):
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         session.status = SessionStatus.revoked
-        session.revoked_at = datetime.now(timezone.utc)
+        session.revoked_at = datetime.now(UTC)
         db.commit()
 
 
@@ -522,7 +529,7 @@ class ApiKeys(ListResponseMixin):
         if not api_key:
             raise HTTPException(status_code=404, detail="API key not found")
         api_key.is_active = False
-        api_key.revoked_at = datetime.now(timezone.utc)
+        api_key.revoked_at = datetime.now(UTC)
         db.commit()
 
     @staticmethod

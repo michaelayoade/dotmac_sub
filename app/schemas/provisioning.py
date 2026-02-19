@@ -15,6 +15,7 @@ from app.models.provisioning import (
     ServiceState,
     TaskStatus,
 )
+
 # Deleted model - commented out
 # from app.models.projects import ProjectType
 ProjectType = str  # Fallback type alias
@@ -80,7 +81,7 @@ class InstallAppointmentUpdate(BaseModel):
     is_self_install: bool | None = None
 
     @model_validator(mode="after")
-    def _validate_schedule_order(self) -> "InstallAppointmentUpdate":
+    def _validate_schedule_order(self) -> InstallAppointmentUpdate:
         if self.scheduled_start and self.scheduled_end:
             if self.scheduled_start >= self.scheduled_end:
                 raise ValueError("scheduled_start must be before scheduled_end")

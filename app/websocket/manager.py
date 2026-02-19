@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState

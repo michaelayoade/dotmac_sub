@@ -5,8 +5,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.notification import DeliveryStatus, NotificationChannel, NotificationStatus
 from app.models.network_monitoring import AlertSeverity, AlertStatus
+from app.models.notification import (
+    DeliveryStatus,
+    NotificationChannel,
+    NotificationStatus,
+)
 
 
 class NotificationTemplateBase(BaseModel):

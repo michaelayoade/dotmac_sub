@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_reseller_auth as web_reseller_auth_service
+
 router = APIRouter(prefix="/reseller/auth", tags=["web-reseller-auth"])
 
 

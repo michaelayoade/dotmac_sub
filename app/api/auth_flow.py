@@ -1,6 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
-from sqlalchemy.orm import Session
 from typing import cast
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from sqlalchemy.orm import Session
+
 from app.db import get_db
 from app.schemas.auth import MFAMethodRead
 from app.schemas.auth_flow import (

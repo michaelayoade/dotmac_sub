@@ -26,7 +26,6 @@ from app.schemas.wireguard import (
 )
 from app.services import wireguard as wg_service
 
-
 router = APIRouter(prefix="/wireguard", tags=["wireguard"])
 public_router = APIRouter(prefix="/wireguard-provision", tags=["wireguard-provisioning-public"])
 

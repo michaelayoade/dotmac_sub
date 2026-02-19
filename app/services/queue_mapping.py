@@ -6,7 +6,6 @@ allowing the poller to associate bandwidth samples with the correct subscriber.
 """
 import logging
 import uuid
-from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -62,7 +61,7 @@ class QueueMappingService:
         db: Session,
         nas_device_id: uuid.UUID,
         queue_name: str,
-    ) -> Optional[QueueMapping]:
+    ) -> QueueMapping | None:
         """
         Get a queue mapping by NAS device and queue name.
 
@@ -89,7 +88,7 @@ class QueueMappingService:
         db: Session,
         nas_device_id: uuid.UUID,
         queue_name: str,
-    ) -> Optional[uuid.UUID]:
+    ) -> uuid.UUID | None:
         """
         Resolve a queue name to a subscription ID.
 
@@ -178,9 +177,9 @@ class QueueMappingService:
     def update(
         db: Session,
         mapping_id: uuid.UUID,
-        queue_name: Optional[str] = None,
-        subscription_id: Optional[uuid.UUID] = None,
-        is_active: Optional[bool] = None,
+        queue_name: str | None = None,
+        subscription_id: uuid.UUID | None = None,
+        is_active: bool | None = None,
     ) -> QueueMapping:
         """
         Update a queue mapping.

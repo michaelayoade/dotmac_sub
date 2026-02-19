@@ -3,8 +3,11 @@ import logging
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.network_monitoring import NetworkDevice
+from app.services.snmp_discovery import (
+    apply_interface_snapshot,
+    collect_interface_snapshot,
+)
 from app.services.vpn_routing import VpnRoutingError, ensure_vpn_ready
-from app.services.snmp_discovery import apply_interface_snapshot, collect_interface_snapshot
 
 logger = logging.getLogger(__name__)
 

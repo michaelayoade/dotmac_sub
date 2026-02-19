@@ -1,7 +1,6 @@
 from datetime import datetime
-from app.schemas.common import ListResponse
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -20,6 +19,7 @@ from app.schemas.collections import (
     DunningRunRequest,
     DunningRunResponse,
 )
+from app.schemas.common import ListResponse
 from app.schemas.lifecycle import (
     SubscriptionLifecycleEventCreate,
     SubscriptionLifecycleEventRead,
@@ -28,21 +28,21 @@ from app.schemas.network import (
     CPEDeviceCreate,
     CPEDeviceRead,
     CPEDeviceUpdate,
-    FiberSegmentCreate,
-    FiberSegmentRead,
-    FiberSegmentUpdate,
     FdhCabinetCreate,
     FdhCabinetRead,
     FdhCabinetUpdate,
+    FiberSegmentCreate,
+    FiberSegmentRead,
+    FiberSegmentUpdate,
     FiberSpliceClosureCreate,
     FiberSpliceClosureRead,
     FiberSpliceClosureUpdate,
     FiberSpliceCreate,
     FiberSpliceRead,
-    FiberSpliceUpdate,
     FiberSpliceTrayCreate,
     FiberSpliceTrayRead,
     FiberSpliceTrayUpdate,
+    FiberSpliceUpdate,
     FiberStrandCreate,
     FiberStrandRead,
     FiberStrandUpdate,
@@ -64,6 +64,12 @@ from app.schemas.network import (
     IPv6AddressCreate,
     IPv6AddressRead,
     IPv6AddressUpdate,
+    OltCardCreate,
+    OltCardPortCreate,
+    OltCardPortRead,
+    OltCardPortUpdate,
+    OltCardRead,
+    OltCardUpdate,
     OLTDeviceCreate,
     OLTDeviceRead,
     OLTDeviceUpdate,
@@ -73,12 +79,6 @@ from app.schemas.network import (
     OltSfpModuleCreate,
     OltSfpModuleRead,
     OltSfpModuleUpdate,
-    OltCardCreate,
-    OltCardPortCreate,
-    OltCardPortRead,
-    OltCardPortUpdate,
-    OltCardRead,
-    OltCardUpdate,
     OltShelfCreate,
     OltShelfRead,
     OltShelfUpdate,
@@ -90,10 +90,10 @@ from app.schemas.network import (
     OntUnitUpdate,
     PonPortCreate,
     PonPortRead,
-    PonPortUpdate,
     PonPortSplitterLinkCreate,
     PonPortSplitterLinkRead,
     PonPortSplitterLinkUpdate,
+    PonPortUpdate,
     PortCreate,
     PortRead,
     PortUpdate,
@@ -112,10 +112,11 @@ from app.schemas.network import (
     VlanRead,
     VlanUpdate,
 )
+from app.schemas.network_metrics import FiberPathRead, PortUtilizationRead
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
-    AlertBulkActionResponse,
     AlertBulkAcknowledgeRequest,
+    AlertBulkActionResponse,
     AlertBulkResolveRequest,
     AlertEventRead,
     AlertRead,
@@ -139,7 +140,6 @@ from app.schemas.network_monitoring import (
     UptimeReportRequest,
     UptimeReportResponse,
 )
-from app.schemas.network_metrics import FiberPathRead, PortUtilizationRead
 from app.schemas.provisioning import (
     InstallAppointmentCreate,
     InstallAppointmentRead,
@@ -225,23 +225,43 @@ from app.schemas.usage import (
     UsageChargePostBatchResponse,
     UsageChargePostRequest,
     UsageChargeRead,
-    UsageRecordCreate,
-    UsageRecordRead,
     UsageRatingRunRead,
     UsageRatingRunRequest,
     UsageRatingRunResponse,
+    UsageRecordCreate,
+    UsageRecordRead,
 )
 from app.services import (
     bandwidth as bandwidth_service,
+)
+from app.services import (
     collections as collections_service,
+)
+from app.services import (
     lifecycle as lifecycle_service,
+)
+from app.services import (
     network as network_service,
+)
+from app.services import (
     network_monitoring as monitoring_service,
+)
+from app.services import (
     provisioning as provisioning_service,
+)
+from app.services import (
     radius as radius_service,
+)
+from app.services import (
     snmp as snmp_service,
+)
+from app.services import (
     subscription_engine as subscription_engine_service,
+)
+from app.services import (
     tr069 as tr069_service,
+)
+from app.services import (
     usage as usage_service,
 )
 

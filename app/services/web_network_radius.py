@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+from typing import cast
 
 from sqlalchemy.orm import Session
-from typing import cast
 
 from app.models.catalog import NasVendor
 from app.models.radius import RadiusServer
-from app.schemas.catalog import RadiusAttributeCreate, RadiusProfileCreate, RadiusProfileUpdate
-from app.schemas.radius import RadiusClientCreate
-from app.schemas.radius import RadiusClientUpdate, RadiusServerCreate, RadiusServerUpdate
+from app.schemas.catalog import (
+    RadiusAttributeCreate,
+    RadiusProfileCreate,
+    RadiusProfileUpdate,
+)
+from app.schemas.radius import (
+    RadiusClientCreate,
+    RadiusClientUpdate,
+    RadiusServerCreate,
+    RadiusServerUpdate,
+)
 from app.services import catalog as catalog_service
 from app.services import radius as radius_service
 from app.services.audit_helpers import diff_dicts, model_to_dict

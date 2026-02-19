@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.admin.system import (
-    UsersPage,
-    RolesPage,
     APIKeysPage,
-    WebhooksPage,
     AuditPage,
+    RolesPage,
     SettingsPage,
+    UsersPage,
+    WebhooksPage,
 )
 
 

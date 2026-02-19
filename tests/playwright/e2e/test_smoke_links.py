@@ -4,7 +4,6 @@ import os
 from collections import deque
 from urllib.parse import urljoin, urlparse, urlunparse
 
-
 EXCLUDED_PATH_SNIPPETS = {
     "/logout",
     "/stop-impersonation",

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,9 +15,9 @@ from app.services import subscriber as subscriber_service
 def build_contacts_index_context(
     db: Session,
     *,
-    search: Optional[str],
-    status: Optional[str],
-    entity_type: Optional[str],
+    search: str | None,
+    status: str | None,
+    entity_type: str | None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
@@ -115,7 +115,7 @@ def build_contacts_index_context(
             )
 
     contacts.sort(
-        key=lambda item: item["created_at"] or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda item: item["created_at"] or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
 
@@ -163,8 +163,8 @@ def build_contacts_index_context(
 def build_customers_index_context(
     db: Session,
     *,
-    search: Optional[str],
-    customer_type: Optional[str],
+    search: str | None,
+    customer_type: str | None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:

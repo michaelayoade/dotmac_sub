@@ -3,10 +3,10 @@ import time
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
-from app.services import gis_sync as gis_sync_service
-from app.services.scheduler_config import _effective_bool
 from app.metrics import observe_job
 from app.models.domain_settings import SettingDomain
+from app.services import gis_sync as gis_sync_service
+from app.services.scheduler_config import _effective_bool
 
 logger = logging.getLogger(__name__)
 

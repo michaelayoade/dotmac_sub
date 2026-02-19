@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,7 @@ def revoke_api_key(db: Session, *, key_id: str) -> bool:
     api_key = db.get(ApiKey, coerce_uuid(key_id))
     if not api_key:
         return False
-    api_key.revoked_at = datetime.now(timezone.utc)
+    api_key.revoked_at = datetime.now(UTC)
     api_key.is_active = False
     db.commit()
     return True

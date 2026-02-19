@@ -6,9 +6,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import gis as gis_service
+from app.models.gis import GeoAreaType, GeoLocationType
 from app.schemas.gis import GeoLocationCreate, GeoLocationUpdate
-from app.models.gis import GeoLocationType, GeoAreaType
+from app.services import gis as gis_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
 
 @router.get("", response_class=HTMLResponse)
 def gis_index(request: Request, tab: str = "locations", db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     # Get GIS data
     locations = gis_service.geo_locations.list(
@@ -53,7 +53,7 @@ def gis_index(request: Request, tab: str = "locations", db: Session = Depends(ge
 
 @router.get("/locations/new", response_class=HTMLResponse)
 def gis_location_new(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     context = {
         "request": request,
@@ -78,7 +78,7 @@ def gis_location_create(
     is_active: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     try:
         payload = GeoLocationCreate(
@@ -106,7 +106,7 @@ def gis_location_create(
 
 @router.get("/locations/{location_id}/edit", response_class=HTMLResponse)
 def gis_location_edit(request: Request, location_id: str, db: Session = Depends(get_db)):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     location = gis_service.geo_locations.get(db=db, location_id=location_id)
 
@@ -134,7 +134,7 @@ def gis_location_update(
     is_active: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_sidebar_stats, get_current_user
+    from app.web.admin import get_current_user, get_sidebar_stats
 
     try:
         payload = GeoLocationUpdate(

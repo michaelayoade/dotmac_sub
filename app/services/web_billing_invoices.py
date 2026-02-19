@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, TypedDict
+from typing import TypedDict
 from uuid import UUID
 
 from sqlalchemy import select

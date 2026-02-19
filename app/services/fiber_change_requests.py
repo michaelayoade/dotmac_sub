@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -10,7 +10,6 @@ from app.models.fiber_change_request import (
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
-from app.services.common import coerce_uuid
 from app.models.network import (
     FdhCabinet,
     FiberSegment,
@@ -22,6 +21,7 @@ from app.models.network import (
     Splitter,
     SplitterPort,
 )
+from app.services.common import coerce_uuid
 
 ASSET_MODEL_MAP = {
     "fdh_cabinet": FdhCabinet,
@@ -116,7 +116,7 @@ def reject_request(db: Session, request_id: str, reviewer_person_id: str, review
     request.status = FiberChangeRequestStatus.rejected
     request.reviewed_by_person_id = coerce_uuid(reviewer_person_id)
     request.review_notes = review_notes
-    request.reviewed_at = datetime.now(timezone.utc)
+    request.reviewed_at = datetime.now(UTC)
     db.commit()
     db.refresh(request)
     return request
@@ -148,7 +148,7 @@ def _apply_request(db: Session, request: FiberChangeRequest):
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
         if hasattr(asset, "is_active"):
-            setattr(asset, "is_active", False)
+            asset.is_active = False
         else:
             db.delete(asset)
     else:
@@ -163,8 +163,8 @@ def approve_request(db: Session, request_id: str, reviewer_person_id: str, revie
     request.status = FiberChangeRequestStatus.applied
     request.reviewed_by_person_id = coerce_uuid(reviewer_person_id)
     request.review_notes = review_notes
-    request.reviewed_at = datetime.now(timezone.utc)
-    request.applied_at = datetime.now(timezone.utc)
+    request.reviewed_at = datetime.now(UTC)
+    request.applied_at = datetime.now(UTC)
     db.commit()
     db.refresh(request)
     return request

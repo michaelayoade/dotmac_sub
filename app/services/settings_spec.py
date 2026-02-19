@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import HTTPException
 

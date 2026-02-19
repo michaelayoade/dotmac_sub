@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import builtins
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -12,10 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
-from app.services.common import apply_ordering, apply_pagination
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
-from app.services.response import list_response
-from app.services.response import ListResponseMixin
+from app.services.common import apply_ordering, apply_pagination
+from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +139,7 @@ class BandwidthSamples(ListResponseMixin):
         agg: str,
     ):
         if start_at is None and end_at is None:
-            end_at = datetime.now(timezone.utc)
+            end_at = datetime.now(UTC)
             start_at = end_at - timedelta(hours=24)
         rows = BandwidthSamples.series(
             db,
@@ -256,7 +255,7 @@ class BandwidthSamples(ListResponseMixin):
         """
         # Default time range
         if not end_at:
-            end_at = datetime.now(timezone.utc)
+            end_at = datetime.now(UTC)
         if not start_at:
             start_at = end_at - timedelta(hours=24)
 
@@ -288,7 +287,9 @@ class BandwidthSamples(ListResponseMixin):
         else:
             # Query from VictoriaMetrics
             try:
-                from app.services.metrics_store import get_metrics_store, MetricsStoreError
+                from app.services.metrics_store import (
+                    get_metrics_store,
+                )
 
                 metrics_store = get_metrics_store()
                 result = await metrics_store.get_subscription_bandwidth(
@@ -352,11 +353,11 @@ class BandwidthSamples(ListResponseMixin):
             "30d": timedelta(days=30),
         }
         duration = period_map.get(period, timedelta(hours=24))
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         start = end - duration
 
         try:
-            from app.services.metrics_store import get_metrics_store, MetricsStoreError
+            from app.services.metrics_store import get_metrics_store
 
             metrics_store = get_metrics_store()
 
@@ -435,7 +436,7 @@ class BandwidthSamples(ListResponseMixin):
         Returns:
             List of dicts with subscription_id, total_bps, account_name
         """
-        from app.services.metrics_store import get_metrics_store, MetricsStoreError
+        from app.services.metrics_store import MetricsStoreError, get_metrics_store
 
         try:
             metrics_store = get_metrics_store()

@@ -2,7 +2,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.snmp import SnmpCredential, SnmpOid, SnmpPoller, SnmpReading, SnmpTarget
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.schemas.snmp import (
     SnmpCredentialCreate,
     SnmpCredentialUpdate,
@@ -14,6 +13,10 @@ from app.schemas.snmp import (
     SnmpReadingUpdate,
     SnmpTargetCreate,
     SnmpTargetUpdate,
+)
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
 )
 from app.services.response import ListResponseMixin
 

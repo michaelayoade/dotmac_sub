@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
 
-
 ENFORCEMENT_DOMAIN = "enforcement"
 
 # Domain groupings by business function

@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -90,7 +90,7 @@ def deliver_webhook(self, delivery_id: str):
             headers["X-Webhook-Signature-256"] = f"sha256={signature}"
 
         # Update attempt timestamp only - count is incremented on failure
-        delivery.last_attempt_at = datetime.now(timezone.utc)
+        delivery.last_attempt_at = datetime.now(UTC)
         session.commit()
 
         # Make HTTP request
@@ -111,7 +111,7 @@ def deliver_webhook(self, delivery_id: str):
 
         if response.is_success:
             delivery.status = WebhookDeliveryStatus.delivered
-            delivery.delivered_at = datetime.now(timezone.utc)
+            delivery.delivered_at = datetime.now(UTC)
             delivery.error = None
             logger.info(
                 f"Webhook delivered successfully to {endpoint.url} "
@@ -145,7 +145,7 @@ def deliver_webhook(self, delivery_id: str):
             delivery = session.get(WebhookDelivery, delivery_id)
             if delivery:
                 delivery.attempt_count += 1
-                delivery.last_attempt_at = datetime.now(timezone.utc)
+                delivery.last_attempt_at = datetime.now(UTC)
                 delivery.error = str(exc)
 
                 if delivery.attempt_count >= MAX_RETRIES:

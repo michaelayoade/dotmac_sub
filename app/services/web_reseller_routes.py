@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+from uuid import UUID
+
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Any
-from uuid import UUID
 
-from app.services import customer_portal
-from app.services import reseller_portal
+from app.services import customer_portal, reseller_portal
 
 templates = Jinja2Templates(directory="templates")
 
@@ -128,10 +128,19 @@ def reseller_fiber_map(request: Request, db: Session):
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     import json
+
     from sqlalchemy import func
-    from app.models.network import FdhCabinet, FiberSpliceClosure, FiberSegment, Splitter, FiberSplice, FiberSpliceTray
-    from app.services import settings_spec
+
     from app.models.domain_settings import SettingDomain
+    from app.models.network import (
+        FdhCabinet,
+        FiberSegment,
+        FiberSplice,
+        FiberSpliceClosure,
+        FiberSpliceTray,
+        Splitter,
+    )
+    from app.services import settings_spec
 
     features = []
 

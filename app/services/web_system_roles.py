@@ -5,7 +5,8 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.rbac import Permission, Role, SubscriberRole as SubscriberRoleModel
+from app.models.rbac import Permission, Role
+from app.models.rbac import SubscriberRole as SubscriberRoleModel
 
 
 def get_roles_page_data(

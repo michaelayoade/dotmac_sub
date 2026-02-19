@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import math
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -13,14 +13,12 @@ from app.models.qualification import (
     BuildoutProjectStatus,
     BuildoutRequest,
     BuildoutRequestStatus,
-    BuildoutUpdate,
     BuildoutStatus,
+    BuildoutUpdate,
     CoverageArea,
     QualificationStatus,
     ServiceQualification,
 )
-from app.services.response import ListResponseMixin
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.subscriber import Address
 from app.schemas.qualification import (
     BuildoutApproveRequest,
@@ -35,6 +33,12 @@ from app.schemas.qualification import (
     CoverageAreaUpdate,
     ServiceQualificationRequest,
 )
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    validate_enum,
+)
+from app.services.response import ListResponseMixin
 
 
 def _extract_polygon(geometry: dict) -> list[tuple[float, float]]:
@@ -307,7 +311,7 @@ class ServiceQualifications(ListResponseMixin):
             estimated_install_window=estimated_install_window,
             reasons=reasons,
             metadata=payload.metadata_,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         db.add(qualification)
         db.commit()

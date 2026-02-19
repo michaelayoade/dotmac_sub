@@ -6,7 +6,7 @@ Provides Celery tasks for:
 - Expired provision token cleanup
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -68,7 +68,7 @@ def cleanup_expired_tokens() -> dict[str, int]:
     """
     session = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Find all peers with expired tokens
         expired_peers = (
@@ -152,7 +152,7 @@ def generate_connection_log_report(
     """
     session = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
 
         query = session.query(WireGuardConnectionLog).filter(
             WireGuardConnectionLog.connected_at >= cutoff

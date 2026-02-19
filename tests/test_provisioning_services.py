@@ -1,21 +1,23 @@
 """Tests for provisioning service."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.models.provisioning import (
-    ServiceOrderStatus,
     AppointmentStatus,
-    TaskStatus,
-    ServiceState,
     ProvisioningStepType,
+    ServiceOrderStatus,
+    ServiceState,
+    TaskStatus,
 )
 from app.schemas.provisioning import (
-    ServiceOrderCreate, ServiceOrderUpdate,
-    InstallAppointmentCreate, InstallAppointmentUpdate,
-    ProvisioningTaskCreate, ProvisioningTaskUpdate,
-    ProvisioningWorkflowCreate,
-    ProvisioningStepCreate,
+    InstallAppointmentCreate,
     ProvisioningRunCreate,
+    ProvisioningStepCreate,
+    ProvisioningTaskCreate,
+    ProvisioningTaskUpdate,
+    ProvisioningWorkflowCreate,
+    ServiceOrderCreate,
+    ServiceOrderUpdate,
     ServiceStateTransitionCreate,
 )
 from app.services import provisioning as provisioning_service
@@ -119,8 +121,8 @@ def test_create_install_appointment(db_session, subscriber_account, subscription
         db_session,
         InstallAppointmentCreate(
             service_order_id=order.id,
-            scheduled_start=datetime.now(timezone.utc) + timedelta(days=1),
-            scheduled_end=datetime.now(timezone.utc) + timedelta(days=1, hours=2),
+            scheduled_start=datetime.now(UTC) + timedelta(days=1),
+            scheduled_end=datetime.now(UTC) + timedelta(days=1, hours=2),
         ),
     )
     assert appointment.service_order_id == order.id
@@ -140,8 +142,8 @@ def test_list_appointments_by_service_order(db_session, subscriber_account, subs
         db_session,
         InstallAppointmentCreate(
             service_order_id=order.id,
-            scheduled_start=datetime.now(timezone.utc) + timedelta(days=1),
-            scheduled_end=datetime.now(timezone.utc) + timedelta(days=1, hours=2),
+            scheduled_start=datetime.now(UTC) + timedelta(days=1),
+            scheduled_end=datetime.now(UTC) + timedelta(days=1, hours=2),
         ),
     )
 

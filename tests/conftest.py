@@ -1,11 +1,11 @@
 import os
 import sqlite3
 import uuid
+from datetime import UTC
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine, event, TypeDecorator, String
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import String, TypeDecorator, create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -14,9 +14,9 @@ from app.db import Base
 
 class _JoseDateTimeProxy:
     def utcnow(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def now(self, tz: Any | None = None):
         from datetime import datetime
@@ -62,7 +62,6 @@ class SQLiteUUID(TypeDecorator):
 
 # Monkey-patch SQLAlchemy's UUID type for SQLite compatibility
 # This must happen before any models are imported
-from sqlalchemy import Uuid
 from sqlalchemy.sql import sqltypes
 
 _original_uuid_bind_processor = sqltypes.Uuid.bind_processor
@@ -93,14 +92,12 @@ def _sqlite_uuid_result_processor(self, dialect, coltype):
     return _original_uuid_result_processor(self, dialect, coltype)
 
 
-setattr(sqltypes.Uuid, "bind_processor", _sqlite_uuid_bind_processor)
-setattr(sqltypes.Uuid, "result_processor", _sqlite_uuid_result_processor)
+sqltypes.Uuid.bind_processor = _sqlite_uuid_bind_processor
+sqltypes.Uuid.result_processor = _sqlite_uuid_result_processor
 
 
 # Monkey-patch PostgreSQL JSONB type for SQLite compatibility
 # SQLite uses JSON instead of JSONB
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import JSON
 
 _original_jsonb_compile = None
 
@@ -122,20 +119,25 @@ def _patch_jsonb_for_sqlite():
 
 _patch_jsonb_for_sqlite()
 
-from app.models.subscriber import Subscriber, SubscriberChannel, ChannelType
-from app.schemas.network_monitoring import PopSiteCreate, NetworkDeviceCreate
+from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
+from app.models.subscriber import Subscriber
+from app.schemas.catalog import (
+    CatalogOfferCreate,
+    OfferVersionCreate,
+    SubscriptionCreate,
+)
+from app.schemas.gis import GeoLayerCreate
 from app.schemas.network import OLTDeviceCreate
-from app.schemas.catalog import CatalogOfferCreate, OfferVersionCreate, SubscriptionCreate
-from app.models.catalog import ServiceType, AccessType, PriceBasis, RegionZone
+from app.schemas.network_monitoring import NetworkDeviceCreate, PopSiteCreate
 from app.schemas.radius import RadiusServerCreate
 from app.schemas.tr069 import Tr069AcsServerCreate
-from app.schemas.gis import GeoLayerCreate
-from app.services import network_monitoring as network_monitoring_service
-from app.services import network as network_service
 from app.services import catalog as catalog_service
+from app.services import gis as gis_service
+from app.services import network as network_service
+from app.services import network_monitoring as network_monitoring_service
 from app.services import radius as radius_service
 from app.services import tr069 as tr069_service
-from app.services import gis as gis_service
+
 
 @pytest.fixture(scope="session")
 def engine():

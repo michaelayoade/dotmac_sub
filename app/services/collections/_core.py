@@ -1,6 +1,6 @@
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
 import logging
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from typing import cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -10,7 +10,6 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
 from app.models.catalog import (
     AccessCredential,
     BillingMode,
@@ -22,7 +21,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscriber import SubscriberStatus, Subscriber
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,
     DunningActionLogUpdate,
@@ -33,10 +32,16 @@ from app.schemas.collections import (
     PrepaidEnforcementRunRequest,
     PrepaidEnforcementRunResponse,
 )
-from app.services.response import ListResponseMixin
 from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +293,7 @@ def _restore_account(db: Session, account_id: str) -> int:
     if was_suspended:
         account.status = SubscriberStatus.active
     restored_count = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     subscriptions = (
         db.query(Subscription)
         .options(selectinload(Subscription.offer))
@@ -480,7 +485,11 @@ def _restore_throttle(db: Session, account_id: str) -> int:
 
 def _create_throttle_notification(db: Session, account_id: str, days_overdue: int) -> None:
     """Create email notification that account has been throttled."""
-    from app.models.notification import Notification, NotificationChannel, NotificationStatus
+    from app.models.notification import (
+        Notification,
+        NotificationChannel,
+        NotificationStatus,
+    )
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -503,7 +512,11 @@ def _create_suspension_warning_notification(
     db: Session, account_id: str, days_overdue: int, note: str | None = None
 ) -> None:
     """Create email notification warning of pending suspension."""
-    from app.models.notification import Notification, NotificationChannel, NotificationStatus
+    from app.models.notification import (
+        Notification,
+        NotificationChannel,
+        NotificationStatus,
+    )
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -524,7 +537,11 @@ def _create_suspension_warning_notification(
 
 def _create_suspension_notification(db: Session, account_id: str) -> None:
     """Create email notification that account has been suspended."""
-    from app.models.notification import Notification, NotificationChannel, NotificationStatus
+    from app.models.notification import (
+        Notification,
+        NotificationChannel,
+        NotificationStatus,
+    )
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -532,7 +549,7 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
         return
 
     # Idempotency check: don't create duplicate suspension notification within 24 hours
-    recent_threshold = datetime.now(timezone.utc) - timedelta(hours=24)
+    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
     existing = (
         db.query(Notification)
         .filter(Notification.recipient == email)
@@ -561,10 +578,14 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
 def _create_prepaid_warning_notification(
     db: Session, account_id: str, balance: str, threshold: str
 ) -> None:
-    from app.models.notification import Notification, NotificationChannel, NotificationStatus
+    from app.models.notification import (
+        Notification,
+        NotificationChannel,
+        NotificationStatus,
+    )
 
     # Idempotency check: don't create duplicate warning within 24 hours
-    recent_threshold = datetime.now(timezone.utc) - timedelta(hours=24)
+    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
     email = _get_account_email(db, account_id)
     if not email:
         logger.warning(
@@ -614,7 +635,11 @@ def _create_prepaid_warning_notification(
 
 
 def _create_prepaid_deactivation_notification(db: Session, account_id: str) -> None:
-    from app.models.notification import Notification, NotificationChannel, NotificationStatus
+    from app.models.notification import (
+        Notification,
+        NotificationChannel,
+        NotificationStatus,
+    )
 
     email = _get_account_email(db, account_id)
     if not email:
@@ -628,7 +653,7 @@ def _create_prepaid_deactivation_notification(db: Session, account_id: str) -> N
     ) or "Service Deactivated"
 
     # Idempotency check: don't create duplicate deactivation notification within 24 hours
-    recent_threshold = datetime.now(timezone.utc) - timedelta(hours=24)
+    recent_threshold = datetime.now(UTC) - timedelta(hours=24)
     existing = (
         db.query(Notification)
         .filter(Notification.recipient == email)
@@ -946,7 +971,7 @@ class DunningCases(ListResponseMixin):
                            "Pay invoices first or use skip_payment_check=True for admin override.",
                 )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         case.status = DunningCaseStatus.closed
         case.resolved_at = now
         if notes:
@@ -1079,7 +1104,7 @@ class DunningActionLogs(ListResponseMixin):
 class DunningWorkflow(ListResponseMixin):
     @staticmethod
     def run(db: Session, payload: DunningRunRequest) -> DunningRunResponse:
-        run_at = payload.run_at or datetime.now(timezone.utc)
+        run_at = payload.run_at or datetime.now(UTC)
         invoices = (
             db.query(Invoice)
             .filter(Invoice.balance_due > 0)
@@ -1245,7 +1270,7 @@ class DunningWorkflow(ListResponseMixin):
                     .all()
                 )
             if open_cases:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 for case in open_cases:
                     case.status = DunningCaseStatus.resolved
                     case.resolved_at = now
@@ -1298,7 +1323,7 @@ class DunningWorkflow(ListResponseMixin):
         )
         if not cases:
             return 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for case in cases:
             case.status = DunningCaseStatus.resolved
             case.resolved_at = now
@@ -1319,7 +1344,7 @@ class DunningWorkflow(ListResponseMixin):
 class PrepaidEnforcement(ListResponseMixin):
     @staticmethod
     def run(db: Session, payload: PrepaidEnforcementRunRequest) -> PrepaidEnforcementRunResponse:
-        run_at = payload.run_at or datetime.now(timezone.utc)
+        run_at = payload.run_at or datetime.now(UTC)
         timezone_name = str(
             settings_spec.resolve_value(db, SettingDomain.scheduler, "timezone") or "UTC"
         )
@@ -1520,7 +1545,7 @@ class PrepaidEnforcement(ListResponseMixin):
         )
         if not cases:
             return 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for case in cases:
             case.status = DunningCaseStatus.resolved
             case.resolved_at = now

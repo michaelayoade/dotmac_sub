@@ -1,7 +1,6 @@
 """Service helpers for customer portal auth."""
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -14,8 +13,7 @@ from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber
-from app.services import customer_portal
-from app.services import radius_auth
+from app.services import customer_portal, radius_auth
 from app.services.auth_flow import verify_password
 from app.services.settings_spec import resolve_value
 
@@ -31,7 +29,7 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
         return default
 
 
-def get_current_customer_from_request(request: Request, db: Session) -> Optional[dict]:
+def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
     return customer_portal.get_current_customer(session_token, db)
 
@@ -78,7 +76,7 @@ def customer_login_submit(
         if local_credential:
             if not local_credential.is_active:
                 raise ValueError("Account disabled. Please contact support.")
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if local_credential.locked_until and local_credential.locked_until > now:
                 raise ValueError("Account locked. Please try again later.")
             if not verify_password(password, local_credential.password_hash):

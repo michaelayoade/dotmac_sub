@@ -3,9 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 

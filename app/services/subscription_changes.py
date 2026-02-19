@@ -1,14 +1,17 @@
 """Service for managing subscription change requests."""
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.subscription_change import SubscriptionChangeRequest, SubscriptionChangeStatus
+from app.models.catalog import Subscription
+from app.models.subscription_change import (
+    SubscriptionChangeRequest,
+    SubscriptionChangeStatus,
+)
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
 
@@ -174,7 +177,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 detail=f"Cannot approve request with status {request.status.value}",
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         request.status = SubscriptionChangeStatus.approved
         request.reviewed_at = now
         if reviewer_id:
@@ -214,7 +217,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 detail=f"Cannot reject request with status {request.status.value}",
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         request.status = SubscriptionChangeStatus.rejected
         request.reviewed_at = now
         request.rejection_reason = reason
@@ -258,8 +261,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         subscription.offer_id = request.requested_offer_id
 
         # Get new offer for pricing info
-        from app.models.catalog import CatalogOffer
-        from app.models.catalog import PriceType
+        from app.models.catalog import CatalogOffer, PriceType
 
         new_offer = db.get(CatalogOffer, request.requested_offer_id)
         if new_offer:
@@ -272,7 +274,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
             if recurring_prices:
                 subscription.unit_price = recurring_prices[0].amount
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         request.status = SubscriptionChangeStatus.applied
         request.applied_at = now
 

@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.wireguard import WireGuardPeerStatus
 
-
 # ============== WireGuard Server Schemas ==============
 
 

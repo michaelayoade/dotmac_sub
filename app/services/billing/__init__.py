@@ -11,37 +11,40 @@ All existing import patterns are preserved for backward compatibility:
     from app.services.billing import _recalculate_invoice_totals
 """
 
-from app.services.billing.invoices import Invoices, InvoiceLines
-from app.services.billing.credit_notes import CreditNotes, CreditNoteLines, CreditNoteApplications
-from app.services.billing.payments import (
-    Payments,
-    PaymentMethods,
-    BankAccounts,
-    PaymentAllocations,
-    PaymentChannels,
-    CollectionAccounts,
-    PaymentChannelAccounts,
-)
-from app.services.billing.providers import PaymentProviders, PaymentProviderEvents
-from app.services.billing.ledger import LedgerEntries
-from app.services.billing.tax import TaxRates
-from app.services.billing.runs import BillingRuns
-from app.services.billing.reporting import BillingReporting, billing_reporting
-
 # Export common helpers used by billing_automation
 from app.services.billing._common import (
-    _validate_account,
-    _validate_invoice_totals,
-    _validate_credit_note_totals,
-    _validate_invoice_line_amount,
-    _resolve_tax_rate,
-    _validate_invoice_currency,
-    _recalculate_invoice_totals,
     _recalculate_credit_note_totals,
+    _recalculate_invoice_totals,
+    _resolve_tax_rate,
+    _validate_account,
+    _validate_credit_note_totals,
+    _validate_invoice_currency,
+    _validate_invoice_line_amount,
+    _validate_invoice_totals,
+    _validate_ledger_linkages,
     _validate_payment_linkages,
     _validate_payment_provider,
-    _validate_ledger_linkages,
 )
+from app.services.billing.credit_notes import (
+    CreditNoteApplications,
+    CreditNoteLines,
+    CreditNotes,
+)
+from app.services.billing.invoices import InvoiceLines, Invoices
+from app.services.billing.ledger import LedgerEntries
+from app.services.billing.payments import (
+    BankAccounts,
+    CollectionAccounts,
+    PaymentAllocations,
+    PaymentChannelAccounts,
+    PaymentChannels,
+    PaymentMethods,
+    Payments,
+)
+from app.services.billing.providers import PaymentProviderEvents, PaymentProviders
+from app.services.billing.reporting import BillingReporting, billing_reporting
+from app.services.billing.runs import BillingRuns
+from app.services.billing.tax import TaxRates
 
 # Singleton instances for service access
 invoices = Invoices()

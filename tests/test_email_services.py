@@ -1,7 +1,6 @@
 """Tests for email service."""
 
 import smtplib
-import pytest
 
 from app.services import email as email_service
 from tests.mocks import FakeSMTP

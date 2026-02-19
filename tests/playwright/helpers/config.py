@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -38,7 +38,7 @@ class E2ESettings:
     user_password: str
 
     @classmethod
-    def from_env(cls) -> "E2ESettings":
+    def from_env(cls) -> E2ESettings:
         base_url = os.getenv("PLAYWRIGHT_BASE_URL", "http://localhost:8000").rstrip("/")
         browser = os.getenv("PLAYWRIGHT_BROWSER", "firefox")
         headless = _bool_env("PLAYWRIGHT_HEADLESS", True)

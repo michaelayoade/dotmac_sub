@@ -9,7 +9,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey, MFAMethod, UserCredential
-from app.models.rbac import Role, SubscriberRole as SubscriberRoleModel
+from app.models.rbac import Role
+from app.models.rbac import SubscriberRole as SubscriberRoleModel
 from app.models.subscriber import Subscriber
 from app.services import rbac as rbac_service
 from app.services.common import coerce_uuid

@@ -5,11 +5,10 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
-from app.models.connector import ConnectorConfig, ConnectorAuthType, ConnectorType
+from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.services import connector as connector_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-
 
 # =============================================================================
 # Helper Function Tests

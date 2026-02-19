@@ -3,29 +3,29 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.subscription_engine import SettingValueType
 from app.models.domain_settings import SettingDomain
-from app.services.domain_settings import DomainSettings
+from app.models.subscription_engine import SettingValueType
 from app.services.domain_settings import (
-    auth_settings,
+    DomainSettings,
     audit_settings,
+    auth_settings,
     billing_settings,
     catalog_settings,
-    subscriber_settings,
     collections_settings,
-    geocoding_settings,
-    imports_settings,
-    gis_settings,
     comms_settings,
+    geocoding_settings,
+    gis_settings,
+    imports_settings,
+    lifecycle_settings,
+    network_monitoring_settings,
     network_settings,
     notification_settings,
     provisioning_settings,
     radius_settings,
     scheduler_settings,
-    usage_settings,
-    lifecycle_settings,
-    network_monitoring_settings,
+    subscriber_settings,
     tr069_settings,
+    usage_settings,
 )
 from app.services.secrets import is_openbao_ref
 

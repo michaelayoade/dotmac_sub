@@ -9,7 +9,6 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import geocoding
 
-
 # =============================================================================
 # Helper Function Tests
 # =============================================================================

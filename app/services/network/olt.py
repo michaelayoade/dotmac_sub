@@ -3,11 +3,10 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
 from app.models.network import (
-    OLTDevice,
     OltCard,
     OltCardPort,
+    OLTDevice,
     OltPortType,
     OltPowerUnit,
     OltSfpModule,
@@ -17,31 +16,28 @@ from app.models.network import (
     PonPort,
 )
 from app.schemas.network import (
-    OLTDeviceUpdate,
     OltCardCreate,
     OltCardPortCreate,
     OltCardPortUpdate,
     OltCardUpdate,
+    OLTDeviceUpdate,
     OltPowerUnitUpdate,
     OltSfpModuleUpdate,
     OltShelfCreate,
     OltShelfUpdate,
-    OntAssignmentCreate,
     OntAssignmentUpdate,
     OntUnitUpdate,
     PonPortCreate,
     PonPortUpdate,
 )
-from app.services import settings_spec
+from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
 )
-from app.services.common import coerce_uuid
 from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.services.response import ListResponseMixin
 
 
 class OLTDevices(CRUDManager[OLTDevice]):

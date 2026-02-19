@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -25,7 +25,7 @@ def get_webhooks_list_data(db: Session) -> dict[str, object]:
         or 0
     )
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
     delivery_count_24h = (
         db.scalar(
             select(func.count())

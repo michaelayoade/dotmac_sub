@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import csv
 import logging
-from io import StringIO
 from decimal import Decimal
+from io import StringIO
 from typing import Any
 
 from sqlalchemy import func, or_, select

@@ -1,17 +1,16 @@
 """Service helpers for vendor portal routes."""
 
-from typing import Any, cast
+from typing import cast
 from uuid import UUID
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.models.rbac import Role, SubscriberRole
 from app.services import vendor as vendor_service
 from app.services import vendor_portal
-from app.models.rbac import Role, SubscriberRole
 from app.services.common import coerce_uuid
 from app.web.request_parsing import parse_json_body_sync
 
@@ -157,10 +156,19 @@ def vendor_fiber_map(request: Request, db: Session):
         return HTMLResponse(content="Forbidden", status_code=403)
 
     import json
+
     from sqlalchemy import func
-    from app.models.network import FdhCabinet, FiberSpliceClosure, FiberSegment, Splitter, FiberSplice, FiberSpliceTray
-    from app.services import settings_spec
+
     from app.models.domain_settings import SettingDomain
+    from app.models.network import (
+        FdhCabinet,
+        FiberSegment,
+        FiberSplice,
+        FiberSpliceClosure,
+        FiberSpliceTray,
+        Splitter,
+    )
+    from app.services import settings_spec
 
     def _resolve_float_setting(domain: SettingDomain, key: str, default: float) -> float:
         raw = settings_spec.resolve_value(db, domain, key)
@@ -307,8 +315,8 @@ def vendor_fiber_map_update_position(request: Request, db: Session):
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
-    from app.services import fiber_change_requests as change_request_service
     from app.models.fiber_change_request import FiberChangeRequestOperation
+    from app.services import fiber_change_requests as change_request_service
 
     def _float_from_obj(value: object | None) -> float | None:
         if value is None or isinstance(value, bool):

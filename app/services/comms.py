@@ -14,12 +14,15 @@ from app.schemas.comms import (
     CustomerNotificationUpdate,
     EtaUpdateCreate,
     SurveyCreate,
-    SurveyUpdate,
     SurveyResponseCreate,
+    SurveyUpdate,
 )
-from app.services.common import validate_enum, apply_pagination, apply_ordering, coerce_uuid
-from app.services.response import ListResponseMixin
 from app.services import settings_spec
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+)
+from app.services.response import ListResponseMixin
 
 
 class CustomerNotifications(ListResponseMixin):

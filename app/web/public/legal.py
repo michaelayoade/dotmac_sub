@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_public_legal as legal_web_service
+
 router = APIRouter(prefix="/legal", tags=["public-legal"])
 
 

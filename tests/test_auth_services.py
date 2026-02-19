@@ -233,7 +233,7 @@ def test_api_key_update_and_revoke(db_session, person):
         str(created.id),
         ApiKeyUpdate(key_hash="new-key"),
     )
-    assert updated.key_hash == hashlib.sha256("new-key".encode("utf-8")).hexdigest()
+    assert updated.key_hash == hashlib.sha256(b"new-key").hexdigest()
 
     auth_service.api_keys.revoke(db_session, str(created.id))
     db_session.refresh(created)

@@ -6,7 +6,7 @@ OfferAddOn linking, and OfferValidation.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -17,7 +17,6 @@ from app.models.catalog import (
     AccessType,
     AddOnType,
     BillingCycle,
-    BillingMode,
     ContractTerm,
     DunningAction,
     NasVendor,
@@ -25,10 +24,8 @@ from app.models.catalog import (
     PriceBasis,
     PriceType,
     ProrationPolicy,
-    RefundPolicy,
     ServiceType,
     SubscriptionStatus,
-    SuspensionAction,
 )
 from app.schemas.catalog import (
     AccessCredentialCreate,
@@ -42,7 +39,6 @@ from app.schemas.catalog import (
     OfferPriceCreate,
     OfferPriceUpdate,
     OfferRadiusProfileCreate,
-    OfferRadiusProfileUpdate,
     OfferValidationRequest,
     OfferVersionCreate,
     OfferVersionPriceCreate,
@@ -69,7 +65,6 @@ from app.schemas.catalog import (
     ValidationAddOnRequest,
 )
 from app.services import catalog as catalog_service
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1583,7 +1578,7 @@ class TestSubscriptions:
                 status=SubscriptionStatus.pending,
             ),
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         updated = catalog_service.subscriptions.update(
             db_session,
             str(sub.id),
@@ -1597,7 +1592,7 @@ class TestSubscriptions:
 
     def test_expire_subscriptions(self, db_session, subscriber, catalog_offer):
         """Subscriptions past end_at should be expired."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         past = now - timedelta(days=1)
         sub = catalog_service.subscriptions.create(
             db_session,
@@ -1615,7 +1610,7 @@ class TestSubscriptions:
         assert sub.status == SubscriptionStatus.expired
 
     def test_expire_subscriptions_dry_run(self, db_session, subscriber, catalog_offer):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         past = now - timedelta(days=1)
         sub = catalog_service.subscriptions.create(
             db_session,
@@ -1639,7 +1634,7 @@ class TestSubscriptions:
     def test_subscription_contract_term_sets_end_at(
         self, db_session, subscriber, catalog_offer
     ):
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
         sub = catalog_service.subscriptions.create(
             db_session,
             SubscriptionCreate(
@@ -1932,7 +1927,7 @@ class TestSubscriptionHelpers:
     def test_compute_next_billing_at_monthly(self):
         from app.services.catalog.subscriptions import _compute_next_billing_at
 
-        start = datetime(2025, 1, 15, tzinfo=timezone.utc)
+        start = datetime(2025, 1, 15, tzinfo=UTC)
         next_billing = _compute_next_billing_at(start, BillingCycle.monthly)
         assert next_billing.month == 2
         assert next_billing.day == 15
@@ -1940,7 +1935,7 @@ class TestSubscriptionHelpers:
     def test_compute_next_billing_at_annual(self):
         from app.services.catalog.subscriptions import _compute_next_billing_at
 
-        start = datetime(2025, 3, 1, tzinfo=timezone.utc)
+        start = datetime(2025, 3, 1, tzinfo=UTC)
         next_billing = _compute_next_billing_at(start, BillingCycle.annual)
         assert next_billing.year == 2026
         assert next_billing.month == 3
@@ -1948,21 +1943,21 @@ class TestSubscriptionHelpers:
     def test_compute_next_billing_at_daily(self):
         from app.services.catalog.subscriptions import _compute_next_billing_at
 
-        start = datetime(2025, 6, 10, tzinfo=timezone.utc)
+        start = datetime(2025, 6, 10, tzinfo=UTC)
         next_billing = _compute_next_billing_at(start, BillingCycle.daily)
         assert next_billing.day == 11
 
     def test_compute_next_billing_at_weekly(self):
         from app.services.catalog.subscriptions import _compute_next_billing_at
 
-        start = datetime(2025, 6, 10, tzinfo=timezone.utc)
+        start = datetime(2025, 6, 10, tzinfo=UTC)
         next_billing = _compute_next_billing_at(start, BillingCycle.weekly)
         assert (next_billing - start).days == 7
 
     def test_compute_contract_end_at_twelve_month(self):
         from app.services.catalog.subscriptions import _compute_contract_end_at
 
-        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        start = datetime(2025, 1, 1, tzinfo=UTC)
         end = _compute_contract_end_at(start, ContractTerm.twelve_month)
         assert end is not None
         assert end.year == 2026
@@ -1971,7 +1966,7 @@ class TestSubscriptionHelpers:
     def test_compute_contract_end_at_twentyfour_month(self):
         from app.services.catalog.subscriptions import _compute_contract_end_at
 
-        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        start = datetime(2025, 1, 1, tzinfo=UTC)
         end = _compute_contract_end_at(start, ContractTerm.twentyfour_month)
         assert end is not None
         assert end.year == 2027
@@ -1980,7 +1975,7 @@ class TestSubscriptionHelpers:
     def test_compute_contract_end_at_month_to_month(self):
         from app.services.catalog.subscriptions import _compute_contract_end_at
 
-        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        start = datetime(2025, 1, 1, tzinfo=UTC)
         end = _compute_contract_end_at(start, ContractTerm.month_to_month)
         assert end is None
 
@@ -1988,7 +1983,7 @@ class TestSubscriptionHelpers:
         from app.services.catalog.subscriptions import _add_months
 
         # Jan 31 + 1 month should be Feb 28 (not Feb 31 which doesn't exist)
-        dt = datetime(2025, 1, 31, tzinfo=timezone.utc)
+        dt = datetime(2025, 1, 31, tzinfo=UTC)
         result = _add_months(dt, 1)
         assert result.month == 2
         assert result.day == 28

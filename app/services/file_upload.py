@@ -23,7 +23,6 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Union
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ SAFE_ENTITY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # ---------------------------------------------------------------------------
 
 
-def coerce_uuid(value: Union[str, uuid.UUID]) -> uuid.UUID:
+def coerce_uuid(value: str | uuid.UUID) -> uuid.UUID:
     """Convert string to UUID if needed."""
     if isinstance(value, uuid.UUID):
         return value
@@ -396,7 +395,6 @@ class FileUploadService:
 
 def _avatar_config() -> FileUploadConfig:
     """Avatar upload configuration."""
-    import os
 
     return FileUploadConfig(
         base_dir=os.getenv("AVATAR_UPLOAD_DIR", "static/avatars"),
@@ -411,7 +409,6 @@ def _avatar_config() -> FileUploadConfig:
 
 def _branding_config() -> FileUploadConfig:
     """Branding (logo, favicon) upload configuration."""
-    import os
 
     return FileUploadConfig(
         base_dir=os.getenv("BRANDING_UPLOAD_DIR", "static/branding"),
@@ -432,7 +429,6 @@ def _branding_config() -> FileUploadConfig:
 
 def _subscriber_document_config() -> FileUploadConfig:
     """Subscriber document upload configuration (ID docs, contracts, etc.)."""
-    import os
 
     return FileUploadConfig(
         base_dir=os.getenv("SUBSCRIBER_DOCS_DIR", "uploads/subscriber_docs"),
@@ -460,7 +456,6 @@ def _subscriber_document_config() -> FileUploadConfig:
 
 def _import_file_config() -> FileUploadConfig:
     """Bulk import file configuration (CSV, Excel)."""
-    import os
 
     return FileUploadConfig(
         base_dir=os.getenv("IMPORT_UPLOAD_DIR", "uploads/imports"),
@@ -480,7 +475,6 @@ def _import_file_config() -> FileUploadConfig:
 
 def _attachment_config() -> FileUploadConfig:
     """General attachment configuration (invoices, tickets, etc.)."""
-    import os
 
     return FileUploadConfig(
         base_dir=os.getenv("ATTACHMENT_UPLOAD_DIR", "uploads/attachments"),

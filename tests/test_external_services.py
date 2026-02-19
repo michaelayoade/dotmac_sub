@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.connector import ConnectorConfig, ConnectorType
-from app.models.external import ExternalReference, ExternalEntityType
+from app.models.external import ExternalEntityType, ExternalReference
 from app.schemas.external import (
     ExternalReferenceCreate,
     ExternalReferenceSync,
@@ -14,7 +14,6 @@ from app.schemas.external import (
 )
 from app.services import external as external_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
-
 
 # =============================================================================
 # Helper Function Tests

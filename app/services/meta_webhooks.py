@@ -6,13 +6,12 @@ Now stubbed as CRM functionality has been removed.
 
 import hashlib
 import hmac
-from datetime import datetime
 from typing import cast
 
 from sqlalchemy.orm import Session
 
-from app.logging import get_logger
 from app.config import settings
+from app.logging import get_logger
 
 logger = get_logger(__name__)
 

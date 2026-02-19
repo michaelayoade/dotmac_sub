@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TypeVar, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -7,9 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.schemas.workflow import StatusTransitionRequest
-from app.services.common import validate_enum, coerce_uuid
-
-from typing import TypeVar, cast
+from app.services.common import coerce_uuid, validate_enum
 
 TModel = TypeVar("TModel")
 

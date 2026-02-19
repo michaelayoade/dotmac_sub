@@ -83,7 +83,7 @@ class PortCreate(PortFields):
     device_id: UUID | None = None
 
     @model_validator(mode="after")
-    def _resolve_device(self) -> "PortCreate":
+    def _resolve_device(self) -> PortCreate:
         if not self.device_id and not self.olt_id:
             raise ValueError("device_id or olt_id is required.")
         if not self.device_id and self.olt_id:
@@ -176,7 +176,7 @@ class IPAssignmentBase(BaseModel):
 
 class IPAssignmentCreate(IPAssignmentBase):
     @model_validator(mode="after")
-    def _validate_ip_version(self) -> "IPAssignmentCreate":
+    def _validate_ip_version(self) -> IPAssignmentCreate:
         if self.ip_version == IPVersion.ipv4:
             if not self.ipv4_address_id or self.ipv6_address_id is not None:
                 raise ValueError("ipv4 assignments require ipv4_address_id only.")
@@ -203,7 +203,7 @@ class IPAssignmentUpdate(BaseModel):
     is_active: bool | None = None
 
     @model_validator(mode="after")
-    def _validate_ip_version(self) -> "IPAssignmentUpdate":
+    def _validate_ip_version(self) -> IPAssignmentUpdate:
         fields_set = self.model_fields_set
         if {"ip_version", "ipv4_address_id", "ipv6_address_id"} & fields_set:
             if self.ip_version is None:
@@ -391,7 +391,7 @@ class PonPortCreate(PonPortFields):
     card_id: UUID | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
-    def _ensure_name(self) -> "PonPortCreate":
+    def _ensure_name(self) -> PonPortCreate:
         if not self.name:
             if self.port_number is None:
                 raise ValueError("name or port_number is required.")
@@ -718,7 +718,7 @@ class FiberStrandCreate(FiberStrandFields):
     segment_id: UUID | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
-    def _resolve_cable_name(self) -> "FiberStrandCreate":
+    def _resolve_cable_name(self) -> FiberStrandCreate:
         if not self.cable_name:
             if not self.segment_id:
                 raise ValueError("cable_name or segment_id is required.")
@@ -818,7 +818,7 @@ class FiberSpliceCreate(FiberSpliceFields):
     position: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def _validate_requirements(self) -> "FiberSpliceCreate":
+    def _validate_requirements(self) -> FiberSpliceCreate:
         has_full = self.closure_id and self.from_strand_id and self.to_strand_id
         has_tray = self.tray_id and self.position
         if not has_full and not has_tray:

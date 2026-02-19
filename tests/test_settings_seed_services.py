@@ -1,14 +1,9 @@
 """Tests for settings seed services."""
 
-import os
-from unittest.mock import patch, MagicMock
 
-import pytest
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.services import settings_seed
-
 
 # =============================================================================
 # Auth Settings Tests
