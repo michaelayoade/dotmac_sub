@@ -57,6 +57,8 @@ class PaymentStatus(enum.Enum):
 class PaymentProviderType(enum.Enum):
     stripe = "stripe"
     paypal = "paypal"
+    paystack = "paystack"
+    flutterwave = "flutterwave"
     manual = "manual"
     custom = "custom"
 
@@ -129,7 +131,9 @@ class Invoice(Base):
     balance_due: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00")
     )
-    billing_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    billing_period_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     billing_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -146,7 +150,9 @@ class Invoice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     account = relationship("Subscriber", foreign_keys=[account_id])
@@ -296,7 +302,9 @@ class InvoiceLine(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     invoice = relationship("Invoice", back_populates="lines")
@@ -331,7 +339,9 @@ class PaymentMethod(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     account = relationship("Subscriber")
@@ -365,7 +375,9 @@ class BankAccount(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     account = relationship("Subscriber")
@@ -409,7 +421,9 @@ class Payment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     account = relationship("Subscriber")
@@ -426,7 +440,9 @@ class Payment(Base):
 class PaymentAllocation(Base):
     __tablename__ = "payment_allocations"
     __table_args__ = (
-        UniqueConstraint("payment_id", "invoice_id", name="uq_payment_allocations_payment_invoice"),
+        UniqueConstraint(
+            "payment_id", "invoice_id", name="uq_payment_allocations_payment_invoice"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -498,7 +514,9 @@ class TaxRate(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -524,7 +542,9 @@ class PaymentProvider(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     connector_config = relationship("ConnectorConfig")
@@ -559,7 +579,9 @@ class CollectionAccount(Base):
     )
 
     payments = relationship("Payment", back_populates="collection_account")
-    channel_mappings = relationship("PaymentChannelAccount", back_populates="collection_account")
+    channel_mappings = relationship(
+        "PaymentChannelAccount", back_populates="collection_account"
+    )
 
 
 class PaymentChannel(Base):
@@ -635,7 +657,9 @@ class PaymentChannelAccount(Base):
     )
 
     channel = relationship("PaymentChannel", back_populates="channel_accounts")
-    collection_account = relationship("CollectionAccount", back_populates="channel_mappings")
+    collection_account = relationship(
+        "CollectionAccount", back_populates="channel_mappings"
+    )
 
 
 class PaymentProviderEvent(Base):

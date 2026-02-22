@@ -39,7 +39,9 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
     """Customer dashboard with account overview."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/dashboard", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/dashboard", status_code=303
+        )
 
     dashboard_context = customer_portal.get_dashboard_context(db, customer)
 
@@ -65,7 +67,9 @@ def customer_billing(
     """Customer billing history."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/billing", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing", status_code=303
+        )
 
     billing_data = customer_portal.get_billing_page(
         db, customer, status=status, page=page, per_page=per_page
@@ -84,14 +88,6 @@ def customer_billing(
 
 @router.get("/billing/invoices", response_class=HTMLResponse)
 def customer_billing_invoices_redirect(request: Request) -> RedirectResponse:
-    target = "/portal/billing"
-    if request.url.query:
-        target = f"{target}?{request.url.query}"
-    return RedirectResponse(url=target, status_code=303)
-
-
-@router.get("/billing/pay", response_class=HTMLResponse)
-def customer_billing_pay_redirect(request: Request) -> RedirectResponse:
     target = "/portal/billing"
     if request.url.query:
         target = f"{target}?{request.url.query}"
@@ -139,7 +135,9 @@ def customer_usage(
     """Customer usage dashboard."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/usage", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/usage", status_code=303
+        )
 
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
@@ -180,7 +178,9 @@ def customer_services(
     """Customer active services."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/services", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/services", status_code=303
+        )
 
     services_data = customer_portal.get_services_page(
         db, customer, status=status, page=page, per_page=per_page
@@ -238,7 +238,9 @@ def customer_installations(
     """Customer installation appointments."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/installations", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/installations", status_code=303
+        )
 
     appt_data = customer_portal.get_customer_appointments(
         db=db,
@@ -275,7 +277,9 @@ def customer_service_orders(
     """Customer service orders."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/service-orders", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/service-orders", status_code=303
+        )
 
     orders_data = customer_portal.get_service_orders_page(
         db, customer, status=status, page=page, per_page=per_page
@@ -303,9 +307,7 @@ def customer_installation_detail(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    detail = customer_portal.get_installation_detail(
-        db, customer, str(appointment_id)
-    )
+    detail = customer_portal.get_installation_detail(db, customer, str(appointment_id))
     if not detail:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -364,7 +366,9 @@ def customer_profile(
     """Customer profile settings."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/profile", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/profile", status_code=303
+        )
 
     return templates.TemplateResponse(
         "customer/profile/index.html",
@@ -402,8 +406,80 @@ def customer_update_profile(
 
 
 # =============================================================================
+# Online Payment (Paystack / Flutterwave)
+# =============================================================================
+
+
+@router.get("/billing/pay", response_class=HTMLResponse)
+def customer_pay_invoice(
+    request: Request,
+    invoice: str = Query(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show payment page for an invoice."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    page_data = customer_portal.get_payment_page(db, customer, invoice)
+    if not page_data:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Invoice not found or already paid"},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "customer/billing/pay.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.get("/billing/pay/verify", response_class=HTMLResponse)
+def customer_verify_payment(
+    request: Request,
+    reference: str = Query(...),
+    provider: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Verify online payment and record it."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    try:
+        result = customer_portal.verify_and_record_payment(
+            db, customer, reference, provider=provider
+        )
+        return templates.TemplateResponse(
+            "customer/billing/pay_success.html",
+            {
+                "request": request,
+                "customer": customer,
+                "payment": result["payment"],
+                "invoice": result["invoice"],
+                "amount": result["amount"],
+                "reference": result["reference"],
+                "active_page": "billing",
+            },
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": str(exc)},
+            status_code=400,
+        )
+
+
+# =============================================================================
 # Plan Change Self-Service
 # =============================================================================
+
 
 @router.get("/services/{subscription_id}/change", response_class=HTMLResponse)
 def customer_change_plan(
@@ -416,9 +492,7 @@ def customer_change_plan(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    page_data = customer_portal.get_change_plan_page(
-        db, customer, str(subscription_id)
-    )
+    page_data = customer_portal.get_change_plan_page(db, customer, str(subscription_id))
     if not page_data:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -442,26 +516,24 @@ def customer_submit_change_plan(
     request: Request,
     subscription_id: UUID,
     offer_id: str = Form(...),
-    effective_date: str = Form(...),
     notes: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Submit a plan change request."""
+    """Instantly apply a plan change."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
-        customer_portal.submit_change_plan(
+        customer_portal.apply_instant_plan_change(
             db=db,
             customer=customer,
             subscription_id=str(subscription_id),
             offer_id=offer_id,
-            effective_date=effective_date,
             notes=notes,
         )
         return RedirectResponse(
-            url="/portal/change-requests?submitted=true",
+            url=f"/portal/services/{subscription_id}?plan_changed=true",
             status_code=303,
         )
     except Exception as exc:
@@ -492,7 +564,9 @@ def customer_change_requests(
     """List pending plan change requests."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/change-requests", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/change-requests", status_code=303
+        )
 
     change_data = customer_portal.get_change_requests_page(
         db, customer, status=status, page=page, per_page=per_page
@@ -513,6 +587,7 @@ def customer_change_requests(
 # Payment Arrangements Self-Service
 # =============================================================================
 
+
 @router.get("/billing/arrangements", response_class=HTMLResponse)
 def customer_payment_arrangements(
     request: Request,
@@ -524,7 +599,9 @@ def customer_payment_arrangements(
     """List payment arrangements for the customer."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/billing/arrangements", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/arrangements", status_code=303
+        )
 
     arrangements_data = customer_portal.get_payment_arrangements_page(
         db, customer, status=status, page=page, per_page=per_page
@@ -601,9 +678,7 @@ def customer_submit_payment_arrangement(
     except Exception as exc:
         account_id = customer.get("account_id")
         account_id_str = str(account_id) if account_id else None
-        error_ctx = customer_portal.get_arrangement_error_context(
-            db, account_id_str
-        )
+        error_ctx = customer_portal.get_arrangement_error_context(db, account_id_str)
         return templates.TemplateResponse(
             "customer/billing/arrangement_form.html",
             {

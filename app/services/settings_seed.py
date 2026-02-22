@@ -700,6 +700,40 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_CREDIT_NOTE_NUMBER_START", "1"),
     )
+    billing_settings.ensure_by_key(
+        db,
+        key="paystack_secret_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PAYSTACK_SECRET_KEY", ""),
+        is_secret=True,
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="paystack_public_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PAYSTACK_PUBLIC_KEY", ""),
+    )
+    # Flutterwave settings
+    billing_settings.ensure_by_key(
+        db,
+        key="flutterwave_secret_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("FLUTTERWAVE_SECRET_KEY", ""),
+        is_secret=True,
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="flutterwave_public_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("FLUTTERWAVE_PUBLIC_KEY", ""),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="flutterwave_secret_hash",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("FLUTTERWAVE_SECRET_HASH", ""),
+        is_secret=True,
+    )
 
 
 def seed_catalog_settings(db: Session) -> None:

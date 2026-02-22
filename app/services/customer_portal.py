@@ -114,7 +114,9 @@ def get_customer_session(session_token: str) -> dict | None:
     return session
 
 
-def refresh_customer_session(session_token: str, db: Session | None = None) -> dict | None:
+def refresh_customer_session(
+    session_token: str, db: Session | None = None
+) -> dict | None:
     session = load_session(_CUSTOMER_SESSION_PREFIX, session_token, _CUSTOMER_SESSIONS)
     if not session:
         return None
@@ -125,7 +127,9 @@ def refresh_customer_session(session_token: str, db: Session | None = None) -> d
         return None
 
     ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
-    session["expires_at"] = (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat()
+    session["expires_at"] = (
+        datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    ).isoformat()
     store_session(
         _CUSTOMER_SESSION_PREFIX,
         session_token,
@@ -237,7 +241,11 @@ def _build_current_user(db: Session, session: dict) -> dict:
     name = session.get("username") or "Customer"
     email = None
     if subscriber:
-        name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip() or name
+        name = (
+            subscriber.display_name
+            or f"{subscriber.first_name} {subscriber.last_name}".strip()
+            or name
+        )
         email = subscriber.email or email
         if subscriber.organization_id:
             organization = db.get(Organization, subscriber.organization_id)
@@ -343,7 +351,8 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         recurring_prices = []
         if offer:
             recurring_prices = [
-                price for price in offer.prices
+                price
+                for price in offer.prices
                 if price.price_type == PriceType.recurring and price.is_active
             ]
         monthly_cost = float(recurring_prices[0].amount) if recurring_prices else 0.0
@@ -357,9 +366,13 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             )
         )
 
-    primary_service = services[0] if services else SimpleNamespace(
-        status="inactive",
-        plan_name="No active plan",
+    primary_service = (
+        services[0]
+        if services
+        else SimpleNamespace(
+            status="inactive",
+            plan_name="No active plan",
+        )
     )
     if services:
         primary_service = SimpleNamespace(
@@ -380,7 +393,9 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     }
 
 
-def resolve_customer_account(customer: dict, db: Session) -> tuple[str | None, str | None]:
+def resolve_customer_account(
+    customer: dict, db: Session
+) -> tuple[str | None, str | None]:
     """Resolve account_id and subscription_id from customer session.
 
     Args:
@@ -463,12 +478,16 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
 
     if invoice.account_id:
         try:
-            account = subscriber_service.accounts.get(db=db, account_id=str(invoice.account_id))
+            account = subscriber_service.accounts.get(
+                db=db, account_id=str(invoice.account_id)
+            )
         except Exception:
             account = None
 
     if account:
-        billing_name = account.display_name or f"{account.first_name} {account.last_name}".strip()
+        billing_name = (
+            account.display_name or f"{account.first_name} {account.last_name}".strip()
+        )
         billing_email = account.email
         if account.organization_id:
             organization = db.get(Organization, account.organization_id)
@@ -479,7 +498,10 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
 
     if not billing_name and subscriber:
-        billing_name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip()
+        billing_name = (
+            subscriber.display_name
+            or f"{subscriber.first_name} {subscriber.last_name}".strip()
+        )
         billing_email = billing_email or subscriber.email
         if subscriber.organization_id:
             organization = db.get(Organization, subscriber.organization_id)
@@ -525,9 +547,7 @@ def get_customer_appointments(
     if account_id_str:
         filters.append(ServiceOrder.subscriber_id == coerce_uuid(account_id_str))
     if subscription_id_str:
-        filters.append(
-            ServiceOrder.subscription_id == coerce_uuid(subscription_id_str)
-        )
+        filters.append(ServiceOrder.subscription_id == coerce_uuid(subscription_id_str))
     if status:
         filters.append(InstallAppointment.status == status)
 
@@ -830,8 +850,7 @@ def get_services_page(
     )
     if status:
         stmt = stmt.where(
-            Subscription.status
-            == _validate_enum(status, SubscriptionStatus, "status")
+            Subscription.status == _validate_enum(status, SubscriptionStatus, "status")
         )
     total = db.scalar(stmt) or 0
 
@@ -933,17 +952,14 @@ def get_service_orders_page(
 
     stmt = select(func.count(ServiceOrder.id))
     if account_id_str:
-        stmt = stmt.where(
-            ServiceOrder.subscriber_id == coerce_uuid(account_id_str)
-        )
+        stmt = stmt.where(ServiceOrder.subscriber_id == coerce_uuid(account_id_str))
     if subscription_id_str:
         stmt = stmt.where(
             ServiceOrder.subscription_id == coerce_uuid(subscription_id_str)
         )
     if status:
         stmt = stmt.where(
-            ServiceOrder.status
-            == _validate_enum(status, ServiceOrderStatus, "status")
+            ServiceOrder.status == _validate_enum(status, ServiceOrderStatus, "status")
         )
     total = db.scalar(stmt) or 0
 
@@ -978,7 +994,9 @@ def get_service_order_detail(
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
-    service_order = provisioning_service.service_orders.get(db=db, entity_id=service_order_id)
+    service_order = provisioning_service.service_orders.get(
+        db=db, entity_id=service_order_id
+    )
     if not service_order:
         return None
 
@@ -1037,11 +1055,15 @@ def get_installation_detail(
     account_id_str = str(account_id) if account_id else None
     subscription_id_str = str(subscription_id) if subscription_id else None
 
-    appointment = provisioning_service.install_appointments.get(db=db, entity_id=appointment_id)
+    appointment = provisioning_service.install_appointments.get(
+        db=db, entity_id=appointment_id
+    )
     if not appointment:
         return None
 
-    service_order = provisioning_service.service_orders.get(db=db, entity_id=str(appointment.service_order_id))
+    service_order = provisioning_service.service_orders.get(
+        db=db, entity_id=str(appointment.service_order_id)
+    )
     if not service_order:
         return None
 
@@ -1224,9 +1246,8 @@ def get_change_requests_page(
         offset=(page - 1) * per_page,
     )
 
-    stmt = (
-        select(func.count(SubscriptionChangeRequest.id))
-        .where(SubscriptionChangeRequest.is_active.is_(True))
+    stmt = select(func.count(SubscriptionChangeRequest.id)).where(
+        SubscriptionChangeRequest.is_active.is_(True)
     )
     if account_id_str:
         stmt = stmt.join(Subscription).where(
@@ -1295,9 +1316,8 @@ def get_payment_arrangements_page(
         offset=(page - 1) * per_page,
     )
 
-    stmt = (
-        select(func.count(PaymentArrangement.id))
-        .where(PaymentArrangement.is_active.is_(True))
+    stmt = select(func.count(PaymentArrangement.id)).where(
+        PaymentArrangement.is_active.is_(True)
     )
     if account_id_str:
         stmt = stmt.where(
@@ -1347,9 +1367,7 @@ def get_new_arrangement_page(
 
     selected_invoice = None
     if invoice_id:
-        selected_invoice = billing_service.invoices.get(
-            db=db, invoice_id=invoice_id
-        )
+        selected_invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
 
     return {
         "invoices": invoices,
@@ -1521,4 +1539,301 @@ def get_invoice_detail(
         "invoice": invoice,
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],
+    }
+
+
+# =============================================================================
+# Online Payment (Paystack / Flutterwave)
+# =============================================================================
+
+
+def _resolve_payment_provider(db: Session) -> str:
+    """Return the configured payment provider type ('paystack' or 'flutterwave')."""
+    val = resolve_value(db, SettingDomain.billing, "default_payment_provider_type")
+    if val and str(val) == "flutterwave":
+        return "flutterwave"
+    return "paystack"
+
+
+def get_payment_page(
+    db: Session,
+    customer: dict,
+    invoice_id: str,
+) -> dict | None:
+    """Build context for the online payment page.
+
+    Selects the payment provider (Paystack or Flutterwave) based on the
+    ``billing.default_payment_provider_type`` setting.
+
+    Args:
+        db: Database session.
+        customer: Customer session dict.
+        invoice_id: Invoice UUID string.
+
+    Returns:
+        Dict with invoice details, provider public key, and generated
+        payment reference — or None if the invoice is not payable.
+    """
+    allowed_account_ids = get_allowed_account_ids(customer, db)
+
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if not invoice or (
+        allowed_account_ids
+        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    ):
+        return None
+
+    # Only unpaid invoices are payable
+    if invoice.status in (InvoiceStatus.paid, InvoiceStatus.void):
+        return None
+
+    provider_type = _resolve_payment_provider(db)
+    invoice_number = getattr(invoice, "invoice_number", None)
+
+    billing_contact = get_invoice_billing_contact(db, invoice, customer)
+    email = billing_contact["billing_email"] or customer.get("username", "")
+
+    if provider_type == "flutterwave":
+        from app.services.flutterwave import generate_reference, get_public_key
+
+        reference = generate_reference(invoice_number)
+        return {
+            "invoice": invoice,
+            "provider_type": "flutterwave",
+            "provider_public_key": get_public_key(db),
+            "payment_reference": reference,
+            "customer_email": email,
+        }
+
+    # Default: Paystack
+    from app.services.paystack import generate_reference, get_public_key
+
+    reference = generate_reference(invoice_number)
+    return {
+        "invoice": invoice,
+        "provider_type": "paystack",
+        "provider_public_key": get_public_key(db),
+        "paystack_public_key": get_public_key(db),
+        "payment_reference": reference,
+        "customer_email": email,
+    }
+
+
+def verify_and_record_payment(
+    db: Session,
+    customer: dict,
+    reference: str,
+    *,
+    provider: str | None = None,
+) -> dict:
+    """Verify an online payment transaction and record the payment.
+
+    Supports both Paystack and Flutterwave.  The provider is resolved from
+    the ``provider`` parameter, falling back to the billing setting.
+
+    Args:
+        db: Database session.
+        customer: Customer session dict.
+        reference: Transaction reference.
+        provider: Explicit provider name, or None to resolve from settings.
+
+    Returns:
+        Dict with payment details on success.
+
+    Raises:
+        ValueError: If verification fails or the transaction was not successful.
+    """
+    provider_type = provider or _resolve_payment_provider(db)
+
+    if provider_type == "flutterwave":
+        from app.services import flutterwave as flutterwave_svc
+
+        tx = flutterwave_svc.verify_transaction(db, reference)
+
+        if tx.get("status") != "successful":
+            raise ValueError(
+                f"Payment was not successful (status: {tx.get('status')})"
+            )
+
+        # Flutterwave stores metadata under "meta"
+        metadata = tx.get("meta") or {}
+        invoice_id = metadata.get("invoice_id")
+        # Amount already in naira (major unit)
+        amount_naira = Decimal(str(tx.get("amount", 0)))
+        memo_prefix = "Flutterwave"
+    else:
+        from app.services.paystack import kobo_to_naira, verify_transaction
+
+        tx = verify_transaction(db, reference)
+
+        if tx.get("status") != "success":
+            raise ValueError(
+                f"Payment was not successful (status: {tx.get('status')})"
+            )
+
+        metadata = tx.get("metadata") or {}
+        invoice_id = metadata.get("invoice_id")
+        amount_naira = kobo_to_naira(tx.get("amount", 0))
+        memo_prefix = "Paystack"
+
+    if not invoice_id:
+        raise ValueError("Payment metadata missing invoice_id")
+
+    # Verify the invoice belongs to this customer
+    allowed_account_ids = get_allowed_account_ids(customer, db)
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if not invoice or (
+        allowed_account_ids
+        and str(getattr(invoice, "account_id", "")) not in allowed_account_ids
+    ):
+        raise ValueError("Invoice not found or access denied")
+
+    # Create the payment via the billing service
+    from uuid import UUID as _UUID
+
+    from app.models.billing import PaymentStatus
+    from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+
+    payment_payload = PaymentCreate(
+        account_id=_UUID(str(invoice.account_id)),
+        amount=amount_naira,
+        currency=tx.get("currency", "NGN"),
+        status=PaymentStatus.succeeded,
+        external_id=str(tx.get("id", "")),
+        memo=f"{memo_prefix} payment ref: {reference}",
+        allocations=[
+            PaymentAllocationApply(
+                invoice_id=_UUID(str(invoice_id)),
+                amount=amount_naira,
+            )
+        ],
+    )
+    payment = billing_service.payments.create(db, payment_payload)
+
+    return {
+        "payment": payment,
+        "invoice": invoice,
+        "amount": amount_naira,
+        "reference": reference,
+    }
+
+
+def _get_offer_recurring_price(offer: CatalogOffer) -> Decimal:
+    """Extract the first active recurring price from an offer."""
+    from app.models.catalog import PriceType
+
+    for price in offer.prices or []:
+        if price.is_active and price.price_type == PriceType.recurring:
+            return Decimal(str(price.amount))
+    return Decimal("0")
+
+
+# =============================================================================
+# Instant Plan Change
+# =============================================================================
+
+
+def apply_instant_plan_change(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    offer_id: str,
+    notes: str | None = None,
+) -> dict:
+    """Instantly apply a plan change for the customer.
+
+    Creates a change request, auto-approves it, and applies the change
+    in a single step.
+
+    Args:
+        db: Database session.
+        customer: Customer session dict.
+        subscription_id: Subscription UUID string.
+        offer_id: New offer UUID string.
+        notes: Optional customer notes.
+
+    Returns:
+        Dict with old/new offer names and price difference.
+
+    Raises:
+        ValueError: If the subscription/offer is invalid or not authorized.
+    """
+    from app.services import subscription_changes as change_service
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    # Verify subscription belongs to customer
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription:
+        raise ValueError("Subscription not found")
+
+    account_id = customer.get("account_id")
+    if account_id and str(subscription.subscriber_id) != str(account_id):
+        raise ValueError("Subscription does not belong to this account")
+
+    # Verify new offer is valid
+    new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
+    if not new_offer or not new_offer.is_active:
+        raise ValueError("Selected plan is not available")
+
+    # Get current offer for comparison
+    current_offer = (
+        db.get(CatalogOffer, subscription.offer_id) if subscription.offer_id else None
+    )
+    old_price = (
+        _get_offer_recurring_price(current_offer) if current_offer else Decimal("0")
+    )
+    new_price = _get_offer_recurring_price(new_offer)
+    old_name = current_offer.name if current_offer else "Unknown"
+    new_name = new_offer.name
+
+    # Create → approve → apply in one step
+    subscriber_id = customer.get("subscriber_id")
+    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+
+    change_request = change_service.subscription_change_requests.create(
+        db=db,
+        subscription_id=subscription_id,
+        new_offer_id=offer_id,
+        effective_date=date.today(),
+        requested_by_person_id=str(subscriber.id) if subscriber else None,
+        notes=notes,
+    )
+
+    change_service.subscription_change_requests.approve(
+        db=db,
+        request_id=str(change_request.id),
+        reviewer_id=None,
+    )
+
+    change_service.subscription_change_requests.apply(
+        db=db,
+        request_id=str(change_request.id),
+    )
+
+    # Emit upgrade/downgrade event
+    event_type = (
+        EventType.subscription_upgraded
+        if new_price > old_price
+        else EventType.subscription_downgraded
+    )
+    emit_event(
+        db,
+        event_type,
+        {
+            "subscription_id": subscription_id,
+            "old_offer": old_name,
+            "new_offer": new_name,
+            "price_difference": str(new_price - old_price),
+        },
+    )
+
+    return {
+        "old_offer_name": old_name,
+        "new_offer_name": new_name,
+        "old_price": old_price,
+        "new_price": new_price,
+        "price_difference": new_price - old_price,
     }
