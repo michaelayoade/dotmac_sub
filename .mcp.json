@@ -8,6 +8,29 @@
       ],
       "description": "DotMac Sub database - read-only queries for debugging and analysis"
     },
+    "radius-db": {
+      "command": "/bin/bash",
+      "args": [
+        "-lc",
+        "set -a; [ -f .env ] && . .env; set +a; if [ -z \"${RADIUS_DB_DSN:-}\" ]; then echo \"RADIUS_DB_DSN is required (export it or set it in .env). Example: postgresql://radius_readonly:<password>@localhost:5437/radius\" >&2; exit 1; fi; exec npx -y @bytebase/dbhub --dsn \"$RADIUS_DB_DSN\""
+      ],
+      "description": "RADIUS database - read-only queries for auth attributes, accounting sessions, NAS clients"
+    },
+    "genieacs-db": {
+      "command": "/bin/bash",
+      "args": [
+        "-lc",
+        "set -a; [ -f .env ] && . .env; set +a; if [ -z \"${GENIEACS_MONGODB_DSN:-}\" ]; then echo \"GENIEACS_MONGODB_DSN is required (export it or set it in .env). Example: mongodb://genieacs_readonly:<password>@localhost:27017/genieacs?authSource=admin\" >&2; exit 1; fi; exec npx -y mongodb-mcp-server@latest --readOnly --connectionString \"$GENIEACS_MONGODB_DSN\""
+      ],
+      "description": "GenieACS MongoDB - read-only queries for TR-069 CPE devices, faults, presets"
+    },
+    "victoriametrics": {
+      "command": "mcp-victoriametrics",
+      "env": {
+        "VM_INSTANCE_ENTRYPOINT": "http://localhost:8428"
+      },
+      "description": "VictoriaMetrics - PromQL queries for bandwidth and network metrics"
+    },
     "playwright": {
       "command": "npx",
       "args": ["@playwright/mcp@latest", "--headless"],

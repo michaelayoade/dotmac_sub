@@ -161,6 +161,8 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: genieacs
       MONGO_INITDB_ROOT_PASSWORD: Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm
+    ports:
+    - 27017:27017
     volumes:
     - genieacs_mongodb_data:/data/db
   victoriametrics:
