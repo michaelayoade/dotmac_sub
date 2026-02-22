@@ -137,9 +137,9 @@ async def audit_middleware(request: Request, call_next):
     return response
 
 
-# CSRF Protection paths - only protect web admin forms
-_CSRF_PROTECTED_PATHS = ["/admin/", "/web/"]
-_CSRF_EXEMPT_PATHS = ["/api/", "/auth/", "/health", "/metrics", "/static/"]
+# CSRF Protection paths - protect all web portals and auth forms
+_CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
+_CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
 
 
 @app.middleware("http")
@@ -163,6 +163,15 @@ async def csrf_middleware(request: Request, call_next):
     if not needs_protection:
         return await call_next(request)
 
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+    generated_token: str | None = None
+
+    if not cookie_token:
+        generated_token = generate_csrf_token()
+        request.state.csrf_token = generated_token
+    else:
+        request.state.csrf_token = cookie_token
+
     # For state-changing methods, validate CSRF token
     if method in ("POST", "PUT", "DELETE", "PATCH"):
         from fastapi.responses import HTMLResponse
@@ -172,8 +181,6 @@ async def csrf_middleware(request: Request, call_next):
                 content=f"<h1>403 Forbidden</h1><p>{message}</p>",
                 status_code=403,
             )
-
-        cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
 
         if not cookie_token:
             # No CSRF cookie - reject request
@@ -211,11 +218,14 @@ async def csrf_middleware(request: Request, call_next):
                             parser = BytesParser(policy=HTTP)
                             msg = parser.parsebytes(mime_message)
 
-                            # Walk through all parts to find _csrf_token
+                            # Walk through all parts to find CSRF token field
                             if msg.is_multipart():
                                 for part in msg.iter_parts():
                                     content_disp = part.get("Content-Disposition", "")
-                                    if 'name="_csrf_token"' in content_disp or "name=_csrf_token" in content_disp:
+                                    if (
+                                        'name="_csrf_token"' in content_disp
+                                        or "name=_csrf_token" in content_disp
+                                    ):
                                         payload = part.get_payload(decode=True)
                                         if isinstance(payload, (bytes, bytearray)):
                                             form_token = payload.decode("utf-8", errors="ignore").strip()
@@ -245,9 +255,8 @@ async def csrf_middleware(request: Request, call_next):
     response = await call_next(request)
 
     # Set CSRF cookie on responses if not present
-    if CSRF_COOKIE_NAME not in request.cookies:
-        token = generate_csrf_token()
-        set_csrf_cookie(response, token)
+    if generated_token:
+        set_csrf_cookie(response, generated_token)
 
     return response
 

@@ -1,7 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge %}
 
-{% block title %}{{ subscriber.person.first_name if subscriber.person else subscriber.organization.name }} - Subscriber{% endblock %}
+{% block title %}
+{{ (subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name)|trim if subscriber.person else (subscriber.organization.name if subscriber.organization else ((subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber')) }} - Subscriber
+{% endblock %}
 
 {% block head %}
 {% if map_data %}
@@ -46,15 +48,23 @@
                 {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
                 {% if subscriber.person %}
                     {{ subscriber.person.first_name[0] }}{{ subscriber.person.last_name[0] if subscriber.person.last_name else '' }}
-                {% else %}
+                {% elif subscriber.organization %}
                     {{ subscriber.organization.name[0:2] | upper }}
+                {% else %}
+                    {{ subscriber.first_name[0] if subscriber.first_name else 'S' }}{{ subscriber.last_name[0] if subscriber.last_name else '' }}
                 {% endif %}
             </div>
         </div>
         <div>
             <div class="flex items-center gap-3">
                 <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display tracking-tight">
-                    {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
+                    {% if subscriber.person %}
+                    {{ subscriber.person.first_name }} {{ subscriber.person.last_name }}
+                    {% elif subscriber.organization %}
+                    {{ subscriber.organization.name }}
+                    {% else %}
+                    {{ (subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber' }}
+                    {% endif %}
                 </h1>
                 {% if subscriber.is_active %}
                 {{ status_badge("Active", "active", size="sm") }}
@@ -89,7 +99,7 @@
             <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             Create Subscription
         </a>
-        <a href="/admin/operations/service-orders/new?subscriber={{ subscriber.id }}" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
+        <a href="/admin/provisioning/orders/new?subscriber={{ subscriber.id }}" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
             <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             New Service
         </a>
@@ -764,6 +774,7 @@
 
             <!-- Form -->
             <form method="POST" action="/admin/catalog/subscriptions" class="p-6 space-y-5">
+                {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="subscriber_id" value="{{ subscriber.id }}">
                 {% if accounts and accounts|length == 1 %}
                 <input type="hidden" name="account_id" value="{{ accounts[0].id }}">

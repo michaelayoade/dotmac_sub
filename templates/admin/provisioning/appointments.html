@@ -1,33 +1,38 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, card, table_head, table_row,
+    status_badge, empty_state, animation_styles
+%}
+
+{% set appt_variants = {
+    'proposed': 'info',
+    'confirmed': 'success',
+    'completed': 'paid',
+    'no_show': 'warning',
+    'canceled': 'inactive'
+} %}
 
 {% block title %}Appointments - Admin{% endblock %}
 
-{% set appt_status_colors = {
-    'proposed': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-    'confirmed': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-    'completed': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300',
-    'no_show': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
-    'canceled': 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
-} %}
-
-{% block breadcrumbs %}
-<a href="/admin/provisioning" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Provisioning</a>
-<span class="mx-2 text-slate-400">/</span>
-<span class="text-slate-600 dark:text-slate-300">Appointments</span>
-{% endblock %}
-
 {% block content %}
-<div class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Install Appointments</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All scheduled installation appointments</p>
-        </div>
-    </div>
+{{ ambient_background("amber", "orange") }}
 
-    <!-- Filters -->
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {{ page_header(
+        title="Install Appointments",
+        subtitle="All scheduled installation appointments",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>',
+        color="amber",
+        color2="orange",
+        breadcrumbs=[
+            {"label": "Provisioning", "href": "/admin/provisioning"},
+            {"label": "Appointments"}
+        ]
+    ) }}
+
+    {# ── Filters ── #}
+    {% call card(color="amber") %}
         <form method="GET" action="/admin/provisioning/appointments" class="flex flex-col gap-3 sm:flex-row sm:items-center">
             <select name="status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All Statuses</option>
@@ -38,90 +43,82 @@
             <input type="text" name="technician" placeholder="Technician name..."
                    value="{{ current_technician }}"
                    class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            <button type="submit" class="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <button type="submit" class="rounded-lg bg-amber-100 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50">
                 Filter
             </button>
         </form>
-    </div>
+    {% endcall %}
 
-    <!-- Appointments Table -->
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-            <thead class="bg-slate-50 dark:bg-slate-800/50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Date/Time</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Service Order</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Technician</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Self-Install</th>
-                    <th class="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                {% for appt in appointments %}
-                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white">
-                        {{ appt.scheduled_start.strftime('%Y-%m-%d %H:%M') }} - {{ appt.scheduled_end.strftime('%H:%M') }}
-                    </td>
-                    <td class="whitespace-nowrap px-6 py-4 text-sm">
-                        <a href="/admin/provisioning/orders/{{ appt.service_order_id }}" class="font-mono text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                            {{ appt.service_order_id|string|truncate(8, True, '') }}
-                        </a>
-                    </td>
-                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                        {% if appt.service_order and appt.service_order.subscriber %}
-                        <a href="/admin/subscribers/{{ appt.service_order.subscriber_id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
-                            {{ subscriber_label(appt.service_order.subscriber) }}
-                        </a>
-                        {% else %}
-                        <span class="text-slate-400">-</span>
-                        {% endif %}
-                    </td>
-                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ appt.technician or '-' }}</td>
-                    <td class="whitespace-nowrap px-6 py-4 text-sm">
-                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ appt_status_colors.get(appt.status.value, 'bg-slate-100 text-slate-700') }}">
-                            {{ appt.status.value|replace('_', ' ')|title }}
-                        </span>
-                    </td>
-                    <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                        {% if appt.is_self_install %}
-                        <span class="text-green-600 dark:text-green-400">Yes</span>
-                        {% else %}
-                        No
-                        {% endif %}
-                    </td>
-                    <td class="whitespace-nowrap px-6 py-4 text-right text-sm">
-                        <form method="POST" action="/admin/provisioning/appointments/{{ appt.id }}/status" class="inline">
-                            <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token|default('') }}">
-                            <select name="new_status" onchange="this.form.submit()"
-                                    class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for s in appointment_statuses %}
-                                <option value="{{ s }}" {{ 'selected' if appt.status.value == s else '' }}>{{ s|replace('_', ' ')|title }}</option>
-                                {% endfor %}
-                            </select>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="7" class="px-6 py-12 text-center">
-                        <div class="flex flex-col items-center">
-                            <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                            </svg>
-                            <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No appointments found</p>
-                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Appointments are created from service order detail pages.</p>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    {# ── Appointments Table ── #}
+    {% call card(color="amber", padding=False) %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Date/Time"},
+                    {"label": "Service Order"},
+                    {"label": "Subscriber"},
+                    {"label": "Technician"},
+                    {"label": "Status"},
+                    {"label": "Self-Install"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                    {% for appt in appointments %}
+                    {% call table_row(color="amber") %}
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white">
+                            {{ appt.scheduled_start.strftime('%Y-%m-%d %H:%M') }} - {{ appt.scheduled_end.strftime('%H:%M') }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm">
+                            <a href="/admin/provisioning/orders/{{ appt.service_order_id }}" class="font-mono font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
+                                {{ appt.service_order_id|string|truncate(8, True, '') }}
+                            </a>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if appt.service_order and appt.service_order.subscriber %}
+                            <a href="/admin/subscribers/{{ appt.service_order.subscriber_id }}" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
+                                {{ subscriber_label(appt.service_order.subscriber) }}
+                            </a>
+                            {% else %}
+                            <span class="text-slate-400">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ appt.technician or '-' }}</td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {{ status_badge(appt.status.value|replace('_', ' ')|title, variant=appt_variants.get(appt.status.value, 'default')) }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {% if appt.is_self_install %}
+                            <span class="text-green-600 dark:text-green-400">Yes</span>
+                            {% else %}No{% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right text-sm">
+                            <form method="POST" action="/admin/provisioning/appointments/{{ appt.id }}/status" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <select name="new_status" onchange="this.form.submit()"
+                                        class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    {% for s in appointment_statuses %}
+                                    <option value="{{ s }}" {{ 'selected' if appt.status.value == s else '' }}>{{ s|replace('_', ' ')|title }}</option>
+                                    {% endfor %}
+                                </select>
+                            </form>
+                        </td>
+                    {% endcall %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No appointments found",
+                        message="Appointments are created from service order detail pages.",
+                        icon='<svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>',
+                        color="amber",
+                        colspan=7
+                    ) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
 
+        {# Pagination #}
         {% if appointments %}
-        <!-- Pagination -->
-        <div class="border-t border-slate-200 bg-slate-50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+        <div class="border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
             <div class="flex items-center justify-between">
                 <p class="text-sm text-slate-500 dark:text-slate-400">
                     Showing {{ appointments|length }} appointment{{ 's' if appointments|length != 1 else '' }}
@@ -129,16 +126,18 @@
                 <div class="flex gap-2">
                     {% if has_prev %}
                     <a href="/admin/provisioning/appointments?page={{ page - 1 }}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_technician %}&technician={{ current_technician }}{% endif %}"
-                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
+                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
                     {% endif %}
                     {% if has_next %}
                     <a href="/admin/provisioning/appointments?page={{ page + 1 }}{% if current_status %}&status={{ current_status }}{% endif %}{% if current_technician %}&technician={{ current_technician }}{% endif %}"
-                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
+                       class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
                     {% endif %}
                 </div>
             </div>
         </div>
         {% endif %}
-    </div>
+    {% endcall %}
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

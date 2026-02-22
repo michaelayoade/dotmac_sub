@@ -27,6 +27,7 @@
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="/admin/system/users/{{ user.id }}/edit" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
             <div class="grid gap-4 sm:grid-cols-2">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">First Name</label>

@@ -28,6 +28,7 @@
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
             <div class="grid gap-4 sm:grid-cols-2">
                 {% include "admin/billing/_customer_subscriber_fields.html" with context %}
                 <div>

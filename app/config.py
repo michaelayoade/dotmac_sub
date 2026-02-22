@@ -30,6 +30,9 @@ class Settings:
     mysql_password: str = os.getenv("SPLYNX_MYSQL_PASSWORD", "")
     mysql_database: str = os.getenv("SPLYNX_MYSQL_DATABASE", "splynx")
 
+    # Cookie security
+    secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() in ("true", "1", "yes")
+
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")
 

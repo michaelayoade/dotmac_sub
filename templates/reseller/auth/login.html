@@ -38,6 +38,7 @@
               x-data="{ loading: false }"
               x-on:submit="loading = true"
               class="space-y-5">
+            {% include "components/forms/csrf_input.html" %}
 
             <div>
                 <label for="username" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">

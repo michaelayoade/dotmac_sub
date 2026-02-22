@@ -33,6 +33,7 @@
         {% endif %}
 
         <form class="space-y-6" action="/portal/auth/login" method="POST">
+            {% include "components/forms/csrf_input.html" %}
             {% if next %}
             <input type="hidden" name="next" value="{{ next }}">
             {% endif %}

@@ -74,7 +74,7 @@ def login_submit(
                 value=result.get("mfa_token", ""),
                 httponly=True,
                 secure=True,
-                samesite="none",
+                samesite="lax",
                 max_age=300,
             )
             return response

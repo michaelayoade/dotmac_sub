@@ -19,6 +19,14 @@ from app.services.settings_spec import resolve_value
 
 templates = Jinja2Templates(directory="templates")
 
+
+def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str:
+    """Validate redirect URL to prevent open redirect attacks."""
+    if next_url and next_url.startswith("/"):
+        return next_url
+    return fallback
+
+
 def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> int:
     raw = resolve_value(db, domain, key)
     if raw is None:
@@ -39,7 +47,7 @@ def customer_login_page(request: Request, error: str | None = None, next_url: st
     try:
         customer = get_current_customer_from_request(request, db)
         if customer:
-            return RedirectResponse(url=next_url or "/portal/dashboard", status_code=303)
+            return RedirectResponse(url=_safe_next(next_url), status_code=303)
     finally:
         db.close()
 
@@ -156,7 +164,7 @@ def customer_login_submit(
             db=db,
         )
 
-        redirect_url = next_url or "/portal/dashboard"
+        redirect_url = _safe_next(next_url)
         response = RedirectResponse(url=redirect_url, status_code=303)
 
         max_age = customer_portal.get_remember_max_age(db) if remember else customer_portal.get_session_max_age(db)

@@ -29,6 +29,7 @@
           action="/auth/mfa"
           x-data="{ code: '' }"
           class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
 
         <!-- Hidden next URL for redirect after MFA -->
         {% if next %}

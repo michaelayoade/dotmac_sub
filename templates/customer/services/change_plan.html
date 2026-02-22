@@ -3,7 +3,7 @@
 {% block title %}Change Plan - Customer Portal{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-6" x-data="changePlanPage()">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
@@ -12,10 +12,10 @@
                 <span class="text-slate-900 dark:text-white">Change Plan</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Change Your Plan</h1>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Select a new plan for your subscription</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Select a new plan — changes take effect immediately</p>
         </div>
         <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-            View change requests
+            View change history
         </a>
     </div>
 
@@ -44,7 +44,8 @@
     </div>
     {% endif %}
 
-    <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6">
+    <form action="/portal/services/{{ subscription.id }}/change" method="POST" class="space-y-6" @submit.prevent="confirmAndSubmit($event)">
+        {% include "components/forms/csrf_input.html" %}
         <!-- Available Plans -->
         <div>
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Available Plans</h2>
@@ -54,7 +55,8 @@
                 {% if not current_offer or str(offer.id) != str(current_offer.id) %}
                 {% set selectable_offers.count = selectable_offers.count + 1 %}
                 <label class="relative cursor-pointer">
-                    <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required>
+                    <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
+                           @change="selectOffer('{{ offer.name }}', {{ offer.price or 0 }})">
                     <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600 dark:peer-checked:border-primary-400">
                         <div class="flex items-start justify-between">
                             <div>
@@ -79,9 +81,9 @@
                             {% if current_offer %}
                             {% set diff = (offer.price or 0) - (current_offer.price or 0) %}
                             {% if diff > 0 %}
-                            <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">+{{ '{:,.2f}'.format(diff) }}/month</p>
+                            <p class="mt-1 text-sm font-medium text-amber-600 dark:text-amber-400">+{{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(diff) }}/month</p>
                             {% elif diff < 0 %}
-                            <p class="mt-1 text-sm text-green-600 dark:text-green-400">{{ '{:,.2f}'.format(diff) }}/month</p>
+                            <p class="mt-1 text-sm font-medium text-green-600 dark:text-green-400">-{{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(diff | abs) }}/month</p>
                             {% endif %}
                             {% endif %}
                         </div>
@@ -97,28 +99,12 @@
             {% endif %}
         </div>
 
-        <!-- Effective Date -->
+        <!-- Notes -->
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">When should the change take effect?</h3>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                    <label for="effective_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Effective Date</label>
-                    <input type="date" id="effective_date" name="effective_date" required
-                           value="{{ next_billing_date.strftime('%Y-%m-%d') if next_billing_date else '' }}"
-                           data-next-billing="{{ next_billing_date.strftime('%Y-%m-%d') if next_billing_date else '' }}"
-                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default is the next billing cycle. You can pick a later date.</p>
-                    {% if next_billing_date %}
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Next cycle starts {{ next_billing_date.strftime('%b %d, %Y') }}.</p>
-                    {% endif %}
-                </div>
-                <div>
-                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (optional)</label>
-                    <textarea id="notes" name="notes" rows="3"
-                              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
-                              placeholder="Any additional notes or requests..."></textarea>
-                </div>
-            </div>
+            <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (optional)</label>
+            <textarea id="notes" name="notes" rows="2"
+                      class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                      placeholder="Any additional notes..."></textarea>
         </div>
 
         <!-- Submit -->
@@ -127,32 +113,75 @@
                 Cancel
             </a>
             <button type="submit" class="rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 {% if selectable_offers.count == 0 %}opacity-60 cursor-not-allowed{% endif %}" {% if selectable_offers.count == 0 %}disabled{% endif %}>
-                Submit Change Request
+                Change Plan Now
             </button>
         </div>
     </form>
+
+    <!-- Confirmation Modal -->
+    <div x-show="showConfirm" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showConfirm = false">
+        <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800" @click.away="showConfirm = false">
+            <div class="text-center">
+                <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30">
+                    <svg class="h-6 w-6 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                    </svg>
+                </div>
+                <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Confirm Plan Change</h3>
+                <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                    You're switching to <span class="font-semibold text-slate-900 dark:text-white" x-text="selectedOfferName"></span>.
+                    Your next bill will reflect the new price of
+                    <span class="font-semibold" x-text="'NGN ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                </p>
+                <template x-if="priceDifference > 0">
+                    <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
+                        This is an increase of NGN <span x-text="priceDifference.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                    </p>
+                </template>
+                <template x-if="priceDifference < 0">
+                    <p class="mt-2 text-sm font-medium text-green-600 dark:text-green-400">
+                        This saves you NGN <span x-text="Math.abs(priceDifference).toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                    </p>
+                </template>
+            </div>
+            <div class="mt-6 flex gap-3">
+                <button @click="showConfirm = false" class="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    Cancel
+                </button>
+                <button @click="submitForm()" class="flex-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Change Plan Now
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
-    // Set default effective date to next billing date (or tomorrow) and clamp min to today
-    const dateInput = document.getElementById('effective_date');
-    if (dateInput && !dateInput.value) {
-        const nextBilling = dateInput.dataset.nextBilling;
-        const today = new Date();
-        const tomorrow = new Date();
-        tomorrow.setDate(today.getDate() + 1);
-        const todayStr = today.toISOString().split('T')[0];
-        dateInput.min = todayStr;
-        dateInput.value = nextBilling || tomorrow.toISOString().split('T')[0];
-        if (dateInput.value < todayStr) {
-            dateInput.value = todayStr;
+function changePlanPage() {
+    return {
+        showConfirm: false,
+        selectedOfferName: '',
+        selectedOfferPrice: 0,
+        priceDifference: 0,
+        currentPrice: {{ current_offer.price or 0 if current_offer else 0 }},
+        pendingForm: null,
+        selectOffer(name, price) {
+            this.selectedOfferName = name;
+            this.selectedOfferPrice = price;
+            this.priceDifference = price - this.currentPrice;
+        },
+        confirmAndSubmit(event) {
+            if (!this.selectedOfferName) return;
+            this.pendingForm = event.target;
+            this.showConfirm = true;
+        },
+        submitForm() {
+            if (this.pendingForm) {
+                this.showConfirm = false;
+                this.pendingForm.submit();
+            }
         }
-    } else if (dateInput) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        dateInput.min = todayStr;
-        if (dateInput.value < todayStr) {
-            dateInput.value = todayStr;
-        }
-    }
+    };
+}
 </script>
 {% endblock %}

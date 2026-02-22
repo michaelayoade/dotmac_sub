@@ -1,30 +1,34 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, status_badge,
+    empty_state, animation_styles
+%}
 
 {% block title %}Dunning - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">Dunning</span>
-            </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Dunning Cases</h1>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Manage overdue accounts and collection workflows</p>
-        </div>
-    </div>
+{{ ambient_background("emerald", "teal") }}
 
-    <!-- Filters -->
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {{ page_header(
+        "Dunning Cases",
+        subtitle="Manage overdue accounts and collection workflows",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+        color="emerald",
+        color2="teal",
+        breadcrumbs=[{"label": "Billing", "href": "/admin/billing"}, {"label": "Dunning"}]
+    ) }}
+
+    {# ── Customer Search Filter ── #}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <form method="get" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="w-full sm:w-72">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
                 <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
                     <input type="text" data-typeahead-input
                            placeholder="Search customers..."
-                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                     <input type="hidden" name="customer_ref" data-typeahead-hidden value="{{ customer_ref or '' }}">
                     <div data-typeahead-results></div>
                 </div>
@@ -33,7 +37,7 @@
                 {% endif %}
             </div>
             <div class="flex items-center gap-2">
-                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <button type="submit" class="inline-flex items-center rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:shadow-md transition-all">
                     Apply
                 </button>
                 {% if customer_ref %}
@@ -45,10 +49,10 @@
         </form>
     </div>
 
-    <!-- Status Filters -->
+    {# ── Status Filter Pills ── #}
     <div class="flex flex-wrap items-center gap-2">
         <a href="/admin/billing/dunning{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}"
-           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if not status else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300' if not status else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
             All
             <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ (status_counts.open + status_counts.paused + status_counts.resolved + status_counts.closed) if status_counts else 0 }}</span>
         </a>
@@ -74,17 +78,20 @@
         </a>
     </div>
 
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
+    {# ── Dunning Table ── #}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800"
          x-data="{ selected: [], selectAll: false }"
          @toggle-all="selectAll = !selectAll; selected = selectAll ? [...document.querySelectorAll('[data-case-id]')].map(el => el.dataset.caseId) : []">
-        <!-- Bulk Actions Bar -->
+
+        {# Bulk Actions Bar #}
         <div x-show="selected.length > 0" x-cloak
-             class="flex items-center justify-between border-b border-slate-200 bg-primary-50 px-6 py-3 dark:border-slate-700 dark:bg-primary-900/20">
-            <span class="text-sm font-medium text-primary-700 dark:text-primary-300">
+             class="flex items-center justify-between border-b border-slate-200 bg-emerald-50 px-6 py-3 dark:border-slate-700 dark:bg-emerald-900/20">
+            <span class="text-sm font-medium text-emerald-700 dark:text-emerald-300">
                 <span x-text="selected.length"></span> selected
             </span>
             <div class="flex items-center gap-2">
                 <form method="post" action="/admin/billing/dunning/bulk/pause" class="inline">
+                    {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="case_ids" :value="selected.join(',')">
                     <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -92,6 +99,7 @@
                     </button>
                 </form>
                 <form method="post" action="/admin/billing/dunning/bulk/resume" class="inline">
+                    {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="case_ids" :value="selected.join(',')">
                     <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -103,32 +111,33 @@
                 </button>
             </div>
         </div>
+
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th class="w-12 px-6 py-3">
+                <thead>
+                    <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                        <th scope="col" class="w-12 px-6 py-3">
                             <input type="checkbox" x-model="selectAll" @change="$dispatch('toggle-all')"
-                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Step</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Started</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Resolved</th>
-                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Account</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Step</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Started</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Resolved</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if cases %}
                     {% for case in cases %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50" data-case-id="{{ case.id }}">
+                    <tr class="group transition-all hover:bg-gradient-to-r hover:from-emerald-50/50 hover:to-emerald-50/30 dark:hover:from-emerald-900/10 dark:hover:to-emerald-900/5" data-case-id="{{ case.id }}">
                         <td class="px-6 py-4">
                             <input type="checkbox" :value="'{{ case.id }}'" x-model="selected"
-                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
                         </td>
                         <td class="px-6 py-4">
-                            <a href="/admin/billing/accounts/{{ case.account_id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                            <a href="/admin/billing/accounts/{{ case.account_id }}" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
                                 {% if case.account and case.account.subscriber and case.account.subscriber.person %}
                                     {{ case.account.subscriber.person.display_name or case.account.subscriber.person.first_name }}
                                 {% else %}
@@ -140,15 +149,17 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4">
-                            {% set status_class = {
-                                'open': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
-                                'paused': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
-                                'resolved': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-                                'closed': 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-                            } %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_class.get(case.status.value, 'bg-slate-100 text-slate-600') }}">
-                                {{ case.status.value | capitalize }}
-                            </span>
+                            {% if case.status.value == 'open' %}
+                            {{ status_badge("Open", variant="error") }}
+                            {% elif case.status.value == 'paused' %}
+                            {{ status_badge("Paused", variant="warning") }}
+                            {% elif case.status.value == 'resolved' %}
+                            {{ status_badge("Resolved", variant="success") }}
+                            {% elif case.status.value == 'closed' %}
+                            {{ status_badge("Closed", variant="inactive") }}
+                            {% else %}
+                            {{ status_badge(case.status.value | capitalize, variant="default") }}
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {% if case.current_step is not none %}
@@ -167,12 +178,14 @@
                             <div class="flex items-center justify-end gap-2" x-data="{ open: false }">
                                 {% if case.status.value == 'open' %}
                                 <form method="post" action="/admin/billing/dunning/{{ case.id }}/pause" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">
                                         Pause
                                     </button>
                                 </form>
                                 {% elif case.status.value == 'paused' %}
                                 <form method="post" action="/admin/billing/dunning/{{ case.id }}/resume" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
                                         Resume
                                     </button>
@@ -193,6 +206,7 @@
                                         {% if case.status.value in ('open', 'paused') %}
                                         <hr class="my-1 border-slate-200 dark:border-slate-700">
                                         <form method="post" action="/admin/billing/dunning/{{ case.id }}/close">
+                                            {% include "components/forms/csrf_input.html" %}
                                             <button type="submit" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
                                                 Close Case
                                             </button>
@@ -206,15 +220,21 @@
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
-                            <div class="flex flex-col items-center gap-2">
-                                <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                </svg>
-                                <p>No dunning cases found</p>
-                                {% if status %}
-                                <a href="/admin/billing/dunning{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}" class="text-primary-600 hover:text-primary-700">Clear filters</a>
-                                {% endif %}
+                        <td colspan="7" class="px-6 py-16 text-center">
+                            <div class="flex flex-col items-center gap-4">
+                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/40 dark:to-teal-900/30">
+                                    <svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">No dunning cases found</h3>
+                                    {% if status %}
+                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                                        <a href="/admin/billing/dunning{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Clear filters</a>
+                                    </p>
+                                    {% endif %}
+                                </div>
                             </div>
                         </td>
                     </tr>
@@ -223,27 +243,34 @@
             </table>
         </div>
 
+        {# ── Pagination ── #}
         {% if total_pages > 1 %}
-        <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
-            <div class="text-sm text-slate-500 dark:text-slate-400">
-                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} cases
-            </div>
-            <div class="flex items-center gap-2">
-                {% if page > 1 %}
-                <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
-                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Previous
-                </a>
-                {% endif %}
-                {% if page < total_pages %}
-                <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
-                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Next
-                </a>
-                {% endif %}
+        <div class="border-t border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-5 py-4 dark:border-slate-700/60 dark:from-slate-800/80 dark:to-slate-800/50">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing <span class="font-semibold text-slate-700 dark:text-slate-300">{{ ((page - 1) * per_page) + 1 }}</span> to
+                    <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span> of
+                    <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> cases
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if page > 1 %}
+                    <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+                       class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Previous
+                    </a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}"
+                       class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Next
+                    </a>
+                    {% endif %}
+                </div>
             </div>
         </div>
         {% endif %}
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

@@ -140,6 +140,7 @@
 
                 <!-- Login Form -->
                 <form method="post" action="/auth/login" class="space-y-5" x-on:submit="loading = true">
+                    {% include "components/forms/csrf_input.html" %}
                     {% if next %}
                     <input type="hidden" name="next" value="{{ next }}" />
                     {% endif %}

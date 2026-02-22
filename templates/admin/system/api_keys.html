@@ -84,6 +84,7 @@
                         {% endif %}
                         {% if key.is_active and not key.revoked_at %}
                         <form method="POST" action="/admin/system/api-keys/{{ key.id }}/revoke" onsubmit="return confirm('Are you sure you want to revoke this API key? This action cannot be undone.')">
+                            {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="text-sm text-red-600 hover:text-red-700">Revoke</button>
                         </form>
                         {% endif %}

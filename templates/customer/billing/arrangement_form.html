@@ -60,6 +60,7 @@
     </div>
 
     <form action="/portal/billing/arrangements" method="POST" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
         <!-- Arrangement Options -->
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Payment Schedule</h2>

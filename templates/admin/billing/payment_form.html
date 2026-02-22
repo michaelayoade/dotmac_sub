@@ -28,6 +28,7 @@
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
             {% include "admin/billing/_customer_account_fields.html" with context %}
             {% if prefill and prefill.invoice_number %}
             <div class="rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900/40 dark:bg-primary-900/20">

@@ -17,6 +17,7 @@
         <div class="lg:col-span-2 space-y-6">
             <!-- Profile Information -->
             <form method="POST" action="/admin/system/users/profile" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                {% include "components/forms/csrf_input.html" %}
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <h2 class="font-semibold text-slate-900 dark:text-white">Profile Information</h2>
                 </div>
@@ -70,6 +71,7 @@
 
             <!-- Change Password -->
             <form method="POST" action="/admin/system/users/profile/password" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                {% include "components/forms/csrf_input.html" %}
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <h2 class="font-semibold text-slate-900 dark:text-white">Change Password</h2>
                 </div>

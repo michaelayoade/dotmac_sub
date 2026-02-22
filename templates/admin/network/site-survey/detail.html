@@ -54,6 +54,7 @@
                 Edit
             </a>
             <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/delete" onsubmit="return confirm('Delete this survey?');">
+                {% include "components/forms/csrf_input.html" %}
                 <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:bg-slate-800 dark:text-red-400">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                     Delete
@@ -115,6 +116,7 @@
                                     <div class="flex flex-col items-end gap-2">
                                         <button type="button" class="text-xs text-primary-600 hover:text-primary-700 js-refresh-elevation" data-point-id="{{ point.id }}">Refresh elevation</button>
                                         <form method="POST" action="/admin/network/site-survey/points/{{ point.id }}/delete" onsubmit="return confirm('Delete this point?');">
+                                            {% include "components/forms/csrf_input.html" %}
                                             <button type="submit" class="text-red-600 hover:text-red-700 text-sm">Delete</button>
                                         </form>
                                     </div>
@@ -135,6 +137,7 @@
                 </div>
                 <div class="p-6 space-y-4">
                     <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/analyze-los" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        {% include "components/forms/csrf_input.html" %}
                         <div>
                             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">From</label>
                             <select name="from_point_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -177,6 +180,7 @@
                                         <span class="badge bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">Unknown</span>
                                     {% endif %}
                                     <form method="POST" action="/admin/network/site-survey/los/{{ path.id }}/delete" onsubmit="return confirm('Delete this LOS path?');">
+                                        {% include "components/forms/csrf_input.html" %}
                                         <button type="submit" class="text-red-600 hover:text-red-700 text-xs">Delete</button>
                                     </form>
                                 </div>
@@ -278,6 +282,7 @@
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Click the map to fill coordinates.</p>
                 </div>
                 <form method="POST" action="/admin/network/site-survey/{{ survey.id }}/points" class="p-6 space-y-4">
+                    {% include "components/forms/csrf_input.html" %}
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name *</label>
                         <input type="text" name="name" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Point name">

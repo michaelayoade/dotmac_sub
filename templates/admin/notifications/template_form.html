@@ -39,6 +39,7 @@
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2">
             <form action="{{ action_url }}" method="POST" class="space-y-6">
+                {% include "components/forms/csrf_input.html" %}
                 <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Template Details</h3>
 
