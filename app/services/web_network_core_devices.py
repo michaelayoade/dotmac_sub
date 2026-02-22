@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -580,7 +581,7 @@ def resolve_device_redirect(db: Session, device_id: str) -> str | None:
         olt = network_service.olt_devices.get(db=db, device_id=device_id)
         if olt:
             return f"/admin/network/olts/{device_id}"
-    except Exception:
+    except HTTPException:
         pass
 
     # Try ONT
@@ -588,7 +589,7 @@ def resolve_device_redirect(db: Session, device_id: str) -> str | None:
         ont = network_service.ont_units.get(db=db, unit_id=device_id)
         if ont:
             return f"/admin/network/onts/{device_id}"
-    except Exception:
+    except HTTPException:
         pass
 
     # Try CPE
@@ -596,7 +597,7 @@ def resolve_device_redirect(db: Session, device_id: str) -> str | None:
         cpe = network_service.cpe_devices.get(db=db, device_id=device_id)
         if cpe:
             return f"/admin/network/cpes/{device_id}"
-    except Exception:
+    except HTTPException:
         pass
 
     return None
@@ -622,7 +623,7 @@ def collect_devices(db: Session) -> list[dict]:
             "name": olt.name,
             "type": "olt",
             "serial_number": getattr(olt, "serial_number", None),
-            "ip_address": getattr(olt, "management_ip", None) or getattr(olt, "mgmt_ip", None),
+            "ip_address": getattr(olt, "mgmt_ip", None),
             "vendor": olt.vendor,
             "model": olt.model,
             "status": "online" if olt.is_active else "offline",
@@ -800,7 +801,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     """Return OLT detail payload with PON ports and ONT assignments."""
     try:
         olt = network_service.olt_devices.get(db=db, device_id=olt_id)
-    except Exception:
+    except HTTPException:
         return None
 
     pon_ports = network_service.pon_ports.list(

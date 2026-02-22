@@ -232,7 +232,7 @@ class SplitterPorts(CRUDManager[SplitterPort]):
 class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
     model = SplitterPortAssignment
     not_found_detail = "Splitter port assignment not found"
-    soft_delete_field = "is_active"
+    soft_delete_field = "active"
     soft_delete_value = False
 
     @staticmethod

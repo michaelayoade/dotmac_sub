@@ -106,107 +106,62 @@ def olt_new(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/olts", response_class=HTMLResponse)
 def olt_create(request: Request, db: Session = Depends(get_db)):
+    from app.web.admin import get_current_user
+
     values = web_network_olts_service.parse_form_values(parse_form_data_sync(request))
     error = web_network_olts_service.validate_values(db, values)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({
-            "olt": None,
-            "action_url": "/admin/network/olts",
-            "error": error,
-        })
+        context.update({"olt": None, "action_url": "/admin/network/olts", "error": error})
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-    olt, error = web_network_olts_service.create_olt(db, values)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    olt, error = web_network_olts_service.create_olt_with_audit(db, request, values, actor_id)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({
-            "olt": web_network_olts_service.snapshot(values),
-            "action_url": "/admin/network/olts",
-            "error": error,
-        })
+        context.update({"olt": web_network_olts_service.snapshot(values), "action_url": "/admin/network/olts", "error": error})
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-    from app.web.admin import get_current_user
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="olt",
-        entity_id=str(olt.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": olt.name, "mgmt_ip": olt.mgmt_ip or None},
-    )
-
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
 
 @router.get("/olts/{olt_id}/edit", response_class=HTMLResponse)
 def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)):
-    try:
-        olt = network_service.olt_devices.get(db=db, device_id=olt_id)
-    except Exception:
+    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-
     context = _base_context(request, db, active_page="olts")
-    context.update({
-        "olt": olt,
-        "action_url": f"/admin/network/olts/{olt.id}",
-    })
+    context.update({"olt": olt, "action_url": f"/admin/network/olts/{olt.id}"})
     return templates.TemplateResponse("admin/network/olts/form.html", context)
 
 
 @router.post("/olts/{olt_id}", response_class=HTMLResponse)
 def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
-    try:
-        olt = network_service.olt_devices.get(db=db, device_id=olt_id)
-    except Exception:
+    from app.web.admin import get_current_user
+
+    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-
     values = web_network_olts_service.parse_form_values(parse_form_data_sync(request))
     error = web_network_olts_service.validate_values(db, values, current_olt=olt)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({
-            "olt": olt,
-            "action_url": f"/admin/network/olts/{olt.id}",
-            "error": error,
-        })
+        context.update({"olt": olt, "action_url": f"/admin/network/olts/{olt.id}", "error": error})
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-
-    before_snapshot = model_to_dict(olt)
-    olt, error = web_network_olts_service.update_olt(db, olt_id, values)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    olt, error = web_network_olts_service.update_olt_with_audit(db, request, olt_id, olt, values, actor_id)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({
-            "olt": web_network_olts_service.snapshot(values),
-            "action_url": f"/admin/network/olts/{olt_id}",
-            "error": error,
-        })
+        context.update({"olt": web_network_olts_service.snapshot(values), "action_url": f"/admin/network/olts/{olt_id}", "error": error})
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-    after = network_service.olt_devices.get(db=db, device_id=olt_id)
-    after_snapshot = model_to_dict(after)
-    changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload = {"changes": changes} if changes else None
-    from app.web.admin import get_current_user
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata=metadata_payload,
-    )
-
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
 

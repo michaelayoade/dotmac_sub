@@ -1,6 +1,11 @@
 """OLT infrastructure services."""
 
+from __future__ import annotations
+
+import logging
+
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -39,6 +44,8 @@ from app.services.network._common import (
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
+logger = logging.getLogger(__name__)
+
 
 class OLTDevices(CRUDManager[OLTDevice]):
     model = OLTDevice
@@ -54,27 +61,27 @@ class OLTDevices(CRUDManager[OLTDevice]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OLTDevice)
-        query = apply_active_state(query, OLTDevice.is_active, is_active)
-        query = _apply_ordering(
-            query,
+    ) -> list[OLTDevice]:
+        stmt = select(OLTDevice)
+        stmt = apply_active_state(stmt, OLTDevice.is_active, is_active)
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OLTDevice.created_at, "name": OLTDevice.name},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def get(cls, db: Session, device_id: str):
+    def get(cls, db: Session, device_id: str) -> OLTDevice:
         return super().get(db, device_id)
 
     @classmethod
-    def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate):
+    def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate) -> OLTDevice:
         return super().update(db, device_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, device_id: str):
+    def delete(cls, db: Session, device_id: str) -> None:
         return super().delete(db, device_id)
 
 
@@ -85,7 +92,7 @@ class PonPorts(CRUDManager[PonPort]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: PonPortCreate):
+    def create(db: Session, payload: PonPortCreate) -> PonPort:
         olt = db.get(OLTDevice, payload.olt_id)
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
@@ -108,8 +115,7 @@ class PonPorts(CRUDManager[PonPort]):
                 is_active=True,
             )
             db.add(card_port)
-            db.commit()
-            db.refresh(card_port)
+            db.flush()
         data = payload.model_dump()
         if payload.card_id and not payload.olt_card_port_id and card_port:
             data["olt_card_port_id"] = card_port.id
@@ -120,7 +126,7 @@ class PonPorts(CRUDManager[PonPort]):
         return port
 
     @classmethod
-    def get(cls, db: Session, port_id: str):
+    def get(cls, db: Session, port_id: str) -> PonPort:
         return super().get(db, port_id)
 
     @staticmethod
@@ -133,23 +139,23 @@ class PonPorts(CRUDManager[PonPort]):
         card_id: str | None = None,
         olt_id: str | None = None,
         is_active: bool | None = None,
-    ):
-        query = db.query(PonPort)
+    ) -> list[PonPort]:
+        stmt = select(PonPort)
         if card_id:
-            query = query.join(OltCardPort, PonPort.olt_card_port_id == OltCardPort.id)
-            query = query.filter(OltCardPort.card_id == coerce_uuid(card_id))
-        query = apply_optional_equals(query, {PonPort.olt_id: olt_id})
-        query = apply_active_state(query, PonPort.is_active, is_active)
-        query = _apply_ordering(
-            query,
+            stmt = stmt.join(OltCardPort, PonPort.olt_card_port_id == OltCardPort.id)
+            stmt = stmt.filter(OltCardPort.card_id == coerce_uuid(card_id))
+        stmt = apply_optional_equals(stmt, {PonPort.olt_id: olt_id})
+        stmt = apply_active_state(stmt, PonPort.is_active, is_active)
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": PonPort.created_at, "name": PonPort.name},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, port_id: str, payload: PonPortUpdate):
+    def update(db: Session, port_id: str, payload: PonPortUpdate) -> PonPort:
         port = PonPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         if "olt_id" in data:
@@ -167,26 +173,28 @@ class PonPorts(CRUDManager[PonPort]):
         return port
 
     @classmethod
-    def delete(cls, db: Session, port_id: str):
+    def delete(cls, db: Session, port_id: str) -> None:
         return super().delete(db, port_id)
 
     @staticmethod
-    def utilization(db: Session, olt_id: str | None):
-        query = db.query(PonPort)
+    def utilization(db: Session, olt_id: str | None) -> dict[str, object]:
+        total_stmt = select(func.count(PonPort.id)).where(PonPort.is_active.is_(True))
         if olt_id:
-            query = query.filter(PonPort.olt_id == olt_id)
-        total_ports = query.filter(PonPort.is_active.is_(True)).count()
-        assigned_ports = (
-            db.query(OntAssignment.pon_port_id)
-            .filter(OntAssignment.active.is_(True))
+            total_stmt = total_stmt.where(PonPort.olt_id == olt_id)
+        total_ports = db.scalar(total_stmt) or 0
+
+        assigned_stmt = (
+            select(func.count(func.distinct(OntAssignment.pon_port_id)))
+            .where(OntAssignment.active.is_(True))
         )
         if olt_id:
-            assigned_ports = assigned_ports.filter(
+            assigned_stmt = assigned_stmt.where(
                 OntAssignment.pon_port_id.in_(
-                    db.query(PonPort.id).filter(PonPort.olt_id == olt_id)
+                    select(PonPort.id).where(PonPort.olt_id == olt_id)
                 )
             )
-        assigned_count = assigned_ports.distinct().count()
+        assigned_count = db.scalar(assigned_stmt) or 0
+
         return {
             "olt_id": olt_id,
             "total_ports": total_ports,
@@ -208,27 +216,27 @@ class OntUnits(CRUDManager[OntUnit]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OntUnit)
-        query = apply_active_state(query, OntUnit.is_active, is_active)
-        query = _apply_ordering(
-            query,
+    ) -> list[OntUnit]:
+        stmt = select(OntUnit)
+        stmt = apply_active_state(stmt, OntUnit.is_active, is_active)
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OntUnit.created_at, "serial_number": OntUnit.serial_number},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def get(cls, db: Session, unit_id: str):
+    def get(cls, db: Session, unit_id: str) -> OntUnit:
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate):
+    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate) -> OntUnit:
         return super().update(db, unit_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, unit_id: str):
+    def delete(cls, db: Session, unit_id: str) -> None:
         return super().delete(db, unit_id)
 
 
@@ -245,33 +253,33 @@ class OntAssignments(CRUDManager[OntAssignment]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OntAssignment)
-        query = apply_optional_equals(
-            query,
+    ) -> list[OntAssignment]:
+        stmt = select(OntAssignment)
+        stmt = apply_optional_equals(
+            stmt,
             {
                 OntAssignment.ont_unit_id: ont_unit_id,
                 OntAssignment.pon_port_id: pon_port_id,
             },
         )
-        query = _apply_ordering(
-            query,
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OntAssignment.created_at, "active": OntAssignment.active},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def get(cls, db: Session, assignment_id: str):
+    def get(cls, db: Session, assignment_id: str) -> OntAssignment:
         return super().get(db, assignment_id)
 
     @classmethod
-    def update(cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate):
+    def update(cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate) -> OntAssignment:
         return super().update(db, assignment_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, assignment_id: str):
+    def delete(cls, db: Session, assignment_id: str) -> None:
         return super().delete(db, assignment_id)
 
 
@@ -280,7 +288,7 @@ class OltShelves(CRUDManager[OltShelf]):
     not_found_detail = "OLT shelf not found"
 
     @staticmethod
-    def create(db: Session, payload: OltShelfCreate):
+    def create(db: Session, payload: OltShelfCreate) -> OltShelf:
         olt = db.get(OLTDevice, payload.olt_id)
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
@@ -291,7 +299,7 @@ class OltShelves(CRUDManager[OltShelf]):
         return shelf
 
     @classmethod
-    def get(cls, db: Session, shelf_id: str):
+    def get(cls, db: Session, shelf_id: str) -> OltShelf:
         return super().get(db, shelf_id)
 
     @staticmethod
@@ -302,19 +310,19 @@ class OltShelves(CRUDManager[OltShelf]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OltShelf)
-        query = apply_optional_equals(query, {OltShelf.olt_id: olt_id})
-        query = _apply_ordering(
-            query,
+    ) -> list[OltShelf]:
+        stmt = select(OltShelf)
+        stmt = apply_optional_equals(stmt, {OltShelf.olt_id: olt_id})
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OltShelf.created_at, "shelf_number": OltShelf.shelf_number},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, shelf_id: str, payload: OltShelfUpdate):
+    def update(db: Session, shelf_id: str, payload: OltShelfUpdate) -> OltShelf:
         shelf = OltShelves.get(db, shelf_id)
         data = payload.model_dump(exclude_unset=True)
         if "olt_id" in data:
@@ -328,7 +336,7 @@ class OltShelves(CRUDManager[OltShelf]):
         return shelf
 
     @classmethod
-    def delete(cls, db: Session, shelf_id: str):
+    def delete(cls, db: Session, shelf_id: str) -> None:
         return super().delete(db, shelf_id)
 
 
@@ -337,7 +345,7 @@ class OltCards(CRUDManager[OltCard]):
     not_found_detail = "OLT card not found"
 
     @staticmethod
-    def create(db: Session, payload: OltCardCreate):
+    def create(db: Session, payload: OltCardCreate) -> OltCard:
         shelf = db.get(OltShelf, payload.shelf_id)
         if not shelf:
             raise HTTPException(status_code=404, detail="OLT shelf not found")
@@ -348,7 +356,7 @@ class OltCards(CRUDManager[OltCard]):
         return card
 
     @classmethod
-    def get(cls, db: Session, card_id: str):
+    def get(cls, db: Session, card_id: str) -> OltCard:
         return super().get(db, card_id)
 
     @staticmethod
@@ -359,19 +367,19 @@ class OltCards(CRUDManager[OltCard]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OltCard)
-        query = apply_optional_equals(query, {OltCard.shelf_id: shelf_id})
-        query = _apply_ordering(
-            query,
+    ) -> list[OltCard]:
+        stmt = select(OltCard)
+        stmt = apply_optional_equals(stmt, {OltCard.shelf_id: shelf_id})
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OltCard.created_at, "slot_number": OltCard.slot_number},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, card_id: str, payload: OltCardUpdate):
+    def update(db: Session, card_id: str, payload: OltCardUpdate) -> OltCard:
         card = OltCards.get(db, card_id)
         data = payload.model_dump(exclude_unset=True)
         if "shelf_id" in data:
@@ -385,7 +393,7 @@ class OltCards(CRUDManager[OltCard]):
         return card
 
     @classmethod
-    def delete(cls, db: Session, card_id: str):
+    def delete(cls, db: Session, card_id: str) -> None:
         return super().delete(db, card_id)
 
 
@@ -394,7 +402,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
     not_found_detail = "OLT card port not found"
 
     @staticmethod
-    def create(db: Session, payload: OltCardPortCreate):
+    def create(db: Session, payload: OltCardPortCreate) -> OltCardPort:
         card = db.get(OltCard, payload.card_id)
         if not card:
             raise HTTPException(status_code=404, detail="OLT card not found")
@@ -405,7 +413,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         return port
 
     @classmethod
-    def get(cls, db: Session, port_id: str):
+    def get(cls, db: Session, port_id: str) -> OltCardPort:
         return super().get(db, port_id)
 
     @staticmethod
@@ -417,23 +425,23 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OltCardPort)
-        query = apply_optional_equals(query, {OltCardPort.card_id: card_id})
+    ) -> list[OltCardPort]:
+        stmt = select(OltCardPort)
+        stmt = apply_optional_equals(stmt, {OltCardPort.card_id: card_id})
         if port_type:
-            query = query.filter(
+            stmt = stmt.filter(
                 OltCardPort.port_type == _validate_enum(port_type, OltPortType, "port_type")
             )
-        query = _apply_ordering(
-            query,
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OltCardPort.created_at, "port_number": OltCardPort.port_number},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, port_id: str, payload: OltCardPortUpdate):
+    def update(db: Session, port_id: str, payload: OltCardPortUpdate) -> OltCardPort:
         port = OltCardPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         if "card_id" in data:
@@ -447,7 +455,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         return port
 
     @classmethod
-    def delete(cls, db: Session, port_id: str):
+    def delete(cls, db: Session, port_id: str) -> None:
         return super().delete(db, port_id)
 
 
@@ -466,28 +474,28 @@ class OltPowerUnits(CRUDManager[OltPowerUnit]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OltPowerUnit)
-        query = apply_optional_equals(query, {OltPowerUnit.olt_id: olt_id})
-        query = apply_active_state(query, OltPowerUnit.is_active, is_active)
-        query = _apply_ordering(
-            query,
+    ) -> list[OltPowerUnit]:
+        stmt = select(OltPowerUnit)
+        stmt = apply_optional_equals(stmt, {OltPowerUnit.olt_id: olt_id})
+        stmt = apply_active_state(stmt, OltPowerUnit.is_active, is_active)
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OltPowerUnit.created_at, "slot": OltPowerUnit.slot},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def get(cls, db: Session, unit_id: str):
+    def get(cls, db: Session, unit_id: str) -> OltPowerUnit:
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate):
+    def update(cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate) -> OltPowerUnit:
         return super().update(db, unit_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, unit_id: str):
+    def delete(cls, db: Session, unit_id: str) -> None:
         return super().delete(db, unit_id)
 
 
@@ -506,31 +514,31 @@ class OltSfpModules(CRUDManager[OltSfpModule]):
         order_dir: str,
         limit: int,
         offset: int,
-    ):
-        query = db.query(OltSfpModule)
-        query = apply_optional_equals(
-            query,
+    ) -> list[OltSfpModule]:
+        stmt = select(OltSfpModule)
+        stmt = apply_optional_equals(
+            stmt,
             {OltSfpModule.olt_card_port_id: olt_card_port_id},
         )
-        query = apply_active_state(query, OltSfpModule.is_active, is_active)
-        query = _apply_ordering(
-            query,
+        stmt = apply_active_state(stmt, OltSfpModule.is_active, is_active)
+        stmt = _apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": OltSfpModule.created_at, "serial_number": OltSfpModule.serial_number},
         )
-        return _apply_pagination(query, limit, offset).all()
+        return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def get(cls, db: Session, module_id: str):
+    def get(cls, db: Session, module_id: str) -> OltSfpModule:
         return super().get(db, module_id)
 
     @classmethod
-    def update(cls, db: Session, module_id: str, payload: OltSfpModuleUpdate):
+    def update(cls, db: Session, module_id: str, payload: OltSfpModuleUpdate) -> OltSfpModule:
         return super().update(db, module_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, module_id: str):
+    def delete(cls, db: Session, module_id: str) -> None:
         return super().delete(db, module_id)
 
 

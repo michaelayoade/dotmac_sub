@@ -264,6 +264,7 @@ from app.services import (
 from app.services import (
     usage as usage_service,
 )
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
@@ -676,17 +677,28 @@ def delete_ipv6_address(record_id: str, db: Session = Depends(get_db)):
     response_model=OLTDeviceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_device(payload: OLTDeviceCreate, db: Session = Depends(get_db)):
     return network_service.olt_devices.create(db, payload)
 
 
-@router.get("/olt-devices/{device_id}", response_model=OLTDeviceRead, tags=["network"])
+@router.get(
+    "/olt-devices/{device_id}",
+    response_model=OLTDeviceRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def get_olt_device(device_id: str, db: Session = Depends(get_db)):
     return network_service.olt_devices.get(db, device_id)
 
 
-@router.get("/olt-devices", response_model=ListResponse[OLTDeviceRead], tags=["network"])
+@router.get(
+    "/olt-devices",
+    response_model=ListResponse[OLTDeviceRead],
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def list_olt_devices(
     is_active: bool | None = None,
     order_by: str = Query(default="name"),
@@ -701,18 +713,22 @@ def list_olt_devices(
 
 
 @router.patch(
-    "/olt-devices/{device_id}", response_model=OLTDeviceRead, tags=["network"]
+    "/olt-devices/{device_id}",
+    response_model=OLTDeviceRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_device(
     device_id: str, payload: OLTDeviceUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.olt_devices.update(
-        db, device_id, payload
-    )
+    return network_service.olt_devices.update(db, device_id, payload)
 
 
 @router.delete(
-    "/olt-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["network"]
+    "/olt-devices/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_device(device_id: str, db: Session = Depends(get_db)):
     network_service.olt_devices.delete(db, device_id)
@@ -723,13 +739,17 @@ def delete_olt_device(device_id: str, db: Session = Depends(get_db)):
     response_model=OltPowerUnitRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_power_unit(payload: OltPowerUnitCreate, db: Session = Depends(get_db)):
     return network_service.olt_power_units.create(db, payload)
 
 
 @router.get(
-    "/olt-power-units/{unit_id}", response_model=OltPowerUnitRead, tags=["network"]
+    "/olt-power-units/{unit_id}",
+    response_model=OltPowerUnitRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
 )
 def get_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     return network_service.olt_power_units.get(db, unit_id)
@@ -739,6 +759,7 @@ def get_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     "/olt-power-units",
     response_model=ListResponse[OltPowerUnitRead],
     tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
 )
 def list_olt_power_units(
     olt_id: str | None = None,
@@ -758,6 +779,7 @@ def list_olt_power_units(
     "/olt-power-units/{unit_id}",
     response_model=OltPowerUnitRead,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_power_unit(
     unit_id: str, payload: OltPowerUnitUpdate, db: Session = Depends(get_db)
@@ -769,6 +791,7 @@ def update_olt_power_unit(
     "/olt-power-units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     network_service.olt_power_units.delete(db, unit_id)
@@ -779,17 +802,28 @@ def delete_olt_power_unit(unit_id: str, db: Session = Depends(get_db)):
     response_model=OltShelfRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_shelf(payload: OltShelfCreate, db: Session = Depends(get_db)):
     return network_service.olt_shelves.create(db, payload)
 
 
-@router.get("/olt-shelves/{shelf_id}", response_model=OltShelfRead, tags=["network"])
+@router.get(
+    "/olt-shelves/{shelf_id}",
+    response_model=OltShelfRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def get_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     return network_service.olt_shelves.get(db, shelf_id)
 
 
-@router.get("/olt-shelves", response_model=ListResponse[OltShelfRead], tags=["network"])
+@router.get(
+    "/olt-shelves",
+    response_model=ListResponse[OltShelfRead],
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def list_olt_shelves(
     olt_id: str | None = None,
     order_by: str = Query(default="shelf_number"),
@@ -804,18 +838,22 @@ def list_olt_shelves(
 
 
 @router.patch(
-    "/olt-shelves/{shelf_id}", response_model=OltShelfRead, tags=["network"]
+    "/olt-shelves/{shelf_id}",
+    response_model=OltShelfRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_shelf(
     shelf_id: str, payload: OltShelfUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.olt_shelves.update(
-        db, shelf_id, payload
-    )
+    return network_service.olt_shelves.update(db, shelf_id, payload)
 
 
 @router.delete(
-    "/olt-shelves/{shelf_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["network"]
+    "/olt-shelves/{shelf_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     network_service.olt_shelves.delete(db, shelf_id)
@@ -826,17 +864,28 @@ def delete_olt_shelf(shelf_id: str, db: Session = Depends(get_db)):
     response_model=OltCardRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_card(payload: OltCardCreate, db: Session = Depends(get_db)):
     return network_service.olt_cards.create(db, payload)
 
 
-@router.get("/olt-cards/{card_id}", response_model=OltCardRead, tags=["network"])
+@router.get(
+    "/olt-cards/{card_id}",
+    response_model=OltCardRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def get_olt_card(card_id: str, db: Session = Depends(get_db)):
     return network_service.olt_cards.get(db, card_id)
 
 
-@router.get("/olt-cards", response_model=ListResponse[OltCardRead], tags=["network"])
+@router.get(
+    "/olt-cards",
+    response_model=ListResponse[OltCardRead],
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def list_olt_cards(
     shelf_id: str | None = None,
     order_by: str = Query(default="slot_number"),
@@ -851,18 +900,22 @@ def list_olt_cards(
 
 
 @router.patch(
-    "/olt-cards/{card_id}", response_model=OltCardRead, tags=["network"]
+    "/olt-cards/{card_id}",
+    response_model=OltCardRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_card(
     card_id: str, payload: OltCardUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.olt_cards.update(
-        db, card_id, payload
-    )
+    return network_service.olt_cards.update(db, card_id, payload)
 
 
 @router.delete(
-    "/olt-cards/{card_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["network"]
+    "/olt-cards/{card_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_card(card_id: str, db: Session = Depends(get_db)):
     network_service.olt_cards.delete(db, card_id)
@@ -873,17 +926,28 @@ def delete_olt_card(card_id: str, db: Session = Depends(get_db)):
     response_model=OltCardPortRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_card_port(payload: OltCardPortCreate, db: Session = Depends(get_db)):
     return network_service.olt_card_ports.create(db, payload)
 
 
-@router.get("/olt-card-ports/{port_id}", response_model=OltCardPortRead, tags=["network"])
+@router.get(
+    "/olt-card-ports/{port_id}",
+    response_model=OltCardPortRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def get_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     return network_service.olt_card_ports.get(db, port_id)
 
 
-@router.get("/olt-card-ports", response_model=ListResponse[OltCardPortRead], tags=["network"])
+@router.get(
+    "/olt-card-ports",
+    response_model=ListResponse[OltCardPortRead],
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def list_olt_card_ports(
     card_id: str | None = None,
     order_by: str = Query(default="port_number"),
@@ -898,20 +962,22 @@ def list_olt_card_ports(
 
 
 @router.patch(
-    "/olt-card-ports/{port_id}", response_model=OltCardPortRead, tags=["network"]
+    "/olt-card-ports/{port_id}",
+    response_model=OltCardPortRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_card_port(
     port_id: str, payload: OltCardPortUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.olt_card_ports.update(
-        db, port_id, payload
-    )
+    return network_service.olt_card_ports.update(db, port_id, payload)
 
 
 @router.delete(
     "/olt-card-ports/{port_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     network_service.olt_card_ports.delete(db, port_id)
@@ -922,6 +988,7 @@ def delete_olt_card_port(port_id: str, db: Session = Depends(get_db)):
     response_model=OltSfpModuleRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_olt_sfp_module(payload: OltSfpModuleCreate, db: Session = Depends(get_db)):
     return network_service.olt_sfp_modules.create(db, payload)
@@ -931,6 +998,7 @@ def create_olt_sfp_module(payload: OltSfpModuleCreate, db: Session = Depends(get
     "/olt-sfp-modules/{module_id}",
     response_model=OltSfpModuleRead,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
 )
 def get_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     return network_service.olt_sfp_modules.get(db, module_id)
@@ -940,6 +1008,7 @@ def get_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     "/olt-sfp-modules",
     response_model=ListResponse[OltSfpModuleRead],
     tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
 )
 def list_olt_sfp_modules(
     olt_card_port_id: str | None = None,
@@ -959,6 +1028,7 @@ def list_olt_sfp_modules(
     "/olt-sfp-modules/{module_id}",
     response_model=OltSfpModuleRead,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_olt_sfp_module(
     module_id: str, payload: OltSfpModuleUpdate, db: Session = Depends(get_db)
@@ -970,6 +1040,7 @@ def update_olt_sfp_module(
     "/olt-sfp-modules/{module_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     network_service.olt_sfp_modules.delete(db, module_id)
@@ -980,17 +1051,41 @@ def delete_olt_sfp_module(module_id: str, db: Session = Depends(get_db)):
     response_model=PonPortRead,
     status_code=status.HTTP_201_CREATED,
     tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def create_pon_port(payload: PonPortCreate, db: Session = Depends(get_db)):
     return network_service.pon_ports.create(db, payload)
 
 
-@router.get("/pon-ports/{port_id}", response_model=PonPortRead, tags=["network"])
+@router.get(
+    "/pon-ports/utilization",
+    response_model=PortUtilizationRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def get_pon_port_utilization(
+    olt_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return network_service.pon_ports.utilization(db, olt_id)
+
+
+@router.get(
+    "/pon-ports/{port_id}",
+    response_model=PonPortRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def get_pon_port(port_id: str, db: Session = Depends(get_db)):
     return network_service.pon_ports.get(db, port_id)
 
 
-@router.get("/pon-ports", response_model=ListResponse[PonPortRead], tags=["network"])
+@router.get(
+    "/pon-ports",
+    response_model=ListResponse[PonPortRead],
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def list_pon_ports(
     olt_id: str | None = None,
     is_active: bool | None = None,
@@ -1005,27 +1100,23 @@ def list_pon_ports(
     )
 
 
-@router.get("/pon-ports/utilization", response_model=PortUtilizationRead, tags=["network"])
-def get_pon_port_utilization(
-    olt_id: str | None = None,
-    db: Session = Depends(get_db),
-):
-    return network_service.pon_ports.utilization(db, olt_id)
-
-
 @router.patch(
-    "/pon-ports/{port_id}", response_model=PonPortRead, tags=["network"]
+    "/pon-ports/{port_id}",
+    response_model=PonPortRead,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def update_pon_port(
     port_id: str, payload: PonPortUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.pon_ports.update(
-        db, port_id, payload
-    )
+    return network_service.pon_ports.update(db, port_id, payload)
 
 
 @router.delete(
-    "/pon-ports/{port_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["network"]
+    "/pon-ports/{port_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["network"],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def delete_pon_port(port_id: str, db: Session = Depends(get_db)):
     network_service.pon_ports.delete(db, port_id)
