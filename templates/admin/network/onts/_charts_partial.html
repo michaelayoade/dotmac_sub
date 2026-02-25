@@ -1,0 +1,220 @@
+{# HTMX partial: ONT signal and traffic charts #}
+
+{# Time range selector #}
+<div class="flex items-center justify-between mb-6">
+    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Signal & Traffic History</h3>
+    <div class="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+        {% for r in ['6h', '24h', '7d', '30d'] %}
+        <button
+            hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ r }}"
+            hx-target="#charts-content"
+            hx-swap="innerHTML"
+            class="px-3 py-1.5 text-xs font-medium transition-colors {{ 'bg-blue-600 text-white' if time_range == r else 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700' }}"
+        >{{ r }}</button>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="space-y-6">
+    {# Signal Trend Chart #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Optical Signal Level</h4>
+        {% if signal_chart and signal_chart.available and signal_chart.series %}
+        <div class="relative" style="height: 280px;">
+            <canvas id="signal-chart"></canvas>
+        </div>
+        {% else %}
+        <div class="flex items-center justify-center py-12">
+            <div class="text-center">
+                <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ signal_chart.error or 'No signal data available.' }}</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {# Traffic Chart #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Traffic Throughput</h4>
+        {% if traffic_chart and traffic_chart.available and traffic_chart.series %}
+        <div class="relative" style="height: 280px;">
+            <canvas id="traffic-chart"></canvas>
+        </div>
+        {% else %}
+        <div class="flex items-center justify-center py-12">
+            <div class="text-center">
+                <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ traffic_chart.error or 'No traffic data available.' }}</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{# Chart.js rendering (loaded once via CDN, safe for HTMX re-swaps) #}
+{% if (signal_chart and signal_chart.available) or (traffic_chart and traffic_chart.available) %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+(function() {
+    const isDark = document.documentElement.classList.contains('dark');
+    const gridColor = isDark ? 'rgba(148,163,184,0.15)' : 'rgba(203,213,225,0.5)';
+    const textColor = isDark ? '#94a3b8' : '#64748b';
+
+    const commonScales = {
+        x: {
+            type: 'time',
+            time: { tooltipFormat: 'MMM d, HH:mm' },
+            grid: { color: gridColor },
+            ticks: { color: textColor, maxTicksLimit: 8 },
+        },
+    };
+
+    {% if signal_chart and signal_chart.available and signal_chart.series %}
+    // Signal chart
+    const signalCtx = document.getElementById('signal-chart');
+    if (signalCtx) {
+        const signalColors = ['#6366f1', '#10b981'];
+        const signalDatasets = [];
+        {% for s in signal_chart.series %}
+        signalDatasets.push({
+            label: {{ s.label | tojson }},
+            data: {{ s.timestamps | tojson }}.map(function(t, i) {
+                return { x: t, y: {{ s.values | tojson }}[i] };
+            }),
+            borderColor: signalColors[{{ loop.index0 }}] || '#6366f1',
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+        });
+        {% endfor %}
+
+        // Threshold lines
+        const warnThresh = {{ warn_threshold | default(-25.0) }};
+        const critThresh = {{ crit_threshold | default(-28.0) }};
+
+        new Chart(signalCtx, {
+            type: 'line',
+            data: { datasets: signalDatasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: textColor, usePointStyle: true, pointStyle: 'line' } },
+                    annotation: undefined,
+                },
+                scales: {
+                    ...commonScales,
+                    y: {
+                        title: { display: true, text: 'dBm', color: textColor },
+                        grid: { color: gridColor },
+                        ticks: { color: textColor },
+                    },
+                },
+            },
+            plugins: [{
+                id: 'thresholdLines',
+                afterDraw: function(chart) {
+                    const yScale = chart.scales.y;
+                    const ctx = chart.ctx;
+                    const left = chart.chartArea.left;
+                    const right = chart.chartArea.right;
+
+                    // Warning threshold
+                    const warnY = yScale.getPixelForValue(warnThresh);
+                    if (warnY >= chart.chartArea.top && warnY <= chart.chartArea.bottom) {
+                        ctx.save();
+                        ctx.strokeStyle = '#f59e0b';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([5, 3]);
+                        ctx.beginPath();
+                        ctx.moveTo(left, warnY);
+                        ctx.lineTo(right, warnY);
+                        ctx.stroke();
+                        ctx.fillStyle = '#f59e0b';
+                        ctx.font = '10px sans-serif';
+                        ctx.fillText('Warn ' + warnThresh + ' dBm', right - 90, warnY - 4);
+                        ctx.restore();
+                    }
+
+                    // Critical threshold
+                    const critY = yScale.getPixelForValue(critThresh);
+                    if (critY >= chart.chartArea.top && critY <= chart.chartArea.bottom) {
+                        ctx.save();
+                        ctx.strokeStyle = '#f43f5e';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([5, 3]);
+                        ctx.beginPath();
+                        ctx.moveTo(left, critY);
+                        ctx.lineTo(right, critY);
+                        ctx.stroke();
+                        ctx.fillStyle = '#f43f5e';
+                        ctx.font = '10px sans-serif';
+                        ctx.fillText('Crit ' + critThresh + ' dBm', right - 85, critY - 4);
+                        ctx.restore();
+                    }
+                }
+            }],
+        });
+    }
+    {% endif %}
+
+    {% if traffic_chart and traffic_chart.available and traffic_chart.series %}
+    // Traffic chart
+    const trafficCtx = document.getElementById('traffic-chart');
+    if (trafficCtx) {
+        const trafficColors = [
+            { border: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
+            { border: '#8b5cf6', bg: 'rgba(139,92,246,0.1)' },
+        ];
+        const trafficDatasets = [];
+        {% for s in traffic_chart.series %}
+        trafficDatasets.push({
+            label: {{ s.label | tojson }},
+            data: {{ s.timestamps | tojson }}.map(function(t, i) {
+                return { x: t, y: {{ s.values | tojson }}[i] };
+            }),
+            borderColor: trafficColors[{{ loop.index0 }}].border,
+            backgroundColor: trafficColors[{{ loop.index0 }}].bg,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: true,
+        });
+        {% endfor %}
+
+        new Chart(trafficCtx, {
+            type: 'line',
+            data: { datasets: trafficDatasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: textColor, usePointStyle: true, pointStyle: 'line' } },
+                },
+                scales: {
+                    ...commonScales,
+                    y: {
+                        title: { display: true, text: 'bps', color: textColor },
+                        grid: { color: gridColor },
+                        ticks: {
+                            color: textColor,
+                            callback: function(val) {
+                                if (val >= 1e9) return (val / 1e9).toFixed(1) + ' Gbps';
+                                if (val >= 1e6) return (val / 1e6).toFixed(1) + ' Mbps';
+                                if (val >= 1e3) return (val / 1e3).toFixed(0) + ' Kbps';
+                                return val + ' bps';
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }
+    {% endif %}
+})();
+</script>
+{% endif %}

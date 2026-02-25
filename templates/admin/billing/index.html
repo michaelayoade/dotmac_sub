@@ -1,4 +1,10 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card, data_table,
+    table_head, table_row, row_actions, row_action, status_badge,
+    empty_state, action_button, metric_row,
+    icon_invoice, icon_plus, icon_view
+%}
 
 {% block title %}Revenue & Billing - Admin{% endblock %}
 
@@ -8,327 +14,476 @@
 {% endblock %}
 
 {% block content %}
+{{ ambient_background("emerald", "teal") }}
+
 <div class="space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Revenue & Billing</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Financial overview and billing operations</p>
-        </div>
-        <div class="flex items-center gap-3">
-            <button class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                Export
-            </button>
-        </div>
-    </div>
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        "Revenue & Billing",
+        subtitle="Financial overview and billing operations",
+        icon=icon_invoice(),
+        color="emerald",
+        color2="teal"
+    ) %}
+        {{ action_button("Export", href="#", icon=icon_plus("h-4 w-4"), variant="secondary", color="emerald") }}
+    {% endcall %}
 
-    <!-- Revenue KPIs -->
+    {% call card(color="emerald") %}
+    <form method="get" action="/admin/billing" class="flex flex-wrap items-end gap-3">
+        <div class="w-full sm:w-56">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Partner</label>
+            <select name="partner_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Partners</option>
+                {% for partner in partner_options|default([]) %}
+                <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="w-full sm:w-56">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Location</label>
+            <select name="location" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Locations</option>
+                {% for loc in location_options|default([]) %}
+                <option value="{{ loc }}" {% if selected_location == loc %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="flex items-center gap-2">
+            <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Apply</button>
+            <a href="/admin/billing" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Reset</a>
+        </div>
+    </form>
+    {% endcall %}
+
+    {# ── KPI Cards ── #}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-xl border border-slate-200 bg-gradient-to-br from-green-50 to-emerald-50 p-5 shadow-sm dark:border-slate-700 dark:from-green-900/20 dark:to-emerald-900/20 card-hover">
-            <div class="flex items-start justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Revenue</p>
-                    <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(stats.total_revenue|default(0)) }}</p>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                        <span class="font-medium text-slate-700 dark:text-slate-300">{{ stats.total_invoices|default(0) }}</span> total invoices
-                    </p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-green-100 dark:bg-green-900/50">
-                    <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-            </div>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
-            <div class="flex items-start justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Pending Amount</p>
-                    <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(stats.pending_amount|default(0)) }}</p>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Awaiting payment</p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/50">
-                    <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-            </div>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
-            <div class="flex items-start justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Overdue Amount</p>
-                    <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(stats.overdue_amount|default(0)) }}</p>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                        <span class="font-medium text-amber-600 dark:text-amber-400">Requires attention</span>
-                    </p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/50">
-                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                </div>
-            </div>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800 card-hover">
-            <div class="flex items-start justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Collection Rate</p>
-                    {% set collection_rate = (stats.total_revenue / (stats.total_revenue + stats.pending_amount + stats.overdue_amount) * 100) if (stats.total_revenue + stats.pending_amount + stats.overdue_amount) > 0 else 0 %}
-                    <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ "{:.1f}".format(collection_rate) }}%</p>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Of billed amount</p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 dark:bg-purple-900/50">
-                    <svg class="h-6 w-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                </div>
-            </div>
-        </div>
+        {{ stats_card(
+            label="Total Revenue",
+            value="₦" ~ "{:,.2f}".format(stats.total_revenue|default(0)),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald",
+            color2="green"
+        ) }}
+        {{ stats_card(
+            label="Pending Amount",
+            value="₦" ~ "{:,.2f}".format(stats.pending_amount|default(0)),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="blue",
+            color2="indigo"
+        ) }}
+        {{ stats_card(
+            label="Overdue Amount",
+            value="₦" ~ "{:,.2f}".format(stats.overdue_amount|default(0)),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+            color="amber",
+            color2="orange"
+        ) }}
+        {{ stats_card(
+            label="Collection Rate",
+            value="{:.1f}".format(stats.collection_rate|default(0)) ~ "%",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+            color="violet",
+            color2="purple"
+        ) }}
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {{ stats_card(
+            label="Payments Received",
+            value="₦" ~ "{:,.2f}".format(stats.payments_amount|default(0)) ~ " (" ~ (stats.payments_count|default(0)) ~ ")",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+            color="teal",
+            color2="emerald"
+        ) }}
+        {{ stats_card(
+            label="Unpaid Invoices",
+            value="₦" ~ "{:,.2f}".format(stats.unpaid_invoices_amount|default(0)) ~ " (" ~ (stats.unpaid_invoices_count|default(0)) ~ ")",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+            color="amber",
+            color2="orange"
+        ) }}
+        {{ stats_card(
+            label="Credit Notes",
+            value="₦" ~ "{:,.2f}".format(stats.credit_notes_total|default(0)) ~ " (" ~ (stats.credit_notes_count|default(0)) ~ ")",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="violet",
+            color2="purple"
+        ) }}
+    </div>
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card(
+            label="Planned Income (Next Period)",
+            value="₦" ~ "{:,.2f}".format(planned_income|default(0)),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>',
+            color="blue",
+            color2="cyan"
+        ) }}
+        {{ stats_card(
+            label="MRR Growth (MoM)",
+            value="{:.2f}".format(mrr_growth_rate|default(0)) ~ "%",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17l4-4 3 3 5-6"/></svg>',
+            color="emerald",
+            color2="teal"
+        ) }}
+        {{ stats_card(
+            label="Net Revenue Retention",
+            value="{:.2f}".format(net_revenue_retention|default(0)) ~ "%",
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m0 0l3-3m-3 3l-3-3"/></svg>',
+            color="violet",
+            color2="purple"
+        ) }}
     </div>
 
-    <!-- Revenue Trend Chart -->
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Revenue Trend</h2>
-                <select class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option>Last 6 Months</option>
-                    <option>Last 12 Months</option>
-                    <option>This Year</option>
-                </select>
-            </div>
+    {# ── Period Comparison ── #}
+    {% call card("Period Comparison", color="emerald") %}
+    <div class="grid gap-4 md:grid-cols-3">
+        {% for period in period_comparison|default([]) %}
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ period.label }}</p>
+            <dl class="mt-3 space-y-1 text-sm">
+                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Payments</dt><dd class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(period.payments_amount|default(0)) }} ({{ period.payments_count|default(0) }})</dd></div>
+                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Paid Invoices</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ period.paid_invoices_count|default(0) }}</dd></div>
+                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Unpaid Invoices</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ period.unpaid_invoices_count|default(0) }}</dd></div>
+                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Credit Notes</dt><dd class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(period.credit_notes_amount|default(0)) }} ({{ period.credit_notes_count|default(0) }})</dd></div>
+                <div class="flex items-center justify-between border-t border-slate-200 pt-1 dark:border-slate-700"><dt class="text-slate-600 dark:text-slate-300">Total Income</dt><dd class="font-bold text-emerald-700 dark:text-emerald-300">₦{{ "{:,.2f}".format(period.total_income|default(0)) }}</dd></div>
+            </dl>
         </div>
-        <div class="p-6">
+        {% endfor %}
+    </div>
+    {% endcall %}
+
+    {# ── Revenue Trend Chart ── #}
+    {% call card("Revenue Trend", color="emerald",
+        actions='<select class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option>Last 6 Months</option><option>Last 12 Months</option><option>This Year</option></select>'
+    ) %}
+    <div class="chart-container" style="min-height: 280px;">
+        <canvas id="revenue-trend-chart"></canvas>
+    </div>
+    {% set trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('revenue-trend-chart');
+        if (!ctx) return;
+        const chartData = {
+            labels: {{ trend["labels"] | tojson | safe }},
+            datasets: [
+                { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)' },
+                { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
+            ]
+        };
+        const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+        DotmacCharts.registerChart('revenue-trend-chart', chart);
+    });
+    </script>
+    {% endcall %}
+
+    {# ── Payment Methods & Daily Payments ── #}
+    <div class="grid gap-6 lg:grid-cols-2">
+        {% call card("Payment Method Breakdown", color="violet") %}
+        <div class="chart-container" style="min-height: 280px;">
+            <canvas id="payment-method-breakdown-chart"></canvas>
+        </div>
+        {% set pmb = payment_method_breakdown|default({'labels': [], 'values': []}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('payment-method-breakdown-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ pmb["labels"] | tojson | safe }},
+                values: {{ pmb["values"] | tojson | safe }},
+                colors: ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#94a3b8']
+            };
+            const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+            DotmacCharts.registerChart('payment-method-breakdown-chart', chart);
+        });
+        </script>
+        {% endcall %}
+
+        {% call card("Daily Payments (Current Month)", color="emerald") %}
+        <div class="chart-container" style="min-height: 280px;">
+            <canvas id="daily-payments-chart"></canvas>
+        </div>
+        {% set dp = daily_payments|default({'labels': [], 'values': []}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('daily-payments-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ dp["labels"] | tojson | safe }},
+                datasets: [{
+                    label: 'Payments',
+                    data: {{ dp["values"] | tojson | safe }},
+                    backgroundColor: '#10b981'
+                }]
+            };
+            const chart = DotmacCharts.createBarChart(ctx, chartData, {
+                plugins: { legend: { display: false } }
+            });
+            DotmacCharts.registerChart('daily-payments-chart', chart);
+        });
+        </script>
+        {% endcall %}
+    </div>
+
+    {# ── Invoicing Overlay + MRR/ARPU + Top Payers ── #}
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="lg:col-span-2">
+            {% call card("Invoicing Period Overlay", color="emerald") %}
             <div class="chart-container" style="min-height: 280px;">
-                <canvas id="revenue-trend-chart"></canvas>
+                <canvas id="invoicing-period-overlay-chart"></canvas>
             </div>
-            {% set revenue_trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
+            {% set ipo = invoicing_period_overlay|default({'labels': [], 'paid': [], 'unpaid': [], 'paid_on_time': [], 'paid_overdue': []}) %}
             <script>
             document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('revenue-trend-chart');
+                const ctx = document.getElementById('invoicing-period-overlay-chart');
                 if (!ctx) return;
                 const chartData = {
-                    labels: {{ revenue_trend.labels | tojson | safe }},
+                    labels: {{ ipo["labels"] | tojson | safe }},
                     datasets: [
-                        { label: 'Billed', data: {{ revenue_trend.billed | tojson | safe }}, borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)' },
-                        { label: 'Collected', data: {{ revenue_trend.collected | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
+                        { label: 'Paid', data: {{ ipo["paid"] | tojson | safe }}, backgroundColor: '#10b981' },
+                        { label: 'Unpaid', data: {{ ipo["unpaid"] | tojson | safe }}, backgroundColor: '#3b82f6' },
+                        { label: 'Paid On Time', data: {{ ipo["paid_on_time"] | tojson | safe }}, backgroundColor: '#22c55e' },
+                        { label: 'Paid Overdue', data: {{ ipo["paid_overdue"] | tojson | safe }}, backgroundColor: '#f59e0b' }
                     ]
                 };
-                const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-                DotmacCharts.registerChart('revenue-trend-chart', chart);
+                const chart = DotmacCharts.createBarChart(ctx, chartData, { scales: { x: { stacked: true }, y: { stacked: true } } });
+                DotmacCharts.registerChart('invoicing-period-overlay-chart', chart);
             });
             </script>
+            {% endcall %}
         </div>
+        {% call card("Top 10 Payers", color="violet") %}
+        <div class="chart-container" style="min-height: 280px;">
+            <canvas id="top-payers-chart"></canvas>
+        </div>
+        {% set tp = top_payers|default({'labels': [], 'values': []}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('top-payers-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ tp["labels"] | tojson | safe }},
+                values: {{ tp["values"] | tojson | safe }},
+                colors: ['#2563eb', '#0891b2', '#0ea5e9', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#db2777', '#8b5cf6', '#6366f1']
+            };
+            const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+            DotmacCharts.registerChart('top-payers-chart', chart);
+        });
+        </script>
+        {% endcall %}
     </div>
 
-    <!-- Quick Actions & Invoice Summary -->
+    <div class="grid gap-6 lg:grid-cols-2">
+        {% call card("Monthly Recurring Revenue (MRR)", color="emerald") %}
+        <div class="chart-container" style="min-height: 260px;">
+            <canvas id="mrr-trend-chart"></canvas>
+        </div>
+        {% set mrr = mrr_trend|default({'labels': [], 'values': []}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('mrr-trend-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ mrr["labels"] | tojson | safe }},
+                datasets: [{ label: 'MRR', data: {{ mrr["values"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)', fill: true, tension: 0.35 }]
+            };
+            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+            DotmacCharts.registerChart('mrr-trend-chart', chart);
+        });
+        </script>
+        {% endcall %}
+
+        {% call card("Average Revenue Per User (ARPU)", color="blue") %}
+        <div class="chart-container" style="min-height: 260px;">
+            <canvas id="arpu-trend-chart"></canvas>
+        </div>
+        {% set arpu = arpu_trend|default({'labels': [], 'values': []}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('arpu-trend-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ arpu["labels"] | tojson | safe }},
+                datasets: [{ label: 'ARPU', data: {{ arpu["values"] | tojson | safe }}, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)', fill: true, tension: 0.35 }]
+            };
+            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+            DotmacCharts.registerChart('arpu-trend-chart', chart);
+        });
+        </script>
+        {% endcall %}
+    </div>
+
+    {# ── Quick Actions & Invoice Status Chart ── #}
     <div class="grid gap-6 lg:grid-cols-3">
-        <!-- Quick Actions -->
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Quick Actions</h3>
-            <div class="mt-4 grid grid-cols-2 gap-3">
-                <a href="/admin/billing/invoices/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                    </div>
-                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Create Invoice</span>
-                </a>
-                <a href="/admin/billing/payments/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
-                        <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                    </div>
-                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Record Payment</span>
-                </a>
-                <a href="/admin/billing/credits/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                        <svg class="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    </div>
-                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Issue Credit</span>
-                </a>
-                <a href="/admin/billing/dunning" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-primary-300 hover:bg-primary-50/50 transition dark:border-slate-700 dark:hover:border-primary-600 dark:hover:bg-primary-900/20">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                    </div>
-                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Dunning</span>
-                </a>
-            </div>
-        </div>
-
-        <!-- Invoice Status Chart -->
-        <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Invoice Status</h2>
-                    <a href="/admin/billing/invoices" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View All Invoices</a>
+        {# Quick Actions #}
+        {% call card("Quick Actions", color="slate") %}
+        <div class="grid grid-cols-2 gap-3">
+            <a href="/admin/billing/invoices/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                 </div>
-            </div>
-            <div class="p-6">
-                {% if stats.total_invoices > 0 %}
-                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    <!-- Chart -->
-                    <div class="chart-container" style="min-height: 200px;">
-                        <canvas id="invoice-status-chart"></canvas>
-                    </div>
-                    <!-- Legend/Stats -->
-                    <div class="flex flex-col justify-center space-y-4">
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <span class="h-3 w-3 rounded-full bg-green-500"></span>
-                                <span class="text-sm text-slate-600 dark:text-slate-400">Paid</span>
-                            </div>
-                            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.paid_count|default(0) }}</span>
-                        </div>
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <span class="h-3 w-3 rounded-full bg-blue-500"></span>
-                                <span class="text-sm text-slate-600 dark:text-slate-400">Pending</span>
-                            </div>
-                            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.pending_count|default(0) }}</span>
-                        </div>
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <span class="h-3 w-3 rounded-full bg-amber-500"></span>
-                                <span class="text-sm text-slate-600 dark:text-slate-400">Overdue</span>
-                            </div>
-                            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.overdue_count|default(0) }}</span>
-                        </div>
-                        <div class="flex items-center justify-between">
-                            <div class="flex items-center gap-2">
-                                <span class="h-3 w-3 rounded-full bg-slate-400"></span>
-                                <span class="text-sm text-slate-600 dark:text-slate-400">Draft</span>
-                            </div>
-                            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.draft_count|default(0) }}</span>
-                        </div>
-                    </div>
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Create Invoice</span>
+            </a>
+            <a href="/admin/billing/payments/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
+                    <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                 </div>
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('invoice-status-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: ['Paid', 'Pending', 'Overdue', 'Draft'],
-                        values: [{{ stats.paid_count|default(0) }}, {{ stats.pending_count|default(0) }}, {{ stats.overdue_count|default(0) }}, {{ stats.draft_count|default(0) }}],
-                        colors: ['#10b981', '#3b82f6', '#f59e0b', '#94a3b8']
-                    };
-                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom', plugins: { legend: { display: false } } });
-                    DotmacCharts.registerChart('invoice-status-chart', chart);
-                });
-                </script>
-                {% else %}
-                <div class="text-center py-8">
-                    <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No invoices yet</p>
-                    <a href="/admin/billing/invoices/new" class="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                        Create your first invoice
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Record Payment</span>
+            </a>
+            <a href="/admin/billing/credits/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                    <svg class="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <!-- Recent Invoices -->
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recent Invoices</h2>
-                <a href="/admin/billing/invoices" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View All</a>
-            </div>
-        </div>
-        {% if invoices %}
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Invoice #</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Account</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Amount</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Due Date</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                    {% for invoice in invoices %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-primary-600 dark:text-primary-400">
-                            <a href="/admin/billing/invoices/{{ invoice.id }}">{{ invoice.invoice_number|default('Invoice') }}</a>
-                        </td>
-                        <td class="px-4 py-3">
-                            <div class="flex items-center gap-3">
-                                <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                    {% if invoice.account and invoice.account.subscriber %}
-                                        {% if invoice.account.subscriber.person %}
-                                            {{ (invoice.account.subscriber.person.first_name[0] ~ invoice.account.subscriber.person.last_name[0])|upper }}
-                                        {% elif invoice.account.subscriber.organization %}
-                                            {{ invoice.account.subscriber.organization.name[0:2] | upper }}
-                                        {% else %}
-                                            AC
-                                        {% endif %}
-                                    {% else %}
-                                        AC
-                                    {% endif %}
-                                </div>
-                                <span class="text-sm font-medium text-slate-900 dark:text-white">
-                                    {% if invoice.account and invoice.account.subscriber %}
-                                        {% if invoice.account.subscriber.person %}
-                                            {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
-                                        {% elif invoice.account.subscriber.organization %}
-                                            {{ invoice.account.subscriber.organization.name }}
-                                        {% else %}
-                                            Account
-                                        {% endif %}
-                                    {% else %}
-                                        Account
-                                    {% endif %}
-                                </span>
-                            </div>
-                        </td>
-                        <td class="whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.total_amount|default(0)) }}</td>
-                        <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
-                            {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'Not set' }}
-                        </td>
-                        <td class="whitespace-nowrap px-4 py-3">
-                            {% set status = invoice.status|default('draft') %}
-                            {% set status_val = status.value if status is not string else status %}
-                            {% if status_val == 'paid' %}
-                            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/50 dark:text-green-300">Paid</span>
-                            {% elif status_val == 'pending' or status_val == 'sent' %}
-                            <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">Pending</span>
-                            {% elif status_val == 'overdue' %}
-                            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/50 dark:text-red-300">Overdue</span>
-                            {% elif status_val == 'draft' %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Draft</span>
-                            {% elif status_val == 'voided' or status_val == 'cancelled' %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">Voided</span>
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ status_val|capitalize }}</span>
-                            {% endif %}
-                        </td>
-                        <td class="whitespace-nowrap px-4 py-3">
-                            <div class="flex items-center gap-2">
-                                <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" title="View">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                </a>
-                                <button class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" title="Send">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                                </button>
-                                <button class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" title="Download PDF">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="p-12 text-center">
-            <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            <h3 class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No invoices found</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by creating your first invoice.</p>
-            <a href="/admin/billing/invoices/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                Create Invoice
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Issue Credit</span>
+            </a>
+            <a href="/admin/billing/dunning" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                    <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                </div>
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Dunning</span>
             </a>
         </div>
-        {% endif %}
+        {% endcall %}
+
+        {# Invoice Status Chart #}
+        <div class="lg:col-span-2">
+            {% call card("Invoice Status", color="emerald",
+                actions='<a href="/admin/billing/invoices" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">View All Invoices</a>'
+            ) %}
+            {% if stats.total_invoices > 0 %}
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <div class="chart-container" style="min-height: 200px;">
+                    <canvas id="invoice-status-chart"></canvas>
+                </div>
+                <div class="flex flex-col justify-center space-y-1">
+                    {{ metric_row("Paid", stats.paid_count|default(0), color="green") }}
+                    {{ metric_row("Pending", stats.pending_count|default(0), color="blue") }}
+                    {{ metric_row("Overdue", stats.overdue_count|default(0), color="amber") }}
+                    {{ metric_row("Draft", stats.draft_count|default(0), color="slate") }}
+                </div>
+            </div>
+            {% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('invoice-status-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: {{ cd["labels"] | tojson | safe }},
+                    values: {{ cd["values"] | tojson | safe }},
+                    colors: {{ cd["colors"] | tojson | safe }}
+                };
+                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom', plugins: { legend: { display: false } } });
+                DotmacCharts.registerChart('invoice-status-chart', chart);
+            });
+            </script>
+            {% else %}
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No invoices yet</p>
+                <a href="/admin/billing/invoices/new" class="mt-3 inline-flex items-center gap-1 text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
+                    Create your first invoice
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </div>
+            {% endif %}
+            {% endcall %}
+        </div>
     </div>
+
+    {# ── Recent Invoices Table ── #}
+    {% call data_table(
+        title="Recent Invoices",
+        icon='<svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="emerald",
+        actions='<a href="/admin/billing/invoices" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">View All</a>'
+    ) %}
+    {% if invoices %}
+    <table class="min-w-full">
+        {{ table_head([
+            {'label': 'Invoice #'},
+            {'label': 'Account'},
+            {'label': 'Amount', 'align': 'right'},
+            {'label': 'Due Date'},
+            {'label': 'Status'},
+            {'label': 'Actions', 'align': 'right'}
+        ]) }}
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {% for invoice in invoices %}
+            {% call table_row(color="emerald") %}
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                    <a href="/admin/billing/invoices/{{ invoice.id }}">{{ invoice.invoice_number|default('Invoice') }}</a>
+                </td>
+                <td class="px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                            {% if invoice.account and invoice.account.subscriber %}
+                                {% if invoice.account.subscriber.person %}
+                                    {{ (invoice.account.subscriber.person.first_name[0] ~ invoice.account.subscriber.person.last_name[0])|upper }}
+                                {% elif invoice.account.subscriber.organization %}
+                                    {{ invoice.account.subscriber.organization.name[0:2] | upper }}
+                                {% else %}AC{% endif %}
+                            {% else %}AC{% endif %}
+                        </div>
+                        <span class="text-sm font-medium text-slate-900 dark:text-white">
+                            {% if invoice.account and invoice.account.subscriber %}
+                                {% if invoice.account.subscriber.person %}
+                                    {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
+                                {% elif invoice.account.subscriber.organization %}
+                                    {{ invoice.account.subscriber.organization.name }}
+                                {% else %}Account{% endif %}
+                            {% else %}Account{% endif %}
+                        </span>
+                    </div>
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">
+                    ₦{{ "{:,.2f}".format(invoice.total|default(0)) }}
+                </td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                    {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'Not set' }}
+                </td>
+                <td class="whitespace-nowrap px-6 py-4">
+                    {% set inv_status = invoice.status|default('draft') %}
+                    {% set status_val = inv_status.value if inv_status is not string else inv_status %}
+                    {% if status_val == 'paid' %}
+                        {{ status_badge("Paid", variant="paid") }}
+                    {% elif status_val == 'issued' or status_val == 'sent' %}
+                        {{ status_badge("Pending", variant="pending") }}
+                    {% elif status_val == 'overdue' %}
+                        {{ status_badge("Overdue", variant="overdue") }}
+                    {% elif status_val == 'draft' %}
+                        {{ status_badge("Draft", variant="draft") }}
+                    {% elif status_val == 'void' or status_val == 'cancelled' %}
+                        {{ status_badge("Voided", variant="inactive") }}
+                    {% else %}
+                        {{ status_badge(status_val|capitalize, variant="default") }}
+                    {% endif %}
+                </td>
+                {% call row_actions() %}
+                    {{ row_action(
+                        href="/admin/billing/invoices/" ~ invoice.id,
+                        icon=icon_view(),
+                        title="View",
+                        color="emerald"
+                    ) }}
+                {% endcall %}
+            {% endcall %}
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <table class="min-w-full">
+        <tbody>
+            {{ empty_state(
+                title="No invoices found",
+                message="Get started by creating your first invoice.",
+                color="emerald",
+                color2="teal",
+                action_label="Create Invoice",
+                action_href="/admin/billing/invoices/new",
+                colspan=6
+            ) }}
+        </tbody>
+    </table>
+    {% endif %}
+    {% endcall %}
 </div>
 {% endblock %}

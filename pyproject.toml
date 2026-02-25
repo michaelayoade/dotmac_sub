@@ -38,6 +38,7 @@ shapely = "2.0.4"
 weasyprint = "61.2"
 aiosmtpd = "1.4.6"
 sse-starlette = "^1.6.0"
+boto3 = "^1.40.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "8.2.2"

@@ -1,120 +1,96 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    status_badge, animation_styles
+%}
+
+{% set run_status_variants = {
+    'success': 'success',
+    'failed': 'error',
+    'running': 'warning',
+    'pending': 'pending'
+} %}
+
 {% block title %}Usage Dashboard{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <!-- Page Header -->
-    <div class="flex items-center justify-between">
-        <div>
-            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Usage Dashboard</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Monitor usage records, charges, and rating runs</p>
-        </div>
-        <a href="/admin/catalog/usage/rating" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors">
-            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-            </svg>
+{{ ambient_background("violet", "purple") }}
+
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        title="Usage Dashboard",
+        subtitle="Monitor usage records, charges, and rating runs",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+        color="violet",
+        color2="purple",
+        breadcrumbs=[
+            {"label": "Catalog", "href": "/admin/catalog"},
+            {"label": "Usage"}
+        ]
+    ) %}
+        <a href="/admin/catalog/usage/rating" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-all hover:shadow-xl hover:shadow-violet-500/30 hover:-translate-y-0.5">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             Run Rating
         </a>
+    {% endcall %}
+
+    {# ── Stats Cards ── #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card("Usage Records", records_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+            color="blue", color2="indigo",
+            href="/admin/catalog/usage/records"
+        ) }}
+        {{ stats_card("Staged Charges", staged_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="amber", color2="orange",
+            href="/admin/catalog/usage/charges?status=staged"
+        ) }}
+        {{ stats_card("Needs Review", needs_review_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+            color="red", color2="rose",
+            href="/admin/catalog/usage/charges?status=needs_review"
+        ) }}
+        {{ stats_card("Staged Amount", "%.2f"|format(total_staged_amount),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green",
+            href="/admin/catalog/usage/charges"
+        ) }}
     </div>
 
-    <!-- Stats Cards -->
-    <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <!-- Records -->
-        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900/30">
-                    <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                    </svg>
-                </div>
-                <a href="/admin/catalog/usage/records" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View &rarr;</a>
-            </div>
-            <p class="mt-4 text-2xl font-semibold text-slate-900 dark:text-white">{{ records_count }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Usage Records</p>
-        </div>
-
-        <!-- Staged Charges -->
-        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-amber-50 dark:bg-amber-900/30">
-                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
-                <a href="/admin/catalog/usage/charges?status=staged" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View &rarr;</a>
-            </div>
-            <p class="mt-4 text-2xl font-semibold text-slate-900 dark:text-white">{{ staged_count }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Staged Charges</p>
-        </div>
-
-        <!-- Needs Review -->
-        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-red-50 dark:bg-red-900/30">
-                    <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                    </svg>
-                </div>
-                <a href="/admin/catalog/usage/charges?status=needs_review" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View &rarr;</a>
-            </div>
-            <p class="mt-4 text-2xl font-semibold text-slate-900 dark:text-white">{{ needs_review_count }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Needs Review</p>
-        </div>
-
-        <!-- Total Staged Amount -->
-        <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-green-50 dark:bg-green-900/30">
-                    <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
-                <a href="/admin/catalog/usage/charges" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View &rarr;</a>
-            </div>
-            <p class="mt-4 text-2xl font-semibold text-slate-900 dark:text-white">{{ "%.2f"|format(total_staged_amount) }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Staged Amount</p>
-        </div>
-    </div>
-
-    <!-- Quick Actions -->
+    {# ── Quick Actions ── #}
     <div class="grid gap-6 lg:grid-cols-2">
-        <!-- Recent Rating Runs -->
-        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
-                <h2 class="text-lg font-medium text-slate-900 dark:text-white">Recent Rating Runs</h2>
-                <a href="/admin/catalog/usage/rating" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View All</a>
-            </div>
-            <div class="p-6">
-                {% if recent_runs %}
-                <div class="space-y-4">
-                    {% for run in recent_runs %}
-                    <div class="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
-                        <div>
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.run_at.strftime('%Y-%m-%d %H:%M') if run.run_at else '-' }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ run.subscriptions_scanned or 0 }} subscriptions, {{ run.charges_created or 0 }} charges</p>
-                        </div>
-                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium
-                            {% if run.status.value == 'success' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
-                            {% elif run.status.value == 'failed' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400
-                            {% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
-                            {{ run.status.value }}
-                        </span>
+        {# Recent Rating Runs #}
+        {% call card("Recent Rating Runs",
+            icon='<svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>',
+            color="violet",
+            actions='<a href="/admin/catalog/usage/rating" class="text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">View All</a>'
+        ) %}
+            {% if recent_runs %}
+            <div class="space-y-4">
+                {% for run in recent_runs %}
+                <div class="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50">
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.run_at.strftime('%Y-%m-%d %H:%M') if run.run_at else '-' }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ run.subscriptions_scanned or 0 }} subscriptions, {{ run.charges_created or 0 }} charges</p>
                     </div>
-                    {% endfor %}
+                    {{ status_badge(run.status.value, variant=run_status_variants.get(run.status.value, 'default')) }}
                 </div>
-                {% else %}
-                <p class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">No rating runs yet. <a href="/admin/catalog/usage/rating" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Run one now</a>.</p>
-                {% endif %}
+                {% endfor %}
             </div>
-        </div>
+            {% else %}
+            <p class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">No rating runs yet. <a href="/admin/catalog/usage/rating" class="text-violet-600 hover:text-violet-700 dark:text-violet-400">Run one now</a>.</p>
+            {% endif %}
+        {% endcall %}
 
-        <!-- Quick Links -->
-        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="text-lg font-medium text-slate-900 dark:text-white">Quick Actions</h2>
-            </div>
-            <div class="p-6 grid gap-4 sm:grid-cols-2">
-                <a href="/admin/catalog/usage/records" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-primary-500 hover:bg-primary-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-primary-500 dark:hover:bg-primary-900/20">
+        {# Quick Links #}
+        {% call card("Quick Actions",
+            icon='<svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+            color="violet"
+        ) %}
+            <div class="grid gap-4 sm:grid-cols-2">
+                <a href="/admin/catalog/usage/records" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-violet-500 hover:bg-violet-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-violet-500 dark:hover:bg-violet-900/20">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
                         <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                     </div>
@@ -124,7 +100,7 @@
                     </div>
                 </a>
 
-                <a href="/admin/catalog/usage/charges" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-primary-500 hover:bg-primary-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-primary-500 dark:hover:bg-primary-900/20">
+                <a href="/admin/catalog/usage/charges" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-violet-500 hover:bg-violet-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-violet-500 dark:hover:bg-violet-900/20">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
                         <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                     </div>
@@ -134,7 +110,7 @@
                     </div>
                 </a>
 
-                <a href="/admin/catalog/usage/rating" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-primary-500 hover:bg-primary-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-primary-500 dark:hover:bg-primary-900/20">
+                <a href="/admin/catalog/usage/rating" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-violet-500 hover:bg-violet-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-violet-500 dark:hover:bg-violet-900/20">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
                         <svg class="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     </div>
@@ -144,7 +120,7 @@
                     </div>
                 </a>
 
-                <a href="/admin/catalog/settings/usage-allowances" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-primary-500 hover:bg-primary-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-primary-500 dark:hover:bg-primary-900/20">
+                <a href="/admin/catalog/settings/usage-allowances" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-violet-500 hover:bg-violet-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-violet-500 dark:hover:bg-violet-900/20">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
                         <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                     </div>
@@ -154,7 +130,7 @@
                     </div>
                 </a>
 
-                <a href="/admin/catalog/usage/fup-calculator" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-primary-500 hover:bg-primary-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-primary-500 dark:hover:bg-primary-900/20">
+                <a href="/admin/catalog/usage/fup-calculator" class="flex items-center gap-4 p-4 rounded-lg border border-slate-200 bg-slate-50 hover:border-violet-500 hover:bg-violet-50 transition-colors dark:border-slate-600 dark:bg-slate-700/50 dark:hover:border-violet-500 dark:hover:bg-violet-900/20">
                     <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
                         <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                     </div>
@@ -164,7 +140,9 @@
                     </div>
                 </a>
             </div>
-        </div>
+        {% endcall %}
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

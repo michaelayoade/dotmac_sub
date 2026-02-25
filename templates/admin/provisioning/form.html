@@ -27,27 +27,24 @@
     <!-- Form -->
     <form method="POST" action="{{ '/admin/provisioning/orders/' ~ order.id ~ '/edit' if order else '/admin/provisioning/orders' }}"
           class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token|default('') }}">
+        {% include "components/forms/csrf_input.html" %}
 
         <div class="space-y-6">
             <!-- Subscriber -->
-            <div x-data='{
-                search: "{{ (order.subscriber.first_name ~ " " ~ order.subscriber.last_name)|trim if order and order.subscriber else "" }}",
-                selectedId: "{{ order.subscriber_id if order else "" }}",
-                showResults: false
-            }'>
+            <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
-                <input type="hidden" name="subscriber_id" :value="selectedId">
-                <input type="text" x-model="search" @focus="showResults = true" @click.away="showResults = false"
-                       placeholder="Search subscriber by name..."
-                       autocomplete="off"
-                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                       hx-get="/admin/subscribers?search={search}&format=json"
-                       hx-trigger="keyup changed delay:300ms"
-                       hx-target="#subscriber-results"
-                       :name="'subscriber_search'">
-                <div id="subscriber-results" x-show="showResults" x-cloak
-                     class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <div class="relative"
+                     data-typeahead-url="/api/v1/search/subscribers"
+                     data-typeahead-min="2"
+                     data-typeahead-limit="8">
+                    <input type="text" name="subscriber_search" data-typeahead-input
+                           value="{{ (order.subscriber.first_name ~ " " ~ order.subscriber.last_name)|trim if order and order.subscriber else (prefill_subscriber_label|default('')) }}"
+                           placeholder="Search subscriber by name..."
+                           autocomplete="off"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input type="hidden" name="subscriber_id" data-typeahead-hidden required
+                           value="{{ order.subscriber_id if order else (prefill_subscriber_id|default('')) }}">
+                    <div data-typeahead-results></div>
                 </div>
                 {% if order and order.subscriber %}
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">

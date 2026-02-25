@@ -22,19 +22,29 @@ def _session_cookie_settings(db: Session) -> dict:
     }
 
 
+def _is_https_request(request: Request) -> bool:
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
 def _safe_next(next_url: str | None, fallback: str = "/admin/dashboard") -> str:
     if next_url and next_url.startswith("/"):
         return next_url
     return fallback
 
 
-def _set_refresh_cookie(response, db: Session, refresh_token: str):
+def _set_refresh_cookie(response, db: Session, refresh_token: str, request: Request | None = None):
     settings = AuthFlow.refresh_cookie_settings(db)
+    secure_cookie = settings["secure"]
+    if request is not None:
+        secure_cookie = bool(settings["secure"]) and _is_https_request(request)
     response.set_cookie(
         key=settings["key"],
         value=refresh_token,
         httponly=settings["httponly"],
-        secure=settings["secure"],
+        secure=secure_cookie,
         samesite=settings["samesite"],
         domain=settings["domain"],
         path=settings["path"],
@@ -66,14 +76,21 @@ def login_submit(
             request=request,
             provider=None,
         )
-        if result.get("requires_mfa"):
+        if result.get("mfa_required"):
             mfa_url = f"/auth/mfa?next={next_url}" if next_url else "/auth/mfa"
             response = RedirectResponse(url=mfa_url, status_code=303)
+            response.delete_cookie("session_token")
+            refresh_settings = AuthFlow.refresh_cookie_settings(db)
+            response.delete_cookie(
+                key=refresh_settings["key"],
+                domain=refresh_settings["domain"],
+                path=refresh_settings["path"],
+            )
             response.set_cookie(
                 key="mfa_pending",
                 value=result.get("mfa_token", ""),
                 httponly=True,
-                secure=True,
+                secure=_is_https_request(request),
                 samesite="lax",
                 max_age=300,
             )
@@ -82,17 +99,18 @@ def login_submit(
         response = RedirectResponse(url=redirect_url, status_code=303)
         max_age = 30 * 24 * 60 * 60 if remember else None
         cookie_cfg = _session_cookie_settings(db)
+        secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
         response.set_cookie(
             key="session_token",
             value=result.get("access_token", ""),
             httponly=True,
-            secure=cookie_cfg["secure"],
+            secure=secure_cookie,
             samesite=cookie_cfg["samesite"],
             max_age=max_age,
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token)
+            _set_refresh_cookie(response, db, refresh_token, request)
         return response
     except Exception as exc:
         error_msg = "Invalid credentials"
@@ -145,16 +163,17 @@ def mfa_submit(
         response = RedirectResponse(url=redirect_url, status_code=303)
         response.delete_cookie("mfa_pending")
         cookie_cfg = _session_cookie_settings(db)
+        secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
         response.set_cookie(
             key="session_token",
             value=result.get("access_token", ""),
             httponly=True,
-            secure=cookie_cfg["secure"],
+            secure=secure_cookie,
             samesite=cookie_cfg["samesite"],
         )
         refresh_token = result.get("refresh_token")
         if refresh_token:
-            _set_refresh_cookie(response, db, refresh_token)
+            _set_refresh_cookie(response, db, refresh_token, request)
         return response
     except Exception:
         return templates.TemplateResponse(
@@ -182,10 +201,21 @@ def forgot_password_submit(request: Request, db: Session, email: str):
     )
 
 
-def reset_password_page(request: Request, token: str, error: str | None = None):
+def reset_password_page(
+    request: Request,
+    token: str,
+    error: str | None = None,
+    next_login: str | None = None,
+):
+    safe_next_login = _safe_next(next_login, "/auth/login")
     return templates.TemplateResponse(
         "auth/reset-password.html",
-        {"request": request, "token": token, "error": error},
+        {
+            "request": request,
+            "token": token,
+            "error": error,
+            "next_login": safe_next_login,
+        },
     )
 
 
@@ -195,20 +225,33 @@ def reset_password_submit(
     token: str,
     password: str,
     password_confirm: str,
+    next_login: str | None = None,
 ):
+    safe_next_login = _safe_next(next_login, "/auth/login")
     if password != password_confirm:
         return templates.TemplateResponse(
             "auth/reset-password.html",
-            {"request": request, "token": token, "error": "Passwords do not match"},
+            {
+                "request": request,
+                "token": token,
+                "error": "Passwords do not match",
+                "next_login": safe_next_login,
+            },
             status_code=400,
         )
     try:
         auth_flow_service.reset_password(db=db, token=token, new_password=password)
-        return RedirectResponse(url="/auth/login?reset=success", status_code=303)
+        separator = "&" if "?" in safe_next_login else "?"
+        return RedirectResponse(url=f"{safe_next_login}{separator}reset=success", status_code=303)
     except Exception:
         return templates.TemplateResponse(
             "auth/reset-password.html",
-            {"request": request, "token": token, "error": "Invalid or expired reset link"},
+            {
+                "request": request,
+                "token": token,
+                "error": "Invalid or expired reset link",
+                "next_login": safe_next_login,
+            },
             status_code=400,
         )
 
@@ -231,16 +274,17 @@ def refresh(request: Request, db: Session, next_url: str | None = None):
 
     response = RedirectResponse(url=redirect_url, status_code=303)
     cookie_cfg = _session_cookie_settings(db)
+    secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
     response.set_cookie(
         key="session_token",
         value=result.get("access_token", ""),
         httponly=True,
-        secure=cookie_cfg["secure"],
+        secure=secure_cookie,
         samesite=cookie_cfg["samesite"],
     )
     refresh_token = result.get("refresh_token")
     if refresh_token:
-        _set_refresh_cookie(response, db, refresh_token)
+        _set_refresh_cookie(response, db, refresh_token, request)
     return response
 
 

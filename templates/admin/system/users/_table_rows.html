@@ -1,6 +1,13 @@
 {% from "components/ui/macros.html" import status_badge %}
 {% for user in users %}
 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+    <td class="px-3 py-4 whitespace-nowrap" data-bulk-id="{{ user.id }}">
+        <input type="checkbox"
+               class="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700"
+               :checked="isSelected('{{ user.id }}')"
+               @change="toggleRow('{{ user.id }}', $event.target.checked)"
+               aria-label="Select user">
+    </td>
     <td class="px-6 py-4 whitespace-nowrap">
         <div class="flex items-center gap-3">
             <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">
@@ -11,7 +18,9 @@
                 {% endif %}
             </div>
             <div>
-                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ user.name }}</p>
+                <a href="/admin/system/users/{{ user.id }}" class="text-sm font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
+                    {{ user.name }}
+                </a>
                 <p class="text-sm text-slate-500 dark:text-slate-400">{{ user.email }}</p>
             </div>
         </div>
@@ -32,6 +41,9 @@
                 <span class="text-xs text-slate-400 dark:text-slate-500">No roles</span>
             {% endif %}
         </div>
+    </td>
+    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+        {{ user.user_type_label }}
     </td>
     <td class="px-6 py-4 whitespace-nowrap">
         {% if user.is_active %}
@@ -72,7 +84,11 @@
                 </a>
                 <button hx-post="/admin/system/users/{{ user.id }}/reset-password"
                         class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
-                    Reset Password
+                    Send Reset Link
+                </button>
+                <button hx-post="/admin/system/users/{{ user.id }}/invite"
+                        class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Send Welcome Invite
                 </button>
                 {% if user.mfa_enabled %}
                 <button hx-post="/admin/system/users/{{ user.id }}/disable-mfa"
@@ -105,7 +121,7 @@
 </tr>
 {% else %}
 <tr>
-    <td colspan="6" class="px-6 py-12">
+    <td colspan="8" class="px-6 py-12">
         {% set title = "No users found" %}
         {% set message = "Add your first system user to get started." %}
         {% include "components/data/empty_state.html" %}

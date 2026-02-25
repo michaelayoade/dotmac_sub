@@ -100,6 +100,7 @@ def test_subscriber_account_number_defaults_use_settings(db_session, person):
         db_session,
         SubscriberCreate(person_id=person.id),
     )
+    assert subscriber.account_number == "ACX-009"
     account = subscriber_service.accounts.create(
         db_session,
         SubscriberAccountCreate(subscriber_id=subscriber.id),

@@ -1,5 +1,6 @@
 """Admin NAS device management web routes."""
 
+import ipaddress
 import json
 from uuid import UUID
 
@@ -16,8 +17,10 @@ from app.models.catalog import (
     NasDeviceStatus,
     NasVendor,
     ProvisioningAction,
+    ProvisioningLogStatus,
 )
 from app.models.network_monitoring import PopSite
+from app.models.subscriber import Organization
 from app.schemas.catalog import (
     NasDeviceCreate,
     NasDeviceUpdate,
@@ -25,6 +28,7 @@ from app.schemas.catalog import (
     ProvisioningTemplateUpdate,
 )
 from app.services import nas as nas_service
+from app.services import network as network_service
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -63,9 +67,21 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
 def _get_form_options(db: Session) -> dict:
     """Get options for form dropdowns."""
     pop_sites = db.query(PopSite).filter(PopSite.is_active.is_(True)).order_by(PopSite.name).all()
+    ip_pools = network_service.ip_pools.list(
+        db=db,
+        ip_version=None,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
+    )
+    organizations = db.query(Organization).order_by(Organization.name).limit(500).all()
 
     return {
         "pop_sites": pop_sites,
+        "ip_pools": ip_pools,
+        "organizations": organizations,
         "vendors": [{"value": v.value, "label": v.value.title()} for v in NasVendor],
         "statuses": [{"value": s.value, "label": s.value.title()} for s in NasDeviceStatus],
         "connection_types": [{"value": ct.value, "label": ct.value.upper()} for ct in ConnectionType],
@@ -75,6 +91,119 @@ def _get_form_options(db: Session) -> dict:
             for a in ProvisioningAction
         ],
     }
+
+
+RADIUS_REQUIRED_CONNECTION_TYPES = {
+    ConnectionType.pppoe,
+    ConnectionType.ipoe,
+    ConnectionType.hotspot,
+}
+
+
+def _validate_ipv4_address(value: str | None, field_label: str) -> str | None:
+    if not value:
+        return None
+    try:
+        ip = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return f"{field_label} must be a valid IPv4 address."
+    if ip.version != 4:
+        return f"{field_label} must be an IPv4 address."
+    return None
+
+
+def _radius_pool_ids_from_tags(tags: list | None) -> list[str]:
+    if not tags:
+        return []
+    ids: list[str] = []
+    for tag in tags:
+        if isinstance(tag, str) and tag.startswith("radius_pool:"):
+            ids.append(tag.split(":", 1)[1])
+    return ids
+
+
+def _prefixed_values_from_tags(tags: list | None, prefix: str) -> list[str]:
+    if not tags:
+        return []
+    values: list[str] = []
+    for tag in tags:
+        if isinstance(tag, str) and tag.startswith(prefix):
+            values.append(tag.split(":", 1)[1])
+    return values
+
+
+def _prefixed_value_from_tags(tags: list | None, prefix: str) -> str | None:
+    values = _prefixed_values_from_tags(tags, prefix)
+    return values[0] if values else None
+
+
+def _upsert_prefixed_tags(existing_tags: list | None, prefix: str, values: list[str]) -> list[str]:
+    base = [
+        str(tag) for tag in (existing_tags or []) if isinstance(tag, str) and not str(tag).startswith(prefix)
+    ]
+    return base + [f"{prefix}{value}" for value in values if value]
+
+
+def _merge_radius_pool_tags(existing_tags: list | None, radius_pool_ids: list[str]) -> list[str] | None:
+    merged = _upsert_prefixed_tags(existing_tags, "radius_pool:", radius_pool_ids)
+    return merged or None
+
+
+def _merge_partner_org_tags(existing_tags: list | None, partner_org_ids: list[str]) -> list[str] | None:
+    merged = _upsert_prefixed_tags(existing_tags, "partner_org:", partner_org_ids)
+    return merged or None
+
+
+def _merge_single_tag(existing_tags: list | None, prefix: str, value: str | None) -> list[str] | None:
+    merged = _upsert_prefixed_tags(existing_tags, prefix, [value] if value else [])
+    return merged or None
+
+
+def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | None]:
+    return {
+        "partner_org_ids": _prefixed_values_from_tags(tags, "partner_org:"),
+        "authorization_type": _prefixed_value_from_tags(tags, "authorization_type:"),
+        "accounting_type": _prefixed_value_from_tags(tags, "accounting_type:"),
+        "physical_address": _prefixed_value_from_tags(tags, "physical_address:"),
+        "latitude": _prefixed_value_from_tags(tags, "latitude:"),
+        "longitude": _prefixed_value_from_tags(tags, "longitude:"),
+    }
+
+
+def _resolve_radius_pool_names(db: Session, device) -> list[str]:
+    ids = _radius_pool_ids_from_tags(device.tags)
+    if not ids:
+        return []
+    pools = network_service.ip_pools.list(
+        db=db,
+        ip_version=None,
+        is_active=None,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    names: list[str] = []
+    for pool in pools:
+        if str(pool.id) in ids:
+            names.append(str(pool.name))
+    return names
+
+
+def _resolve_partner_org_names(db: Session, device) -> list[str]:
+    ids = _prefixed_values_from_tags(device.tags, "partner_org:")
+    if not ids:
+        return []
+    valid_ids: list[UUID] = []
+    for raw in ids:
+        try:
+            valid_ids.append(UUID(raw))
+        except (ValueError, TypeError):
+            continue
+    if not valid_ids:
+        return []
+    orgs = db.query(Organization).filter(Organization.id.in_(valid_ids)).all()
+    return [str(org.name) for org in orgs]
 
 
 
@@ -126,12 +255,17 @@ def nas_index(
 
     # Calculate pagination
     total_pages = (total + limit - 1) // limit
+    ping_statuses = {
+        str(device.id): nas_service.get_ping_status(device.ip_address or device.management_ip)
+        for device in devices
+    }
 
     return templates.TemplateResponse(
         "admin/network/nas/index.html",
         {
             **_base_context(request, db, "nas"),
             "devices": devices,
+            "ping_statuses": ping_statuses,
             "stats": stats,
             "pagination": {
                 "page": page,
@@ -163,6 +297,9 @@ def device_form_new(request: Request, db: Session = Depends(get_db)):
             **_get_form_options(db),
             "device": None,
             "errors": [],
+            "selected_radius_pool_ids": [],
+            "selected_partner_org_ids": [],
+            "enhanced_fields": {},
         },
     )
 
@@ -177,6 +314,12 @@ def device_create(
     ip_address: str = Form(...),
     description: str = Form(None),
     pop_site_id: str = Form(None),
+    partner_org_ids: list[str] = Form(default=[]),
+    authorization_type: str = Form(None),
+    accounting_type: str = Form(None),
+    physical_address: str = Form(None),
+    latitude: str = Form(None),
+    longitude: str = Form(None),
     status: str = Form("active"),
     # Connection settings
     supported_connection_types: str = Form(None),  # JSON array
@@ -201,6 +344,8 @@ def device_create(
     # RADIUS settings
     radius_secret: str = Form(None),
     nas_identifier: str = Form(None),
+    nas_ip: str = Form(None),
+    radius_pool_ids: list[str] = Form(default=[]),
     coa_port: int = Form(3799),
     # Other settings
     firmware_version: str = Form(None),
@@ -220,6 +365,45 @@ def device_create(
             conn_types = [ConnectionType(ct) for ct in conn_types_raw]
         except (json.JSONDecodeError, ValueError) as e:
             errors.append(f"Invalid connection types: {e}")
+    ip_error = _validate_ipv4_address(ip_address, "IP address")
+    if ip_error:
+        errors.append(ip_error)
+    nas_ip_error = _validate_ipv4_address(nas_ip, "NAS IP")
+    if nas_ip_error:
+        errors.append(nas_ip_error)
+    if conn_types and any(ct in RADIUS_REQUIRED_CONNECTION_TYPES for ct in conn_types) and not nas_ip:
+        errors.append("NAS IP is required when PPPoE, IPoE, or Hotspot authentication is enabled.")
+    if radius_pool_ids:
+        valid_pool_ids = {
+            str(pool.id)
+            for pool in network_service.ip_pools.list(
+                db=db,
+                ip_version=None,
+                is_active=True,
+                order_by="name",
+                order_dir="asc",
+                limit=500,
+                offset=0,
+            )
+        }
+        for pool_id in radius_pool_ids:
+            if pool_id not in valid_pool_ids:
+                errors.append(f"Invalid RADIUS pool selected: {pool_id}")
+                break
+    if latitude:
+        try:
+            lat_value = float(latitude)
+            if lat_value < -90 or lat_value > 90:
+                errors.append("Latitude must be between -90 and 90.")
+        except ValueError:
+            errors.append("Latitude must be a valid number.")
+    if longitude:
+        try:
+            lon_value = float(longitude)
+            if lon_value < -180 or lon_value > 180:
+                errors.append("Longitude must be between -180 and 180.")
+        except ValueError:
+            errors.append("Longitude must be a valid number.")
 
     if errors:
         return templates.TemplateResponse(
@@ -231,10 +415,21 @@ def device_create(
                 "errors": errors,
                 "form_data": parse_form_data_sync(request),
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
+                "selected_radius_pool_ids": radius_pool_ids,
+                "selected_partner_org_ids": partner_org_ids,
             },
         )
 
     try:
+        tags: list[str] | None = None
+        tags = _merge_radius_pool_tags(tags, radius_pool_ids)
+        tags = _merge_partner_org_tags(tags, partner_org_ids)
+        tags = _merge_single_tag(tags, "authorization_type:", authorization_type)
+        tags = _merge_single_tag(tags, "accounting_type:", accounting_type)
+        tags = _merge_single_tag(tags, "physical_address:", physical_address)
+        tags = _merge_single_tag(tags, "latitude:", latitude)
+        tags = _merge_single_tag(tags, "longitude:", longitude)
+
         payload = NasDeviceCreate(
             name=name,
             code=nas_identifier or None,  # nas_identifier maps to code
@@ -243,6 +438,7 @@ def device_create(
             ip_address=ip_address,
             management_ip=ip_address,  # Use same IP for management
             management_port=ssh_port,  # ssh_port maps to management_port
+            nas_ip=nas_ip or None,
             description=description or None,
             pop_site_id=UUID(pop_site_id) if pop_site_id else None,
             rack_position=location or None,  # location maps to rack_position
@@ -267,6 +463,7 @@ def device_create(
             firmware_version=firmware_version or None,
             serial_number=serial_number or None,
             notes=notes or None,
+            tags=tags,
             is_active=is_active,
         )
         device = nas_service.NasDevices.create(db, payload)
@@ -293,12 +490,19 @@ def device_create(
                 "errors": errors,
                 "form_data": parse_form_data_sync(request),
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
+                "selected_radius_pool_ids": radius_pool_ids,
+                "selected_partner_org_ids": partner_org_ids,
             },
         )
 
 
 @router.get("/devices/{device_id}", response_class=HTMLResponse)
-def device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
+def device_detail(
+    request: Request,
+    device_id: str,
+    tab: str = Query("information"),
+    db: Session = Depends(get_db),
+):
     """NAS device detail page."""
     device = nas_service.NasDevices.get(db, device_id)
 
@@ -313,6 +517,12 @@ def device_detail(request: Request, device_id: str, db: Session = Depends(get_db
     )
 
     activities = build_audit_activities(db, "nas_device", device_id, limit=10)
+    ping_status = nas_service.get_ping_status(device.ip_address or device.management_ip)
+    radius_pool_names = _resolve_radius_pool_names(db, device)
+    partner_org_names = _resolve_partner_org_names(db, device)
+    enhanced_fields = _extract_enhanced_fields(device.tags)
+    if tab not in {"information", "connection-rules", "vendor-specific", "device-log", "map"}:
+        tab = "information"
 
     return templates.TemplateResponse(
         "admin/network/nas/device_detail.html",
@@ -322,6 +532,11 @@ def device_detail(request: Request, device_id: str, db: Session = Depends(get_db
             "backups": recent_backups,
             "logs": recent_logs,
             "activities": activities,
+            "ping_status": ping_status,
+            "radius_pool_names": radius_pool_names,
+            "partner_org_names": partner_org_names,
+            "enhanced_fields": enhanced_fields,
+            "active_tab": tab,
         },
     )
 
@@ -365,6 +580,9 @@ def device_form_edit(request: Request, device_id: str, db: Session = Depends(get
             "device": device,
             "errors": [],
             "pop_site_label": _get_pop_site_label(device),
+            "selected_radius_pool_ids": _radius_pool_ids_from_tags(device.tags),
+            "selected_partner_org_ids": _prefixed_values_from_tags(device.tags, "partner_org:"),
+            "enhanced_fields": _extract_enhanced_fields(device.tags),
         },
     )
 
@@ -380,6 +598,12 @@ def device_update(
     ip_address: str = Form(...),
     description: str = Form(None),
     pop_site_id: str = Form(None),
+    partner_org_ids: list[str] = Form(default=[]),
+    authorization_type: str = Form(None),
+    accounting_type: str = Form(None),
+    physical_address: str = Form(None),
+    latitude: str = Form(None),
+    longitude: str = Form(None),
     status: str = Form("active"),
     # Connection settings
     supported_connection_types: str = Form(None),
@@ -404,6 +628,8 @@ def device_update(
     # RADIUS settings
     radius_secret: str = Form(None),
     nas_identifier: str = Form(None),
+    nas_ip: str = Form(None),
+    radius_pool_ids: list[str] = Form(default=[]),
     coa_port: int = Form(3799),
     # Other settings
     firmware_version: str = Form(None),
@@ -425,6 +651,45 @@ def device_update(
             conn_types = [ConnectionType(ct) for ct in conn_types_raw]
         except (json.JSONDecodeError, ValueError) as e:
             errors.append(f"Invalid connection types: {e}")
+    ip_error = _validate_ipv4_address(ip_address, "IP address")
+    if ip_error:
+        errors.append(ip_error)
+    nas_ip_error = _validate_ipv4_address(nas_ip, "NAS IP")
+    if nas_ip_error:
+        errors.append(nas_ip_error)
+    if conn_types and any(ct in RADIUS_REQUIRED_CONNECTION_TYPES for ct in conn_types) and not nas_ip:
+        errors.append("NAS IP is required when PPPoE, IPoE, or Hotspot authentication is enabled.")
+    if radius_pool_ids:
+        valid_pool_ids = {
+            str(pool.id)
+            for pool in network_service.ip_pools.list(
+                db=db,
+                ip_version=None,
+                is_active=True,
+                order_by="name",
+                order_dir="asc",
+                limit=500,
+                offset=0,
+            )
+        }
+        for pool_id in radius_pool_ids:
+            if pool_id not in valid_pool_ids:
+                errors.append(f"Invalid RADIUS pool selected: {pool_id}")
+                break
+    if latitude:
+        try:
+            lat_value = float(latitude)
+            if lat_value < -90 or lat_value > 90:
+                errors.append("Latitude must be between -90 and 90.")
+        except ValueError:
+            errors.append("Latitude must be a valid number.")
+    if longitude:
+        try:
+            lon_value = float(longitude)
+            if lon_value < -180 or lon_value > 180:
+                errors.append("Longitude must be between -180 and 180.")
+        except ValueError:
+            errors.append("Longitude must be a valid number.")
 
     if errors:
         return templates.TemplateResponse(
@@ -435,10 +700,23 @@ def device_update(
                 "device": device,
                 "errors": errors,
                 "pop_site_label": _get_pop_site_label(device),
+                "form_data": parse_form_data_sync(request),
+                "selected_radius_pool_ids": radius_pool_ids,
+                "selected_partner_org_ids": partner_org_ids,
+                "enhanced_fields": _extract_enhanced_fields(device.tags),
             },
         )
 
     try:
+        tags: list[str] | None = device.tags
+        tags = _merge_radius_pool_tags(tags, radius_pool_ids)
+        tags = _merge_partner_org_tags(tags, partner_org_ids)
+        tags = _merge_single_tag(tags, "authorization_type:", authorization_type)
+        tags = _merge_single_tag(tags, "accounting_type:", accounting_type)
+        tags = _merge_single_tag(tags, "physical_address:", physical_address)
+        tags = _merge_single_tag(tags, "latitude:", latitude)
+        tags = _merge_single_tag(tags, "longitude:", longitude)
+
         payload = NasDeviceUpdate(
             name=name,
             code=nas_identifier or None,  # nas_identifier maps to code
@@ -447,6 +725,7 @@ def device_update(
             ip_address=ip_address,
             management_ip=ip_address,  # Use same IP for management
             management_port=ssh_port,  # ssh_port maps to management_port
+            nas_ip=nas_ip or None,
             description=description or None,
             pop_site_id=UUID(pop_site_id) if pop_site_id else None,
             rack_position=location or None,  # location maps to rack_position
@@ -471,6 +750,7 @@ def device_update(
             firmware_version=firmware_version or None,
             serial_number=serial_number or None,
             notes=notes or None,
+            tags=tags,
             is_active=is_active,
         )
         updated_device = nas_service.NasDevices.update(db, device_id, payload)
@@ -499,6 +779,10 @@ def device_update(
                 "device": device,
                 "errors": errors,
                 "pop_site_label": _get_pop_site_label(device),
+                "form_data": parse_form_data_sync(request),
+                "selected_radius_pool_ids": radius_pool_ids,
+                "selected_partner_org_ids": partner_org_ids,
+                "enhanced_fields": _extract_enhanced_fields(device.tags),
             },
         )
 
@@ -525,7 +809,10 @@ def device_delete(request: Request, device_id: str, db: Session = Depends(get_db
 @router.post("/devices/{device_id}/ping")
 def device_ping(device_id: str, db: Session = Depends(get_db)):
     """Update device last_seen_at timestamp."""
-    nas_service.NasDevices.update_last_seen(db, device_id)
+    device = nas_service.NasDevices.get(db, device_id)
+    ping_status = nas_service.get_ping_status(device.ip_address or device.management_ip)
+    if ping_status.get("state") == "reachable":
+        nas_service.NasDevices.update_last_seen(db, device_id)
     return RedirectResponse(f"/admin/network/nas/devices/{device_id}", status_code=303)
 
 
@@ -611,7 +898,7 @@ def backup_detail(request: Request, backup_id: str, db: Session = Depends(get_db
     """Config backup detail page."""
     backup = nas_service.NasConfigBackups.get(db, backup_id)
     device = nas_service.NasDevices.get(db, str(backup.nas_device_id))
-    activities = build_audit_activities(db, "nas_backup", backup_id, limit=5)
+    activities = build_audit_activities(db, "nas_backup", backup_id, limit=10)
 
     return templates.TemplateResponse(
         "admin/network/nas/backup_detail.html",
@@ -794,7 +1081,7 @@ def template_create(
 def template_detail(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Provisioning template detail page."""
     template = nas_service.ProvisioningTemplates.get(db, template_id)
-    activities = build_audit_activities(db, "nas_template", template_id, limit=5)
+    activities = build_audit_activities(db, "nas_template", template_id, limit=10)
 
     return templates.TemplateResponse(
         "admin/network/nas/template_detail.html",
@@ -937,7 +1224,7 @@ def logs_list(
 
     device_filter = UUID(device_id) if device_id else None
     action_filter = ProvisioningAction(action) if action else None
-    status_filter = status if status else None
+    status_filter = ProvisioningLogStatus(status) if status else None
 
     logs = nas_service.ProvisioningLogs.list(
         db=db,
@@ -987,7 +1274,7 @@ def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
     """Provisioning log detail page."""
     log = nas_service.ProvisioningLogs.get(db, log_id)
     device = nas_service.NasDevices.get(db, str(log.nas_device_id)) if log.nas_device_id else None
-    activities = build_audit_activities(db, "nas_provision_log", log_id, limit=5)
+    activities = build_audit_activities(db, "nas_provision_log", log_id, limit=10)
 
     return templates.TemplateResponse(
         "admin/network/nas/log_detail.html",

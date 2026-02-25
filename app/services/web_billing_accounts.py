@@ -119,6 +119,37 @@ def create_account_from_form(
     return account, resolved_subscriber_id
 
 
+def update_account_from_form(
+    db,
+    *,
+    account_id: str,
+    reseller_id: str | None,
+    tax_rate_id: str | None,
+    account_number: str | None,
+    status: str | None,
+    notes: str | None,
+):
+    resolved_status: SubscriberStatus | None = None
+    if status:
+        try:
+            resolved_status = SubscriberStatus(status)
+        except ValueError as exc:
+            allowed = ", ".join(s.value for s in SubscriberStatus)
+            raise ValueError(f"Invalid status. Allowed: {allowed}") from exc
+
+    return subscriber_service.subscribers.update(
+        db=db,
+        subscriber_id=account_id,
+        payload=SubscriberUpdate(
+            reseller_id=UUID(reseller_id) if reseller_id else None,
+            tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
+            account_number=account_number.strip() if account_number else None,
+            status=resolved_status,
+            notes=notes.strip() if notes else None,
+        ),
+    )
+
+
 def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
     account = subscriber_service.accounts.get(db, account_id)
     invoices = billing_service.invoices.list(

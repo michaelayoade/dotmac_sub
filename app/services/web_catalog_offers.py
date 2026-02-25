@@ -431,6 +431,11 @@ def offer_form_context(
     return context
 
 
+def dashboard_stats(db: Session) -> dict[str, object]:
+    """Return catalog dashboard KPIs and chart data from core service."""
+    return catalog_service.offers.get_dashboard_stats(db)
+
+
 def overview_page_data(
     db: Session,
     *,

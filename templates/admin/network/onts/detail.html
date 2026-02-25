@@ -1,21 +1,42 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, card, data_table, table_head, empty_state, animation_styles %}
 
 {% block title %}{{ ont.serial_number }} - ONT - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-6" x-data="{ activeTab: 'overview' }">
+    {# Header #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/network/onts" class="hover:text-primary-600">ONTs</a>
+                <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">{{ ont.serial_number }}</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ ont.serial_number }}</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ ont.vendor or '' }} {{ ont.model or '' }}</p>
+            <div class="flex items-center gap-3">
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ ont.serial_number }}</h1>
+                {% if signal_info and signal_info.online_status != 'unknown' %}
+                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.online_status_class }}">
+                    {% if signal_info.online_status == 'online' %}
+                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    {% elif signal_info.online_status == 'offline' %}
+                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                    {% endif %}
+                    {{ signal_info.online_status | replace("_", " ") | title }}
+                </span>
+                {% endif %}
+            </div>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {{ ont.vendor or '' }} {{ ont.model or '' }}
+                {% if ont.firmware_version %}<span class="font-mono">&middot; fw {{ ont.firmware_version }}</span>{% endif %}
+            </p>
         </div>
         <div class="flex items-center gap-2">
+            {% if ont.is_active %}
+            {{ status_badge("Active", "active", size="sm") }}
+            {% else %}
+            {{ status_badge("Inactive", "inactive", size="sm") }}
+            {% endif %}
             <a href="/admin/network/onts/{{ ont.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 Edit
@@ -23,182 +44,524 @@
         </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <!-- Main Info -->
-        <div class="lg:col-span-2 space-y-6">
-            <!-- ONT Details -->
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
-                </div>
-                <div class="p-6">
-                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.serial_number }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
-                            <dd class="mt-1">
-                                {% if ont.is_active %}
-                                {{ status_badge("Active", "active", size="sm") }}
-                                {% else %}
-                                {{ status_badge("Inactive", "inactive", size="sm") }}
-                                {% endif %}
-                            </dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.firmware_version or '-' }}</dd>
-                        </div>
-                        {% if ont.notes %}
-                        <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
-                        </div>
-                        {% endif %}
-                    </dl>
-                </div>
+    {# Optical Signal + Customer Summary Row #}
+    {% if signal_info %}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {# OLT Rx #}
+        <div class="rounded-xl border p-4 {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if signal_info.olt_quality == 'good' else 'border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-900/10' if signal_info.olt_quality == 'warning' else 'border-rose-200 bg-rose-50/50 dark:border-rose-800/40 dark:bg-rose-900/10' if signal_info.olt_quality == 'critical' else 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800' }}">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">OLT Rx Power</span>
+                {% if signal_info.olt_quality != 'unknown' %}
+                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ signal_info.olt_quality_class }}">{{ signal_info.olt_quality | title }}</span>
+                {% endif %}
             </div>
-
-            <!-- Active Assignment -->
-            {% if assignment %}
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Current Assignment</h2>
-                </div>
-                <div class="p-6">
-                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {% if assignment.pon_port and assignment.pon_port.olt %}
-                                <a href="/admin/network/olts/{{ assignment.pon_port.olt.id }}" class="text-primary-600 hover:text-primary-700">{{ assignment.pon_port.olt.name }}</a>
-                                {% else %}-{% endif %}
-                            </dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">PON Port</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {% if assignment.account and assignment.account.subscriber %}
-                                    {% if assignment.account.subscriber.person %}
-                                    <a href="/admin/subscribers/{{ assignment.account.subscriber.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ assignment.account.subscriber.person.first_name }} {{ assignment.account.subscriber.person.last_name }}
-                                    </a>
-                                    {% elif assignment.account.subscriber.organization %}
-                                    <a href="/admin/subscribers/{{ assignment.account.subscriber.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ assignment.account.subscriber.organization.name }}
-                                    </a>
-                                    {% else %}-{% endif %}
-                                {% else %}-{% endif %}
-                            </dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '-' }}</dd>
-                        </div>
-                        {% if assignment.service_address %}
-                        <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Address</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {{ assignment.service_address.line1 or '' }}{% if assignment.service_address.line2 %}, {{ assignment.service_address.line2 }}{% endif %}<br>
-                                {{ assignment.service_address.city or '' }}{% if assignment.service_address.state %}, {{ assignment.service_address.state }}{% endif %} {{ assignment.service_address.postal_code or '' }}
-                            </dd>
-                        </div>
-                        {% endif %}
-                    </dl>
-                </div>
-            </div>
+            {% if signal_info.olt_rx_dbm is not none %}
+            <p class="text-2xl font-bold tabular-nums font-mono text-slate-900 dark:text-white">{{ "%.2f"|format(signal_info.olt_rx_dbm) }} <span class="text-sm font-normal text-slate-500">dBm</span></p>
             {% else %}
-            <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800/50 dark:bg-amber-900/20">
-                <div class="flex items-center gap-3">
-                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                    <div>
-                        <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Unassigned ONT</h3>
-                        <p class="text-sm text-amber-700 dark:text-amber-400">This ONT is not currently assigned to any subscriber.</p>
-                    </div>
-                </div>
-            </div>
+            <p class="text-lg text-slate-400 dark:text-slate-500">&mdash;</p>
             {% endif %}
         </div>
 
-        <!-- Sidebar -->
-        <div class="space-y-6">
-            <!-- Quick Info -->
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+        {# ONU Rx #}
+        <div class="rounded-xl border p-4 {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if signal_info.onu_quality == 'good' else 'border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-900/10' if signal_info.onu_quality == 'warning' else 'border-rose-200 bg-rose-50/50 dark:border-rose-800/40 dark:bg-rose-900/10' if signal_info.onu_quality == 'critical' else 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800' }}">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">ONU Rx Power</span>
+                {% if signal_info.onu_quality != 'unknown' %}
+                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ signal_info.onu_quality_class }}">{{ signal_info.onu_quality | title }}</span>
+                {% endif %}
+            </div>
+            {% if signal_info.onu_rx_dbm is not none %}
+            <p class="text-2xl font-bold tabular-nums font-mono text-slate-900 dark:text-white">{{ "%.2f"|format(signal_info.onu_rx_dbm) }} <span class="text-sm font-normal text-slate-500">dBm</span></p>
+            {% else %}
+            <p class="text-lg text-slate-400 dark:text-slate-500">&mdash;</p>
+            {% endif %}
+        </div>
+
+        {# Distance #}
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Fiber Distance</span>
+            {% if signal_info.distance_meters is not none %}
+            <p class="mt-1 text-2xl font-bold tabular-nums font-mono text-slate-900 dark:text-white">{{ "{:,}".format(signal_info.distance_meters) }} <span class="text-sm font-normal text-slate-500">m</span></p>
+            {% else %}
+            <p class="mt-1 text-lg text-slate-400 dark:text-slate-500">&mdash;</p>
+            {% endif %}
+        </div>
+
+        {# Last Polled #}
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Polled</span>
+            {% if signal_info.signal_updated_at %}
+            <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ signal_info.signal_updated_at.strftime('%H:%M') }}</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">{{ signal_info.signal_updated_at.strftime('%Y-%m-%d') }}</p>
+            {% else %}
+            <p class="mt-1 text-lg text-slate-400 dark:text-slate-500">&mdash;</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {# Tab Navigation #}
+    <div class="border-b border-slate-200 dark:border-slate-700">
+        <nav class="flex gap-6 -mb-px">
+            <button @click="activeTab = 'overview'"
+                    :class="activeTab === 'overview' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Overview
+            </button>
+            <button @click="activeTab = 'network'"
+                    :class="activeTab === 'network' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                Network
+            </button>
+            <button @click="activeTab = 'history'"
+                    :class="activeTab === 'history' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                History
+            </button>
+            <button @click="activeTab = 'tr069'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                TR-069 / CPE
+            </button>
+            <button @click="activeTab = 'charts'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'charts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                Charts
+            </button>
+        </nav>
+    </div>
+
+    {# ===================== OVERVIEW TAB ===================== #}
+    <div x-show="activeTab === 'overview'" x-transition>
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <div class="lg:col-span-2 space-y-6">
+                {# Device Information #}
+                {% call card("Device Information", color="blue") %}
+                <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.serial_number }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '&mdash;' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '&mdash;' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '&mdash;' }}</dd>
+                    </div>
+                    {% if ont.notes %}
+                    <div class="sm:col-span-2">
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+                {% endcall %}
+
+                {# Customer Information #}
+                {% if subscriber_info and subscriber_info.id %}
+                {% call card("Customer Information", color="indigo") %}
+                <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
+                        <dd class="mt-1 text-sm">
+                            <a href="/admin/subscribers/{{ subscriber_info.id }}" class="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">{{ subscriber_info.name }}</a>
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                        <dd class="mt-1">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ subscriber_info.status_class }}">{{ subscriber_info.status | title }}</span>
+                        </dd>
+                    </div>
+                    {% if subscriber_info.plan_name %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Plan</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ subscriber_info.plan_name }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if subscriber_info.subscription_status %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscription Status</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ subscriber_info.subscription_status | replace("_", " ") | title }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+                {% endcall %}
+                {% elif not assignment %}
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800/50 dark:bg-amber-900/20">
+                    <div class="flex items-center gap-3">
+                        <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        <div>
+                            <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Unassigned ONT</h3>
+                            <p class="text-sm text-amber-700 dark:text-amber-400">This ONT is not currently assigned to any subscriber or PON port.</p>
+                        </div>
+                    </div>
                 </div>
-                <div class="p-6 space-y-4">
+                {% endif %}
+
+                {# Signal Thresholds Reference #}
+                {% if signal_info %}
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Signal Thresholds</p>
+                    <div class="flex items-center gap-4 text-xs">
+                        <span class="flex items-center gap-1.5">
+                            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                            Good: &ge; {{ signal_info.warn_threshold }} dBm
+                        </span>
+                        <span class="flex items-center gap-1.5">
+                            <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                            Warning: {{ signal_info.crit_threshold }} to {{ signal_info.warn_threshold }} dBm
+                        </span>
+                        <span class="flex items-center gap-1.5">
+                            <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                            Critical: &lt; {{ signal_info.crit_threshold }} dBm
+                        </span>
+                    </div>
+                </div>
+                {% endif %}
+
+                {# Running Config Panel (populated via HTMX from View Config button) #}
+                <div id="ont-config-panel"></div>
+            </div>
+
+            {# Sidebar #}
+            <div class="space-y-6">
+                {# Network Path #}
+                {% if network_path %}
+                {% call card("Network Path", color="blue") %}
+                <div class="space-y-3">
+                    {% if network_path.olt_name %}
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                            <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">OLT</p>
+                            <a href="/admin/network/olts/{{ network_path.olt_id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400">{{ network_path.olt_name }}</a>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if network_path.pon_port %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PON Port</p>
+                            <p class="text-sm text-slate-900 dark:text-white">{{ network_path.pon_port }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if network_path.splitter_name %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Splitter</p>
+                            <p class="text-sm text-slate-900 dark:text-white">{{ network_path.splitter_name }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-blue-300 pl-4 dark:border-blue-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endcall %}
+                {% endif %}
+
+                {# Quick Info #}
+                {% call card("Quick Info", color="slate") %}
+                <div class="space-y-4">
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
                         <p class="text-sm text-slate-900 dark:text-white font-mono">{{ ont.id | string | truncate(20, True, '...') }}</p>
                     </div>
+                    {% if signal_info and signal_info.offline_reason_display %}
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Offline Reason</p>
+                        <p class="text-sm text-rose-600 dark:text-rose-400">{{ signal_info.offline_reason_display }}</p>
+                    </div>
+                    {% endif %}
+                    {% if signal_info and signal_info.last_seen_at %}
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen Online</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ signal_info.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                    </div>
+                    {% endif %}
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '-' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.updated_at.strftime('%B %d, %Y') if ont.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '&mdash;' }}</p>
                     </div>
                 </div>
-            </div>
+                {% endcall %}
 
-            <!-- Actions -->
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Actions</h2>
-                </div>
-                <div class="p-6 space-y-3">
-                    <button type="button" onclick="alert('Rebooting ONT...')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                        Reboot ONT
-                    </button>
+                {# Actions #}
+                {% call card("Actions", color="slate") %}
+                <div class="space-y-3">
+                    <a href="/admin/network/onts/{{ ont.id }}/edit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                        Edit Device
+                    </a>
                     {% if not assignment %}
-                    <a href="/admin/network/onts/{{ ont.id }}/assign" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <a href="/admin/network/onts/{{ ont.id }}/assign" class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
                         Assign to Subscriber
                     </a>
                     {% endif %}
                 </div>
-            </div>
+                {% endcall %}
 
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+                {# Remote Actions (TR-069 / GenieACS) #}
+                {% call card("Remote Actions", color="blue") %}
+                <div x-data="{ showResetConfirm: false }" class="space-y-3">
+                    {# Get Status / Refresh #}
+                    <button
+                        hx-post="/admin/network/onts/{{ ont.id }}/refresh"
+                        hx-swap="none"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                    >
+                        <svg class="h-4 w-4 htmx-indicator animate-spin hidden" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Get Status
+                    </button>
+
+                    {# Reboot #}
+                    <button
+                        hx-post="/admin/network/onts/{{ ont.id }}/reboot"
+                        hx-swap="none"
+                        hx-confirm="Are you sure you want to reboot this ONT? The subscriber will experience a brief service interruption."
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors"
+                    >
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        Reboot
+                    </button>
+
+                    {# View Config #}
+                    <button
+                        hx-get="/admin/network/onts/{{ ont.id }}/config"
+                        hx-target="#ont-config-panel"
+                        hx-swap="innerHTML"
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 transition-colors"
+                    >
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                        View Config
+                    </button>
+
+                    {# Factory Reset — with double confirmation #}
+                    <div>
+                        <button
+                            @click="showResetConfirm = !showResetConfirm"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-600 dark:bg-slate-800 dark:text-rose-400 transition-colors"
+                        >
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            Factory Reset
+                        </button>
+                        <div x-show="showResetConfirm" x-transition x-cloak class="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3 dark:border-rose-800/50 dark:bg-rose-900/20">
+                            <p class="text-xs text-rose-700 dark:text-rose-300 mb-2">This will erase all device configuration. This action cannot be undone.</p>
+                            <button
+                                hx-post="/admin/network/onts/{{ ont.id }}/factory-reset"
+                                hx-swap="none"
+                                hx-confirm="FINAL WARNING: Factory reset will erase ALL configuration on this ONT. Continue?"
+                                @click="showResetConfirm = false"
+                                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700 transition-colors"
+                            >
+                                Confirm Factory Reset
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div class="divide-y divide-slate-200 dark:divide-slate-700">
-                    {% if activities %}
-                    {% for activity in activities %}
-                    <div class="px-6 py-4">
-                        <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
+                {% endcall %}
+            </div>
+        </div>
+    </div>
+
+    {# ===================== NETWORK TAB ===================== #}
+    <div x-show="activeTab === 'network'" x-transition x-cloak>
+        <div class="space-y-6">
+            {# Current Assignment #}
+            {% if assignment %}
+            {% call card("Current Assignment", color="blue") %}
+            <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                        {% if assignment.pon_port and assignment.pon_port.olt %}
+                        <a href="/admin/network/olts/{{ assignment.pon_port.olt.id }}" class="text-blue-600 hover:text-blue-800 dark:text-blue-400">{{ assignment.pon_port.olt.name }}</a>
+                        {% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">PON Port</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '&mdash;' }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned Date</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '&mdash;' }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                        {% if subscriber_info and subscriber_info.id %}
+                        <a href="/admin/subscribers/{{ subscriber_info.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">{{ subscriber_info.name }}</a>
+                        {% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscription</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                        {% if subscriber_info and subscriber_info.plan_name %}
+                        {{ subscriber_info.plan_name }}
+                        {% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                {% if assignment.service_address %}
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Address</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                        {{ assignment.service_address.line1 or '' }}{% if assignment.service_address.line2 %}, {{ assignment.service_address.line2 }}{% endif %}<br>
+                        {{ assignment.service_address.city or '' }}{% if assignment.service_address.state %}, {{ assignment.service_address.state }}{% endif %} {{ assignment.service_address.postal_code or '' }}
+                    </dd>
+                </div>
+                {% endif %}
+            </dl>
+            {% if assignment.notes %}
+            <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Assignment Notes</p>
+                <p class="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{{ assignment.notes }}</p>
+            </div>
+            {% endif %}
+            {% endcall %}
+            {% else %}
+            {% call card("Current Assignment", color="blue") %}
+            {% call empty_state("Not assigned", "This ONT is not currently assigned to a PON port or subscriber.") %}{% endcall %}
+            {% endcall %}
+            {% endif %}
+
+            {# Signal Detail #}
+            {% if signal_info %}
+            {% call card("Optical Signal Detail", color="blue") %}
+            <dl class="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5">
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT Rx</dt>
+                    <dd class="mt-1 text-sm font-mono tabular-nums text-slate-900 dark:text-white">
+                        {% if signal_info.olt_rx_dbm is not none %}{{ "%.2f"|format(signal_info.olt_rx_dbm) }} dBm{% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ONU Rx</dt>
+                    <dd class="mt-1 text-sm font-mono tabular-nums text-slate-900 dark:text-white">
+                        {% if signal_info.onu_rx_dbm is not none %}{{ "%.2f"|format(signal_info.onu_rx_dbm) }} dBm{% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Distance</dt>
+                    <dd class="mt-1 text-sm font-mono tabular-nums text-slate-900 dark:text-white">
+                        {% if signal_info.distance_meters is not none %}{{ "{:,}".format(signal_info.distance_meters) }} m{% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Online Status</dt>
+                    <dd class="mt-1">
+                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.online_status_class }}">{{ signal_info.online_status | replace("_", " ") | title }}</span>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Polled</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                        {% if signal_info.signal_updated_at %}{{ signal_info.signal_updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}&mdash;{% endif %}
+                    </dd>
+                </div>
+            </dl>
+            {% endcall %}
+            {% endif %}
+        </div>
+    </div>
+
+    {# ===================== HISTORY TAB ===================== #}
+    <div x-show="activeTab === 'history'" x-transition x-cloak>
+        <div class="space-y-6">
+            {# Past Assignments #}
+            {% if past_assignments %}
+            {% call card("Past Assignments", color="slate") %}
+            {% call data_table() %}
+                {{ table_head(["PON Port", "OLT", "Subscriber", "Assigned", "Notes"]) }}
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for pa in past_assignments %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '&mdash;' }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                            {% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}&mdash;{% endif %}
+                        </td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                            {% if pa.subscriber %}
+                            <a href="/admin/subscribers/{{ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+                                {% if pa.subscriber.person %}{{ pa.subscriber.person.first_name }} {{ pa.subscriber.person.last_name }}{% elif pa.subscriber.organization %}{{ pa.subscriber.organization.name }}{% else %}{{ pa.subscriber.id | string | truncate(12) }}{% endif %}
+                            </a>
+                            {% else %}&mdash;{% endif %}
+                        </td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '&mdash;' }}</td>
+                        <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ pa.notes or '&mdash;' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            {% endcall %}
+            {% endcall %}
+            {% endif %}
+
+            {# Activity Log #}
+            {% call card("Recent Activity", color="slate") %}
+            {% if activities %}
+            <div class="space-y-3">
+                {% for activity in activities %}
+                <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
                         {% if activity.description %}
-                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
-                        {% endif %}
-                        {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
                         {% endif %}
                     </div>
-                    {% endfor %}
-                    {% else %}
-                    <div class="px-6 py-6 text-sm text-slate-500 dark:text-slate-400">No activity yet.</div>
+                    {% if activity.occurred_at %}
+                    <span class="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</span>
                     {% endif %}
                 </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            {% call empty_state("No activity yet", "Activity for this ONT will appear here as changes are made.") %}{% endcall %}
+            {% endif %}
+            {% endcall %}
+        </div>
+    </div>
+
+    {# ===================== TR-069 / CPE TAB ===================== #}
+    <div x-show="activeTab === 'tr069'" x-transition x-cloak>
+        <div id="tr069-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
+            </div>
+        </div>
+    </div>
+
+    {# ===================== CHARTS TAB ===================== #}
+    <div x-show="activeTab === 'charts'" x-transition x-cloak>
+        <div id="charts-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
             </div>
         </div>
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

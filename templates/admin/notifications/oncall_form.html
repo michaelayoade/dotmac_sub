@@ -1,0 +1,181 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, detail_header, info_row, info_grid,
+    table_head, table_row, status_badge, card,
+    animation_styles, icon_delete
+%}
+
+{% block title %}{{ rotation.name }} - On-Call Rotation - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "pink") }}
+
+<div class="relative space-y-6">
+
+    {# Header #}
+    {{ detail_header(
+        back_url="/admin/notifications/oncall-rotations",
+        back_label="On-Call Rotations",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+        title=rotation.name,
+        status="Active" if rotation.is_active else "Inactive",
+        status_variant="active" if rotation.is_active else "neutral",
+        color="rose"
+    ) }}
+
+    {# Rotation Details #}
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {% call card(title="Rotation Details", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="rose") %}
+            {% call info_grid() %}
+                {{ info_row("Name", rotation.name) }}
+                {{ info_row("Timezone", rotation.timezone or 'UTC') }}
+                {{ info_row("Status", "Active" if rotation.is_active else "Inactive") }}
+                {{ info_row("Members", members | length if members else 0) }}
+                {{ info_row("Created", rotation.created_at.strftime('%Y-%m-%d %H:%M') if rotation.created_at else 'N/A') }}
+            {% endcall %}
+            {% if rotation.notes %}
+            <div class="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Notes</p>
+                <p class="text-sm text-slate-700 dark:text-slate-300">{{ rotation.notes }}</p>
+            </div>
+            {% endif %}
+        {% endcall %}
+
+        {# Edit Form #}
+        {% call card(title="Edit Rotation", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', color="rose") %}
+            <form method="post" action="/admin/notifications/oncall-rotations/{{ rotation.id }}" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label for="edit_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Name</label>
+                    <input type="text" id="edit_name" name="name" value="{{ rotation.name }}" required
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="edit_timezone" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Timezone</label>
+                    <input type="text" id="edit_timezone" name="timezone" value="{{ rotation.timezone or 'UTC' }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="edit_notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                    <textarea id="edit_notes" name="notes" rows="2"
+                              class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ rotation.notes or '' }}</textarea>
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="edit_is_active" name="is_active" {% if rotation.is_active %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="edit_is_active" class="text-sm text-slate-600 dark:text-slate-400">Active</label>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit"
+                            class="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                        Update Rotation
+                    </button>
+                </div>
+            </form>
+        {% endcall %}
+    </div>
+
+    {# Members Table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-rose-50 to-pink-50 px-6 py-4 dark:border-slate-700 dark:from-rose-900/20 dark:to-pink-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Rotation Members</h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Priority"},
+                    {"label": "Name"},
+                    {"label": "Contact"},
+                    {"label": "Status"},
+                    {"label": "Last Used"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if members %}
+                    {% for member in members %}
+                    {% call table_row(color="rose") %}
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">
+                            {{ member.priority }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">
+                            {{ member.name }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-mono text-slate-600 dark:text-slate-300">
+                            {{ member.contact }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if member.is_active %}
+                                {{ status_badge("Active", variant="active") }}
+                            {% else %}
+                                {{ status_badge("Inactive", variant="neutral") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ member.last_used_at.strftime('%Y-%m-%d %H:%M') if member.last_used_at else 'Never' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                <form method="post" action="/admin/notifications/oncall-rotations/{{ rotation.id }}/members/{{ member.id }}/delete" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Remove this member?')"
+                                            class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/20 dark:hover:text-rose-400 transition-colors"
+                                            title="Remove Member">
+                                        {{ icon_delete() }}
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No members in this rotation yet.
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Add Member Form #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-rose-50 to-pink-50 px-6 py-4 dark:border-slate-700 dark:from-rose-900/20 dark:to-pink-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Add Member</h3>
+        </div>
+        <form method="post" action="/admin/notifications/oncall-rotations/{{ rotation.id }}/members" class="space-y-4 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-3">
+                <div>
+                    <label for="member_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Name</label>
+                    <input type="text" id="member_name" name="member_name" required placeholder="e.g. John Doe"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="member_contact" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Contact</label>
+                    <input type="text" id="member_contact" name="member_contact" required placeholder="email or phone"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="member_priority" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Priority</label>
+                    <input type="number" id="member_priority" name="member_priority" value="0" min="0"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Lower number = higher priority</p>
+                </div>
+            </div>
+
+            <div class="flex justify-end pt-2">
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                    Add Member
+                </button>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

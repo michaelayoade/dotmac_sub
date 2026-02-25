@@ -5,22 +5,38 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.domain_settings import SettingDomain
+from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
 from app.services import (
     billing as billing_service,
 )
+from app.services import branding_storage as branding_storage_service
+from app.services import email as email_service
+from app.services import file_upload as file_upload_service
 from app.services import (
     rbac as rbac_service,
 )
 from app.services import (
     scheduler as scheduler_service,
 )
+from app.services import settings_spec
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
 from app.services import (
     web_system_api_key_mutations as web_system_api_key_mutations_service,
@@ -31,6 +47,7 @@ from app.services import web_system_billing_forms as web_system_billing_forms_se
 from app.services import web_system_common as web_system_common_service
 from app.services import web_system_form_views as web_system_form_views_service
 from app.services import web_system_health as web_system_health_service
+from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
 )
@@ -46,7 +63,7 @@ from app.services import web_system_users as web_system_users_service
 from app.services import web_system_webhook_forms as web_system_webhook_forms_service
 from app.services import web_system_webhooks as web_system_webhooks_service
 from app.services.auth_dependencies import require_permission
-from app.web.request_parsing import parse_form_data
+from app.web.request_parsing import parse_form_data, parse_json_body
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/system", tags=["web-admin-system"])
@@ -102,6 +119,8 @@ def _workflow_context(request: Request, db: Session, error: str | None = None):
 def system_overview(request: Request, db: Session = Depends(get_db)):
     """System settings overview."""
     from app.web.admin import get_current_user, get_sidebar_stats
+
+    dashboard = web_system_overview_service.get_dashboard_stats(db)
     return templates.TemplateResponse(
         "admin/system/index.html",
         {
@@ -110,6 +129,7 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            **dashboard,
         },
     )
 
@@ -120,10 +140,13 @@ def users_list(
     search: str | None = None,
     role: str | None = None,
     status: str | None = None,
+    filters: str | None = None,
+    order_by: str | None = Query("last_name"),
+    order_dir: str | None = Query("asc"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    per_page: int = Query(500, ge=10, le=500),
     offset: int | None = Query(None, ge=0),
-    limit: int | None = Query(None, ge=5, le=100),
+    limit: int | None = Query(None, ge=5, le=500),
     db: Session = Depends(get_db),
 ):
     """List system users."""
@@ -137,14 +160,22 @@ def users_list(
         search=search,
         role=role,
         status=status,
+        filters=filters,
+        order_by=order_by,
+        order_dir=order_dir,
         offset=offset,
         limit=limit,
     )
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            "admin/system/users/_table_rows.html",
-            {"request": request, "users": state["users"]},
+            "admin/system/users/_table_content.html",
+            {
+                "request": request,
+                **state,
+                "htmx_url": "/admin/system/users/filter",
+                "htmx_target": "users-table-content",
+            },
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -154,11 +185,12 @@ def users_list(
             "request": request,
             **state,
             "htmx_url": "/admin/system/users/filter",
-            "htmx_target": "users-table-body",
+            "htmx_target": "users-table-content",
             "active_page": "users",
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            "user_type_options": state["user_type_options"],
         },
     )
 
@@ -169,8 +201,11 @@ def users_search(
     search: str | None = None,
     role: str | None = None,
     status: str | None = None,
+    filters: str | None = None,
+    order_by: str | None = Query("last_name"),
+    order_dir: str | None = Query("asc"),
     offset: int = Query(0, ge=0),
-    limit: int = Query(25, ge=5, le=100),
+    limit: int = Query(500, ge=5, le=500),
     db: Session = Depends(get_db),
 ):
     state = web_system_users_service.build_users_page_state(
@@ -178,12 +213,20 @@ def users_search(
         search=search,
         role=role,
         status=status,
+        filters=filters,
+        order_by=order_by,
+        order_dir=order_dir,
         offset=offset,
         limit=limit,
     )
     return templates.TemplateResponse(
-        "admin/system/users/_table_rows.html",
-        {"request": request, "users": state["users"]},
+        "admin/system/users/_table_content.html",
+        {
+            "request": request,
+            **state,
+            "htmx_url": "/admin/system/users/filter",
+            "htmx_target": "users-table-content",
+        },
     )
 
 
@@ -193,8 +236,11 @@ def users_filter(
     search: str | None = None,
     role: str | None = None,
     status: str | None = None,
+    filters: str | None = None,
+    order_by: str | None = Query("last_name"),
+    order_dir: str | None = Query("asc"),
     offset: int = Query(0, ge=0),
-    limit: int = Query(25, ge=5, le=100),
+    limit: int = Query(500, ge=5, le=500),
     db: Session = Depends(get_db),
 ):
     state = web_system_users_service.build_users_page_state(
@@ -202,12 +248,20 @@ def users_filter(
         search=search,
         role=role,
         status=status,
+        filters=filters,
+        order_by=order_by,
+        order_dir=order_dir,
         offset=offset,
         limit=limit,
     )
     return templates.TemplateResponse(
-        "admin/system/users/_table_rows.html",
-        {"request": request, "users": state["users"]},
+        "admin/system/users/_table_content.html",
+        {
+            "request": request,
+            **state,
+            "htmx_url": "/admin/system/users/filter",
+            "htmx_target": "users-table-content",
+        },
     )
 
 
@@ -285,6 +339,69 @@ def user_profile_update(
     return templates.TemplateResponse("admin/system/profile.html", context)
 
 
+@router.post("/users/bulk/user-type", dependencies=[Depends(require_permission("rbac:assign"))])
+def users_bulk_set_user_type(
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    user_ids = data.get("user_ids", [])
+    user_type = data.get("user_type")
+    if not user_ids or not isinstance(user_ids, list):
+        raise HTTPException(status_code=400, detail="user_ids is required")
+    if not user_type or not isinstance(user_type, str):
+        raise HTTPException(status_code=400, detail="user_type is required")
+
+    updated = web_system_user_mutations_service.bulk_set_user_type(
+        db,
+        user_ids=[str(item) for item in user_ids],
+        user_type=user_type,
+    )
+    return {
+        "message": f"Updated user type for {updated} users.",
+        "updated_count": updated,
+    }
+
+
+@router.post("/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))])
+def users_bulk_delete(
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    user_ids = data.get("user_ids", [])
+    if not user_ids or not isinstance(user_ids, list):
+        raise HTTPException(status_code=400, detail="user_ids is required")
+
+    deleted, skipped = web_system_user_mutations_service.bulk_delete_user_records(
+        db,
+        user_ids=[str(item) for item in user_ids],
+    )
+    return {
+        "message": f"Deleted {deleted} users. Skipped {skipped}.",
+        "deleted_count": deleted,
+        "skipped_count": skipped,
+    }
+
+
+@router.post("/users/bulk/invite", dependencies=[Depends(require_permission("rbac:assign"))])
+def users_bulk_invite(
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    user_ids = data.get("user_ids", [])
+    if not user_ids or not isinstance(user_ids, list):
+        raise HTTPException(status_code=400, detail="user_ids is required")
+
+    sent, failed = web_system_user_mutations_service.bulk_send_user_invites(
+        db,
+        user_ids=[str(item) for item in user_ids],
+    )
+    return {
+        "message": f"Sent {sent} invite(s). Failed {failed}.",
+        "sent_count": sent,
+        "failed_count": failed,
+    }
+
+
 @router.get("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
 def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -334,6 +451,7 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
             "current_role_ids": edit_data["current_role_ids"],
             "all_permissions": edit_data["all_permissions"],
             "direct_permission_ids": edit_data["direct_permission_ids"],
+            "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
             "can_update_password": web_system_common_service.is_admin_request(request),
             "active_page": "users",
             "active_menu": "system",
@@ -362,6 +480,7 @@ def user_edit_submit(
     parsed = web_system_user_edit_service.parse_edit_form(form_data)
     display_name = cast(str | None, parsed["display_name"])
     phone = cast(str | None, parsed["phone"])
+    user_type = cast(str | None, parsed["user_type"])
     is_active = cast(str | None, parsed["is_active"])
     role_ids = cast(list[str], parsed["role_ids"])
     direct_permission_ids = cast(list[str], parsed["direct_permission_ids"])
@@ -378,6 +497,7 @@ def user_edit_submit(
             display_name=display_name,
             email=str(parsed["email"]),
             phone=phone,
+            user_type=user_type,
             is_active=web_system_common_service.form_bool(is_active),
             role_ids=role_ids,
             direct_permission_ids=direct_permission_ids,
@@ -399,6 +519,7 @@ def user_edit_submit(
                 "current_role_ids": edit_data["current_role_ids"],
                 "all_permissions": edit_data["all_permissions"],
                 "direct_permission_ids": edit_data["direct_permission_ids"],
+                "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
                 "can_update_password": web_system_common_service.is_admin_request(request),
                 "active_page": "users",
                 "active_menu": "system",
@@ -435,16 +556,60 @@ def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_d
 
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_reset_password(request: Request, user_id: str, db: Session = Depends(get_db)):
-    temp_password = web_system_user_mutations_service.reset_user_password(db, user_id=user_id)
+    try:
+        note = web_system_user_mutations_service.send_password_reset_link_for_user(
+            db,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        note = str(exc)
+    success = "success" if "sent" in note.lower() else "error"
     trigger = {
         "showToast": {
-            "type": "success",
+            "type": success,
             "title": "Password reset",
-            "message": f"Temporary password: {temp_password}",
-            "duration": 12000,
+            "message": note,
+            "duration": 8000,
         }
     }
-    return Response(status_code=204, headers={"HX-Trigger": json.dumps(trigger)})
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Trigger": json.dumps(trigger)})
+    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.get("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+def user_reset_password_get_fallback(user_id: str):
+    """Fallback for auth-refresh GET redirect on reset-password action URLs."""
+    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.post("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_db)):
+    try:
+        note = web_system_user_mutations_service.send_user_invite_for_user(
+            db,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        note = str(exc)
+    success = "success" if "sent" in note.lower() else "error"
+    trigger = {
+        "showToast": {
+            "type": success,
+            "title": "User invite",
+            "message": note,
+            "duration": 8000,
+        }
+    }
+    if request.headers.get("HX-Request"):
+        return Response(status_code=204, headers={"HX-Trigger": json.dumps(trigger)})
+    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
+
+
+@router.get("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+def user_send_invite_get_fallback(user_id: str):
+    """Fallback for auth-refresh GET redirect on invite action URLs."""
+    return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
 @router.post("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
@@ -454,24 +619,30 @@ def user_create(
     last_name: str = Form(...),
     email: str = Form(...),
     role_id: str = Form(...),
+    user_type: str = Form("system_user"),
     send_invite: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    subscriber = None
     try:
-        web_system_user_mutations_service.create_user_with_role_and_password(
+        subscriber, _ = web_system_user_mutations_service.create_user_with_role_and_password(
             db,
             first_name=first_name,
             last_name=last_name,
             email=email,
             role_id=role_id,
+            user_type=user_type,
         )
     except IntegrityError as exc:
         db.rollback()
         return web_system_common_service.error_banner(web_system_common_service.humanize_integrity_error(exc))
 
     note = "User created. Ask the user to reset their password."
-    if send_invite:
-        note = web_system_user_mutations_service.send_user_invite(db, email=email)
+    if send_invite and subscriber is not None:
+        note = web_system_user_mutations_service.send_user_invite_for_user(
+            db,
+            user_id=str(subscriber.id),
+        )
     return HTMLResponse(
         '<div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">'
         f"{note}"
@@ -1224,6 +1395,285 @@ def settings_update(
         "admin/system/settings.html",
         context,
     )
+
+
+@router.post(
+    "/settings/branding",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_branding_update(
+    request: Request,
+    main_logo_url: str | None = Form(None),
+    dark_logo_url: str | None = Form(None),
+    favicon_url: str | None = Form(None),
+    remove_main_logo: str | None = Form(None),
+    remove_dark_logo: str | None = Form(None),
+    remove_favicon: str | None = Form(None),
+    main_logo_file: UploadFile | None = File(None),
+    dark_logo_file: UploadFile | None = File(None),
+    favicon_file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """Update sidebar branding assets via URL or file upload."""
+    domain = SettingDomain.comms
+    from app.web.admin import get_current_user as get_admin_current_user
+
+    def _is_local_branding_path(value: str) -> bool:
+        return value.startswith("/static/branding/")
+
+    def _validate_url(url_value: str) -> str:
+        candidate = url_value.strip()
+        if not candidate:
+            return ""
+        if (
+            candidate.startswith("http://")
+            or candidate.startswith("https://")
+            or candidate.startswith("/static/")
+            or candidate.startswith("/branding/assets/")
+        ):
+            return candidate
+        raise ValueError(
+            "Branding URLs must start with http://, https://, /static/, or /branding/assets/."
+        )
+
+    def _resolve_next_value(
+        *,
+        key: str,
+        incoming_url: str | None,
+        remove_requested: bool,
+        incoming_file: UploadFile | None,
+        subdir: str,
+        prefix: str,
+    ) -> tuple[str, str]:
+        current_raw = settings_spec.resolve_value(db, domain, key)
+        current_value = str(current_raw).strip() if current_raw else ""
+        next_value = current_value
+
+        if remove_requested:
+            return current_value, ""
+
+        if incoming_file and incoming_file.filename:
+            file_bytes = incoming_file.file.read()
+            if not file_bytes:
+                raise ValueError("Uploaded file is empty.")
+            file_record = branding_storage_service.upload_branding_asset(
+                db=db,
+                setting_key=key,
+                file_data=file_bytes,
+                content_type=incoming_file.content_type,
+                filename=incoming_file.filename,
+                uploaded_by=(get_admin_current_user(request) or {}).get("subscriber_id"),
+            )
+            next_value = branding_storage_service.branding_url_for_file(file_record.id)
+        else:
+            validated_url = _validate_url(incoming_url or "")
+            if validated_url:
+                next_value = validated_url
+
+        return current_value, next_value
+
+    def _persist_setting(key: str, value: str) -> None:
+        payload = DomainSettingUpdate(
+            value_type=SettingValueType.string,
+            value_text=value,
+            value_json=None,
+            is_secret=False,
+            is_active=True,
+        )
+        settings_spec.DOMAIN_SETTINGS_SERVICE[domain].upsert_by_key(db, key, payload)
+
+    try:
+        assets = [
+            (
+                web_system_settings_views_service.SIDEBAR_LOGO_SETTING_KEY,
+                main_logo_url,
+                web_system_common_service.form_bool(remove_main_logo),
+                main_logo_file,
+                "sidebar",
+                "main_logo",
+            ),
+            (
+                web_system_settings_views_service.SIDEBAR_LOGO_DARK_SETTING_KEY,
+                dark_logo_url,
+                web_system_common_service.form_bool(remove_dark_logo),
+                dark_logo_file,
+                "sidebar",
+                "dark_logo",
+            ),
+            (
+                web_system_settings_views_service.FAVICON_SETTING_KEY,
+                favicon_url,
+                web_system_common_service.form_bool(remove_favicon),
+                favicon_file,
+                "favicon",
+                "favicon",
+            ),
+        ]
+
+        updates: list[tuple[str, str, str]] = []
+        for key, url_value, remove_flag, file_value, subdir, prefix in assets:
+            current_value, next_value = _resolve_next_value(
+                key=key,
+                incoming_url=url_value,
+                remove_requested=remove_flag,
+                incoming_file=file_value,
+                subdir=subdir,
+                prefix=prefix,
+            )
+            updates.append((key, current_value, next_value))
+
+        for key, _current, next_value in updates:
+            _persist_setting(key, next_value)
+
+        for _key, current_value, next_value in updates:
+            if not current_value or current_value == next_value:
+                continue
+            if branding_storage_service.is_managed_branding_url(current_value):
+                branding_storage_service.delete_managed_branding_url(db, current_value)
+                continue
+            if _is_local_branding_path(current_value):
+                upload = file_upload_service.get_branding_upload()
+                upload.delete_by_url(current_value, "/static/branding/")
+
+        return RedirectResponse(url="/admin/system/settings?domain=branding", status_code=303)
+    except Exception as exc:
+        settings_context = web_system_settings_views_service.build_settings_context(db, "branding")
+        context = web_system_settings_views_service.build_settings_page_context(
+            request,
+            db,
+            settings_context=settings_context,
+            extra={"errors": [str(exc)]},
+        )
+        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
+
+
+@router.post(
+    "/settings/smtp-senders",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_smtp_sender_upsert(
+    request: Request,
+    sender_key: str = Form(...),
+    host: str = Form(...),
+    port: int = Form(587),
+    username: str | None = Form(None),
+    password: str | None = Form(None),
+    from_email: str = Form(...),
+    from_name: str | None = Form(None),
+    use_tls: str | None = Form(None),
+    use_ssl: str | None = Form(None),
+    is_active: str | None = Form(None),
+    is_default: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        normalized_key = email_service.upsert_smtp_sender(
+            db,
+            sender_key=sender_key,
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            from_email=from_email,
+            from_name=from_name,
+            use_tls=web_system_common_service.form_bool(use_tls),
+            use_ssl=web_system_common_service.form_bool(use_ssl),
+            is_active=web_system_common_service.form_bool(is_active),
+        )
+        if web_system_common_service.form_bool(is_default):
+            email_service.set_default_smtp_sender_key(db, normalized_key)
+        return RedirectResponse(
+            url="/admin/system/settings?domain=notification#smtp-senders",
+            status_code=303,
+        )
+    except Exception as exc:
+        settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+        context = web_system_settings_views_service.build_settings_page_context(
+            request,
+            db,
+            settings_context=settings_context,
+            extra={"errors": [str(exc)]},
+        )
+        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
+
+
+@router.post(
+    "/settings/smtp-senders/default",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_smtp_sender_set_default(
+    sender_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    email_service.set_default_smtp_sender_key(db, sender_key)
+    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+
+
+@router.post(
+    "/settings/smtp-senders/{sender_key}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_smtp_sender_delete(sender_key: str, db: Session = Depends(get_db)):
+    normalized = sender_key.strip().lower()
+    email_service.deactivate_smtp_sender(db, normalized)
+    remaining = email_service.list_smtp_senders(db)
+    current_default = email_service.get_default_smtp_sender_key(db)
+    if current_default == normalized:
+        if remaining:
+            email_service.set_default_smtp_sender_key(db, str(remaining[0].get("sender_key", "default")))
+        else:
+            email_service.set_default_smtp_sender_key(db, "default")
+    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+
+
+@router.post(
+    "/settings/smtp-senders/{sender_key}/test",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_smtp_sender_test(
+    request: Request,
+    sender_key: str,
+    db: Session = Depends(get_db),
+):
+    normalized = sender_key.strip().lower()
+    config = email_service.get_smtp_config(db, sender_key=normalized)
+    ok, error = email_service.test_smtp_connection(config, db=db)
+    message = "SMTP connection successful." if ok else (error or "SMTP test failed.")
+    settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+    context = web_system_settings_views_service.build_settings_page_context(
+        request,
+        db,
+        settings_context=settings_context,
+        extra={
+            "smtp_test_result": {
+                "sender_key": normalized,
+                "ok": ok,
+                "message": message,
+            }
+        },
+    )
+    return templates.TemplateResponse("admin/system/settings.html", context)
+
+
+@router.post(
+    "/settings/smtp-senders/activities",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_smtp_sender_activities(
+    form=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    for activity_key, _ in email_service.SMTP_ACTIVITY_CHOICES:
+        field_name = f"activity_{activity_key}"
+        sender = form.get(field_name)
+        email_service.upsert_smtp_activity_mapping(db, activity_key, sender)
+    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
 
 
 @router.post(

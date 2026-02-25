@@ -4,8 +4,8 @@ This module provides services for managing fiber optic network components
 including strands, segments, splices, splice closures, trays, and termination points.
 """
 
-# Re-export fiber-related services from the legacy module
-from app.services.network._legacy import (
+# Re-export fiber-related services from the dedicated fiber services module
+from app.services.network.fiber_services import (
     FiberSegments,
     FiberSpliceClosures,
     FiberSplices,

@@ -89,6 +89,28 @@ document.addEventListener('alpine:init', () => {
                     this.dueAt = issueDate.toISOString().split('T')[0];
                 }
             });
+
+            this.bindAccountField();
+        },
+
+        bindAccountField() {
+            const sync = () => {
+                const accountField = this.$el.querySelector("[name='account_id']");
+                if (accountField) {
+                    this.accountId = accountField.value || "";
+                }
+            };
+
+            sync();
+            this.$el.addEventListener("change", (event) => {
+                const target = event && event.target;
+                if (target && target.name === "account_id") {
+                    this.accountId = target.value || "";
+                }
+            });
+
+            // HTMX swaps account selector markup after customer changes.
+            this.$el.addEventListener("htmx:afterSwap", sync);
         },
 
         // Line item management

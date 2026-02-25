@@ -20,6 +20,21 @@
                     <span class="font-mono">{{ device.ip_address }}</span>
                     {% if device.model %} &middot; {{ device.model }}{% endif %}
                 </p>
+                <div class="mt-2">
+                    {% if ping_status and ping_status.state == 'reachable' %}
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                        <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>{{ ping_status.label }}
+                    </span>
+                    {% elif ping_status and ping_status.state == 'unreachable' %}
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">
+                        <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>{{ ping_status.label }}
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                        Ping unknown
+                    </span>
+                    {% endif %}
+                </div>
             </div>
         </div>
         <div class="flex items-center gap-2">
@@ -392,15 +407,27 @@
                     <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS</h2>
                 </div>
                 <div class="p-6">
-                    {% if device.radius_secret %}
+                    {% if device.shared_secret %}
                     <div class="space-y-2 text-sm">
                         <p class="text-slate-600 dark:text-slate-300">
                             <span class="text-slate-400">Secret:</span>
                             <span class="font-mono">********</span>
                         </p>
-                        {% if device.nas_identifier %}
                         <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">NAS-ID:</span> {{ device.nas_identifier }}
+                            <span class="text-slate-400">NAS IP:</span> {{ device.nas_ip or '-' }}
+                        </p>
+                        {% if device.code %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">NAS-ID:</span> {{ device.code }}
+                        </p>
+                        {% endif %}
+                        {% if radius_pool_names %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Pools:</span> {{ radius_pool_names | join(', ') }}
+                        </p>
+                        {% else %}
+                        <p class="text-slate-500 dark:text-slate-400">
+                            Use only these pools, if selected (in service set as Any pool): none selected.
                         </p>
                         {% endif %}
                     </div>

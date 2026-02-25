@@ -1,0 +1,166 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_head, table_row, row_action, status_badge,
+    empty_state, action_button, animation_styles,
+    icon_plus, icon_view, icon_delete
+%}
+
+{% block title %}On-Call Rotations - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "pink") }}
+
+<div class="relative space-y-6">
+
+    {# Page Header #}
+    {% call(content) page_header(
+        "On-Call Rotations",
+        subtitle="Manage on-call schedules and team rotations",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+        color="rose",
+        breadcrumbs=[
+            {"label": "Notifications", "href": "/admin/notifications"},
+            {"label": "On-Call Rotations"}
+        ]
+    ) %}
+        {{ action_button("New Rotation", href="#create-form", icon=icon_plus("h-4 w-4"), variant="primary", color="rose") }}
+    {% endcall %}
+
+    {# Stats #}
+    {% set active_count = rotations | selectattr('is_active') | list | length %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" style="animation-delay: 50ms;">
+        {{ stats_card(
+            "Total Rotations",
+            total,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+            color="rose", color2="pink"
+        ) }}
+        {{ stats_card(
+            "Active",
+            active_count,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+    </div>
+
+    {# Data table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Rotation"},
+                    {"label": "Timezone"},
+                    {"label": "Members"},
+                    {"label": "Status"},
+                    {"label": "Created"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if rotations %}
+                    {% for rotation in rotations %}
+                    {% call table_row(color="rose") %}
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-sm">
+                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <a href="/admin/notifications/oncall-rotations/{{ rotation.id }}" class="font-semibold text-slate-900 hover:text-rose-600 dark:text-white dark:hover:text-rose-400">
+                                        {{ rotation.name }}
+                                    </a>
+                                    {% if rotation.notes %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ rotation.notes }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-mono text-slate-600 dark:text-slate-300">
+                            {{ rotation.timezone or 'UTC' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ rotation.members | length if rotation.members else 0 }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if rotation.is_active %}
+                                {{ status_badge("Active", variant="active") }}
+                            {% else %}
+                                {{ status_badge("Inactive", variant="neutral") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ rotation.created_at.strftime('%Y-%m-%d') if rotation.created_at else 'N/A' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href="/admin/notifications/oncall-rotations/" ~ rotation.id, icon=icon_view(), title="View Details", color="rose") }}
+                                <form method="post" action="/admin/notifications/oncall-rotations/{{ rotation.id }}/delete" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Delete this rotation?')"
+                                            class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/20 dark:hover:text-rose-400 transition-colors"
+                                            title="Delete">
+                                        {{ icon_delete() }}
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No on-call rotations configured",
+                        message="Create a rotation to manage on-call schedules for alert escalation",
+                        icon='<svg class="h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+                        color="rose",
+                        action_label="New Rotation",
+                        action_href="#create-form",
+                        colspan=6
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Inline Create Form #}
+    <div id="create-form" class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-rose-50 to-pink-50 px-6 py-4 dark:border-slate-700 dark:from-rose-900/20 dark:to-pink-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Create Rotation</h3>
+        </div>
+        <form method="post" action="/admin/notifications/oncall-rotations" class="space-y-4 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Rotation Name</label>
+                    <input type="text" id="name" name="name" required placeholder="e.g. NOC Primary"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="timezone" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Timezone</label>
+                    <input type="text" id="timezone" name="timezone" value="UTC" placeholder="UTC"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                <textarea id="notes" name="notes" rows="2" placeholder="Optional notes"
+                          class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+            </div>
+
+            <div class="flex justify-end pt-2">
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                    Create Rotation
+                </button>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

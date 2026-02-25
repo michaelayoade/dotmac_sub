@@ -10,6 +10,7 @@ from app.models.subscriber import (
     Organization,
     Reseller,
     Subscriber,
+    SubscriberCategory,
     SubscriberCustomField,
 )
 from app.schemas.subscriber import (
@@ -165,9 +166,14 @@ class Subscribers(ListResponseMixin):
             if not subscriber:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
             data = payload.model_dump(exclude_unset=True, exclude={"person_id"})
+            category = data.pop("category", None)
             data.pop("organization_id", None)
             for key, value in data.items():
                 setattr(subscriber, key, value)
+            if category is not None:
+                subscriber.category = (
+                    category if isinstance(category, SubscriberCategory) else str(category)
+                )
             if not subscriber.subscriber_number:
                 generated = numbering.generate_number(
                     db,
@@ -180,11 +186,24 @@ class Subscribers(ListResponseMixin):
                 )
                 if generated:
                     subscriber.subscriber_number = generated
+            if not subscriber.account_number:
+                generated_account = numbering.generate_number(
+                    db,
+                    SettingDomain.subscriber,
+                    "account_number",
+                    "account_number_enabled",
+                    "account_number_prefix",
+                    "account_number_padding",
+                    "account_number_start",
+                )
+                if generated_account:
+                    subscriber.account_number = generated_account
             db.commit()
             db.refresh(subscriber)
             return subscriber
 
         data = payload.model_dump()
+        category = data.pop("category", None)
         data.pop("organization_id", None)
         if not data.get("subscriber_number"):
             generated = numbering.generate_number(
@@ -198,7 +217,23 @@ class Subscribers(ListResponseMixin):
             )
             if generated:
                 data["subscriber_number"] = generated
+        if not data.get("account_number"):
+            generated_account = numbering.generate_number(
+                db,
+                SettingDomain.subscriber,
+                "account_number",
+                "account_number_enabled",
+                "account_number_prefix",
+                "account_number_padding",
+                "account_number_start",
+            )
+            if generated_account:
+                data["account_number"] = generated_account
         subscriber = Subscriber(**data)
+        if category is not None:
+            subscriber.category = (
+                category if isinstance(category, SubscriberCategory) else str(category)
+            )
         db.add(subscriber)
         db.commit()
         db.refresh(subscriber)
@@ -273,9 +308,14 @@ class Subscribers(ListResponseMixin):
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
         data = payload.model_dump(exclude_unset=True)
+        category = data.pop("category", None)
         data.pop("organization_id", None)
         for key, value in data.items():
             setattr(subscriber, key, value)
+        if category is not None:
+            subscriber.category = (
+                category if isinstance(category, SubscriberCategory) else str(category)
+            )
         db.commit()
         db.refresh(subscriber)
 
@@ -348,6 +388,108 @@ class Subscribers(ListResponseMixin):
             elif normalized == "organization":
                 query = query.filter(Subscriber.organization_id.is_not(None))
         return query.scalar() or 0
+
+    @staticmethod
+    def get_dashboard_stats(db: Session) -> dict:
+        """Build subscriber dashboard stats for admin overview.
+
+        Returns:
+            Dictionary with active_count, new_this_month, suspended_count,
+            churn_rate, subscriber_status_chart, signup_trend, and
+            recent_subscribers.
+        """
+        import calendar
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        all_subs = db.query(Subscriber).all()
+        total = len(all_subs)
+        active_count = sum(1 for s in all_subs if s.is_active)
+        inactive_count = total - active_count
+
+        # New this month
+        new_this_month = sum(
+            1 for s in all_subs
+            if s.created_at is not None and s.created_at >= month_start
+        )
+
+        # Suspended (subscribers with status=suspended on their account)
+        from app.models.subscriber import SubscriberStatus as SubStatus
+
+        suspended_count = 0
+        canceled_count = 0
+        for s in all_subs:
+            acct_status = getattr(s, "status", None)
+            if acct_status == SubStatus.suspended:
+                suspended_count += 1
+            elif acct_status == SubStatus.canceled:
+                canceled_count += 1
+
+        # Churn rate: canceled in last 30 days / active at start of period
+        thirty_days_ago = now - timedelta(days=30)
+        churned_recent = sum(
+            1 for s in all_subs
+            if (
+                getattr(s, "status", None) == SubStatus.canceled
+                and s.updated_at is not None
+                and s.updated_at >= thirty_days_ago
+            )
+        )
+        active_at_start = active_count + churned_recent
+        churn_rate = (
+            round(churned_recent / active_at_start * 100, 1)
+            if active_at_start > 0
+            else 0.0
+        )
+
+        # Status chart
+        subscriber_status_chart = {
+            "labels": ["Active", "Suspended", "Canceled", "Inactive"],
+            "values": [active_count, suspended_count, canceled_count, inactive_count],
+            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+        }
+
+        # Signup trend — last 12 months
+        labels: list[str] = []
+        values: list[int] = []
+        for i in range(11, -1, -1):
+            month = now.month - i
+            year = now.year
+            while month <= 0:
+                month += 12
+                year -= 1
+            labels.append(calendar.month_abbr[month])
+            count = sum(
+                1 for s in all_subs
+                if (
+                    s.created_at is not None
+                    and s.created_at.year == year
+                    and s.created_at.month == month
+                )
+            )
+            values.append(count)
+
+        signup_trend = {"labels": labels, "values": values}
+
+        # Recent subscribers
+        recent = sorted(
+            all_subs,
+            key=lambda s: s.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )[:10]
+
+        return {
+            "active_count": active_count,
+            "total_count": total,
+            "new_this_month": new_this_month,
+            "suspended_count": suspended_count,
+            "churn_rate": churn_rate,
+            "subscriber_status_chart": subscriber_status_chart,
+            "signup_trend": signup_trend,
+            "recent_subscribers": recent,
+        }
 
 
 class Accounts(ListResponseMixin):

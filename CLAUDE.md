@@ -74,6 +74,12 @@ app/
 │   └── public/        # Public/legal pages
 ├── models/            # SQLAlchemy ORM models
 ├── services/          # ALL business logic lives here
+│   ├── billing/       #   Invoices, payments, credit notes, tax, ledger
+│   ├── catalog/       #   Offers, subscriptions, add-ons, RADIUS profiles
+│   ├── network/       #   OLT, CPE, IP management
+│   ├── events/        #   Event dispatcher, types, handler chains
+│   ├── web_*.py       #   Web UI context builders (pair with web/admin/)
+│   └── *.py           #   Domain services (subscriber, nas, provisioning, ...)
 ├── schemas/           # Pydantic request/response models
 ├── tasks/             # Celery background tasks
 ├── validators/        # Input validation utilities

@@ -3,7 +3,10 @@
 Provides services for Offers, OfferPrices, OfferVersions, and OfferVersionPrices.
 """
 
+import logging
+
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
@@ -19,6 +22,8 @@ from app.models.catalog import (
     OfferVersionPrice,
     PriceType,
     ServiceType,
+    Subscription,
+    SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
 from app.schemas.catalog import (
@@ -36,10 +41,89 @@ from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
+logger = logging.getLogger(__name__)
+
 
 class Offers(CRUDManager[CatalogOffer]):
     model = CatalogOffer
     not_found_detail = "Offer not found"
+
+    @staticmethod
+    def get_dashboard_stats(db: Session) -> dict:
+        """Return catalog dashboard KPIs, charts, and popular plans."""
+        total_count = db.query(func.count(CatalogOffer.id)).scalar() or 0
+        active_count = (
+            db.query(func.count(CatalogOffer.id))
+            .filter(CatalogOffer.status == OfferStatus.active)
+            .scalar()
+            or 0
+        )
+        archived_count = (
+            db.query(func.count(CatalogOffer.id))
+            .filter(CatalogOffer.status == OfferStatus.archived)
+            .scalar()
+            or 0
+        )
+
+        total_subscriptions = (
+            db.query(func.count(Subscription.id))
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .scalar()
+            or 0
+        )
+
+        # Subscriptions by plan (top 10)
+        plan_rows = (
+            db.execute(
+                select(CatalogOffer.name, func.count(Subscription.id))
+                .join(Subscription, Subscription.offer_id == CatalogOffer.id)
+                .where(Subscription.status == SubscriptionStatus.active)
+                .group_by(CatalogOffer.id, CatalogOffer.name)
+                .order_by(func.count(Subscription.id).desc())
+                .limit(10)
+            )
+            .all()
+        )
+        subscriptions_by_plan = {
+            "labels": [row[0] for row in plan_rows],
+            "values": [row[1] for row in plan_rows],
+        }
+
+        # Recent offers (last 10)
+        recent_offers = (
+            db.query(CatalogOffer)
+            .order_by(CatalogOffer.created_at.desc())
+            .limit(10)
+            .all()
+        )
+
+        # Status chart
+        status_rows = (
+            db.execute(
+                select(CatalogOffer.status, func.count(CatalogOffer.id))
+                .group_by(CatalogOffer.status)
+            )
+            .all()
+        )
+        status_map = {row[0].value if hasattr(row[0], "value") else str(row[0]): row[1] for row in status_rows}
+        chart_labels = ["Active", "Inactive", "Archived", "Draft"]
+        chart_keys = ["active", "inactive", "archived", "draft"]
+        chart_colors = ["#10b981", "#f59e0b", "#94a3b8", "#64748b"]
+        chart_data = {
+            "labels": chart_labels,
+            "values": [status_map.get(k, 0) for k in chart_keys],
+            "colors": chart_colors,
+        }
+
+        return {
+            "total_count": total_count,
+            "active_count": active_count,
+            "archived_count": archived_count,
+            "total_subscriptions": total_subscriptions,
+            "subscriptions_by_plan": subscriptions_by_plan,
+            "chart_data": chart_data,
+            "recent_offers": recent_offers,
+        }
 
     @staticmethod
     def create(db: Session, payload: CatalogOfferCreate):

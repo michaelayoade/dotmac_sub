@@ -1,134 +1,107 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, status_badge, empty_state, action_button, animation_styles %}
 
 {% block title %}Notification Queue - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/system" class="hover:text-primary-600">System</a>
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">Notification Queue</span>
-            </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Notification Queue</h1>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">View and manage pending notifications</p>
-        </div>
-        <div class="flex items-center gap-3">
-            <a href="/admin/notifications/templates"
-               class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
-                Templates
-            </a>
-            <a href="/admin/notifications/history"
-               class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                History
-            </a>
-        </div>
-    </div>
+{{ ambient_background("rose", "pink") }}
 
-    <!-- Status Filters -->
-    <div class="flex flex-wrap items-center gap-2">
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="Notification Queue",
+        subtitle="View and manage pending notifications",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>',
+        color="rose",
+        color2="pink"
+    ) %}
+        <div class="flex items-center gap-2">
+            {{ action_button("Templates", "/admin/notifications/templates", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>', "secondary", "slate") }}
+            {{ action_button("History", "/admin/notifications/history", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', "secondary", "slate") }}
+        </div>
+    {% endcall %}
+
+    {# Status Filter Pills #}
+    {% if statuses %}
+    <div class="flex flex-wrap items-center gap-2 animate-fade-in-up" style="animation-delay: 50ms;">
+        <a href="/admin/notifications/queue{% if channel %}?channel={{ channel }}{% endif %}"
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors
+                  {% if not status %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400
+                  {% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+            All
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs dark:bg-slate-800">{{ total }}</span>
+        </a>
         {% for st in statuses %}
         <a href="/admin/notifications/queue?status={{ st }}{% if channel %}&channel={{ channel }}{% endif %}"
-           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors {{ 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300' if status == st else 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600' }}">
-            {{ st | capitalize }}
-            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs">{{ status_counts.get(st, 0) }}</span>
+           class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors
+                  {% if status == st %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400
+                  {% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+            {{ st|capitalize }}
+            <span class="rounded-full bg-white/50 px-1.5 py-0.5 text-xs dark:bg-slate-800">{{ status_counts.get(st, 0) }}</span>
         </a>
         {% endfor %}
     </div>
+    {% endif %}
 
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Recipient</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Channel</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subject/Body</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Scheduled</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% if notifications %}
-                    {% for notification in notifications %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-6 py-4">
-                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ notification.recipient or 'N/A' }}</span>
-                        </td>
-                        <td class="px-6 py-4">
-                            {% set channel_colors = {
-                                'email': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-                                'sms': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-                                'push': 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
-                                'whatsapp': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300',
-                                'webhook': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
-                            } %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ channel_colors.get(notification.channel.value, 'bg-slate-100 text-slate-600') }}">
-                                {{ notification.channel.value | capitalize }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4">
-                            {% if notification.subject %}
-                            <p class="text-sm font-medium text-slate-900 dark:text-white truncate max-w-xs">{{ notification.subject }}</p>
-                            {% endif %}
-                            <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ notification.body[:100] }}{% if notification.body|length > 100 %}...{% endif %}</p>
-                        </td>
-                        <td class="px-6 py-4">
-                            {% set status_class = {
-                                'queued': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
-                                'sending': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-                                'delivered': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-                                'failed': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
-                            } %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_class.get(notification.status.value, 'bg-slate-100 text-slate-600') }}">
-                                {{ notification.status.value | capitalize }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ notification.send_at.strftime('%b %d, %H:%M') if notification.send_at else 'Immediate' }}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    {% else %}
-                    <tr>
-                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
-                            <div class="flex flex-col items-center gap-2">
-                                <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                </svg>
-                                <p>No notifications in queue</p>
-                            </div>
-                        </td>
-                    </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
+    {# Notifications Table #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Queue", color="rose") %}
+        {% if notifications %}
+        {% call data_table() %}
+            {{ table_head(["Recipient", "Channel", "Subject / Body", "Status", "Scheduled"]) }}
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                {% for notification in notifications %}
+                {% call table_row(notification.id) %}
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="text-sm font-medium text-slate-900 dark:text-white">{{ notification.recipient or 'N/A' }}</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% set channel_status = {'email': 'info', 'sms': 'active', 'push': 'neutral', 'whatsapp': 'active', 'webhook': 'warning'} %}
+                        {{ status_badge(notification.channel.value|capitalize, channel_status.get(notification.channel.value, 'neutral'), size="sm") }}
+                    </td>
+                    <td class="px-6 py-4">
+                        {% if notification.subject %}
+                        <p class="text-sm font-medium text-slate-900 dark:text-white truncate max-w-xs">{{ notification.subject }}</p>
+                        {% endif %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ notification.body[:100] }}{% if notification.body|length > 100 %}...{% endif %}</p>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% set notif_status_map = {'queued': 'warning', 'sending': 'info', 'delivered': 'active', 'failed': 'error', 'canceled': 'neutral'} %}
+                        {{ status_badge(notification.status.value|capitalize, notif_status_map.get(notification.status.value, 'neutral'), size="sm") }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                        {{ notification.send_at.strftime('%b %d, %H:%M') if notification.send_at else 'Immediate' }}
+                    </td>
+                {% endcall %}
+                {% endfor %}
+            </tbody>
+        {% endcall %}
 
+        {# Pagination #}
         {% if total_pages > 1 %}
-        <div class="flex items-center justify-between border-t border-slate-200 bg-white px-6 py-3 dark:border-slate-700 dark:bg-slate-800">
-            <div class="text-sm text-slate-500 dark:text-slate-400">
-                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} notifications
-            </div>
+        <div class="mt-4 flex flex-col items-center justify-between gap-4 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total]|min }} of {{ total }} notifications
+            </p>
             <div class="flex items-center gap-2">
                 {% if page > 1 %}
                 <a href="?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}{% if channel %}&channel={{ channel }}{% endif %}"
-                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Previous
-                </a>
+                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
+                <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</span>
                 {% if page < total_pages %}
                 <a href="?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}{% if channel %}&channel={{ channel }}{% endif %}"
-                   class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Next
-                </a>
+                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>
         </div>
         {% endif %}
+        {% else %}
+        {{ empty_state("No notifications in queue", "Notifications will appear here when they are queued for delivery.") }}
+        {% endif %}
+    {% endcall %}
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

@@ -284,6 +284,7 @@ def _events_to_activities(
             else "System"
         )
         metadata = getattr(event, "metadata_", None) or {}
+        comment_text = str(metadata.get("comment") or "").strip()
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
         action_label = (event.action or "Activity").replace("_", " ").title()
@@ -294,11 +295,14 @@ def _events_to_activities(
             title = f"{entity_label} {action_label}"
         else:
             title = action_label
+        if comment_text:
+            description = f"{actor_name} · {comment_text}"
+        else:
+            description = f"{actor_name}" + (f" · {change_summary}" if change_summary else "")
         activities.append(
             {
                 "title": title,
-                "description": f"{actor_name}"
-                + (f" · {change_summary}" if change_summary else ""),
+                "description": description,
                 "occurred_at": event.occurred_at,
             }
         )

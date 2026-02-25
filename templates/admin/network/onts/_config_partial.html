@@ -1,0 +1,80 @@
+{# HTMX partial: ONT running config display #}
+{% if config_result and config_result.success and config_result.data %}
+<div class="space-y-4">
+    {# Device Info Section #}
+    {% if config_result.data.device_info %}
+    <div>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Device Info</h4>
+        <dl class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {% for key, value in config_result.data.device_info.items() %}
+            {% if value is not none %}
+            <div class="flex justify-between rounded-md bg-slate-50 px-3 py-1.5 dark:bg-slate-800/60">
+                <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                <dd class="text-xs font-mono text-slate-900 dark:text-white">{{ value }}</dd>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </dl>
+    </div>
+    {% endif %}
+
+    {# WAN Section #}
+    {% if config_result.data.wan %}
+    <div>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">WAN / IP</h4>
+        <dl class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {% for key, value in config_result.data.wan.items() %}
+            {% if value is not none %}
+            <div class="flex justify-between rounded-md bg-slate-50 px-3 py-1.5 dark:bg-slate-800/60">
+                <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                <dd class="text-xs font-mono text-slate-900 dark:text-white">{{ value }}</dd>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </dl>
+    </div>
+    {% endif %}
+
+    {# Optical Section #}
+    {% if config_result.data.optical %}
+    <div>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Optical</h4>
+        <dl class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {% for key, value in config_result.data.optical.items() %}
+            {% if value is not none %}
+            <div class="flex justify-between rounded-md bg-slate-50 px-3 py-1.5 dark:bg-slate-800/60">
+                <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                <dd class="text-xs font-mono text-slate-900 dark:text-white">{{ value }}</dd>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </dl>
+    </div>
+    {% endif %}
+
+    {# WiFi Section #}
+    {% if config_result.data.wifi %}
+    <div>
+        <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">WiFi</h4>
+        <dl class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {% for key, value in config_result.data.wifi.items() %}
+            {% if value is not none %}
+            <div class="flex justify-between rounded-md bg-slate-50 px-3 py-1.5 dark:bg-slate-800/60">
+                <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                <dd class="text-xs font-mono text-slate-900 dark:text-white">{{ value }}</dd>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </dl>
+    </div>
+    {% endif %}
+</div>
+{% elif config_result and not config_result.success %}
+<div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800/50 dark:bg-rose-900/20">
+    <p class="text-sm text-rose-700 dark:text-rose-300">{{ config_result.message }}</p>
+</div>
+{% else %}
+<div class="text-center py-6">
+    <p class="text-sm text-slate-500 dark:text-slate-400">No configuration data available.</p>
+</div>
+{% endif %}

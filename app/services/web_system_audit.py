@@ -30,10 +30,11 @@ def get_audit_page_data(
 ) -> dict[str, object]:
     """Return audit events view rows and pagination totals."""
     offset = (page - 1) * per_page
+    normalized_actor_id = _normalize_actor_id(actor_id)
 
     events = audit_service.audit_events.list(
         db=db,
-        actor_id=str(UUID(actor_id)) if actor_id else None,
+        actor_id=normalized_actor_id,
         actor_type=None,
         action=action if action else None,
         entity_type=entity_type if entity_type else None,
@@ -97,8 +98,8 @@ def get_audit_page_data(
     total_stmt = select(func.count()).select_from(AuditEvent).where(
         AuditEvent.is_active.is_(True)
     )
-    if actor_id:
-        total_stmt = total_stmt.where(AuditEvent.actor_id == UUID(actor_id))
+    if normalized_actor_id:
+        total_stmt = total_stmt.where(AuditEvent.actor_id == UUID(normalized_actor_id))
     if action:
         total_stmt = total_stmt.where(AuditEvent.action == action)
     if entity_type:
@@ -118,6 +119,20 @@ def get_audit_page_data(
 
 def _is_user_actor(actor_type) -> bool:
     return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
+
+
+def _normalize_actor_id(actor_id: str | None) -> str | None:
+    if not actor_id:
+        return None
+    value = actor_id.strip()
+    if not value:
+        return None
+    if value.lower() in {"none", "null", "undefined"}:
+        return None
+    try:
+        return str(UUID(value))
+    except ValueError:
+        return None
 
 
 def _resolve_actor_name(event, people: dict[str, Subscriber]) -> str:

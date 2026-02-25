@@ -60,6 +60,7 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
                 body_html=body,
                 body_text=None,
                 track=False,
+                activity="notification_queue",
             )
         except Exception as exc:
             success = False

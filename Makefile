@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check migrate dev docker-up docker-down docker-logs worker beat coverage clean
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean
 
 # Default target
 help: ## Show this help
@@ -20,6 +20,15 @@ security: ## Run bandit security scan
 	poetry run bandit -r app/ -c pyproject.toml -q
 
 check: lint type-check security ## Run all quality checks (lint + type-check + security)
+
+lint-file: ## Lint a single file (usage: make lint-file FILE=app/services/nas.py)
+	poetry run ruff check $(FILE)
+	poetry run ruff format --check $(FILE)
+
+type-check-file: ## Type-check a single file (usage: make type-check-file FILE=app/services/nas.py)
+	poetry run mypy $(FILE) --ignore-missing-imports
+
+check-file: lint-file type-check-file ## Lint + type-check a single file (usage: make check-file FILE=app/services/nas.py)
 
 # ─── Testing ──────────────────────────────────────────────
 

@@ -1,4 +1,10 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    table_head, table_row, row_actions, row_action, status_badge,
+    empty_state, action_button, animation_styles,
+    icon_plus, icon_view, icon_edit, icon_invoice
+%}
 
 {% block title %}Payments - Admin{% endblock %}
 
@@ -8,200 +14,113 @@
 {% endblock %}
 
 {% block content %}
-<!-- Ambient Background -->
-<div class="pointer-events-none fixed inset-0 overflow-hidden">
-    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-emerald-400/5 to-green-500/5 blur-3xl"></div>
-    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-amber-400/5 to-orange-500/5 blur-3xl"></div>
-</div>
+{{ ambient_background("emerald", "teal") }}
 
 <div class="relative space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-start gap-4">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-green-600 shadow-lg shadow-emerald-500/25">
-                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/>
-                </svg>
-            </div>
-            <div>
-                <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-1">
-                    <a href="/admin/billing" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Billing</a>
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    <span class="text-slate-900 dark:text-white font-medium">Payments</span>
-                </nav>
-                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Payments</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track all payment transactions and collections</p>
-            </div>
-        </div>
-        <div class="flex items-center gap-3">
-            <a href="/admin/billing/payments/import" class="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:-translate-y-0.5 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                Import
-            </a>
-            <a href="/admin/billing/payments/new" class="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
-                <svg class="h-5 w-5 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                Record Payment
-            </a>
-        </div>
-    </div>
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        page_heading|default("Payments"),
+        subtitle=page_subtitle|default("Track all payment transactions and collections"),
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+        color="emerald",
+        color2="teal",
+        breadcrumbs=[{"label": "Billing", "href": "/admin/billing"}, {"label": "Payments"}]
+    ) %}
+        {{ action_button("Import", href="/admin/billing/payments/import", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>', variant="secondary", color="emerald") }}
+        {{ action_button("Export CSV", href="/admin/billing/payments/export.csv?customer_ref=" ~ (customer_ref or '') ~ "&partner_id=" ~ (selected_partner_id or '') ~ "&status=" ~ (status or '') ~ "&method=" ~ (method or '') ~ "&search=" ~ (search or '') ~ "&date_range=" ~ (date_range or '') ~ "&unallocated_only=" ~ ('true' if unallocated_only else 'false'), icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>', variant="secondary", color="emerald") }}
+        {{ action_button("Unallocated", href="/admin/billing/payments/unallocated", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>', variant="secondary", color="emerald") }}
+        {{ action_button("Record Payment", href="/admin/billing/payments/new", icon=icon_plus("h-4 w-4"), variant="primary", color="amber", color2="orange") }}
+    {% endcall %}
 
-    <!-- Summary Stats -->
+    {# ── Summary Stats ── #}
     {% set total_payments = payments | sum(attribute='amount') if payments else 0 %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 0.1s;">
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-500/10 to-green-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Collected</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(total_payments) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All time payments</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-blue-500/10 to-indigo-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Completed</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'completed') | list | length if payments else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Successful transactions</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-yellow-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pending</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'pending') | list | length if payments else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Awaiting confirmation</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-red-500/10 to-rose-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Failed</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/30">
-                        <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'failed') | list | length if payments else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Needs review</p>
-            </div>
-        </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card(
+            "Total Collected",
+            "₦" ~ "{:,.2f}".format(total_payments),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card(
+            "Completed",
+            payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'succeeded') | list | length if payments else 0,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+        {{ stats_card(
+            "Pending",
+            payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'pending') | list | length if payments else 0,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="amber", color2="yellow"
+        ) }}
+        {{ stats_card(
+            "Failed",
+            payments | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'failed') | list | length if payments else 0,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="red", color2="rose"
+        ) }}
     </div>
 
-    <!-- Charts -->
-    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 0.2s;">
-        <!-- Payment Trend -->
-        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-                <div>
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Payment Trend</h2>
-                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Collections over time</p>
-                </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/30">
-                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
-                    </svg>
-                </div>
+    {# ── Charts ── #}
+    <div class="grid gap-6 lg:grid-cols-2">
+        {% call card("Payment Trend", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>', color="emerald") %}
+            <div class="chart-container" style="min-height: 260px;">
+                <canvas id="payment-trend-chart"></canvas>
             </div>
-            <div class="p-6">
-                <div class="chart-container" style="min-height: 260px;">
-                    <canvas id="payment-trend-chart"></canvas>
-                </div>
-                {% set payment_trend = payment_trend|default({'labels': ['Week 1', 'Week 2', 'Week 3', 'Week 4'], 'amounts': [0,0,0,0]}) %}
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('payment-trend-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: {{ payment_trend.labels | tojson | safe }},
-                        datasets: [{
-                            label: 'Payments Received',
-                            data: {{ payment_trend.amounts | tojson | safe }},
-                            borderColor: '#10b981',
-                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                            fill: true,
-                            tension: 0.4
-                        }]
-                    };
-                    const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-                    DotmacCharts.registerChart('payment-trend-chart', chart);
-                });
-                </script>
-            </div>
-        </div>
+            {% set payment_trend = payment_trend|default({'labels': ['Week 1', 'Week 2', 'Week 3', 'Week 4'], 'amounts': [0,0,0,0]}) %}
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('payment-trend-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: {{ payment_trend["labels"] | tojson | safe }},
+                    datasets: [{
+                        label: 'Payments Received',
+                        data: {{ payment_trend["amounts"] | tojson | safe }},
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                };
+                const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+                DotmacCharts.registerChart('payment-trend-chart', chart);
+            });
+            </script>
+        {% endcall %}
 
-        <!-- Payment Methods -->
-        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-                <div>
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Payment Methods</h2>
-                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Distribution by method</p>
-                </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 dark:bg-violet-900/30">
-                    <svg class="h-5 w-5 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/>
-                    </svg>
-                </div>
+        {% call card("Payment Methods", icon='<svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/></svg>', color="violet") %}
+            <div class="chart-container" style="min-height: 260px;">
+                <canvas id="payment-methods-chart"></canvas>
             </div>
-            <div class="p-6">
-                <div class="chart-container" style="min-height: 260px;">
-                    <canvas id="payment-methods-chart"></canvas>
-                </div>
-                {% set payment_methods = payment_methods|default({'labels': ['Bank Transfer', 'Card', 'Cash', 'Mobile'], 'values': [0,0,0,0]}) %}
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('payment-methods-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: {{ payment_methods["labels"] | tojson | safe }},
-                        values: {{ payment_methods["values"] | tojson | safe }},
-                        colors: ['#f59e0b', '#8b5cf6', '#10b981', '#06b6d4']
-                    };
-                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'right' });
-                    DotmacCharts.registerChart('payment-methods-chart', chart);
-                });
-                </script>
-            </div>
-        </div>
+            {% set payment_methods = payment_methods|default({'labels': ['Bank Transfer', 'Card', 'Cash', 'Mobile'], 'values': [0,0,0,0]}) %}
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('payment-methods-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: {{ payment_methods["labels"] | tojson | safe }},
+                    values: {{ payment_methods["values"] | tojson | safe }},
+                    colors: ['#f59e0b', '#8b5cf6', '#10b981', '#06b6d4']
+                };
+                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'right' });
+                DotmacCharts.registerChart('payment-methods-chart', chart);
+            });
+            </script>
+        {% endcall %}
     </div>
 
-    <!-- Filters -->
-    <div class="rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80 animate-fade-in-up" style="animation-delay: 0.3s;">
-        <form hx-get="/admin/billing/payments" hx-target="#payments-table" hx-trigger="submit, change from:select" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+    {# ── Filters ── #}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+        <form method="get" action="/admin/billing/payments{% if unallocated_only %}/unallocated{% endif %}" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>
                 <div class="relative">
                     <svg class="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
-                    <input type="text" name="search" placeholder="Search by transaction ID..."
-                           hx-get="/admin/billing/payments" hx-target="#payments-table" hx-trigger="keyup changed delay:300ms"
+                    <input type="text" name="search" placeholder="Search by memo/reference..."
+                           value="{{ search or '' }}"
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                 </div>
             </div>
@@ -212,59 +131,81 @@
                            placeholder="Search customers..."
                            class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                     <input type="hidden" name="customer_ref" data-typeahead-hidden
-                           hx-get="/admin/billing/payments" hx-target="#payments-table" hx-trigger="change" hx-include="closest form"
                            value="{{ customer_ref or '' }}">
                     <div data-typeahead-results></div>
                 </div>
             </div>
             <div class="w-full sm:w-44">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Partner</label>
+                <select name="partner_id" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="">All Partners</option>
+                    {% for partner in partner_options %}
+                    <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="w-full sm:w-44">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Status</label>
                 <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
                     <option value="">All Status</option>
-                    <option value="completed">Completed</option>
-                    <option value="pending">Pending</option>
-                    <option value="failed">Failed</option>
-                    <option value="refunded">Refunded</option>
+                    <option value="succeeded" {% if status == 'succeeded' %}selected{% endif %}>Completed</option>
+                    <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
+                    <option value="failed" {% if status == 'failed' %}selected{% endif %}>Failed</option>
+                    <option value="refunded" {% if status == 'refunded' %}selected{% endif %}>Refunded</option>
                 </select>
             </div>
             <div class="w-full sm:w-44">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Method</label>
                 <select name="method" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
                     <option value="">All Methods</option>
-                    <option value="bank_transfer">Bank Transfer</option>
-                    <option value="card">Card</option>
-                    <option value="cash">Cash</option>
-                    <option value="mobile">Mobile Money</option>
+                    <option value="transfer" {% if method == 'transfer' %}selected{% endif %}>Bank Transfer</option>
+                    <option value="card" {% if method == 'card' %}selected{% endif %}>Card</option>
+                    <option value="cash" {% if method == 'cash' %}selected{% endif %}>Cash</option>
+                    <option value="other" {% if method == 'other' %}selected{% endif %}>Other</option>
                 </select>
+            </div>
+            <div class="w-full sm:w-44">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Date Range</label>
+                <select name="date_range" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
+                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
+                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
+                    <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
+                </select>
+            </div>
+            <div class="w-full sm:w-auto">
+                <button type="submit" class="inline-flex w-full items-center justify-center rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-white hover:bg-amber-700 sm:w-auto">
+                    Apply
+                </button>
             </div>
         </form>
     </div>
 
-    <!-- Payments Table -->
-    <div id="payments-table" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 0.4s;">
+    {# ── Payments Table ── #}
+    <div id="payments-table" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead>
-                    <tr class="bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-slate-800/80 dark:to-slate-700/50">
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Transaction</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Account</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Amount</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Method</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Status</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Date</th>
-                        <th class="px-6 py-4 text-right text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Actions</th>
-                    </tr>
-                </thead>
+                {{ table_head([
+                    {"label": "Transaction"},
+                    {"label": "Account"},
+                    {"label": "Amount"},
+                    {"label": "Method"},
+                    {"label": "Narration"},
+                    {"label": "Status"},
+                    {"label": "Date"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if payments %}
                     {% for payment in payments %}
                     {% set status = payment.status | default('pending') %}
                     {% set status_val = status.value if status is not string else status %}
-                    <tr class="group transition-colors hover:bg-amber-50/50 dark:hover:bg-amber-900/10">
+                    {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if status_val == 'completed' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif status_val == 'pending' %}from-amber-100 to-yellow-100 text-amber-600 dark:from-amber-900/30 dark:to-yellow-900/30 dark:text-amber-400{% elif status_val == 'failed' %}from-red-100 to-rose-100 text-red-600 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
-                                    {% if status_val == 'completed' %}
+                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if status_val == 'succeeded' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif status_val == 'pending' %}from-amber-100 to-yellow-100 text-amber-600 dark:from-amber-900/30 dark:to-yellow-900/30 dark:text-amber-400{% elif status_val == 'failed' %}from-red-100 to-rose-100 text-red-600 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
+                                    {% if status_val == 'succeeded' %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     {% elif status_val == 'pending' %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -276,10 +217,10 @@
                                 </div>
                                 <div>
                                     <a href="/admin/billing/payments/{{ payment.id }}" class="font-mono text-sm font-semibold text-slate-900 dark:text-white hover:text-amber-600">
-                                        {{ payment.id | string | truncate(12, True, '') }}
+                                        {{ payment.display_number | default(payment.id | string | truncate(12, True, '')) }}
                                     </a>
-                                    {% if payment.reference %}
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.reference }}</p>
+                                    {% if payment.external_id %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.external_id }}</p>
                                     {% endif %}
                                 </div>
                             </div>
@@ -294,14 +235,14 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm font-bold {% if status_val == 'completed' %}text-emerald-600 dark:text-emerald-400{% elif status_val == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                            <span class="text-sm font-bold {% if status_val == 'succeeded' %}text-emerald-600 dark:text-emerald-400{% elif status_val == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-900 dark:text-white{% endif %}">
                                 ₦{{ "{:,.2f}".format(payment.amount or 0) }}
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% set method = payment.method | default('N/A') %}
+                            {% set method = payment.display_method | default('Other') %}
                             <div class="flex items-center gap-2">
-                                {% if method == 'bank_transfer' or method == 'Bank Transfer' %}
+                                {% if method == 'Bank' or method == 'Bank Transfer' %}
                                 <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
                                     <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                                 </div>
@@ -318,35 +259,21 @@
                                     <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                                 </div>
                                 {% endif %}
-                                <span class="text-sm text-slate-600 dark:text-slate-400">{{ method | title }}</span>
+                                <span class="text-sm text-slate-600 dark:text-slate-400">{{ method }}</span>
                             </div>
                         </td>
+                        <td class="max-w-xs truncate px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ payment.narration | default('-') }}</td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if status_val == 'completed' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                Completed
-                            </span>
+                            {% if status_val == 'succeeded' %}
+                            {{ status_badge("Completed", variant="paid") }}
                             {% elif status_val == 'pending' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                                Pending
-                            </span>
+                            {{ status_badge("Pending", variant="pending") }}
                             {% elif status_val == 'failed' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-                                Failed
-                            </span>
+                            {{ status_badge("Failed", variant="error") }}
                             {% elif status_val == 'refunded' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg>
-                                Refunded
-                            </span>
+                            {{ status_badge("Refunded", variant="inactive") }}
                             {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                {{ status_val | title }}
-                            </span>
+                            {{ status_badge(status_val | title, variant="default") }}
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
@@ -355,51 +282,81 @@
                             <p class="text-xs text-slate-400 dark:text-slate-500">{{ payment.created_at.strftime('%I:%M %p') }}</p>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <a href="/admin/billing/payments/{{ payment.id }}/edit" class="inline-flex items-center justify-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-amber-100 hover:text-amber-700 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-amber-900/30 dark:hover:text-amber-400">
-                                Edit
-                            </a>
-                        </td>
-                    </tr>
+                        {% call row_actions() %}
+                            {{ row_action(href="/admin/billing/payments/" ~ payment.id ~ "/edit", icon=icon_edit(), title="Edit", color="amber") }}
+                        {% endcall %}
+                    {% endcall %}
                     {% endfor %}
-                    {% else %}
-                    <tr>
-                        <td colspan="7" class="px-6 py-16 text-center">
-                            <div class="flex flex-col items-center">
-                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/>
-                                    </svg>
-                                </div>
-                                <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No payments found</p>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Record your first payment to get started</p>
-                                <a href="/admin/billing/payments/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 transition-colors">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                                    Record Payment
-                                </a>
+                    <tr class="bg-slate-50 dark:bg-slate-800/70">
+                        <td colspan="8" class="px-6 py-3">
+                            <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                                <span>Completed: {{ status_totals.succeeded.count }} (₦{{ "{:,.2f}".format(status_totals.succeeded.amount) }})</span>
+                                <span>Pending: {{ status_totals.pending.count }} (₦{{ "{:,.2f}".format(status_totals.pending.amount) }})</span>
+                                <span>Failed: {{ status_totals.failed.count }} (₦{{ "{:,.2f}".format(status_totals.failed.amount) }})</span>
+                                <span>Refunded: {{ status_totals.refunded.count }} (₦{{ "{:,.2f}".format(status_totals.refunded.amount) }})</span>
+                                <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
                             </div>
                         </td>
                     </tr>
+                    {% else %}
+                    {{ empty_state(
+                        title="No payments found",
+                        message="Record your first payment to get started",
+                        icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+                        color="emerald",
+                        action_label="Record Payment",
+                        action_href="/admin/billing/payments/new",
+                        colspan=8
+                    ) }}
                     {% endif %}
                 </tbody>
             </table>
         </div>
+        {% if total_pages and total_pages > 1 %}
+        {% set start_item = ((page - 1) * per_page) + 1 if total else 0 %}
+        {% set end_item = [page * per_page, total] | min if total else 0 %}
+        {% set base_path = '/admin/billing/payments/unallocated' if unallocated_only else '/admin/billing/payments' %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ start_item }}</span>
+                to <span class="font-medium text-slate-700 dark:text-slate-200">{{ end_item }}</span>
+                of <span class="font-medium text-slate-700 dark:text-slate-200">{{ total }}</span> results
+            </p>
+            <div class="flex items-center gap-1">
+                {% if page > 1 %}
+                <a href="{{ base_path }}?page={{ page - 1 }}&per_page={{ per_page }}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if method %}&method={{ method }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                </a>
+                {% else %}
+                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                </span>
+                {% endif %}
+
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-sm font-medium text-white">{{ p }}</span>
+                    {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
+                    <a href="{{ base_path }}?page={{ p }}&per_page={{ per_page }}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if method %}&method={{ method }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ p }}</a>
+                    {% elif p == page - 2 or p == page + 2 %}
+                    <span class="inline-flex h-9 w-9 items-center justify-center text-slate-400">...</span>
+                    {% endif %}
+                {% endfor %}
+
+                {% if page < total_pages %}
+                <a href="{{ base_path }}?page={{ page + 1 }}&per_page={{ per_page }}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if method %}&method={{ method }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+                {% else %}
+                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 
-<style>
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out backwards;
-}
-</style>
+{{ animation_styles() }}
 {% endblock %}

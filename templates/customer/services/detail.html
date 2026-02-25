@@ -5,6 +5,18 @@
 {% block content %}
 {% set status_value = subscription.status.value if subscription.status and subscription.status.value is defined else subscription.status %}
 <div class="space-y-6">
+    {% if request.query_params.get('plan_changed') == 'true' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/20">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+            </svg>
+            <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                Your plan has been changed to {{ current_offer.name if current_offer else 'the new plan' }}. The change is effective immediately.
+            </p>
+        </div>
+    </div>
+    {% endif %}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">

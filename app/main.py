@@ -1,3 +1,4 @@
+import logging
 import secrets
 from threading import Lock
 from time import monotonic
@@ -23,6 +24,7 @@ from app.api.deps import require_role, require_user_auth
 from app.api.domains import router as domains_router
 from app.api.external import router as external_router
 from app.api.fiber_plant import router as fiber_plant_router
+from app.api.files import router as files_router
 from app.api.geocoding import router as geocoding_router
 from app.api.gis import router as gis_router
 from app.api.imports import router as imports_router
@@ -37,6 +39,7 @@ from app.api.scheduler import router as scheduler_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
 from app.api.subscribers import router as subscriber_router
+from app.api.tables import router as tables_router
 from app.api.validation import router as validation_router
 from app.api.webhooks import router as webhooks_router
 from app.api.wireguard import public_router as wireguard_public_router
@@ -53,6 +56,7 @@ from app.logging import configure_logging
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
+from app.services.object_storage import ensure_storage_bucket
 from app.services.settings_seed import (
     seed_audit_settings,
     seed_auth_policy_settings,
@@ -87,6 +91,7 @@ from app.web_home import router as web_home_router
 from app.websocket.router import router as ws_router
 
 app = FastAPI(title="dotmac_sm API")
+logger = logging.getLogger(__name__)
 
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
@@ -256,7 +261,7 @@ async def csrf_middleware(request: Request, call_next):
 
     # Set CSRF cookie on responses if not present
     if generated_token:
-        set_csrf_cookie(response, generated_token)
+        set_csrf_cookie(response, generated_token, request)
 
     return response
 
@@ -341,6 +346,7 @@ def _include_api_router(router, dependencies=None):
 _include_api_router(notifications_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(external_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(billing_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(files_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(catalog_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(auth_router, dependencies=[Depends(require_role("admin"))])
 # Only include auth_flow at /api/v1 to avoid conflict with web /auth/login
@@ -349,6 +355,7 @@ _include_api_router(rbac_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(customers_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(search_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(domains_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(imports_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(audit_router)
@@ -394,6 +401,10 @@ def metrics():
 
 @app.on_event("startup")
 def _start_jobs():
+    try:
+        ensure_storage_bucket()
+    except Exception:
+        logger.exception("Failed to ensure storage bucket during startup")
     db = SessionLocal()
     try:
         seed_auth_settings(db)

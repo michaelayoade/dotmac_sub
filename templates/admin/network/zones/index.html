@@ -1,0 +1,146 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    table_head, table_row, row_actions, row_action,
+    icon_view, icon_edit, empty_state, animation_styles
+%}
+
+{% block title %}Network Zones - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        title="Network Zones",
+        subtitle="Organize infrastructure by geographic zone",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>',
+        color="blue",
+        color2="cyan",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Zones"}
+        ]
+    ) %}
+        <form method="GET" action="/admin/network/zones" class="contents">
+            <select id="status" name="status"
+                onchange="this.form.submit()"
+                class="block appearance-none rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 pr-10 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:focus:border-blue-500">
+                <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Status</option>
+                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+                <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
+            </select>
+        </form>
+        <a href="/admin/network/zones/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5">
+            <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+            Add Zone
+        </a>
+    {% endcall %}
+
+    {# ── Stats Cards ── #}
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card("Total Zones", stats.total,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>',
+            color="blue", color2="cyan"
+        ) }}
+        {{ stats_card("Active", stats.active,
+            icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-white"></span></span>',
+            color="emerald", color2="teal"
+        ) }}
+        {{ stats_card("Inactive", stats.inactive,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>',
+            color="slate"
+        ) }}
+    </div>
+
+    {# ── Zones Table ── #}
+    {% call card(color="blue", padding=False) %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Zone"},
+                    {"label": "Parent"},
+                    {"label": "ONTs"},
+                    {"label": "Splitters"},
+                    {"label": "FDH Cabinets"},
+                    {"label": "Status"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-200/60 dark:divide-slate-700/60">
+                    {% for zone in zones %}
+                    {% set zs = zone_stats.get(zone.id | string, {}) %}
+                    {% call table_row(color="blue") %}
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-cyan-100 transition-transform group-hover:scale-105 dark:from-blue-900/40 dark:to-cyan-900/30">
+                                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                                </div>
+                                <div>
+                                    <a href="/admin/network/zones/{{ zone.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">
+                                        {{ zone.name }}
+                                    </a>
+                                    {% if zone.description %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px]">{{ zone.description }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if zone.parent %}
+                            <a href="/admin/network/zones/{{ zone.parent_id }}" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ zone.parent.name }}</a>
+                            {% else %}
+                            <span class="text-xs text-slate-400">Top-level</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">{{ zs.get('ont_count', 0) }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-lg bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">{{ zs.get('splitter_count', 0) }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ zs.get('fdh_count', 0) }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if zone.is_active %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-green-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm shadow-emerald-500/25">
+                                <span class="relative flex h-1.5 w-1.5">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                                    <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-white"></span>
+                                </span>
+                                Active
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                                Inactive
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {% call row_actions() %}
+                                {{ row_action("/admin/network/zones/" ~ zone.id, icon=icon_view(), title="View Details", color="blue") }}
+                                {{ row_action("/admin/network/zones/" ~ zone.id ~ "/edit", icon=icon_edit(), title="Edit Zone", color="amber") }}
+                            {% endcall %}
+                        </td>
+                    {% endcall %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No network zones",
+                        message="Get started by creating a zone to organize your infrastructure.",
+                        icon='<svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>',
+                        color="blue",
+                        action_label="Add Zone",
+                        action_href="/admin/network/zones/new",
+                        colspan=7
+                    ) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endcall %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

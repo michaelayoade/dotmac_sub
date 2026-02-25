@@ -1,0 +1,137 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, animation_styles %}
+
+{% block title %}{{ zone.name }} - Network Zones - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        title=zone.name,
+        subtitle=zone.description or "Network zone",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>',
+        color="blue",
+        color2="cyan",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Zones", "href": "/admin/network/zones"},
+            {"label": zone.name}
+        ]
+    ) %}
+        <div class="flex items-center gap-2">
+            {% if zone.is_active %}
+            <span class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-green-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm">
+                <span class="relative flex h-1.5 w-1.5">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                    <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-white"></span>
+                </span>
+                Active
+            </span>
+            {% else %}
+            <span class="inline-flex items-center gap-1.5 rounded-lg bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">Inactive</span>
+            {% endif %}
+            <a href="/admin/network/zones/{{ zone.id }}/edit" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+        </div>
+    {% endcall %}
+
+    {# ── Infrastructure Stats ── #}
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card("ONTs", infra_stats.ont_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+        {{ stats_card("Splitters (ODBs)", infra_stats.splitter_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>',
+            color="violet", color2="purple"
+        ) }}
+        {{ stats_card("FDH Cabinets", infra_stats.fdh_count,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+            color="amber", color2="orange"
+        ) }}
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        {# ── Zone Details ── #}
+        <div class="lg:col-span-2">
+            {% call card(color="blue") %}
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Zone Details</h3>
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Name</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ zone.name }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Parent Zone</dt>
+                        <dd class="mt-1 text-sm">
+                            {% if parent %}
+                            <a href="/admin/network/zones/{{ parent.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ parent.name }}</a>
+                            {% else %}
+                            <span class="text-slate-400">None (top-level)</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    {% if zone.description %}
+                    <div class="sm:col-span-2">
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Description</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ zone.description }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if zone.latitude and zone.longitude %}
+                    <div>
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Coordinates</dt>
+                        <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ "%.6f"|format(zone.latitude) }}, {{ "%.6f"|format(zone.longitude) }}</dd>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Created</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ zone.created_at.strftime('%Y-%m-%d %H:%M') if zone.created_at else '-' }}</dd>
+                    </div>
+                </dl>
+            {% endcall %}
+        </div>
+
+        {# ── Child Zones Sidebar ── #}
+        <div>
+            {% call card(color="cyan") %}
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Child Zones</h3>
+                {% if children %}
+                <ul class="space-y-2">
+                    {% for child in children %}
+                    <li>
+                        <a href="/admin/network/zones/{{ child.id }}" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/50">
+                            <svg class="h-4 w-4 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                            {{ child.name }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-sm text-slate-400 dark:text-slate-500">No child zones</p>
+                {% endif %}
+            {% endcall %}
+
+            {# Quick Actions #}
+            {% call card(color="slate") %}
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Quick Actions</h3>
+                <div class="space-y-2">
+                    <a href="/admin/network/onts?zone_id={{ zone.id }}" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:text-slate-300 dark:hover:bg-blue-900/20 dark:hover:text-blue-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                        View ONTs in this zone
+                    </a>
+                    <a href="/admin/network/zones/{{ zone.id }}/edit" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-amber-50 hover:text-amber-600 dark:text-slate-300 dark:hover:bg-amber-900/20 dark:hover:text-amber-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                        Edit zone
+                    </a>
+                </div>
+            {% endcall %}
+        </div>
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

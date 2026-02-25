@@ -1,56 +1,56 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    table_head, table_row, empty_state, animation_styles
+%}
 
 {% block title %}Ledger - Admin{% endblock %}
 
 {% block content %}
-<!-- Ambient Background -->
-<div class="pointer-events-none fixed inset-0 overflow-hidden">
-    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-violet-400/5 to-purple-500/5 blur-3xl"></div>
-    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-amber-400/5 to-orange-500/5 blur-3xl"></div>
-</div>
+{{ ambient_background("emerald", "teal") }}
 
 <div class="relative space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-start gap-4">
+    {# ── Header with Filter Pills ── #}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fade-in-up">
+        <div class="flex items-center gap-4">
             <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
                 <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
             </div>
             <div>
-                <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-1">
-                    <a href="/admin/billing" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Billing</a>
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    <span class="text-slate-900 dark:text-white font-medium">General Ledger</span>
+                <nav class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                    <a href="/admin/billing" class="hover:text-emerald-600 dark:hover:text-emerald-400">Billing</a>
+                    <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    <span class="text-slate-700 dark:text-slate-300">General Ledger</span>
                 </nav>
                 <h1 class="text-2xl font-bold text-slate-900 dark:text-white">General Ledger</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Complete transaction history and financial records</p>
+                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Complete transaction history and financial records</p>
             </div>
         </div>
-        <!-- Filter Pills -->
+        {# Filter Pills #}
         <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-            <a href="/admin/billing/ledger{% if customer_ref %}?customer_ref={{ customer_ref }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if not entry_type %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger{% if customer_ref or date_range or category or selected_partner_id %}?{% endif %}{% if customer_ref %}customer_ref={{ customer_ref }}{% endif %}{% if customer_ref and (date_range or category or selected_partner_id) %}&{% endif %}{% if date_range %}date_range={{ date_range }}{% endif %}{% if date_range and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if not entry_type %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 All
             </a>
-            <a href="/admin/billing/ledger?entry_type=credit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'credit' %}bg-white text-emerald-600 shadow-sm dark:bg-slate-700 dark:text-emerald-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger?entry_type=credit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'credit' %}bg-white text-emerald-600 shadow-sm dark:bg-slate-700 dark:text-emerald-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 Credits
             </a>
-            <a href="/admin/billing/ledger?entry_type=debit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'debit' %}bg-white text-amber-600 shadow-sm dark:bg-slate-700 dark:text-amber-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
+            <a href="/admin/billing/ledger?entry_type=debit{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% if category %}&category={{ category }}{% endif %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}" class="rounded-lg px-4 py-2 text-sm font-medium transition-all {% if entry_type == 'debit' %}bg-white text-amber-600 shadow-sm dark:bg-slate-700 dark:text-amber-400{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
                 Debits
             </a>
         </div>
     </div>
 
-    <!-- Filters -->
-    <div class="rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80 animate-fade-in-up" style="animation-delay: 0.05s;">
+    {# ── Customer Filter ── #}
+    {% call card(color="emerald") %}
         <form method="get" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="w-full sm:w-72">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
                 <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
                     <input type="text" data-typeahead-input
                            placeholder="Search customers..."
-                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                     <input type="hidden" name="customer_ref" data-typeahead-hidden value="{{ customer_ref or '' }}">
                     <div data-typeahead-results></div>
                 </div>
@@ -58,98 +58,99 @@
                 <input type="hidden" name="entry_type" value="{{ entry_type }}">
                 {% endif %}
             </div>
+            <div class="w-full sm:w-52">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Partner</label>
+                <select name="partner_id" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not selected_partner_id %}selected{% endif %}>All Partners</option>
+                    {% for partner in partner_options %}
+                    <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="w-full sm:w-52">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Category</label>
+                <select name="category" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not category %}selected{% endif %}>All Categories</option>
+                    <option value="service" {% if category == 'service' %}selected{% endif %}>Service</option>
+                    <option value="payment" {% if category == 'payment' %}selected{% endif %}>Payment</option>
+                    <option value="credit_note" {% if category == 'credit_note' %}selected{% endif %}>Credit Note</option>
+                    <option value="adjustment" {% if category == 'adjustment' %}selected{% endif %}>Adjustment</option>
+                    <option value="refund" {% if category == 'refund' %}selected{% endif %}>Refund</option>
+                    <option value="other" {% if category == 'other' %}selected{% endif %}>Other</option>
+                </select>
+            </div>
+            <div class="w-full sm:w-52">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Date Range</label>
+                <select name="date_range" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
+                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
+                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
+                    <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
+                    <option value="year" {% if date_range == 'year' %}selected{% endif %}>This Year</option>
+                </select>
+            </div>
             <div class="flex items-center gap-2">
-                <button type="submit" class="inline-flex items-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
                     Apply
                 </button>
+                <a href="/admin/billing/ledger/export.csv?entry_type={{ entry_type or '' }}&customer_ref={{ customer_ref or '' }}&date_range={{ date_range or '' }}&category={{ category or '' }}&partner_id={{ selected_partner_id or '' }}"
+                   class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Export CSV
+                </a>
                 {% if customer_ref %}
-                <a href="/admin/billing/ledger{% if entry_type %}?entry_type={{ entry_type }}{% endif %}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                <a href="/admin/billing/ledger{% if entry_type or date_range or category or selected_partner_id %}?{% endif %}{% if entry_type %}entry_type={{ entry_type }}{% endif %}{% if entry_type and (date_range or category or selected_partner_id) %}&{% endif %}{% if date_range %}date_range={{ date_range }}{% endif %}{% if date_range and (category or selected_partner_id) %}&{% endif %}{% if category %}category={{ category }}{% endif %}{% if category and selected_partner_id %}&{% endif %}{% if selected_partner_id %}partner_id={{ selected_partner_id }}{% endif %}" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                     Clear customer
                 </a>
                 {% endif %}
             </div>
         </form>
-    </div>
+    {% endcall %}
 
-    <!-- Summary Stats -->
+    {# ── Summary Stats ── #}
     {% set total_credits = entries | selectattr('entry_type', 'defined') | selectattr('entry_type.value', 'equalto', 'credit') | sum(attribute='amount') if entries else 0 %}
     {% set total_debits = entries | selectattr('entry_type', 'defined') | selectattr('entry_type.value', 'equalto', 'debit') | sum(attribute='amount') if entries else 0 %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3 animate-fade-in-up" style="animation-delay: 0.1s;">
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-500/10 to-green-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Credits</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-emerald-600 dark:text-emerald-400">₦{{ "{:,.2f}".format(total_credits) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Payments received</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-orange-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Debits</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-amber-600 dark:text-amber-400">₦{{ "{:,.2f}".format(total_debits) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Invoices & charges</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-violet-500/10 to-purple-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Net Balance</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
-                        <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
-                    </div>
-                </div>
-                {% set net = total_credits - total_debits %}
-                <p class="mt-3 text-2xl font-bold {% if net >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-red-600 dark:text-red-400{% endif %}">₦{{ "{:,.2f}".format(net) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Credits - Debits</p>
-            </div>
-        </div>
+    {% set net = total_credits - total_debits %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {{ stats_card("Total Credits", "₦" ~ "{:,.2f}".format(total_credits),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card("Total Debits", "₦" ~ "{:,.2f}".format(total_debits),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>',
+            color="amber", color2="orange"
+        ) }}
+        {{ stats_card("Net Balance", "₦" ~ "{:,.2f}".format(net),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>',
+            color="violet", color2="purple"
+        ) }}
     </div>
 
-    <!-- Ledger Table -->
-    <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 0.2s;">
+    {# ── Ledger Table ── #}
+    {% call card(color="emerald", padding=False) %}
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead>
-                    <tr class="bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-slate-800/80 dark:to-slate-700/50">
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Entry</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Account</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Type</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Source</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Amount</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Created</th>
-                    </tr>
-                </thead>
+                {{ table_head([
+                    {"label": "Entry"},
+                    {"label": "Account"},
+                    {"label": "Type"},
+                    {"label": "Source"},
+                    {"label": "Debit"},
+                    {"label": "Credit"},
+                    {"label": "Description"},
+                    {"label": "Created"}
+                ]) }}
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if entries %}
                     {% for entry in entries %}
-                    {% set entry_type = entry.entry_type.value if entry.entry_type else 'unknown' %}
-                    <tr class="group transition-colors hover:bg-amber-50/50 dark:hover:bg-amber-900/10">
+                    {% set et = entry.entry_type.value if entry.entry_type else 'unknown' %}
+                    {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if entry_type == 'credit' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif entry_type == 'debit' %}from-amber-100 to-orange-100 text-amber-600 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
-                                    {% if entry_type == 'credit' %}
+                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if et == 'credit' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif et == 'debit' %}from-amber-100 to-orange-100 text-amber-600 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
+                                    {% if et == 'credit' %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                                    {% elif entry_type == 'debit' %}
+                                    {% elif et == 'debit' %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
                                     {% else %}
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -162,27 +163,27 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if entry.account_id %}
-                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors font-mono">
+                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 transition-colors font-mono">
                                 {{ entry.account_id | string | truncate(8, True, '') }}
                             </a>
                             {% else %}
-                            <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+                            <span class="text-sm text-slate-400 dark:text-slate-500">&mdash;</span>
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if entry_type == 'credit' %}
+                            {% if et == 'credit' %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                                 Credit
                             </span>
-                            {% elif entry_type == 'debit' %}
+                            {% elif et == 'debit' %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
                                 Debit
                             </span>
                             {% else %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                {{ entry_type | title }}
+                                {{ et | title }}
                             </span>
                             {% endif %}
                         </td>
@@ -190,9 +191,23 @@
                             {% set source = entry.source.value if entry.source else 'N/A' %}
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ source | title | replace('_', ' ') }}</span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm font-bold {% if entry_type == 'credit' %}text-emerald-600 dark:text-emerald-400{% elif entry_type == 'debit' %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
-                                {% if entry_type == 'credit' %}+{% elif entry_type == 'debit' %}-{% endif %}₦{{ "{:,.2f}".format(entry.amount or 0) }}
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
+                            {% if et == 'debit' %}
+                            ₦{{ "{:,.2f}".format(entry.amount or 0) }}
+                            {% else %}
+                            &mdash;
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                            {% if et == 'credit' %}
+                            ₦{{ "{:,.2f}".format(entry.amount or 0) }}
+                            {% else %}
+                            &mdash;
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
+                            <span class="block max-w-xs truncate" title="{{ entry.memo or '' }}">
+                                {{ entry.memo or "—" }}
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
@@ -201,42 +216,44 @@
                             <p class="text-xs text-slate-400 dark:text-slate-500">{{ entry.created_at.strftime('%I:%M %p') }}</p>
                             {% endif %}
                         </td>
-                    </tr>
+                    {% endcall %}
                     {% endfor %}
                     {% else %}
+                    {{ empty_state(
+                        title="No ledger entries found",
+                        message="Entries will appear here when billing activity occurs",
+                        icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+                        color="emerald",
+                        colspan=8
+                    ) }}
+                    {% endif %}
+                </tbody>
+                {% if entries %}
+                <tfoot class="bg-slate-50 dark:bg-slate-900/40">
                     <tr>
-                        <td colspan="6" class="px-6 py-16 text-center">
-                            <div class="flex flex-col items-center">
-                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                    </svg>
+                        <td colspan="8" class="px-6 py-4">
+                            <div class="grid gap-3 sm:grid-cols-3">
+                                <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-800/40 dark:bg-emerald-900/20">
+                                    <p class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Credit</p>
+                                    <p class="mt-0.5 text-sm font-bold text-emerald-700 dark:text-emerald-300">{{ ledger_totals.credit_count }} entries · ₦{{ "{:,.2f}".format(ledger_totals.credit_total or 0) }}</p>
                                 </div>
-                                <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No ledger entries found</p>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Entries will appear here when billing activity occurs</p>
+                                <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800/40 dark:bg-amber-900/20">
+                                    <p class="text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Debit</p>
+                                    <p class="mt-0.5 text-sm font-bold text-amber-700 dark:text-amber-300">{{ ledger_totals.debit_count }} entries · ₦{{ "{:,.2f}".format(ledger_totals.debit_total or 0) }}</p>
+                                </div>
+                                <div class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-800/40 dark:bg-violet-900/20">
+                                    <p class="text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Net</p>
+                                    <p class="mt-0.5 text-sm font-bold text-violet-700 dark:text-violet-300">₦{{ "{:,.2f}".format(ledger_totals.net_total or 0) }}</p>
+                                </div>
                             </div>
                         </td>
                     </tr>
-                    {% endif %}
-                </tbody>
+                </tfoot>
+                {% endif %}
             </table>
         </div>
-    </div>
+    {% endcall %}
 </div>
 
-<style>
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out backwards;
-}
-</style>
+{{ animation_styles() }}
 {% endblock %}

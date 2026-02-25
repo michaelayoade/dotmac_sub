@@ -4,19 +4,31 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
-from app.models.network_monitoring import NetworkDevice, PopSite
+from app.models.catalog import NasDevice, Subscription
+from app.models.network_monitoring import NetworkDevice, PopSite, PopSiteContact
+from app.models.stored_file import StoredFile
 from app.models.wireless_mast import WirelessMast
 from app.schemas.wireless_mast import WirelessMastCreate
+from app.services import nas as nas_service
 from app.services import wireless_mast as wireless_mast_service
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
+
+DOCUMENT_CATEGORY_LABELS = {
+    "lease": "Lease Agreement",
+    "permit": "Permit",
+    "survey": "Site Survey",
+    "asbuilt": "As-Built Drawing",
+    "other": "Other",
+}
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -246,12 +258,232 @@ def detail_page_data(db: Session, pop_site_id: str) -> dict[str, object] | None:
         .where(NetworkDevice.pop_site_id == pop_site.id)
         .order_by(NetworkDevice.name)
     ).all()
+    nas_devices = db.scalars(
+        select(NasDevice)
+        .where(NasDevice.pop_site_id == pop_site.id)
+        .where(NasDevice.is_active.is_(True))
+        .order_by(NasDevice.name)
+    ).all()
     masts = db.scalars(
         select(WirelessMast)
         .where(WirelessMast.pop_site_id == pop_site.id)
         .order_by(WirelessMast.name)
     ).all()
-    return {"pop_site": pop_site, "devices": devices, "masts": masts}
+    subscriptions = db.scalars(
+        select(Subscription)
+        .join(NasDevice, Subscription.provisioning_nas_device_id == NasDevice.id)
+        .where(NasDevice.pop_site_id == pop_site.id)
+        .where(NasDevice.is_active.is_(True))
+        .order_by(Subscription.updated_at.desc())
+    ).all()
+
+    hardware_devices: list[dict[str, object]] = []
+    for device in devices:
+        hardware_devices.append(
+            {
+                "id": str(device.id),
+                "name": device.name,
+                "device_type": "Core Device",
+                "role": device.role.value.title() if device.role else "-",
+                "ip": device.mgmt_ip or device.hostname or "-",
+                "status": device.status.value.title() if device.status else "Unknown",
+                "ping_status": "OK" if device.last_ping_ok else "Timeout",
+                "snmp_status": "OK" if device.last_snmp_ok else "Unknown",
+                "detail_url": f"/admin/network/core-devices/{device.id}",
+            }
+        )
+    for nas in nas_devices:
+        ping = nas_service.get_ping_status(nas.ip_address or nas.management_ip)
+        ping_ok = ping.get("state") == "reachable"
+        hardware_devices.append(
+            {
+                "id": str(nas.id),
+                "name": nas.name,
+                "device_type": "NAS Router",
+                "role": "NAS",
+                "ip": nas.ip_address or nas.management_ip or "-",
+                "status": nas.status.value.title() if nas.status else "Unknown",
+                "ping_status": "OK" if ping_ok else "Timeout",
+                "snmp_status": "Configured" if nas.snmp_community else "Unknown",
+                "detail_url": f"/admin/network/nas/devices/{nas.id}",
+            }
+        )
+
+    customer_services: list[dict[str, object]] = []
+    for subscription in subscriptions:
+        subscriber = subscription.subscriber
+        service_address = subscription.service_address
+        customer_services.append(
+            {
+                "subscription_id": str(subscription.id),
+                "subscriber_id": str(subscriber.id) if subscriber else None,
+                "subscriber_name": (
+                    f"{subscriber.first_name} {subscriber.last_name}".strip()
+                    if subscriber
+                    else "Unknown"
+                ),
+                "subscriber_number": subscriber.subscriber_number if subscriber else None,
+                "subscription_status": subscription.status.value.title()
+                if subscription.status
+                else "Unknown",
+                "service_description": subscription.service_description
+                or (subscription.offer.name if subscription.offer else "-"),
+                "login": subscription.login or "-",
+                "ipv4_address": subscription.ipv4_address or "-",
+                "nas_name": subscription.provisioning_nas_device.name
+                if subscription.provisioning_nas_device
+                else "-",
+                "latitude": service_address.latitude if service_address else None,
+                "longitude": service_address.longitude if service_address else None,
+                "address_label": service_address.label if service_address else None,
+            }
+        )
+
+    map_markers: list[dict[str, object]] = []
+    for service in customer_services:
+        lat = service.get("latitude")
+        lon = service.get("longitude")
+        if lat is None or lon is None:
+            continue
+        map_markers.append(
+            {
+                "type": "service",
+                "latitude": lat,
+                "longitude": lon,
+                "title": service.get("subscriber_name"),
+                "subtitle": service.get("service_description"),
+                "meta": service.get("address_label") or service.get("ipv4_address"),
+            }
+        )
+    for mast in masts:
+        if mast.latitude is None or mast.longitude is None:
+            continue
+        map_markers.append(
+            {
+                "type": "hardware",
+                "latitude": mast.latitude,
+                "longitude": mast.longitude,
+                "title": mast.name,
+                "subtitle": "Wireless Mast",
+                "meta": mast.status or "",
+            }
+        )
+
+    photo_files = (
+        db.query(StoredFile)
+        .filter(StoredFile.entity_type == "pop_site_photo")
+        .filter(StoredFile.entity_id == str(pop_site.id))
+        .filter(StoredFile.is_deleted.is_(False))
+        .order_by(StoredFile.created_at.desc())
+        .all()
+    )
+    contacts = (
+        db.query(PopSiteContact)
+        .filter(PopSiteContact.pop_site_id == pop_site.id)
+        .filter(PopSiteContact.is_active.is_(True))
+        .order_by(PopSiteContact.is_primary.desc(), PopSiteContact.created_at.desc())
+        .all()
+    )
+    document_records = (
+        db.query(StoredFile)
+        .filter(StoredFile.entity_type.like("pop_site_document_%"))
+        .filter(StoredFile.entity_id == str(pop_site.id))
+        .filter(StoredFile.is_deleted.is_(False))
+        .order_by(StoredFile.created_at.desc())
+        .all()
+    )
+    documents: list[dict[str, object]] = []
+    for doc in document_records:
+        category = "other"
+        if doc.entity_type.startswith("pop_site_document_"):
+            category = doc.entity_type.replace("pop_site_document_", "", 1) or "other"
+        documents.append(
+            {
+                "id": doc.id,
+                "filename": doc.original_filename,
+                "file_size": doc.file_size,
+                "content_type": doc.content_type,
+                "created_at": doc.created_at,
+                "category": category,
+                "category_label": DOCUMENT_CATEGORY_LABELS.get(category, "Other"),
+                "uploaded_by": doc.uploaded_by,
+            }
+        )
+
+    return {
+        "pop_site": pop_site,
+        "devices": devices,
+        "nas_devices": nas_devices,
+        "hardware_devices": hardware_devices,
+        "masts": masts,
+        "customer_services": customer_services,
+        "service_impact_count": len(customer_services),
+        "map_markers": map_markers,
+        "photo_files": photo_files,
+        "documents": documents,
+        "contacts": contacts,
+    }
+
+
+def get_site_file_or_none(db: Session, file_id: str) -> StoredFile | None:
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        return None
+    record = db.get(StoredFile, file_uuid)
+    if not record or record.is_deleted:
+        return None
+    if record.entity_type != "pop_site_photo" and not record.entity_type.startswith("pop_site_document_"):
+        return None
+    return record
+
+
+def create_contact(
+    db: Session,
+    *,
+    pop_site_id: str,
+    name: str,
+    role: str | None,
+    phone: str | None,
+    email: str | None,
+    notes: str | None,
+    is_primary: bool,
+) -> PopSiteContact:
+    if is_primary:
+        db.query(PopSiteContact).filter(
+            PopSiteContact.pop_site_id == coerce_uuid(pop_site_id),
+            PopSiteContact.is_active.is_(True),
+            PopSiteContact.is_primary.is_(True),
+        ).update({"is_primary": False}, synchronize_session=False)
+    contact = PopSiteContact(
+        pop_site_id=coerce_uuid(pop_site_id),
+        name=name,
+        role=role,
+        phone=phone,
+        email=email,
+        notes=notes,
+        is_primary=is_primary,
+        is_active=True,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+def delete_contact(db: Session, *, pop_site_id: str, contact_id: str) -> bool:
+    try:
+        contact_uuid = coerce_uuid(contact_id)
+    except Exception:
+        return False
+    contact = db.get(PopSiteContact, contact_uuid)
+    if not contact or str(contact.pop_site_id) != str(pop_site_id):
+        return False
+    contact.is_active = False
+    contact.is_primary = False
+    db.add(contact)
+    db.commit()
+    return True
 
 
 def maybe_create_mast(db: Session, pop_site_id: str, mast_data: dict[str, object] | None) -> None:

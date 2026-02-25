@@ -1,295 +1,241 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+
 {% block title %}Configuration{% endblock %}
 
 {% block content %}
-<div class="space-y-8">
-    <!-- Page Header -->
-    <div class="flex items-center justify-between">
-        <div>
-            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Configuration</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Technical infrastructure and integration setup</p>
-        </div>
-    </div>
+{{ ambient_background("slate", "gray") }}
 
-    <!-- Network Infrastructure Section -->
-    <div>
-        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Network Infrastructure</h2>
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="Configuration",
+        subtitle="Technical infrastructure and integration setup",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}
+    {% endcall %}
+
+    {# Network Infrastructure #}
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Network Infrastructure", color="blue") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <!-- POP Sites -->
-            <a href="/admin/network/pop-sites" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/network/pop-sites" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">POP Sites</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">POP Sites</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ pop_sites_count }} sites</p>
                     </div>
                 </div>
             </a>
-
-            <!-- VPN -->
-            <a href="/admin/network/vpn" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/network/vpn" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">VPN</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">VPN</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ vpn_servers_count }} servers</p>
                     </div>
                 </div>
             </a>
-
-            <!-- NAS Devices -->
-            <a href="/admin/network/nas" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/network/nas" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">NAS Devices</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">NAS Devices</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ nas_devices_count }} devices</p>
                     </div>
                 </div>
             </a>
-
-            <!-- RADIUS / AAA -->
-            <a href="/admin/network/radius" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/network/radius" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">RADIUS</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">RADIUS</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ radius_servers_count }} servers</p>
                     </div>
                 </div>
             </a>
-
         </div>
+    {% endcall %}
     </div>
 
-    <!-- Catalog Configuration Section -->
-    <div>
-        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Catalog Configuration</h2>
+    {# Catalog Configuration #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Catalog Configuration", color="violet") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            <!-- Region Zones -->
-            <a href="/admin/catalog/settings/region-zones" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/settings/region-zones" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-violet-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Region Zones</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Region Zones</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ region_zones_count }} zones</p>
                     </div>
                 </div>
             </a>
-
-            <!-- SLA Profiles -->
-            <a href="/admin/catalog/settings/sla-profiles" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/settings/sla-profiles" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-violet-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">SLA Profiles</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">SLA Profiles</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ sla_profiles_count }} profiles</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Policy Sets -->
-            <a href="/admin/catalog/settings/policy-sets" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/settings/policy-sets" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-violet-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Policy Sets</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Policy Sets</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ policy_sets_count }} policies</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Usage Allowances -->
-            <a href="/admin/catalog/settings/usage-allowances" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/settings/usage-allowances" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-violet-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Usage Allowances</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Usage Allowances</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ usage_allowances_count }} allowances</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Add-Ons -->
-            <a href="/admin/catalog/settings/add-ons" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/settings/add-ons" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-violet-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-pink-50 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Add-Ons</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Add-Ons</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ addons_count }} add-ons</p>
                     </div>
                 </div>
             </a>
         </div>
+    {% endcall %}
     </div>
 
-    <!-- Integrations Section -->
-    <div>
-        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Integrations</h2>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            <!-- Connectors -->
-            <a href="/admin/integrations/connectors" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+    {# Integrations #}
+    <div class="animate-fade-in-up" style="animation-delay: 150ms;">
+    {% call card("Integrations", color="indigo") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <a href="/admin/integrations/connectors" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Connectors</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Connectors</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ connectors_count }} connectors</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Targets -->
-            <a href="/admin/integrations/targets" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/integrations/targets" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-fuchsia-50 text-fuchsia-600 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-fuchsia-100 text-fuchsia-600 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Targets</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Targets</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Sync destinations</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Webhooks -->
-            <a href="/admin/integrations/webhooks" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/integrations/webhooks" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Webhooks</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Webhooks</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ webhooks_count }} endpoints</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Payment Providers -->
-            <a href="/admin/integrations/providers" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/integrations/providers" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Payment Providers</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Payment Providers</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Payment gateways</p>
                     </div>
                 </div>
             </a>
-
         </div>
+    {% endcall %}
     </div>
 
-    <!-- Operations & Business Section -->
-    <div>
-        <h2 class="text-lg font-medium text-slate-900 dark:text-white mb-4">Operations & Business</h2>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            <!-- Resellers -->
-            <a href="/admin/resellers" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+    {# Operations & Business #}
+    <div class="animate-fade-in-up" style="animation-delay: 200ms;">
+    {% call card("Operations & Business", color="amber") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <a href="/admin/resellers" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-amber-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857M12 12a3 3 0 100-6 3 3 0 000 6zm5 8a3 3 0 00-5.356-1.857M7 18a3 3 0 015.356-1.857"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857M12 12a3 3 0 100-6 3 3 0 000 6zm5 8a3 3 0 00-5.356-1.857M7 18a3 3 0 015.356-1.857"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Resellers</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Resellers</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Channel partners</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Tax Rates -->
-            <a href="/admin/billing/tax-rates" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/billing/tax-rates" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-amber-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-lime-50 text-lime-600 dark:bg-lime-900/30 dark:text-lime-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2zM10 8.5a.5.5 0 11-1 0 .5.5 0 011 0zm5 5a.5.5 0 11-1 0 .5.5 0 011 0z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-lime-100 text-lime-600 dark:bg-lime-900/30 dark:text-lime-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2zM10 8.5a.5.5 0 11-1 0 .5.5 0 011 0zm5 5a.5.5 0 11-1 0 .5.5 0 011 0z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Tax Rates</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Tax Rates</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ tax_rates_count }} rates</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Usage Reports -->
-            <a href="/admin/catalog/usage" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/usage" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-amber-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Usage Reports</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Usage Reports</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Bandwidth & metering</p>
                     </div>
                 </div>
             </a>
-
-            <!-- Price Calculator -->
-            <a href="/admin/catalog/calculator" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-primary-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800">
+            <a href="/admin/catalog/calculator" class="group block rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-amber-500 hover:shadow-md transition-all dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-400">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                        </svg>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
                     </div>
                     <div>
-                        <h3 class="font-semibold text-slate-900 dark:text-white">Price Calculator</h3>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Price Calculator</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Quote estimation</p>
                     </div>
                 </div>
             </a>
         </div>
+    {% endcall %}
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

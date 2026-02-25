@@ -83,6 +83,9 @@
                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
                     {{ subscriber.subscriber_type | title }}
                 </span>
+                <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                    {{ billing_config.category.value | replace('_', ' ') | title if billing_config and billing_config.category else 'Residential' }}
+                </span>
                 <span class="flex items-center gap-1.5">
                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                     Since {{ subscriber.created_at.strftime('%b %Y') if subscriber.created_at else 'Jan 2024' }}
@@ -554,7 +557,7 @@
             </div>
         </div>
 
-        <!-- Location Mini-Map -->
+        <!-- Location -->
         {% if map_data %}
         <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 225ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
@@ -572,8 +575,98 @@
             <div class="p-2">
                 <div id="subscriber-mini-map" class="rounded-xl overflow-hidden" style="height: 200px;"></div>
             </div>
+            <div class="px-5 pb-2">
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button"
+                            id="subscriber-map-click-toggle"
+                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                        Set by map click
+                    </button>
+                    <span id="subscriber-map-edit-status" class="text-xs text-slate-500 dark:text-slate-400"></span>
+                </div>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                    <div>
+                        <label for="subscriber-map-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                        <input id="subscriber-map-latitude"
+                               type="number"
+                               step="0.000001"
+                               value="{{ map_data.center[0] if map_data and map_data.center else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="subscriber-map-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                        <input id="subscriber-map-longitude"
+                               type="number"
+                               step="0.000001"
+                               value="{{ map_data.center[1] if map_data and map_data.center else '' }}"
+                               class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    </div>
+                </div>
+                <button type="button"
+                        id="subscriber-map-save-btn"
+                        data-address-id="{{ primary_address.id if primary_address and primary_address.id else '' }}"
+                        class="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    Save coordinates
+                </button>
+            </div>
             <div class="px-5 pb-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
                 <div id="map-nearby-assets"></div>
+            </div>
+        </div>
+        {% elif geocode_target %}
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 225ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Location</h2>
+                </div>
+            </div>
+            <div class="p-5 space-y-3">
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Address</p>
+                    <p class="text-sm text-slate-900 dark:text-white">{{ geocode_target.address_line1 }}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ geocode_target.city | default('') }}{% if geocode_target.region %}, {{ geocode_target.region }}{% endif %} {{ geocode_target.postal_code or '' }}
+                    </p>
+                </div>
+                <button type="button"
+                        id="subscriber-geocode-btn"
+                        data-address-id="{{ geocode_target.id or '' }}"
+                        data-address='{{ geocode_target.payload | tojson | safe }}'
+                        class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Geocode address
+                </button>
+                <p id="subscriber-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
+                <div id="subscriber-geocode-results" class="space-y-2"></div>
+                <div class="grid grid-cols-2 gap-2 pt-2">
+                    <div>
+                        <label for="subscriber-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                        <input id="subscriber-latitude"
+                               type="number"
+                               step="0.000001"
+                               placeholder="0.000000"
+                               class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="subscriber-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                        <input id="subscriber-longitude"
+                               type="number"
+                               step="0.000001"
+                               placeholder="0.000000"
+                               class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    </div>
+                </div>
+                <button type="button"
+                        id="subscriber-coords-save-btn"
+                        class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                    Save coordinates
+                </button>
             </div>
         </div>
         {% endif %}
@@ -595,10 +688,15 @@
                 <div class="flex items-center justify-between mb-4 pb-4 border-b border-slate-100 dark:border-slate-700">
                     <div>
                         <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Current Balance</p>
-                        <p class="text-2xl font-bold {% if (stats.balance_due | default(0)) > 0 %}text-red-600 dark:text-red-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %} font-display">₦{{ "{:,.2f}".format(stats.balance_due | default(0)) }}</p>
+                        <p class="text-2xl font-bold {% if (stats.current_balance | default(0)) > 0 %}text-red-600 dark:text-red-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %} font-display">₦{{ "{:,.2f}".format(stats.current_balance | default(0)) }}</p>
                     </div>
                     <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">Take Payment</button>
                 </div>
+                {% if stats.has_credit_adjustment %}
+                <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
+                    Credit issued of <span class="font-semibold">₦{{ "{:,.2f}".format(stats.credit_issued | default(0)) }}</span> has been added to current balance.
+                </div>
+                {% endif %}
                 <p class="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Recent Invoices</p>
                 {% if invoices %}
                 <div class="space-y-2">
@@ -629,6 +727,64 @@
                     <p class="text-sm text-slate-500 dark:text-slate-400">No invoices yet</p>
                 </div>
                 {% endif %}
+            </div>
+        </div>
+
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 260ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing Configuration</h2>
+                </div>
+                <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ billing_config.next_block_label }}</span>
+            </div>
+            <div class="p-5">
+                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/billing-config" class="grid gap-3 sm:grid-cols-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Billing Day</span>
+                        <input type="number" name="billing_day" min="1" max="31" value="{{ billing_config.billing_day or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Payment Due Days</span>
+                        <input type="number" name="payment_due_days" min="0" value="{{ billing_config.payment_due_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Blocking Period (days)</span>
+                        <input type="number" name="blocking_period_days" min="0" value="{{ billing_config.blocking_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Deactivation Period (days)</span>
+                        <input type="number" name="deactivation_period_days" min="0" value="{{ billing_config.deactivation_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Grace Period (days)</span>
+                        <input type="number" name="grace_period_days" min="0" value="{{ billing_config.grace_period_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Minimum Balance</span>
+                        <input type="number" step="0.01" name="min_balance" value="{{ billing_config.min_balance or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="billing_enabled" value="true" {% if billing_config.billing_enabled %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Billing Enabled
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="auto_create_invoices" value="true" {% if billing_config.auto_create_invoices %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Auto-create Invoices
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 sm:col-span-2">
+                        <input type="checkbox" name="send_billing_notifications" value="true" {% if billing_config.send_billing_notifications %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Send Billing Notifications
+                    </label>
+                    <div class="sm:col-span-2 flex justify-end">
+                        <button type="submit" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Save Billing Config</button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -697,6 +853,26 @@
                 </div>
             </div>
             <div class="p-5">
+                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments" class="mb-5 space-y-3" id="subscriber-comment-form">
+                    {% include "components/forms/csrf_input.html" %}
+                    <label for="subscriber-comment" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Add Comment</label>
+                    <input type="hidden" name="mention_ids" id="subscriber-comment-mention-ids" value="[]">
+                    <textarea id="subscriber-comment" name="comment" rows="3" required
+                              placeholder="Write a note about this subscriber... Type @sam to tag users."
+                              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:focus:border-amber-500 dark:focus:ring-amber-900/30"></textarea>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                        <input type="checkbox" name="is_todo" value="1" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700">
+                        Mark as to-do
+                    </label>
+                    <div id="subscriber-comment-mentions" class="flex flex-wrap gap-2"></div>
+                    <div id="subscriber-comment-mention-suggestions" class="relative"></div>
+                    <div class="flex justify-end">
+                        <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-amber-500/25 transition hover:shadow-lg hover:shadow-amber-500/30">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/></svg>
+                            Post Comment
+                        </button>
+                    </div>
+                </form>
                 {% if timeline %}
                 <div class="relative">
                     <div class="absolute left-4 top-2 bottom-2 w-0.5 bg-gradient-to-b from-amber-200 via-slate-200 to-slate-100 dark:from-amber-800 dark:via-slate-700 dark:to-slate-800"></div>
@@ -717,7 +893,17 @@
                             </div>
                             <div class="flex-1 min-w-0 pt-1">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.title }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.detail }} · <span class="text-slate-400 dark:text-slate-500">{{ event.time }}</span></p>
+                                <div class="flex items-center gap-2">
+                                    <p class="text-xs {% if event.is_todo and event.is_completed %}text-emerald-600 dark:text-emerald-400 line-through{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ event.detail }} · <span class="text-slate-400 dark:text-slate-500">{{ event.time }}</span></p>
+                                    {% if event.is_todo %}
+                                    <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments/{{ event.id }}/toggle">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <button type="submit" class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {% if event.is_completed %}border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
+                                            {% if event.is_completed %}Completed{% else %}Mark Done{% endif %}
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
                             </div>
                         </div>
                         {% endfor %}
@@ -734,6 +920,27 @@
                     <p class="text-xs text-slate-400 dark:text-slate-500">Activity will appear here as you interact with this subscriber.</p>
                 </div>
                 {% endif %}
+            </div>
+        </div>
+
+        <!-- Messengers -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 290ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-600 shadow-lg shadow-indigo-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Messengers</h2>
+                </div>
+            </div>
+            <div class="p-5">
+                <p class="text-sm text-slate-600 dark:text-slate-300">No messenger integrations are active for this workspace.</p>
+                <a href="/admin/integrations" class="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+                    Configure integrations
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
             </div>
         </div>
     </div>
@@ -853,6 +1060,147 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="/static/js/charts.js"></script>
 <script src="/static/js/bandwidth-chart.js"></script>
+<script>
+(function() {
+    const textarea = document.getElementById("subscriber-comment");
+    const mentionIdsInput = document.getElementById("subscriber-comment-mention-ids");
+    const mentionsContainer = document.getElementById("subscriber-comment-mentions");
+    const suggestionsRoot = document.getElementById("subscriber-comment-mention-suggestions");
+    if (!textarea || !mentionIdsInput || !mentionsContainer || !suggestionsRoot) {
+        return;
+    }
+
+    const mentions = new Map();
+    let searchTimer = null;
+    let lastLookupKey = "";
+    let activeQuery = null;
+
+    function syncMentionIds() {
+        mentionIdsInput.value = JSON.stringify(Array.from(mentions.keys()));
+    }
+
+    function renderSelectedMentions() {
+        mentionsContainer.innerHTML = "";
+        mentions.forEach((label, id) => {
+            const pill = document.createElement("span");
+            pill.className = "inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+
+            const text = document.createElement("span");
+            text.textContent = "@" + label;
+            pill.appendChild(text);
+
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "rounded-full px-1 text-amber-600 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-800/40";
+            remove.textContent = "x";
+            remove.addEventListener("click", function() {
+                mentions.delete(id);
+                syncMentionIds();
+                renderSelectedMentions();
+            });
+            pill.appendChild(remove);
+            mentionsContainer.appendChild(pill);
+        });
+    }
+
+    function clearSuggestions() {
+        suggestionsRoot.innerHTML = "";
+        activeQuery = null;
+        lastLookupKey = "";
+    }
+
+    function getMentionQuery() {
+        const cursorPos = textarea.selectionStart || 0;
+        const prefix = textarea.value.slice(0, cursorPos);
+        const match = prefix.match(/(?:^|\s)@([A-Za-z0-9._-]{2,})$/);
+        if (!match) {
+            return null;
+        }
+        const query = match[1];
+        const start = cursorPos - query.length - 1;
+        return { query: query, start: start, end: cursorPos };
+    }
+
+    function replaceCurrentMentionToken(selectedLabel) {
+        if (!activeQuery) {
+            return;
+        }
+        const value = textarea.value;
+        const replacement = "@" + selectedLabel.replace(/\s+/g, "_") + " ";
+        textarea.value = value.slice(0, activeQuery.start) + replacement + value.slice(activeQuery.end);
+        const nextPos = activeQuery.start + replacement.length;
+        textarea.focus();
+        textarea.setSelectionRange(nextPos, nextPos);
+    }
+
+    function renderSuggestions(items) {
+        if (!items || !items.length || !activeQuery) {
+            clearSuggestions();
+            return;
+        }
+        const menu = document.createElement("div");
+        menu.className = "absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800";
+
+        items.forEach((item) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700";
+            button.textContent = item.label || "";
+            button.addEventListener("click", function() {
+                const id = String(item.id || "");
+                if (!id) {
+                    return;
+                }
+                mentions.set(id, item.label || "user");
+                syncMentionIds();
+                renderSelectedMentions();
+                replaceCurrentMentionToken(item.label || "user");
+                clearSuggestions();
+            });
+            menu.appendChild(button);
+        });
+
+        suggestionsRoot.innerHTML = "";
+        suggestionsRoot.appendChild(menu);
+    }
+
+    function lookupMentions() {
+        const info = getMentionQuery();
+        if (!info || !info.query) {
+            clearSuggestions();
+            return;
+        }
+        const lookupKey = info.query.toLowerCase();
+        if (lookupKey === lastLookupKey) {
+            return;
+        }
+        lastLookupKey = lookupKey;
+        activeQuery = info;
+
+        fetch("/api/v1/search/people?q=" + encodeURIComponent(info.query) + "&limit=8")
+            .then((response) => (response.ok ? response.json() : Promise.reject(new Error("search failed"))))
+            .then((data) => renderSuggestions((data && data.items) || []))
+            .catch(() => clearSuggestions());
+    }
+
+    function scheduleLookup() {
+        if (searchTimer) {
+            window.clearTimeout(searchTimer);
+        }
+        searchTimer = window.setTimeout(lookupMentions, 180);
+    }
+
+    textarea.addEventListener("input", scheduleLookup);
+    textarea.addEventListener("keyup", scheduleLookup);
+    textarea.addEventListener("click", scheduleLookup);
+
+    document.addEventListener("click", function(event) {
+        if (!suggestionsRoot.contains(event.target) && event.target !== textarea) {
+            clearSuggestions();
+        }
+    });
+})();
+</script>
 
 {% if map_data %}
 <!-- Leaflet JS for mini-map -->
@@ -877,6 +1225,11 @@
         zoomControl: false,
         attributionControl: false
     }).setView(mapData.center, 15);
+
+    function refreshMapLayout() {
+        // The section can animate into view; force Leaflet size recalculation.
+        map.invalidateSize();
+    }
 
     // Add tile layer
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -943,6 +1296,208 @@
             html = '<span class="text-slate-400 dark:text-slate-500">No nearby infrastructure found</span>';
         }
         summaryEl.innerHTML = html;
+    }
+
+    map.whenReady(() => {
+        setTimeout(refreshMapLayout, 0);
+        setTimeout(refreshMapLayout, 180);
+    });
+    window.addEventListener('resize', refreshMapLayout);
+
+    const clickToggleBtn = document.getElementById('subscriber-map-click-toggle');
+    const editStatusEl = document.getElementById('subscriber-map-edit-status');
+    const latitudeInput = document.getElementById('subscriber-map-latitude');
+    const longitudeInput = document.getElementById('subscriber-map-longitude');
+    const saveBtn = document.getElementById('subscriber-map-save-btn');
+    let clickMode = false;
+    let selectedMarker = null;
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    }
+
+    async function persistSelection(addressId, latitude, longitude) {
+        const isValidAddressId = addressId && addressId !== 'None';
+        const url = isValidAddressId
+            ? `/admin/subscribers/addresses/${addressId}/geocode`
+            : `/admin/subscribers/{{ subscriber.id }}/geocode-primary`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': getCookie('csrf_token')
+            },
+            body: JSON.stringify({ latitude, longitude })
+        });
+        if (!resp.ok) {
+            throw new Error('Geocode save failed');
+        }
+        return resp.json();
+    }
+
+    if (clickToggleBtn && editStatusEl) {
+        clickToggleBtn.addEventListener('click', () => {
+            clickMode = !clickMode;
+            clickToggleBtn.classList.toggle('bg-emerald-50', clickMode);
+            clickToggleBtn.classList.toggle('border-emerald-300', clickMode);
+            clickToggleBtn.classList.toggle('text-emerald-700', clickMode);
+            editStatusEl.textContent = clickMode ? 'Click on the map to place the marker.' : '';
+        });
+    }
+
+    map.on('click', (event) => {
+        if (!clickMode || !latitudeInput || !longitudeInput) return;
+        const lat = Number(event.latlng.lat.toFixed(6));
+        const lng = Number(event.latlng.lng.toFixed(6));
+        latitudeInput.value = String(lat);
+        longitudeInput.value = String(lng);
+        if (selectedMarker) {
+            map.removeLayer(selectedMarker);
+        }
+        selectedMarker = L.marker([lat, lng]).addTo(map);
+    });
+
+    if (saveBtn && latitudeInput && longitudeInput && editStatusEl) {
+        saveBtn.addEventListener('click', async () => {
+            const addressId = saveBtn.dataset.addressId;
+            const latitude = Number(latitudeInput.value);
+            const longitude = Number(longitudeInput.value);
+            if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+                editStatusEl.textContent = 'Enter valid latitude and longitude values.';
+                return;
+            }
+            editStatusEl.textContent = 'Saving coordinates...';
+            try {
+                await persistSelection(addressId, latitude, longitude);
+                window.location.reload();
+            } catch (err) {
+                editStatusEl.textContent = 'Failed to save coordinates.';
+            }
+        });
+    }
+})();
+</script>
+{% endif %}
+
+{% if geocode_target %}
+<script>
+(function() {
+    const button = document.getElementById('subscriber-geocode-btn');
+    const statusEl = document.getElementById('subscriber-geocode-status');
+    const resultsEl = document.getElementById('subscriber-geocode-results');
+    const manualSaveBtn = document.getElementById('subscriber-coords-save-btn');
+    const latitudeInput = document.getElementById('subscriber-latitude');
+    const longitudeInput = document.getElementById('subscriber-longitude');
+    if (!button || !resultsEl || !statusEl) return;
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    }
+
+    async function previewGeocode(payload) {
+        const resp = await fetch('/api/v1/geocode/preview', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': getCookie('csrf_token')
+            },
+            body: JSON.stringify(payload)
+        });
+        if (!resp.ok) {
+            throw new Error('Geocode preview failed');
+        }
+        return resp.json();
+    }
+
+    async function persistSelection(addressId, latitude, longitude) {
+        const isValidAddressId = addressId && addressId !== 'None';
+        const url = isValidAddressId
+            ? `/admin/subscribers/addresses/${addressId}/geocode`
+            : `/admin/subscribers/{{ subscriber.id }}/geocode-primary`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': getCookie('csrf_token')
+            },
+            body: JSON.stringify({ latitude, longitude })
+        });
+        if (!resp.ok) {
+            throw new Error('Geocode save failed');
+        }
+        return resp.json();
+    }
+
+    button.addEventListener('click', async () => {
+        const addressId = button.dataset.addressId;
+        const payload = JSON.parse(button.dataset.address || '{}');
+        if (!payload.address_line1) return;
+
+        button.disabled = true;
+        statusEl.textContent = 'Searching for matches...';
+        resultsEl.innerHTML = '';
+
+        try {
+            const results = await previewGeocode({ ...payload, limit: 3 });
+            if (!results || results.length === 0) {
+                statusEl.textContent = 'No results found.';
+                return;
+            }
+            statusEl.textContent = 'Select a result to save:';
+            resultsEl.innerHTML = results.map(result => {
+                const label = result.display_name || `${result.latitude}, ${result.longitude}`;
+                return `
+                    <button type="button"
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-xs text-slate-700 hover:border-emerald-300 hover:bg-emerald-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-emerald-900/20"
+                        data-lat="${result.latitude}" data-lng="${result.longitude}">
+                        ${label}
+                    </button>
+                `;
+            }).join('');
+        } catch (err) {
+            statusEl.textContent = 'Geocoding failed. Please try again.';
+        } finally {
+            button.disabled = false;
+        }
+    });
+
+    resultsEl.addEventListener('click', async (event) => {
+        const target = event.target.closest('[data-lat][data-lng]');
+        if (!target) return;
+        const addressId = button.dataset.addressId;
+        const latitude = Number(target.dataset.lat);
+        const longitude = Number(target.dataset.lng);
+        if (Number.isNaN(latitude) || Number.isNaN(longitude)) return;
+
+        statusEl.textContent = 'Saving coordinates...';
+        try {
+            await persistSelection(addressId, latitude, longitude);
+            window.location.reload();
+        } catch (err) {
+            statusEl.textContent = 'Failed to save coordinates.';
+        }
+    });
+
+    if (manualSaveBtn && latitudeInput && longitudeInput) {
+        manualSaveBtn.addEventListener('click', async () => {
+            const addressId = button.dataset.addressId;
+            const latitude = Number(latitudeInput.value);
+            const longitude = Number(longitudeInput.value);
+            if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+                statusEl.textContent = 'Enter valid latitude and longitude values.';
+                return;
+            }
+
+            statusEl.textContent = 'Saving coordinates...';
+            try {
+                await persistSelection(addressId, latitude, longitude);
+                window.location.reload();
+            } catch (err) {
+                statusEl.textContent = 'Failed to save coordinates.';
+            }
+        });
     }
 })();
 </script>

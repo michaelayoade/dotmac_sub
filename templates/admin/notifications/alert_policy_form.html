@@ -1,0 +1,249 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, table_head, table_row, status_badge,
+    info_row, info_grid, card, animation_styles
+%}
+
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "pink") }}
+
+<div class="relative space-y-6">
+
+    {# Header #}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/notifications" class="hover:text-rose-600 dark:hover:text-rose-400">Notifications</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/notifications/alert-policies" class="hover:text-rose-600 dark:hover:text-rose-400">Alert Policies</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ form_title }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ form_title }}</h1>
+        </div>
+        <a href="/admin/notifications/alert-policies"
+           class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            Back to Policies
+        </a>
+    </div>
+
+    {# Error display #}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {# Form #}
+    <div class="animate-fade-in-up overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Policy Name</label>
+                    <input type="text" id="name" name="name" value="{{ policy.name if policy else '' }}" required
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Channel</label>
+                    <select id="channel" name="channel" required
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for ch in channels %}
+                        <option value="{{ ch }}" {% if policy and policy.channel and policy.channel.value == ch %}selected{% endif %}>
+                            {{ ch | replace('_', ' ') | title }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="recipient" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Recipient</label>
+                    <input type="text" id="recipient" name="recipient" value="{{ policy.recipient if policy else '' }}" required
+                           placeholder="email@example.com or phone number"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="severity_min" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Minimum Severity</label>
+                    <select id="severity_min" name="severity_min"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="info" {% if policy and policy.severity_min and policy.severity_min.value == 'info' %}selected{% endif %}>Info</option>
+                        <option value="warning" {% if not policy or not policy.severity_min or policy.severity_min.value == 'warning' %}selected{% endif %}>Warning</option>
+                        <option value="critical" {% if policy and policy.severity_min and policy.severity_min.value == 'critical' %}selected{% endif %}>Critical</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="template_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notification Template</label>
+                    <select id="template_id" name="template_id"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— None —</option>
+                        {% for tmpl in notification_templates %}
+                        <option value="{{ tmpl.id }}" {% if policy and policy.template_id and policy.template_id | string == tmpl.id | string %}selected{% endif %}>
+                            {{ tmpl.name }} ({{ tmpl.channel.value }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-center gap-2 pt-6">
+                    <input type="checkbox" id="is_active" name="is_active"
+                           {% if not policy or policy.is_active %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="is_active" class="text-sm text-slate-600 dark:text-slate-400">Active</label>
+                </div>
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                <textarea id="notes" name="notes" rows="3"
+                          class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ policy.notes or '' if policy else '' }}</textarea>
+            </div>
+
+            <div class="flex justify-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                <a href="/admin/notifications/alert-policies"
+                   class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 transition-colors">
+                    {{ submit_label }}
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {# Escalation Steps (only for existing policies) #}
+    {% if policy and steps is defined %}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <div class="flex items-center justify-between border-b border-slate-200 bg-gradient-to-r from-rose-50 to-pink-50 px-6 py-4 dark:border-slate-700 dark:from-rose-900/20 dark:to-pink-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Escalation Steps</h3>
+            <a href="/admin/notifications/alert-policies/{{ policy.id }}/steps/new"
+               class="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Step
+            </a>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Step"},
+                    {"label": "Delay"},
+                    {"label": "Channel"},
+                    {"label": "Recipient"},
+                    {"label": "Rotation"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if steps %}
+                    {% for step in steps %}
+                    {% call table_row(color="rose") %}
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">
+                            {{ step.step_index }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ step.delay_minutes }} min
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {{ status_badge(step.channel.value | title if step.channel else 'N/A', variant="info") }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ step.recipient or '— uses policy default —' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ step.rotation.name if step.rotation else '—' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                <form method="post" action="/admin/notifications/alert-policies/{{ policy.id }}/steps/{{ step.id }}/delete" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Remove this escalation step?')"
+                                            class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/20 dark:hover:text-rose-400 transition-colors"
+                                            title="Delete Step">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No escalation steps configured. Add steps to define the notification escalation chain.
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Add Step Form #}
+    <div id="add-step" class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-rose-50 to-pink-50 px-6 py-4 dark:border-slate-700 dark:from-rose-900/20 dark:to-pink-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Add Escalation Step</h3>
+        </div>
+        <form method="post" action="/admin/notifications/alert-policies/{{ policy.id }}/steps" class="space-y-4 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-3">
+                <div>
+                    <label for="step_index" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Step Order</label>
+                    <input type="number" id="step_index" name="step_index" value="{{ (steps | length) + 1 if steps else 1 }}" min="0"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="step_delay" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Delay (minutes)</label>
+                    <input type="number" id="step_delay" name="delay_minutes" value="0" min="0"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="step_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Channel</label>
+                    <select id="step_channel" name="step_channel"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for ch in channels %}
+                        <option value="{{ ch }}">{{ ch | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="step_recipient" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Recipient Override</label>
+                    <input type="text" id="step_recipient" name="step_recipient" placeholder="Leave blank to use policy default"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="step_rotation_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">On-Call Rotation</label>
+                    <select id="step_rotation_id" name="step_rotation_id"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— None —</option>
+                        {% for rot in rotations %}
+                        <option value="{{ rot.id }}">{{ rot.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex justify-end pt-2">
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 transition-colors">
+                    Add Step
+                </button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

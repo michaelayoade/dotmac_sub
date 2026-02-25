@@ -49,6 +49,18 @@
             </div>
 
             <div>
+                <label for="subscriber_category" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Category</label>
+                {% set selected_category = form.subscriber_category if form is defined else ((subscriber.category.value if subscriber and subscriber.category else 'residential')) %}
+                <select name="subscriber_category" id="subscriber_category"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="residential" {% if selected_category == 'residential' %}selected{% endif %}>Residential</option>
+                    <option value="business" {% if selected_category == 'business' %}selected{% endif %}>Business</option>
+                    <option value="government" {% if selected_category == 'government' %}selected{% endif %}>Government</option>
+                    <option value="ngo" {% if selected_category == 'ngo' %}selected{% endif %}>NGO</option>
+                </select>
+            </div>
+
+            <div>
                 <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
                 <textarea name="notes" id="notes" rows="3"
                     class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.notes if form is defined else (subscriber.notes if subscriber else '') }}</textarea>

@@ -6,7 +6,10 @@
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
 
-<div class="relative space-y-6">
+<div class="relative space-y-6" x-data='{
+    view: "list",
+    filtersOpen: {% if filters.olt_id or filters.zone_id or filters.online_status or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
+}'>
     {# Page Header #}
     {% set ont_icon %}
     <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -21,88 +24,430 @@
         color="blue",
         color2="indigo"
     ) %}
-        <form method="GET" action="/admin/network/onts" class="flex items-center gap-2">
-            <select id="status" name="status" onchange="this.form.submit()"
-                    class="rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2.5 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
-                <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Status</option>
-                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
-                <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
-            </select>
+        <div class="flex items-center gap-2">
+            {# View toggle: List vs Diagnostics #}
+            <div class="flex items-center rounded-lg border border-slate-200 bg-white/80 dark:border-slate-600 dark:bg-slate-700/80">
+                <button @click="view = 'list'" :class="view === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'" class="rounded-l-lg px-3 py-2 text-xs font-medium transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                </button>
+                <button @click="view = 'diagnostics'" :class="view === 'diagnostics' ? 'bg-amber-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'" class="rounded-r-lg px-3 py-2 text-xs font-medium transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                </button>
+            </div>
             {{ action_button("Add Device", "/admin/network/onts/new", icon_plus(), "primary", "blue", "indigo") }}
-        </form>
+        </div>
     {% endcall %}
 
     {# Stats Overview #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-6 animate-fade-in-up" style="animation-delay: 50ms;">
         {{ stats_card("Total ONTs", stats.total_onts, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>', color="blue", color2="indigo") }}
-        {{ stats_card("Inactive ONTs", stats.inactive_onts, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("Online", stats.online_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
+        {{ stats_card("Offline", stats.offline_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3"/></svg>', color="rose", color2="pink") }}
+        {{ stats_card("Low Signal", stats.low_signal_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
         {{ stats_card("Total CPEs", stats.total_cpes, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>', color="emerald", color2="green") }}
         {{ stats_card("Total Devices", stats.total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="violet", color2="purple") }}
     </div>
 
-    {# ONTs Table #}
-    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
-        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-            <div class="flex items-center gap-3">
-                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/40 dark:to-indigo-900/30">
-                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+    {# ═══════════════ Filter Bar ═══════════════ #}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
+        <form method="GET" action="/admin/network/onts" id="ont-filter-form">
+            {# Primary filter row: search + quick filters + toggle #}
+            <div class="flex flex-wrap items-center gap-3 px-4 py-3">
+                {# Search input #}
+                <div class="relative flex-1 min-w-[200px]">
+                    <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    </div>
+                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial number..."
+                           class="w-full rounded-lg border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-4 text-sm text-slate-900 transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder:text-slate-500"
+                           hx-get="/admin/network/onts" hx-trigger="keyup changed delay:400ms" hx-target="body" hx-push-url="true" hx-include="#ont-filter-form">
                 </div>
-                <h2 class="font-semibold text-slate-900 dark:text-white">ONT Units</h2>
-            </div>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full">
-                <thead>
-                    <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Vendor / Model</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Firmware</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {% for ont in onts %}
-                    <tr class="group transition-all hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/30 dark:hover:from-blue-900/10 dark:hover:to-indigo-900/5">
-                        <td class="px-6 py-4">
-                            <div class="flex items-center gap-3">
-                                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25">
-                                    <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                                </div>
-                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ont.serial_number }}</a>
-                            </div>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.model or '-' }}</p>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ ont.firmware_version or '-' }}</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {{ status_badge("Active" if ont.is_active else "Inactive", "active" if ont.is_active else "inactive", pulse=ont.is_active) }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                                {{ row_action("/admin/network/onts/" ~ ont.id, icon_view(), "View details", "blue") }}
-                                {{ row_action("/admin/network/onts/" ~ ont.id ~ "/edit", icon_edit(), "Edit ONT", "slate") }}
-                            </div>
-                        </td>
-                    </tr>
-                    {% else %}
-                    {{ empty_state(
-                        title="No ONT units found",
-                        message="Add ONT devices to manage subscriber connections.",
-                        icon='<svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>',
-                        color="blue",
-                        color2="indigo",
-                        action_label="Add ONT",
-                        action_href="/admin/network/onts/new",
-                        colspan=5
-                    ) }}
+
+                {# OLT filter #}
+                <select name="olt_id" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="">All OLTs</option>
+                    {% for olt in olts %}
+                    <option value="{{ olt.id }}" {% if filters.olt_id == olt.id|string %}selected{% endif %}>{{ olt.name }}</option>
                     {% endfor %}
-                </tbody>
-            </table>
+                </select>
+
+                {# Online status filter #}
+                <select name="online_status" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="">All Status</option>
+                    <option value="online" {% if filters.online_status == 'online' %}selected{% endif %}>Online</option>
+                    <option value="offline" {% if filters.online_status == 'offline' %}selected{% endif %}>Offline</option>
+                </select>
+
+                {# Signal quality filter #}
+                <select name="signal_quality" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="">All Signal</option>
+                    <option value="good" {% if filters.signal_quality == 'good' %}selected{% endif %}>Good</option>
+                    <option value="warning" {% if filters.signal_quality == 'warning' %}selected{% endif %}>Warning</option>
+                    <option value="critical" {% if filters.signal_quality == 'critical' %}selected{% endif %}>Critical</option>
+                </select>
+
+                {# Expand filters toggle #}
+                <button type="button" @click="filtersOpen = !filtersOpen"
+                        class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700/50 dark:text-slate-300 dark:hover:bg-slate-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                    <span>More</span>
+                </button>
+
+                {# Clear filters #}
+                {% if filters.olt_id or filters.zone_id or filters.online_status or filters.signal_quality or filters.search or filters.vendor %}
+                <a href="/admin/network/onts" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    Clear
+                </a>
+                {% endif %}
+            </div>
+
+            {# Expanded filter row #}
+            <div x-show="filtersOpen" x-cloak x-transition class="flex flex-wrap items-center gap-3 border-t border-slate-100 px-4 py-3 dark:border-slate-700/50">
+                {# Zone filter #}
+                <select name="zone_id" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="">All Zones</option>
+                    {% for zone in zones %}
+                    <option value="{{ zone.id }}" {% if filters.zone_id == zone.id|string %}selected{% endif %}>{{ zone.name }}</option>
+                    {% endfor %}
+                </select>
+
+                {# Vendor filter #}
+                <select name="vendor" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="">All Vendors</option>
+                    {% for v in vendors %}
+                    <option value="{{ v }}" {% if filters.vendor == v %}selected{% endif %}>{{ v }}</option>
+                    {% endfor %}
+                </select>
+
+                {# Active/Inactive status #}
+                <select name="status" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Records</option>
+                    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active Only</option>
+                    <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive Only</option>
+                </select>
+
+                {# Sort controls #}
+                <select name="order_by" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="serial_number" {% if filters.order_by == 'serial_number' %}selected{% endif %}>Sort: Serial</option>
+                    <option value="signal" {% if filters.order_by == 'signal' %}selected{% endif %}>Sort: Signal</option>
+                    <option value="last_seen" {% if filters.order_by == 'last_seen' %}selected{% endif %}>Sort: Last Seen</option>
+                    <option value="vendor" {% if filters.order_by == 'vendor' %}selected{% endif %}>Sort: Vendor</option>
+                    <option value="created_at" {% if filters.order_by == 'created_at' %}selected{% endif %}>Sort: Created</option>
+                </select>
+                <select name="order_dir" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="asc" {% if filters.order_dir == 'asc' %}selected{% endif %}>Ascending</option>
+                    <option value="desc" {% if filters.order_dir == 'desc' %}selected{% endif %}>Descending</option>
+                </select>
+            </div>
+        </form>
+    </div>
+
+    {# ═══════════════ List View ═══════════════ #}
+    <div x-show="view === 'list'" x-cloak>
+        {# ONTs Table #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/40 dark:to-indigo-900/30">
+                        <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">ONT Units</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            Showing {{ onts|length }} of {{ pagination.total }} ONT{{ 's' if pagination.total != 1 else '' }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Vendor / Model</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Signal</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for ont in onts %}
+                        {% set sd = signal_data.get(ont.id | string, {}) %}
+                        {% set ai = assignment_info.get(ont.id | string, {}) %}
+                        <tr class="group transition-all hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/30 dark:hover:from-blue-900/10 dark:hover:to-indigo-900/5">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25">
+                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                                    </div>
+                                    <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ont.serial_number }}</a>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.model or '-' }}</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if ai.get("olt_name") %}
+                                <a href="/admin/network/olts/{{ ai.olt_id }}" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">{{ ai.olt_name }}</a>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ ai.pon_port_name or '-' }}</p>
+                                {% else %}
+                                <span class="text-xs text-slate-400">Unassigned</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if sd.get("status_display") and sd.status_display != "Unknown" %}
+                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
+                                    {% if sd.status_display == "Online" %}
+                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    {% else %}
+                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                                    {% endif %}
+                                    {{ sd.status_display }}
+                                </span>
+                                {% if sd.get("reason_display") %}
+                                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ sd.reason_display }}</p>
+                                {% endif %}
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if ont.olt_rx_signal_dbm is not none %}
+                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium font-mono tabular-nums {{ sd.get('quality_class', 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">
+                                    {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
+                                </span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if ont.last_seen_at %}
+                                <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ ont.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') if ont.last_seen_at else '' }}">
+                                    {{ ont.last_seen_at.strftime('%b %d, %H:%M') if ont.last_seen_at else '-' }}
+                                </span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {{ status_badge("Active" if ont.is_active else "Inactive", "active" if ont.is_active else "inactive", pulse=ont.is_active) }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/onts/" ~ ont.id, icon_view(), "View details", "blue") }}
+                                    {{ row_action("/admin/network/onts/" ~ ont.id ~ "/edit", icon_edit(), "Edit ONT", "slate") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No ONT units found",
+                            message="No ONTs match your current filters. Try adjusting or clearing your filters.",
+                            icon='<svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>',
+                            color="blue",
+                            color2="indigo",
+                            action_label="Add ONT",
+                            action_href="/admin/network/onts/new",
+                            colspan=8
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {# Pagination #}
+            {% if pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Page {{ pagination.page }} of {{ pagination.total_pages }}
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if pagination.has_prev %}
+                    <a href="/admin/network/onts?page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        Previous
+                    </a>
+                    {% endif %}
+                    {% if pagination.has_next %}
+                    <a href="/admin/network/onts?page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Next
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {# ═══════════════ Diagnostics View ═══════════════ #}
+    <div x-show="view === 'diagnostics'" x-cloak>
+        <div class="animate-fade-in-up rounded-2xl border border-amber-200/60 bg-white shadow-sm dark:border-amber-700/40 dark:bg-slate-800" style="animation-delay: 100ms;">
+            <div class="flex items-center justify-between border-b border-amber-200/60 px-6 py-4 dark:border-amber-700/40">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/40 dark:to-orange-900/30">
+                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Signal Diagnostics</h2>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">ONTs sorted by worst signal first for maintenance planning</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <a href="/admin/network/onts?signal_quality=critical&order_by=signal&order_dir=asc"
+                       class="inline-flex items-center rounded-lg bg-rose-100 px-3 py-1.5 text-xs font-medium text-rose-700 transition-colors hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
+                        Critical Only
+                    </a>
+                    <a href="/admin/network/onts?signal_quality=warning&order_by=signal&order_dir=asc"
+                       class="inline-flex items-center rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50">
+                        Warning+
+                    </a>
+                    <a href="/admin/network/onts?order_by=signal&order_dir=asc"
+                       class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        All
+                    </a>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 bg-gradient-to-r from-amber-50/50 to-orange-50/30 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT Rx</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">ONU Rx</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Quality</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Distance</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for ont in onts %}
+                        {% set sd = signal_data.get(ont.id | string, {}) %}
+                        {% set ai = assignment_info.get(ont.id | string, {}) %}
+                        <tr class="group transition-all hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
+                            <td class="px-6 py-3">
+                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ont.serial_number }}</a>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.vendor or '' }} {{ ont.model or '' }}</p>
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if ai.get("olt_name") %}
+                                <span class="text-sm text-slate-900 dark:text-white">{{ ai.olt_name }}</span>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ ai.pon_port_name or '-' }}</p>
+                                {% else %}
+                                <span class="text-xs text-slate-400">-</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if ont.olt_rx_signal_dbm is not none %}
+                                <span class="font-mono text-sm tabular-nums {{ sd.get('quality_class', 'text-slate-600 dark:text-slate-300') }} inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium">
+                                    {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
+                                </span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if ont.onu_rx_signal_dbm is not none %}
+                                <span class="font-mono text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ "%.1f"|format(ont.onu_rx_signal_dbm) }} dBm</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% set q = sd.get('quality', 'unknown') %}
+                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.get('quality_class', 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">
+                                    {% if q == 'critical' %}
+                                    <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01"/></svg>
+                                    {% elif q == 'warning' %}
+                                    <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                    {% elif q == 'good' %}
+                                    <svg class="mr-1 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    {% endif %}
+                                    {{ q | title }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if ont.distance_meters is not none %}
+                                <span class="font-mono text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ ont.distance_meters }} m</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if sd.get("status_display") and sd.status_display != "Unknown" %}
+                                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
+                                    {% if sd.status_display == "Online" %}
+                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    {% else %}
+                                    <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                                    {% endif %}
+                                    {{ sd.status_display }}
+                                </span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {{ row_action("/admin/network/onts/" ~ ont.id, icon_view(), "View details", "blue") }}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        {{ empty_state(
+                            title="No ONTs to diagnose",
+                            message="No ONTs match the current signal filters.",
+                            icon='<svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+                            color="amber",
+                            color2="orange",
+                            colspan=8
+                        ) }}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {# Pagination (same as list view) #}
+            {% if pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-amber-200/60 px-6 py-4 dark:border-amber-700/40">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Page {{ pagination.page }} of {{ pagination.total_pages }}
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if pagination.has_prev %}
+                    <a href="/admin/network/onts?page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        Previous
+                    </a>
+                    {% endif %}
+                    {% if pagination.has_next %}
+                    <a href="/admin/network/onts?page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Next
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 

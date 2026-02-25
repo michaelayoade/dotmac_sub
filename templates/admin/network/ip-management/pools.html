@@ -85,6 +85,7 @@
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Version</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CIDR</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Gateway</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Used</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                         <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
                     </tr>
@@ -119,6 +120,22 @@
                         <td class="whitespace-nowrap px-6 py-4 font-mono text-sm text-slate-600 dark:text-slate-300">
                             {{ pool.gateway or '-' }}
                         </td>
+                        <td class="px-6 py-4">
+                            {% set util = pool_utilization[pool.id|string] if pool_utilization else None %}
+                            {% if util and util.total > 0 %}
+                            <div class="w-44">
+                                <div class="mb-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                    <span>{{ util.used }}/{{ util.total }}</span>
+                                    <span>{{ util.percent }}%</span>
+                                </div>
+                                <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
+                                    <div class="h-2 rounded-full bg-blue-500" style="width: {{ util.percent }}%"></div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <span class="text-xs text-slate-400">N/A</span>
+                            {% endif %}
+                        </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {{ status_badge("Active" if pool.is_active else "Inactive", "active" if pool.is_active else "inactive") }}
                         </td>
@@ -136,7 +153,7 @@
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="7" class="px-6 py-12">
+                        <td colspan="8" class="px-6 py-12">
                             {{ empty_state(
                                 title="No IP pools",
                                 message="Get started by creating your first IP pool.",
@@ -145,7 +162,7 @@
                                 color2="violet",
                                 action_label="Add Pool",
                                 action_href="/admin/network/ip-management/pools/new",
-                                colspan=6
+                                colspan=7
                             ) }}
                         </td>
                     </tr>
@@ -181,6 +198,7 @@
                         </th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CIDR Block</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pool</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Used</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Notes</th>
                     </tr>
@@ -206,6 +224,22 @@
                                 -
                             {% endif %}
                         </td>
+                        <td class="px-6 py-4">
+                            {% set util = block_utilization[block.id|string] if block_utilization else None %}
+                            {% if util and util.total > 0 %}
+                            <div class="w-44">
+                                <div class="mb-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                    <span>{{ util.used }}/{{ util.total }}</span>
+                                    <span>{{ util.percent }}%</span>
+                                </div>
+                                <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
+                                    <div class="h-2 rounded-full bg-blue-500" style="width: {{ util.percent }}%"></div>
+                                </div>
+                            </div>
+                            {% else %}
+                            <span class="text-xs text-slate-400">N/A</span>
+                            {% endif %}
+                        </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {{ status_badge("Active" if block.is_active else "Inactive", "active" if block.is_active else "inactive") }}
                         </td>
@@ -216,7 +250,7 @@
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-6 py-12">
+                        <td colspan="6" class="px-6 py-12">
                             {{ empty_state(
                                 title="No IP blocks",
                                 message="Add blocks to organize IP address ranges within pools.",
@@ -225,7 +259,7 @@
                                 color2="blue",
                                 action_label="Add Block",
                                 action_href="/admin/network/ip-management/blocks/new",
-                                colspan=4
+                                colspan=5
                             ) }}
                         </td>
                     </tr>

@@ -50,6 +50,288 @@
     </div>
     {% endif %}
 
+    {% if domain == "notification" %}
+    <div id="smtp-senders" class="space-y-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">SMTP Senders</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage multiple sender profiles and route activities through specific senders.</p>
+                </div>
+            </div>
+            {% if smtp_test_result %}
+            <div class="mt-4 rounded-lg border p-3 text-sm {% if smtp_test_result.ok %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200{% else %}border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-200{% endif %}">
+                <span class="font-semibold">SMTP test for {{ smtp_test_result.sender_key }}:</span>
+                <span>{{ smtp_test_result.message }}</span>
+            </div>
+            {% endif %}
+            {% if smtp_sender_profiles %}
+            <div class="mt-5 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Sender Key</th>
+                            <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Host</th>
+                            <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">From</th>
+                            <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Security</th>
+                            <th class="px-3 py-2 text-left font-semibold text-slate-600 dark:text-slate-300">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for sender in smtp_sender_profiles %}
+                        <tr>
+                            <td class="px-3 py-3 text-slate-800 dark:text-slate-100">
+                                <span class="font-mono">{{ sender.sender_key }}</span>
+                                {% if sender.sender_key == smtp_sender_default_key %}
+                                <span class="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Default</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-3 text-slate-600 dark:text-slate-300">
+                                {{ sender.host }}:{{ sender.port }}
+                            </td>
+                            <td class="px-3 py-3 text-slate-600 dark:text-slate-300">
+                                {{ sender.from_name }} &lt;{{ sender.from_email }}&gt;
+                            </td>
+                            <td class="px-3 py-3 text-slate-600 dark:text-slate-300">
+                                TLS: {{ "On" if sender.use_tls else "Off" }} / SSL: {{ "On" if sender.use_ssl else "Off" }}
+                            </td>
+                            <td class="px-3 py-3">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <form method="post" action="/admin/system/settings/smtp-senders/default">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <input type="hidden" name="sender_key" value="{{ sender.sender_key }}">
+                                        <button type="submit" class="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Set Default</button>
+                                    </form>
+                                    <form method="post" action="/admin/system/settings/smtp-senders/{{ sender.sender_key }}/test">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <button type="submit" class="rounded-md border border-sky-300 px-2.5 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/30">Test</button>
+                                    </form>
+                                    <form method="post" action="/admin/system/settings/smtp-senders/{{ sender.sender_key }}/delete" onsubmit="return confirm('Delete sender {{ sender.sender_key }}?')">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <button type="submit" class="rounded-md border border-rose-300 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-900/30">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="mt-4 text-sm text-slate-500 dark:text-slate-400">No SMTP sender profiles yet. Add one below.</p>
+            {% endif %}
+
+            <div class="mt-6 border-t border-slate-200 pt-6 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Add / Update Sender</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">If sender key exists, this updates it. Leave password blank to keep current password.</p>
+                <form method="post" action="/admin/system/settings/smtp-senders" class="mt-4 grid gap-4 sm:grid-cols-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Sender Key</label>
+                        <input required name="sender_key" placeholder="default" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">SMTP Host</label>
+                        <input required name="host" placeholder="mail.example.com" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Port</label>
+                        <input required type="number" min="1" name="port" value="587" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                        <input name="username" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                        <input type="password" name="password" placeholder="••••••" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">From Email</label>
+                        <input required type="email" name="from_email" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">From Name</label>
+                        <input name="from_name" value="DotMac SM" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="use_tls" value="true" checked class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Use TLS
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="use_ssl" value="true" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Use SSL
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="is_active" value="true" checked class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Active
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="is_default" value="true" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Set as default sender
+                        </label>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Sender</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="mt-6 border-t border-slate-200 pt-6 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Activity Routing</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose sender per activity. Leave blank to use the default sender.</p>
+                <form method="post" action="/admin/system/settings/smtp-senders/activities" class="mt-4 grid gap-4 sm:grid-cols-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    {% for row in smtp_sender_activity_rows %}
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">{{ row.activity_label }}</label>
+                        <select name="activity_{{ row.activity_key }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Use Default</option>
+                            {% for sender in smtp_sender_profiles %}
+                            <option value="{{ sender.sender_key }}" {% if row.sender_key == sender.sender_key %}selected{% endif %}>{{ sender.sender_key }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endfor %}
+                    <div class="sm:col-span-2">
+                        <button type="submit" class="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white">Save Activity Mapping</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if domain == "branding" %}
+    <form method="POST" action="/admin/system/settings/branding" enctype="multipart/form-data" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 space-y-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Branding</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure light logo, dark mode logo, and favicon. File upload overrides URL in each section.</p>
+                </div>
+                <span class="text-xs font-medium uppercase tracking-wide text-slate-400">Branding</span>
+            </div>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Main Logo</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for sidebar logo in light mode, and also dark mode if Dark Mode Logo is not set.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Main Logo URL</label>
+                        <input type="text" name="main_logo_url"
+                               value="{{ branding_main_logo_url or '' }}"
+                               placeholder="https://example.com/logo.png"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Main Logo File</label>
+                        <input type="file" name="main_logo_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_main_logo" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Main Logo
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Dark Mode Logo</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used only in dark mode. If empty, Main Logo is used in dark mode too.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Dark Mode Logo URL</label>
+                        <input type="text" name="dark_logo_url"
+                               value="{{ branding_dark_logo_url or '' }}"
+                               placeholder="https://example.com/logo-dark.png"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Dark Mode Logo File</label>
+                        <input type="file" name="dark_logo_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_dark_logo" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Dark Mode Logo
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Favicon</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for browser tab icon.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Favicon URL</label>
+                        <input type="text" name="favicon_url"
+                               value="{{ branding_favicon_url or '' }}"
+                               placeholder="https://example.com/favicon.ico"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Favicon File</label>
+                        <input type="file" name="favicon_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_favicon" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Favicon
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sidebar Preview</p>
+                <div class="flex items-center gap-4">
+                    <div>
+                        <p class="mb-1 text-xs text-slate-500 dark:text-slate-400">Light</p>
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white">
+                            {% if branding_main_logo_url %}
+                            <img src="{{ branding_main_logo_url }}" alt="Main logo preview" class="h-5 w-5 object-contain">
+                            {% else %}
+                            <svg class="h-5 w-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div>
+                        <p class="mb-1 text-xs text-slate-500 dark:text-slate-400">Dark</p>
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-600 bg-slate-900">
+                            {% if branding_dark_logo_url %}
+                            <img src="{{ branding_dark_logo_url }}" alt="Dark logo preview" class="h-5 w-5 object-contain">
+                            {% elif branding_main_logo_url %}
+                            <img src="{{ branding_main_logo_url }}" alt="Dark logo preview (fallback)" class="h-5 w-5 object-contain">
+                            {% else %}
+                            <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/system/settings?domain=branding" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Branding</button>
+        </div>
+    </form>
+    {% else %}
     <form method="POST" action="/admin/system/settings" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="domain" value="{{ domain }}">
@@ -67,42 +349,42 @@
                 <div>
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ section.title }}</h3>
                     <div class="mt-4 grid gap-4 sm:grid-cols-2">
-                        {% for setting in section.settings %}
+                        {% for setting in section.rows %}
                         <div>
                             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                                {{ setting.label }}
-                                {% if setting.required %}
+                                {{ setting.spec.label or (setting.key | replace('_', ' ') | title) }}
+                                {% if setting.spec.required %}
                                 <span class="text-red-500">*</span>
                                 {% endif %}
                             </label>
-                            {% if setting.value_type == 'boolean' %}
+                            {% if setting.spec.value_type.value == 'boolean' %}
                                 <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                                     <input type="checkbox" name="{{ setting.key }}" value="true"
                                            {% if setting.value %}checked{% endif %}
                                            class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                                     Enabled
                                 </label>
-                            {% elif setting.allowed %}
+                            {% elif setting.spec.allowed %}
                                 <select name="{{ setting.key }}"
-                                        {% if setting.required %}required{% endif %}
+                                        {% if setting.spec.required %}required{% endif %}
                                         class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    {% for option in setting.allowed %}
+                                    {% for option in setting.spec.allowed %}
                                     <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
                                     {% endfor %}
                                 </select>
-                            {% elif setting.value_type == 'integer' %}
+                            {% elif setting.spec.value_type.value == 'integer' %}
                                 <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
-                                       {% if setting.min_value is not none %}min="{{ setting.min_value }}"{% endif %}
-                                       {% if setting.max_value is not none %}max="{{ setting.max_value }}"{% endif %}
-                                       {% if setting.required %}required{% endif %}
+                                       {% if setting.spec.min_value is not none %}min="{{ setting.spec.min_value }}"{% endif %}
+                                       {% if setting.spec.max_value is not none %}max="{{ setting.spec.max_value }}"{% endif %}
+                                       {% if setting.spec.required %}required{% endif %}
                                        class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% else %}
-                                <input type="{% if setting.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
-                                       value="{% if setting.is_secret %}{% else %}{{ setting.value }}{% endif %}"
-                                       placeholder="{% if setting.is_secret %}••••••{% endif %}"
-                                       {% if setting.required and not (setting.is_secret and setting.value) %}required{% endif %}
+                                <input type="{% if setting.spec.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
+                                       value="{% if setting.spec.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                                       placeholder="{% if setting.spec.is_secret %}••••••{% endif %}"
+                                       {% if setting.spec.required and not (setting.spec.is_secret and setting.value) %}required{% endif %}
                                        class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% if setting.is_secret and setting.value %}
+                                {% if setting.spec.is_secret and setting.value %}
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
                                 {% endif %}
                             {% endif %}
@@ -114,42 +396,42 @@
             </div>
             {% else %}
             <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                {% for setting in settings %}
+                {% for setting in settings_rows %}
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                        {{ setting.label }}
-                        {% if setting.required %}
+                        {{ setting.spec.label or (setting.key | replace('_', ' ') | title) }}
+                        {% if setting.spec.required %}
                         <span class="text-red-500">*</span>
                         {% endif %}
                     </label>
-                    {% if setting.value_type == 'boolean' %}
+                    {% if setting.spec.value_type.value == 'boolean' %}
                         <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                             <input type="checkbox" name="{{ setting.key }}" value="true"
                                    {% if setting.value %}checked{% endif %}
                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             Enabled
                         </label>
-                    {% elif setting.allowed %}
+                    {% elif setting.spec.allowed %}
                         <select name="{{ setting.key }}"
-                                {% if setting.required %}required{% endif %}
+                                {% if setting.spec.required %}required{% endif %}
                                 class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            {% for option in setting.allowed %}
+                            {% for option in setting.spec.allowed %}
                             <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
                             {% endfor %}
                         </select>
-                    {% elif setting.value_type == 'integer' %}
+                    {% elif setting.spec.value_type.value == 'integer' %}
                         <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
-                               {% if setting.min_value is not none %}min="{{ setting.min_value }}"{% endif %}
-                               {% if setting.max_value is not none %}max="{{ setting.max_value }}"{% endif %}
-                               {% if setting.required %}required{% endif %}
+                               {% if setting.spec.min_value is not none %}min="{{ setting.spec.min_value }}"{% endif %}
+                               {% if setting.spec.max_value is not none %}max="{{ setting.spec.max_value }}"{% endif %}
+                               {% if setting.spec.required %}required{% endif %}
                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     {% else %}
-                        <input type="{% if setting.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
-                               value="{% if setting.is_secret %}{% else %}{{ setting.value }}{% endif %}"
-                               placeholder="{% if setting.is_secret %}••••••{% endif %}"
-                               {% if setting.required and not (setting.is_secret and setting.value) %}required{% endif %}
+                        <input type="{% if setting.spec.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
+                               value="{% if setting.spec.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                               placeholder="{% if setting.spec.is_secret %}••••••{% endif %}"
+                               {% if setting.spec.required and not (setting.spec.is_secret and setting.value) %}required{% endif %}
                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        {% if setting.is_secret and setting.value %}
+                        {% if setting.spec.is_secret and setting.value %}
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
                         {% endif %}
                     {% endif %}
@@ -164,6 +446,7 @@
             <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Changes</button>
         </div>
     </form>
+    {% endif %}
 
     {% if domain == "billing" %}
     <div class="space-y-4">

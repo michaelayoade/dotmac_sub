@@ -9,23 +9,118 @@ from decimal import Decimal
 from typing import TypedDict
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import CreditNote, CreditNoteStatus, InvoiceStatus
+from app.models.billing import CreditNote, CreditNoteStatus, Invoice, InvoiceStatus
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.billing import InvoiceLineCreate, InvoiceLineUpdate, InvoiceUpdate
 from app.services import audit as audit_service
 from app.services import billing as billing_service
+from app.services import billing_invoice_pdf as billing_invoice_pdf_service
+from app.services import numbering
 from app.services.audit_helpers import extract_changes, format_changes
 
 logger = logging.getLogger(__name__)
+PROFORMA_TAG = "[PROFORMA]"
+PROFORMA_PREFIX = "PF-"
 
 class InvoiceLineItem(TypedDict):
     description: str
     quantity: Decimal
     unit_price: Decimal
     tax_rate_id: UUID | None
+
+
+def is_proforma_invoice(invoice: Invoice | None) -> bool:
+    if not invoice:
+        return False
+    if bool(getattr(invoice, "is_proforma", False)):
+        return True
+    memo = str(getattr(invoice, "memo", "") or "")
+    number = str(getattr(invoice, "invoice_number", "") or "")
+    if PROFORMA_TAG in memo:
+        return True
+    return number.upper().startswith(PROFORMA_PREFIX)
+
+
+def apply_proforma_form_values(
+    *,
+    invoice_number: str | None,
+    memo: str | None,
+    proforma_invoice: bool,
+) -> tuple[str | None, str | None]:
+    clean_number = (invoice_number or "").strip() or None
+    clean_memo = (memo or "").strip() or None
+    if proforma_invoice:
+        if clean_number and not clean_number.upper().startswith(PROFORMA_PREFIX):
+            clean_number = f"{PROFORMA_PREFIX}{clean_number}"
+        if clean_memo:
+            if PROFORMA_TAG not in clean_memo:
+                clean_memo = f"{PROFORMA_TAG} {clean_memo}".strip()
+        else:
+            clean_memo = PROFORMA_TAG
+        return clean_number, clean_memo
+
+    if clean_number and clean_number.upper().startswith(PROFORMA_PREFIX):
+        clean_number = clean_number[len(PROFORMA_PREFIX):].strip() or None
+    if clean_memo and PROFORMA_TAG in clean_memo:
+        clean_memo = clean_memo.replace(PROFORMA_TAG, "").strip() or None
+    return clean_number, clean_memo
+
+
+def build_proforma_summary(invoices: list[Invoice]) -> dict[str, int]:
+    proforma_rows = [item for item in invoices if is_proforma_invoice(item)]
+    paid = 0
+    unpaid = 0
+    for invoice in proforma_rows:
+        due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
+        if due > 0:
+            unpaid += 1
+        else:
+            paid += 1
+    return {
+        "total": len(proforma_rows),
+        "paid": paid,
+        "unpaid": unpaid,
+    }
+
+
+def convert_proforma_to_final(db: Session, *, invoice_id: str) -> Invoice:
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if not is_proforma_invoice(invoice):
+        raise HTTPException(status_code=400, detail="Invoice is not a proforma invoice")
+
+    invoice_number = (invoice.invoice_number or "").strip() or None
+    if invoice_number and invoice_number.upper().startswith(PROFORMA_PREFIX):
+        generated = numbering.generate_number(
+            db,
+            SettingDomain.billing,
+            "invoice_number",
+            "invoice_number_enabled",
+            "invoice_number_prefix",
+            "invoice_number_padding",
+            "invoice_number_start",
+        )
+        invoice_number = generated or None
+
+    _, cleaned_memo = apply_proforma_form_values(
+        invoice_number=invoice_number,
+        memo=invoice.memo,
+        proforma_invoice=False,
+    )
+
+    payload = InvoiceUpdate(
+        invoice_number=invoice_number,
+        memo=cleaned_memo,
+        is_proforma=False,
+        status=InvoiceStatus.issued if invoice.status == InvoiceStatus.draft else invoice.status,
+        issued_at=invoice.issued_at or datetime.now(UTC),
+    )
+    billing_service.invoices.update(db=db, invoice_id=invoice_id, payload=payload)
+    return billing_service.invoices.get(db=db, invoice_id=invoice_id)
 
 
 def build_invoice_payload_data(
@@ -37,6 +132,7 @@ def build_invoice_payload_data(
     issued_at,
     due_at,
     memo: str | None,
+    is_proforma: bool = False,
 ) -> dict[str, object]:
     """Build invoice create/update payload dictionary."""
     return {
@@ -47,6 +143,7 @@ def build_invoice_payload_data(
         "issued_at": issued_at,
         "due_at": due_at,
         "memo": memo.strip() if memo else None,
+        "is_proforma": is_proforma,
     }
 
 
@@ -155,6 +252,7 @@ def maybe_send_invoice_notification(db: Session, *, invoice, send_notification: 
         to_email=email_addr,
         subject=f"Invoice {inv_num}",
         body_html=body_html,
+        activity="billing_invoice",
     )
 
 
@@ -280,9 +378,12 @@ def load_invoice_detail_data(db: Session, *, invoice_id: str) -> dict[str, objec
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     if not invoice:
         return None
+    pdf_export = billing_invoice_pdf_service.get_latest_export(db, invoice_id=invoice_id)
     return {
         "invoice": invoice,
         "tax_rates": load_tax_rates(db),
         "credit_notes": load_credit_notes_for_account(db, account_id=invoice.account_id),
         "activities": build_invoice_activities(db, invoice_id=invoice_id),
+        "pdf_export": pdf_export,
+        "is_proforma": is_proforma_invoice(invoice),
     }

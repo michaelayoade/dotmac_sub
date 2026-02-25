@@ -1,40 +1,55 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    table_head, table_row, status_badge, empty_state,
+    animation_styles
+%}
 
 {% block title %}Legal Documents - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Legal Documents</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage terms of service, privacy policy, and other legal documents</p>
-        </div>
-        <a href="/admin/system/legal/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+{{ ambient_background("slate", "slate") }}
+
+<div class="relative space-y-6">
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        title="Legal Documents",
+        subtitle="Manage terms of service, privacy policy, and other legal documents",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="slate",
+        breadcrumbs=[
+            {"label": "System", "href": "/admin/system"},
+            {"label": "Legal Documents"}
+        ]
+    ) %}
+        <a href="/admin/system/legal/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-500/25 transition-all hover:shadow-xl hover:shadow-slate-500/30 hover:-translate-y-0.5">
+            <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             New Document
         </a>
-    </div>
+    {% endcall %}
 
+    {# ── Stats Cards ── #}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Documents</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Published</p>
-            <p class="mt-1 text-2xl font-bold text-green-600 dark:text-green-400">{{ stats.published }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Drafts</p>
-            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.draft }}</p>
-        </div>
+        {{ stats_card("Total Documents", stats.total,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+            color="slate"
+        ) }}
+        {{ stats_card("Published", stats.published,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card("Drafts", stats.draft,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>',
+            color="amber", color2="orange"
+        ) }}
     </div>
 
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    {# ── Filters ── #}
+    {% call card(color="slate") %}
         <form class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Document Type</label>
-                <select name="document_type" class="block w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <select name="document_type" class="block w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">All Types</option>
                     {% for dtype in document_types %}
                     <option value="{{ dtype }}" {% if document_type_filter == dtype %}selected{% endif %}>{{ dtype | replace('_', ' ') | title }}</option>
@@ -43,7 +58,7 @@
             </div>
             <div class="w-full sm:w-40">
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
-                <select name="is_published" class="block w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <select name="is_published" class="block w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-10 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">All</option>
                     <option value="true" {% if is_published_filter == 'true' %}selected{% endif %}>Published</option>
                     <option value="false" {% if is_published_filter == 'false' %}selected{% endif %}>Draft</option>
@@ -53,35 +68,32 @@
                 <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">Apply</button>
             </div>
         </form>
-    </div>
+    {% endcall %}
 
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    {# ── Documents Table ── #}
+    {% call card(color="slate", padding=False) %}
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Document</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Version</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Updated</th>
-                        <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
-                    </tr>
-                </thead>
+                {{ table_head([
+                    {"label": "Document"},
+                    {"label": "Type"},
+                    {"label": "Version"},
+                    {"label": "Status"},
+                    {"label": "Updated"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                     {% if documents %}
                     {% for doc in documents %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    {% call table_row(color="slate") %}
                         <td class="px-6 py-4">
                             <div>
-                                <a href="/admin/system/legal/{{ doc.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ doc.title }}</a>
+                                <a href="/admin/system/legal/{{ doc.id }}" class="text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">{{ doc.title }}</a>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">/legal/{{ doc.slug }}</p>
                             </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-800 dark:bg-slate-700 dark:text-slate-300">
-                                {{ doc.document_type.value | replace('_', ' ') | title }}
-                            </span>
+                            {{ status_badge(doc.document_type.value | replace('_', ' ') | title, variant="default") }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">
                             v{{ doc.version }}
@@ -91,33 +103,29 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if doc.is_published %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
-                                Published
-                            </span>
+                            {{ status_badge("Published", variant="active") }}
                             {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                                Draft
-                            </span>
+                            {{ status_badge("Draft", variant="draft") }}
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
                             {{ doc.updated_at.strftime('%b %d, %Y') if doc.updated_at else 'N/A' }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <a href="/admin/system/legal/{{ doc.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View</a>
+                            <a href="/admin/system/legal/{{ doc.id }}" class="text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">View</a>
                         </td>
-                    </tr>
+                    {% endcall %}
                     {% endfor %}
                     {% else %}
-                    <tr>
-                        <td colspan="6" class="px-6 py-12">
-                            {% set title = "No legal documents" %}
-                            {% set message = "Create your first legal document to get started." %}
-                            {% include "components/data/empty_state.html" %}
-                        </td>
-                    </tr>
+                    {{ empty_state(
+                        title="No legal documents",
+                        message="Create your first legal document to get started.",
+                        icon='<svg class="h-8 w-8 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+                        color="slate",
+                        action_label="New Document",
+                        action_href="/admin/system/legal/new",
+                        colspan=6
+                    ) }}
                     {% endif %}
                 </tbody>
             </table>
@@ -136,6 +144,8 @@
             </div>
         </div>
         {% endif %}
-    </div>
+    {% endcall %}
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

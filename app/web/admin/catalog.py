@@ -51,8 +51,10 @@ def catalog_overview(
     page_data = web_catalog_offers_service.overview_page_data(
         db, status=status, search=search, page=page, per_page=per_page
     )
+    catalog_stats = web_catalog_offers_service.dashboard_stats(db)
     context = _base_context(request, db, active_page="catalog")
     context.update(page_data)
+    context["catalog_stats"] = catalog_stats
     return templates.TemplateResponse("admin/catalog/index.html", context)
 
 

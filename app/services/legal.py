@@ -1,14 +1,21 @@
 """Service layer for legal document management."""
 
-import os
+from __future__ import annotations
+
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models.legal import LegalDocument, LegalDocumentType
+from app.models.stored_file import StoredFile
 from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
+from app.services.file_storage import file_uploads
+from app.services.object_storage import ObjectNotFoundError, StreamResult
 
+logger = logging.getLogger(__name__)
 UPLOAD_DIR = "uploads/legal"
 
 
@@ -36,7 +43,6 @@ class LegalDocumentService:
         if is_current is not None:
             query = query.filter(LegalDocument.is_current == is_current)
 
-        # Ordering
         order_col = getattr(LegalDocument, order_by, LegalDocument.created_at)
         if order_dir == "desc":
             query = query.order_by(order_col.desc())
@@ -79,17 +85,14 @@ class LegalDocumentService:
         }
 
     def get(self, db: Session, document_id: str) -> LegalDocument | None:
-        """Get a legal document by ID."""
         return db.get(LegalDocument, document_id)
 
     def get_by_slug(self, db: Session, slug: str) -> LegalDocument | None:
-        """Get a legal document by slug."""
         return db.query(LegalDocument).filter(LegalDocument.slug == slug).first()
 
     def get_current_by_type(
         self, db: Session, document_type: LegalDocumentType
     ) -> LegalDocument | None:
-        """Get the current published version of a document type."""
         return (
             db.query(LegalDocument)
             .filter(
@@ -103,7 +106,6 @@ class LegalDocumentService:
         )
 
     def create(self, db: Session, payload: LegalDocumentCreate) -> LegalDocument:
-        """Create a new legal document."""
         document = LegalDocument(
             document_type=payload.document_type,
             title=payload.title,
@@ -117,7 +119,6 @@ class LegalDocumentService:
 
         if payload.is_published:
             document.published_at = datetime.now(UTC)
-            # Mark other documents of same type as not current
             self._set_as_current(db, document)
 
         db.add(document)
@@ -128,14 +129,11 @@ class LegalDocumentService:
     def update(
         self, db: Session, document_id: str, payload: LegalDocumentUpdate
     ) -> LegalDocument | None:
-        """Update a legal document."""
         document = self.get(db, document_id)
         if not document:
             return None
 
         update_data = payload.model_dump(exclude_unset=True)
-
-        # Handle publishing
         if "is_published" in update_data and update_data["is_published"]:
             if not document.is_published:
                 update_data["published_at"] = datetime.now(UTC)
@@ -143,7 +141,6 @@ class LegalDocumentService:
         for field, value in update_data.items():
             setattr(document, field, value)
 
-        # If setting as current, update other documents
         if update_data.get("is_current"):
             self._set_as_current(db, document)
 
@@ -152,21 +149,22 @@ class LegalDocumentService:
         return document
 
     def delete(self, db: Session, document_id: str) -> bool:
-        """Delete a legal document."""
         document = self.get(db, document_id)
         if not document:
             return False
 
-        # Delete associated file if exists
-        if document.file_path and os.path.exists(document.file_path):
-            try:
-                os.remove(document.file_path)
-            except OSError:
-                pass
+        record = self.get_active_file_record(db, document_id)
+        if record:
+            file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+        elif document.file_path:
+            self._delete_legacy_local_file(document.file_path)
 
         db.delete(document)
         db.commit()
         return True
+
+    def get_active_file_record(self, db: Session, document_id: str) -> StoredFile | None:
+        return file_uploads.get_active_entity_file(db, "legal_document", document_id)
 
     def upload_file(
         self,
@@ -174,53 +172,49 @@ class LegalDocumentService:
         document_id: str,
         file_content: bytes,
         file_name: str,
-        mime_type: str,
+        mime_type: str | None,
+        uploaded_by: str | None = None,
     ) -> LegalDocument | None:
-        """Upload a file for a legal document."""
         document = self.get(db, document_id)
         if not document:
             return None
 
-        # Ensure upload directory exists
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        existing = self.get_active_file_record(db, document_id)
+        if existing:
+            file_uploads.soft_delete(db=db, file=existing, hard_delete_object=True)
+        elif document.file_path:
+            self._delete_legacy_local_file(document.file_path)
 
-        # Generate unique filename
-        ext = os.path.splitext(file_name)[1]
-        unique_name = f"{document_id}{ext}"
-        file_path = os.path.join(UPLOAD_DIR, unique_name)
+        uploaded = file_uploads.upload(
+            db=db,
+            domain="legal_documents",
+            entity_type="legal_document",
+            entity_id=document_id,
+            original_filename=file_name,
+            content_type=mime_type,
+            data=file_content,
+            organization_id=None,
+            uploaded_by=uploaded_by,
+        )
 
-        # Delete old file if exists
-        if document.file_path and os.path.exists(document.file_path):
-            try:
-                os.remove(document.file_path)
-            except OSError:
-                pass
-
-        # Save new file
-        with open(file_path, "wb") as f:
-            f.write(file_content)
-
-        # Update document
-        document.file_path = file_path
-        document.file_name = file_name
-        document.file_size = len(file_content)
-        document.mime_type = mime_type
-
+        document.file_path = uploaded.storage_key_or_relative_path
+        document.file_name = uploaded.original_filename
+        document.file_size = uploaded.file_size
+        document.mime_type = uploaded.content_type
         db.commit()
         db.refresh(document)
         return document
 
     def delete_file(self, db: Session, document_id: str) -> LegalDocument | None:
-        """Delete the file associated with a legal document."""
         document = self.get(db, document_id)
         if not document:
             return None
 
-        if document.file_path and os.path.exists(document.file_path):
-            try:
-                os.remove(document.file_path)
-            except OSError:
-                pass
+        record = self.get_active_file_record(db, document_id)
+        if record:
+            file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+        elif document.file_path:
+            self._delete_legacy_local_file(document.file_path)
 
         document.file_path = None
         document.file_name = None
@@ -231,8 +225,75 @@ class LegalDocumentService:
         db.refresh(document)
         return document
 
+    def stream_file(
+        self,
+        db: Session,
+        document: LegalDocument,
+        *,
+        require_published: bool,
+    ) -> tuple[StreamResult, str]:
+        if require_published and not document.is_published:
+            raise ObjectNotFoundError("Document is not published")
+
+        record = self.get_active_file_record(db, str(document.id))
+        if record:
+            return file_uploads.stream_file(record), record.original_filename
+
+        if document.file_path:
+            legacy_stream = self._stream_legacy_file(
+                document.file_path,
+                content_type=document.mime_type,
+                content_length=document.file_size,
+            )
+            return legacy_stream, document.file_name or "document"
+
+        raise ObjectNotFoundError("Document file does not exist")
+
+    def _stream_legacy_file(
+        self,
+        file_path: str,
+        *,
+        content_type: str | None,
+        content_length: int | None,
+    ) -> StreamResult:
+        path = self._safe_legacy_path(file_path)
+        if not path.exists():
+            raise ObjectNotFoundError(str(path))
+
+        def _chunks():
+            with path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamResult(
+            chunks=_chunks(),
+            content_type=content_type,
+            content_length=content_length,
+        )
+
+    def _delete_legacy_local_file(self, file_path: str) -> None:
+        try:
+            path = self._safe_legacy_path(file_path)
+        except ValueError:
+            logger.warning("Skipping unsafe legacy path delete: %s", file_path)
+            return
+        if path.exists():
+            path.unlink(missing_ok=True)
+
+    def _safe_legacy_path(self, file_path: str) -> Path:
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        resolved = path.resolve()
+        allowed_root = (Path.cwd() / "uploads").resolve()
+        if allowed_root != resolved and allowed_root not in resolved.parents:
+            raise ValueError("Legacy path is outside uploads directory")
+        return resolved
+
     def _set_as_current(self, db: Session, document: LegalDocument) -> None:
-        """Set a document as the current version, unsetting others of same type."""
         db.query(LegalDocument).filter(
             and_(
                 LegalDocument.document_type == document.document_type,
@@ -242,5 +303,4 @@ class LegalDocumentService:
         document.is_current = True
 
 
-# Singleton instance
 legal_documents = LegalDocumentService()

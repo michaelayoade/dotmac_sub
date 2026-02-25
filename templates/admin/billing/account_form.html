@@ -30,10 +30,21 @@
         <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
             {% include "components/forms/csrf_input.html" %}
             <div class="grid gap-4 sm:grid-cols-2">
+                {% if account %}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customer</label>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-700/60 dark:text-slate-200">
+                        {{ customer_label or (account.organization.name if account.organization else ((account.first_name ~ " " ~ account.last_name)|trim)) or "Customer" }}
+                    </div>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Customer cannot be changed from account edit.</p>
+                </div>
+                {% else %}
                 {% include "admin/billing/_customer_subscriber_fields.html" with context %}
+                {% endif %}
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Account Number</label>
                     <input type="text" name="account_number" placeholder="Auto-generated if blank"
+                           value="{{ account.account_number if account else '' }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-400">
                 </div>
             </div>
@@ -44,7 +55,7 @@
                             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">None (Direct)</option>
                         {% for reseller in resellers %}
-                        <option value="{{ reseller.id }}">{{ reseller.name }}{% if reseller.code %} ({{ reseller.code }}){% endif %}</option>
+                        <option value="{{ reseller.id }}" {% if selected_reseller_id and selected_reseller_id|string == reseller.id|string %}selected{% endif %}>{{ reseller.name }}{% if reseller.code %} ({{ reseller.code }}){% endif %}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -54,7 +65,7 @@
                             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">None</option>
                         {% for rate in tax_rates %}
-                        <option value="{{ rate.id }}">{{ rate.name }} ({{ (rate.rate * 100) | round(2) }}%)</option>
+                        <option value="{{ rate.id }}" {% if selected_tax_rate_id and selected_tax_rate_id|string == rate.id|string %}selected{% endif %}>{{ rate.name }} ({{ (rate.rate * 100) | round(2) }}%)</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -64,14 +75,16 @@
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Status</label>
                     <select name="status"
                             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="active">Active</option>
-                        <option value="suspended">Suspended</option>
-                        <option value="inactive">Inactive</option>
+                        {% set current_status = account.status.value if account and account.status else 'active' %}
+                        <option value="active" {% if current_status == 'active' %}selected{% endif %}>Active</option>
+                        <option value="suspended" {% if current_status == 'suspended' %}selected{% endif %}>Suspended</option>
+                        <option value="inactive" {% if current_status == 'inactive' %}selected{% endif %}>Inactive</option>
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
                     <input type="text" name="notes"
+                           value="{{ account.notes if account else '' }}"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>

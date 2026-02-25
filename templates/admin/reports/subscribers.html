@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, status_badge, empty_state, action_button, metric_row, animation_styles %}
 
 {% block title %}Subscriber Growth Report - Admin{% endblock %}
 
@@ -8,12 +9,17 @@
 {% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Subscriber Growth</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Monitor subscriber acquisition and trends</p>
-        </div>
+{{ ambient_background("teal", "cyan") }}
+
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="Subscriber Growth",
+        subtitle="Monitor subscriber acquisition and trends",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+        color="teal",
+        color2="cyan"
+    ) %}
         <form method="GET" action="/admin/reports/subscribers/export" class="flex items-center gap-2">
             <label for="days" class="sr-only">Export period</label>
             <select id="days" name="days" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -21,158 +27,128 @@
                 <option value="90">Last 90 Days</option>
                 <option value="365">Last Year</option>
             </select>
-            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <button type="submit" class="group inline-flex items-center px-4 py-2.5 text-sm gap-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:bg-slate-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                 Export
             </button>
         </form>
+    {% endcall %}
+
+    {# KPI Cards #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Total Subscribers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth|default(0)) }}
+        {{ stats_card("New This Month", new_this_month|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>', color="emerald", color2="teal") }}
+        {{ stats_card("Active", active_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="indigo") }}
+        {{ stats_card("Suspended", suspended_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
     </div>
 
-    <!-- Summary Cards -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Subscribers</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ total_subscribers | default(0) }}</p>
-            <p class="mt-1 text-sm {% if subscriber_growth >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
-                {% if subscriber_growth >= 0 %}+{% endif %}{{ "%.1f" | format(subscriber_growth | default(0)) }}% this month
-            </p>
+    {# Growth Trend Chart #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Subscriber Growth Trend", color="teal") %}
+        <div class="chart-container" style="min-height: 280px;">
+            <canvas id="subscriber-growth-chart"></canvas>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">New This Month</p>
-            <p class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">{{ new_this_month | default(0) }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscriptions added</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-white">{{ active_subscribers | default(0) }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ "%.1f" | format(active_rate | default(0)) }}% of total</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Suspended</p>
-            <p class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">{{ suspended_subscribers | default(0) }}</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Pending resolution</p>
-        </div>
+        {% set growth_data = growth_data|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'total': [0,0,0,0,0,0], 'new': [0,0,0,0,0,0]}) %}
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('subscriber-growth-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ growth_data["labels"] | tojson | safe }},
+                datasets: [
+                    {
+                        label: 'Total Subscribers',
+                        data: {{ growth_data["total"] | tojson | safe }},
+                        borderColor: '#14b8a6',
+                        backgroundColor: 'rgba(20, 184, 166, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'New Sign-ups',
+                        data: {{ growth_data["new"] | tojson | safe }},
+                        borderColor: '#10b981',
+                        backgroundColor: 'transparent',
+                        borderDash: [5, 5],
+                        fill: false,
+                        tension: 0.4
+                    }
+                ]
+            };
+            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+            DotmacCharts.registerChart('subscriber-growth-chart', chart);
+        });
+        </script>
+    {% endcall %}
     </div>
 
-    <!-- Growth Chart -->
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <h2 class="font-semibold text-slate-900 dark:text-white">Subscriber Growth Trend</h2>
-        </div>
-        <div class="p-6">
-            <div class="chart-container" style="min-height: 280px;">
-                <canvas id="subscriber-growth-chart"></canvas>
+    {# Status Breakdown + Recent Sign-ups #}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 150ms;">
+        {# Status Breakdown #}
+        {% call card("By Status", color="teal") %}
+            <div class="chart-container mb-4" style="min-height: 180px;">
+                <canvas id="status-breakdown-chart"></canvas>
             </div>
-            {% set growth_data = growth_data|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'total': [0,0,0,0,0,0], 'new': [0,0,0,0,0,0]}) %}
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('subscriber-growth-chart');
-                if (!ctx) return;
-                const chartData = {
-                    labels: {{ growth_data.labels | tojson | safe }},
-                    datasets: [
-                        {
-                            label: 'Total Subscribers',
-                            data: {{ growth_data.total | tojson | safe }},
-                            borderColor: '#06b6d4',
-                            backgroundColor: 'rgba(6, 182, 212, 0.1)',
-                            fill: true,
-                            tension: 0.4
-                        },
-                        {
-                            label: 'New Sign-ups',
-                            data: {{ growth_data.new | tojson | safe }},
-                            borderColor: '#10b981',
-                            backgroundColor: 'transparent',
-                            borderDash: [5, 5],
-                            fill: false,
-                            tension: 0.4
-                        }
-                    ]
-                };
-                const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-                DotmacCharts.registerChart('subscriber-growth-chart', chart);
-            });
-            </script>
-        </div>
-    </div>
-
-    <!-- Subscriber by Status -->
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">By Status</h2>
-            </div>
-            <div class="p-6">
-                <div class="chart-container mb-4" style="min-height: 180px;">
-                    <canvas id="status-breakdown-chart"></canvas>
-                </div>
-                <div class="space-y-3">
-                    {% for status, count in status_breakdown.items() %}
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-2">
-                            <span class="h-3 w-3 rounded-full {% if status == 'active' %}bg-green-500{% elif status == 'suspended' %}bg-amber-500{% elif status == 'cancelled' %}bg-red-500{% else %}bg-blue-500{% endif %}"></span>
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ status | title }}</span>
-                        </div>
-                        <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ count }}</span>
+            <div class="space-y-3">
+                {% for status_name, count in status_breakdown.items() %}
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <span class="h-3 w-3 rounded-full {% if status_name == 'active' %}bg-emerald-500{% elif status_name == 'suspended' %}bg-amber-500{% elif status_name == 'cancelled' %}bg-rose-500{% else %}bg-blue-500{% endif %}"></span>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">{{ status_name|title }}</span>
                     </div>
-                    {% else %}
-                    <p class="text-sm text-slate-500 dark:text-slate-400">No status data available.</p>
-                    {% endfor %}
-                </div>
-                <script>
-                document.addEventListener('DOMContentLoaded', function() {
-                    const ctx = document.getElementById('status-breakdown-chart');
-                    if (!ctx) return;
-                    const chartData = {
-                        labels: [{% for status, count in status_breakdown.items() %}'{{ status | title }}'{% if not loop.last %}, {% endif %}{% endfor %}],
-                        values: [{% for status, count in status_breakdown.items() %}{{ count }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        colors: [{% for status, count in status_breakdown.items() %}{% if status == 'active' %}'#10b981'{% elif status == 'suspended' %}'#f59e0b'{% elif status == 'cancelled' %}'#ef4444'{% else %}'#3b82f6'{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}]
-                    };
-                    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { plugins: { legend: { display: false } } });
-                    DotmacCharts.registerChart('status-breakdown-chart', chart);
-                });
-                </script>
-            </div>
-        </div>
-
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Recent Sign-ups</h2>
-            </div>
-            <div class="p-6">
-                {% if recent_subscribers %}
-                <div class="space-y-3">
-                    {% for sub in recent_subscribers %}
-                    <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
-                        <div>
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">
-                                {% if sub.person %}
-                                    {{ sub.person.first_name }} {{ sub.person.last_name }}
-                                {% elif sub.organization %}
-                                    {{ sub.organization.name }}
-                                {% else %}
-                                    Subscriber
-                                {% endif %}
-                            </p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at.strftime('%b %d, %Y') if sub.created_at else '-' }}</p>
-                        </div>
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
-                            {{ sub.status.value | title if sub.status else 'Active' }}
-                        </span>
-                    </div>
-                    {% endfor %}
+                    <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ count }}</span>
                 </div>
                 {% else %}
-                <p class="text-sm text-slate-500 dark:text-slate-400">No recent sign-ups.</p>
-                {% endif %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No status data available.</p>
+                {% endfor %}
             </div>
-        </div>
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const ctx = document.getElementById('status-breakdown-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: [{% for status_name, count in status_breakdown.items() %}'{{ status_name|title }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+                    values: [{% for status_name, count in status_breakdown.items() %}{{ count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                    colors: [{% for status_name, count in status_breakdown.items() %}{% if status_name == 'active' %}'#10b981'{% elif status_name == 'suspended' %}'#f59e0b'{% elif status_name == 'cancelled' %}'#f43f5e'{% else %}'#3b82f6'{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}]
+                };
+                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { plugins: { legend: { display: false } } });
+                DotmacCharts.registerChart('status-breakdown-chart', chart);
+            });
+            </script>
+        {% endcall %}
+
+        {# Recent Sign-ups #}
+        {% call card("Recent Sign-ups", color="teal") %}
+            {% if recent_subscribers %}
+            <div class="space-y-3">
+                {% for sub in recent_subscribers %}
+                <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">
+                            {% if sub.person %}
+                                {{ sub.person.first_name }} {{ sub.person.last_name }}
+                            {% elif sub.organization %}
+                                {{ sub.organization.name }}
+                            {% else %}
+                                Subscriber
+                            {% endif %}
+                        </p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at.strftime('%b %d, %Y') if sub.created_at else '-' }}</p>
+                    </div>
+                    {{ status_badge(sub.status.value|title if sub.status else 'Active', 'active', size="sm") }}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No recent sign-ups.</p>
+            {% endif %}
+        {% endcall %}
     </div>
 
     {% set activity_title = "Reports Activity" %}
     {% set activity_link = "/admin/system/audit" %}
     {% include "components/data/recent_activity_panel.html" %}
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

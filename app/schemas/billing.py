@@ -39,6 +39,7 @@ class InvoiceBase(BaseModel):
     due_at: datetime | None = None
     paid_at: datetime | None = None
     memo: str | None = None
+    is_proforma: bool = False
     is_active: bool = True
 
 
@@ -59,6 +60,7 @@ class InvoiceUpdate(BaseModel):
     due_at: datetime | None = None
     paid_at: datetime | None = None
     memo: str | None = None
+    is_proforma: bool | None = None
     is_active: bool | None = None
 
     @model_validator(mode="after")

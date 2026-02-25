@@ -252,6 +252,8 @@ def legal_document_upload(
 ):
     """Upload a file for a legal document."""
     try:
+        from app.web.admin import get_current_user as get_admin_current_user
+
         # Validate file type
         allowed_types = [
             "application/pdf",
@@ -272,12 +274,14 @@ def legal_document_upload(
         if len(content) > 10 * 1024 * 1024:
             raise ValueError("File size exceeds 10MB limit")
 
+        current_user = get_admin_current_user(request)
         document = legal_service.legal_documents.upload_file(
             db=db,
             document_id=document_id,
             file_content=content,
             file_name=file.filename or "document",
             mime_type=file.content_type,
+            uploaded_by=current_user.get("subscriber_id") or None,
         )
 
         if not document:

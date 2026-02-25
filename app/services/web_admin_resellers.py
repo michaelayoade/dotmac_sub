@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import logging
 from typing import cast
+from types import SimpleNamespace
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider
 from app.models.rbac import Role
-from app.models.subscriber import Reseller, ResellerUser, Subscriber
+from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.rbac import SubscriberRoleCreate
 from app.schemas.subscriber import SubscriberCreate
@@ -69,14 +71,32 @@ def create_reseller_user_link(
     subscriber_id: UUID,
 ) -> ResellerUser:
     """Create a ResellerUser link between a reseller and subscriber."""
-    link = ResellerUser(
-        reseller_id=reseller_id,
-        subscriber_id=subscriber_id,
-        is_active=True,
-    )
-    db.add(link)
-    db.flush()
-    return link
+    try:
+        link = ResellerUser(
+            reseller_id=reseller_id,
+            subscriber_id=subscriber_id,
+            is_active=True,
+        )
+        db.add(link)
+        db.flush()
+        return link
+    except ProgrammingError:
+        # Compatibility path for schemas without reseller_users* table.
+        db.rollback()
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            raise
+        subscriber.reseller_id = reseller_id
+        subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+        db.flush()
+        return cast(ResellerUser, SimpleNamespace(
+            id=subscriber.id,
+            reseller_id=reseller_id,
+            subscriber_id=subscriber.id,
+            person_id=subscriber.id,
+            is_active=True,
+            created_at=subscriber.created_at,
+        ))
 
 
 def create_reseller_with_user(
@@ -123,18 +143,43 @@ def list_reseller_users(
 
     Attaches the related Subscriber as ``link.person`` for template access.
     """
-    stmt = select(ResellerUser).where(
-        ResellerUser.reseller_id == coerce_uuid(reseller_id)
+    try:
+        stmt = select(ResellerUser).where(
+            ResellerUser.reseller_id == coerce_uuid(reseller_id)
+        )
+        links = list(db.scalars(stmt).all())
+        sub_ids = [link.subscriber_id for link in links if link.subscriber_id]
+        if sub_ids:
+            sub_stmt = select(Subscriber).where(Subscriber.id.in_(sub_ids))
+            subscribers_by_id = {s.id: s for s in db.scalars(sub_stmt).all()}
+            for link in links:
+                if link.subscriber_id is None:
+                    continue
+                link.person = subscribers_by_id.get(link.subscriber_id)  # type: ignore[attr-defined]
+        return links
+    except ProgrammingError:
+        db.rollback()
+
+    subscribers = list(
+        db.scalars(
+            select(Subscriber)
+            .where(Subscriber.reseller_id == coerce_uuid(reseller_id))
+            .where(Subscriber.user_type == UserType.reseller)
+            .order_by(Subscriber.created_at.desc())
+        ).all()
     )
-    links = list(db.scalars(stmt).all())
-    sub_ids = [link.subscriber_id for link in links if link.subscriber_id]
-    if sub_ids:
-        sub_stmt = select(Subscriber).where(Subscriber.id.in_(sub_ids))
-        subscribers_by_id = {s.id: s for s in db.scalars(sub_stmt).all()}
-        for link in links:
-            if link.subscriber_id is None:
-                continue
-            link.person = subscribers_by_id.get(link.subscriber_id)  # type: ignore[attr-defined]
+    links: list[ResellerUser] = []
+    for subscriber in subscribers:
+        link = cast(ResellerUser, SimpleNamespace(
+            id=subscriber.id,
+            reseller_id=subscriber.reseller_id,
+            subscriber_id=subscriber.id,
+            person_id=subscriber.id,
+            is_active=subscriber.is_active,
+            created_at=subscriber.created_at,
+            person=subscriber,
+        ))
+        links.append(link)
     return links
 
 
@@ -183,15 +228,28 @@ def link_existing_subscriber_to_reseller(
     """Link an existing subscriber to a reseller. Returns False if already linked."""
     r_uuid = coerce_uuid(reseller_id)
     s_uuid = coerce_uuid(subscriber_id)
-    stmt = (
-        select(ResellerUser)
-        .where(ResellerUser.reseller_id == r_uuid)
-        .where(ResellerUser.subscriber_id == s_uuid)
-    )
-    existing = db.scalars(stmt).first()
-    if existing:
+    try:
+        stmt = (
+            select(ResellerUser)
+            .where(ResellerUser.reseller_id == r_uuid)
+            .where(ResellerUser.subscriber_id == s_uuid)
+        )
+        existing = db.scalars(stmt).first()
+        if existing:
+            return False
+        create_reseller_user_link(db, reseller_id=r_uuid, subscriber_id=s_uuid)
+        db.commit()
+        return True
+    except ProgrammingError:
+        db.rollback()
+
+    subscriber = db.get(Subscriber, s_uuid)
+    if not subscriber:
         return False
-    create_reseller_user_link(db, reseller_id=r_uuid, subscriber_id=s_uuid)
+    if subscriber.reseller_id == r_uuid and str(getattr(subscriber.user_type, "value", subscriber.user_type)) == "reseller":
+        return False
+    subscriber.reseller_id = r_uuid
+    subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
     db.commit()
     return True
 

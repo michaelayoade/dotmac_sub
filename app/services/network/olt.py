@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -226,6 +227,93 @@ class OntUnits(CRUDManager[OntUnit]):
             {"created_at": OntUnit.created_at, "serial_number": OntUnit.serial_number},
         )
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
+
+    @staticmethod
+    def list_advanced(
+        db: Session,
+        *,
+        olt_id: str | None = None,
+        pon_port_id: str | None = None,
+        zone_id: str | None = None,
+        signal_quality: str | None = None,
+        online_status: str | None = None,
+        vendor: str | None = None,
+        search: str | None = None,
+        is_active: bool | None = None,
+        order_by: str = "serial_number",
+        order_dir: str = "asc",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[Sequence[OntUnit], int]:
+        """Advanced ONT query with multi-dimensional filtering.
+
+        Returns:
+            Tuple of (filtered ONTs, total count before pagination).
+        """
+        from app.services.network.olt_polling import get_signal_thresholds
+
+        stmt = select(OntUnit)
+
+        # Filter by OLT or PON port via active assignment join
+        if olt_id or pon_port_id:
+            stmt = stmt.join(
+                OntAssignment,
+                (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+            )
+            if pon_port_id:
+                stmt = stmt.where(OntAssignment.pon_port_id == coerce_uuid(pon_port_id))
+            elif olt_id:
+                stmt = stmt.join(PonPort, PonPort.id == OntAssignment.pon_port_id)
+                stmt = stmt.where(PonPort.olt_id == coerce_uuid(olt_id))
+
+        # Filter by zone
+        if zone_id:
+            stmt = stmt.where(OntUnit.zone_id == coerce_uuid(zone_id))
+
+        # Filter by active state
+        stmt = apply_active_state(stmt, OntUnit.is_active, is_active)
+
+        # Filter by online status
+        from app.models.network import OnuOnlineStatus
+
+        if online_status and online_status in ("online", "offline", "unknown"):
+            stmt = stmt.where(OntUnit.online_status == OnuOnlineStatus(online_status))
+
+        # Filter by vendor
+        if vendor:
+            stmt = stmt.where(OntUnit.vendor.ilike(f"%{vendor}%"))
+
+        # Text search on serial number
+        if search:
+            stmt = stmt.where(OntUnit.serial_number.ilike(f"%{search}%"))
+
+        # Filter by signal quality using thresholds
+        if signal_quality and signal_quality in ("good", "warning", "critical"):
+            warn, crit = get_signal_thresholds(db)
+            if signal_quality == "critical":
+                stmt = stmt.where(OntUnit.olt_rx_signal_dbm < crit)
+            elif signal_quality == "warning":
+                stmt = stmt.where(
+                    OntUnit.olt_rx_signal_dbm.between(crit, warn)
+                )
+            elif signal_quality == "good":
+                stmt = stmt.where(OntUnit.olt_rx_signal_dbm >= warn)
+
+        # Count before pagination
+        count_stmt = stmt.with_only_columns(func.count()).order_by(None)
+        total = db.scalar(count_stmt) or 0
+
+        # Ordering — include signal-based sorting
+        allowed = {
+            "serial_number": OntUnit.serial_number,
+            "created_at": OntUnit.created_at,
+            "signal": OntUnit.olt_rx_signal_dbm,
+            "last_seen": OntUnit.last_seen_at,
+            "vendor": OntUnit.vendor,
+        }
+        stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
+        results = list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
+        return results, total
 
     @classmethod
     def get(cls, db: Session, unit_id: str) -> OntUnit:

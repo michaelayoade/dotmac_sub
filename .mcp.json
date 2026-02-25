@@ -33,12 +33,12 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "--headless"],
+      "args": ["@playwright/mcp@latest", "--headless", "--no-sandbox"],
       "description": "Browser automation for testing admin/customer/reseller portals"
     },
     "redis": {
-      "command": "uvx",
-      "args": ["--from", "redis-mcp-server@latest", "redis-mcp-server", "--url", "redis://localhost:6379/0"],
+      "command": "/root/.local/bin/uvx",
+      "args": ["--from", "redis-mcp-server@latest", "redis-mcp-server", "--url", "redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@localhost:6379/0"],
       "description": "Redis inspection - Celery queues, settings cache, session data"
     },
     "celery": {
@@ -46,7 +46,7 @@
       "description": "Celery task queue management - submit, monitor, revoke tasks"
     },
     "docker": {
-      "command": "uvx",
+      "command": "/root/.local/bin/uvx",
       "args": ["docker-mcp"],
       "description": "Docker container management and log inspection"
     }

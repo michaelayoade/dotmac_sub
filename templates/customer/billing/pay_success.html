@@ -1,0 +1,61 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Payment Successful - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Payment Successful</span>
+        </nav>
+    </div>
+
+    <div class="mx-auto max-w-lg text-center">
+        <!-- Success Icon -->
+        <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/30">
+            <svg class="h-10 w-10 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+        </div>
+
+        <h1 class="mt-6 text-2xl font-bold text-stone-900 dark:text-white">Payment Successful!</h1>
+        <p class="mt-2 text-stone-500 dark:text-stone-400">Your payment has been processed and applied to your invoice.</p>
+
+        <!-- Payment Details Card -->
+        <div class="mt-8 rounded-2xl border border-stone-200 bg-white p-6 text-left shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Amount Paid</span>
+                    <span class="text-lg font-bold text-emerald-600 dark:text-emerald-400">&#8358;{{ "{:,.2f}".format(amount) }}</span>
+                </div>
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Invoice</span>
+                    <span class="text-sm font-medium text-stone-900 dark:text-white">#{{ invoice.invoice_number or invoice.id[:8] }}</span>
+                </div>
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Reference</span>
+                    <span class="text-sm font-mono text-stone-900 dark:text-white">{{ reference }}</span>
+                </div>
+                {% if payment and payment.receipt_number %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Receipt</span>
+                    <span class="text-sm font-mono text-stone-900 dark:text-white">{{ payment.receipt_number }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <a href="/portal/billing/invoices/{{ invoice.id }}" class="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">
+                View Invoice
+            </a>
+            <a href="/portal/billing" class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-6 py-2.5 text-sm font-semibold text-stone-700 shadow-sm hover:border-stone-300 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                Back to Billing
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

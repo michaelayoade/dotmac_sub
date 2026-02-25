@@ -71,9 +71,14 @@ def forgot_password_submit(
 
 
 @router.get("/reset-password", response_class=HTMLResponse)
-def reset_password_page(request: Request, token: str, error: str | None = None):
+def reset_password_page(
+    request: Request,
+    token: str,
+    error: str | None = None,
+    next_login: str | None = None,
+):
     """Display the password reset page."""
-    return web_auth_service.reset_password_page(request, token, error)
+    return web_auth_service.reset_password_page(request, token, error, next_login)
 
 
 @router.post("/reset-password", response_class=HTMLResponse)
@@ -82,11 +87,12 @@ def reset_password_submit(
     token: str = Form(...),
     password: str = Form(...),
     password_confirm: str = Form(...),
+    next_login: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Process password reset form submission."""
     return web_auth_service.reset_password_submit(
-        request, db, token, password, password_confirm
+        request, db, token, password, password_confirm, next_login
     )
 
 

@@ -5,16 +5,21 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.services import email as email_service
 from app.services import settings_spec
 
 ENFORCEMENT_DOMAIN = "enforcement"
+BRANDING_DOMAIN = "branding"
+SIDEBAR_LOGO_SETTING_KEY = "sidebar_logo_url"
+SIDEBAR_LOGO_DARK_SETTING_KEY = "sidebar_logo_dark_url"
+FAVICON_SETTING_KEY = "favicon_url"
 
 # Domain groupings by business function
 SETTINGS_DOMAIN_GROUPS = {
     "Enforcement": [ENFORCEMENT_DOMAIN],
     "Billing & Payments": ["billing", "collections", "usage"],
     "Notifications": ["notification", "comms"],
-    "Services & Catalog": ["catalog", "subscriber", "provisioning", "lifecycle"],
+    "Services & Catalog": [BRANDING_DOMAIN, "catalog", "subscriber", "provisioning", "lifecycle"],
     "Network": ["network", "network_monitoring", "radius", "bandwidth", "gis", "geocoding"],
     "Operations": ["workflow", "projects", "scheduler", "inventory"],
     "Security & System": ["auth", "audit", "imports"],
@@ -31,6 +36,7 @@ def settings_domains() -> list[dict]:
         for domain in domains
     ]
     items.insert(0, {"value": ENFORCEMENT_DOMAIN, "label": "Enforcement & FUP"})
+    items.insert(1, {"value": BRANDING_DOMAIN, "label": "Branding"})
     return items
 
 
@@ -126,6 +132,7 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
                 raw = _resolve_raw_setting(db, spec.domain, spec.key)
                 rows.append(
                     {
+                        "key": spec.key,
                         "spec": spec,
                         "value": current,
                         "raw": raw,
@@ -133,14 +140,46 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
                         "default": spec.default,
                     }
                 )
-            sections.append({"title": title, "rows": rows, "domain": domain.value})
+            sections.append({"title": title, "rows": rows, "settings": rows, "domain": domain.value})
 
         return {
             "domain": ENFORCEMENT_DOMAIN,
             "domains": settings_domains(),
             "grouped_domains": grouped_settings_domains(),
+            "settings": [],
             "settings_rows": [],
             "sections": sections,
+        }
+
+    if domain_value == BRANDING_DOMAIN:
+        main_logo_raw = settings_spec.resolve_value(
+            db,
+            SettingDomain.comms,
+            SIDEBAR_LOGO_SETTING_KEY,
+        )
+        dark_logo_raw = settings_spec.resolve_value(
+            db,
+            SettingDomain.comms,
+            SIDEBAR_LOGO_DARK_SETTING_KEY,
+        )
+        favicon_raw = settings_spec.resolve_value(
+            db,
+            SettingDomain.comms,
+            FAVICON_SETTING_KEY,
+        )
+        main_logo_url = str(main_logo_raw).strip() if main_logo_raw else ""
+        dark_logo_url = str(dark_logo_raw).strip() if dark_logo_raw else ""
+        favicon_url = str(favicon_raw).strip() if favicon_raw else ""
+        return {
+            "domain": BRANDING_DOMAIN,
+            "domains": settings_domains(),
+            "grouped_domains": grouped_settings_domains(),
+            "settings": [],
+            "settings_rows": [],
+            "sections": [],
+            "branding_main_logo_url": main_logo_url,
+            "branding_dark_logo_url": dark_logo_url,
+            "branding_favicon_url": favicon_url,
         }
 
     selected_domain = resolve_settings_domain(domain_value)
@@ -151,6 +190,7 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
         raw = _resolve_raw_setting(db, spec.domain, spec.key)
         rows.append(
             {
+                "key": spec.key,
                 "spec": spec,
                 "value": current,
                 "raw": raw,
@@ -158,12 +198,31 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
                 "default": spec.default,
             }
         )
+    smtp_sender_profiles: list[dict] = []
+    smtp_sender_default_key = "default"
+    smtp_sender_activity_rows: list[dict] = []
+    if selected_domain == SettingDomain.notification:
+        smtp_sender_profiles = email_service.list_smtp_senders(db)
+        smtp_sender_default_key = email_service.get_default_smtp_sender_key(db)
+        activity_map = email_service.get_smtp_activity_map(db)
+        smtp_sender_activity_rows = [
+            {
+                "activity_key": activity_key,
+                "activity_label": activity_label,
+                "sender_key": activity_map.get(activity_key, ""),
+            }
+            for activity_key, activity_label in email_service.SMTP_ACTIVITY_CHOICES
+        ]
     return {
         "domain": selected_domain.value,
         "domains": settings_domains(),
         "grouped_domains": grouped_settings_domains(),
+        "settings": rows,
         "settings_rows": rows,
         "sections": [],
+        "smtp_sender_profiles": smtp_sender_profiles,
+        "smtp_sender_default_key": smtp_sender_default_key,
+        "smtp_sender_activity_rows": smtp_sender_activity_rows,
     }
 
 

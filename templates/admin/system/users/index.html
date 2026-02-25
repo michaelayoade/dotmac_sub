@@ -1,132 +1,225 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card,
+    animation_styles
+%}
 
 {% block title %}Users - System{% endblock %}
 
-{% block breadcrumbs %}
-<nav class="flex" aria-label="Breadcrumb">
-    <ol class="flex items-center space-x-2 text-sm">
-        <li><a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a></li>
-        <li><svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></li>
-        <li><span class="text-slate-500 dark:text-slate-400">System</span></li>
-        <li><svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg></li>
-        <li class="text-slate-900 dark:text-white font-medium">Users</li>
-    </ol>
-</nav>
-{% endblock %}
-
-{% block page_header %}
-<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-    <div>
-        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Users</h1>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage system users and their access</p>
-    </div>
-    <button type="button"
-            x-on:click="$dispatch('open-modal', {name: 'create-user'})"
-            class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
-        </svg>
-        Add User
-    </button>
-</div>
-{% endblock %}
-
 {% block content %}
-<div class="space-y-6">
-    <!-- Stats Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Users</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active</p>
-            <p class="mt-1 text-2xl font-bold text-green-600 dark:text-green-400">{{ stats.active }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Admins</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.admins }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Pending Invites</p>
-            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.pending }}</p>
-        </div>
+{{ ambient_background("slate", "slate") }}
+
+<div class="relative space-y-6" x-data="usersBulkActions()" x-init="init()">
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        title="Users",
+        subtitle="Manage system users and their access",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>',
+        color="slate",
+        breadcrumbs=[
+            {"label": "System", "href": "/admin/system"},
+            {"label": "Users"}
+        ]
+    ) %}
+        <button type="button"
+                x-on:click="$dispatch('open-modal', {name: 'create-user'})"
+                class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-500/25 transition-all hover:shadow-xl hover:shadow-slate-500/30 hover:-translate-y-0.5">
+            <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+            Add User
+        </button>
+    {% endcall %}
+
+    {# ── Stats Cards ── #}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
+        {{ stats_card("Total Users", stats.total,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+            color="slate"
+        ) }}
+        {{ stats_card("Active", stats.active,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card("Admins", stats.admins,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+        {{ stats_card("Pending Invites", stats.pending,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>',
+            color="amber", color2="orange"
+        ) }}
     </div>
 
-    <!-- Search & Filters -->
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex flex-col sm:flex-row gap-4">
-            <div class="flex-1">
-                <div class="relative">
-                    <input type="text"
-                           name="search"
-                           placeholder="Search users..."
-                           hx-get="/admin/system/users/search"
-                           hx-trigger="input changed delay:300ms"
-                           hx-include="[name='role'],[name='status']"
-                           hx-target="#users-table-body"
-                           class="block w-full rounded-lg border border-slate-300 bg-white pl-10 pr-4 py-2 text-sm shadow-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
-                    <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                    </svg>
+    {# ── Search & Filters ── #}
+    {% call card(color="slate") %}
+        <div
+            x-data="usersFilterBuilder()"
+            x-init="init($el)"
+            data-filter-schema='{{ filter_schema | tojson | e }}'
+            data-initial-filters='{{ filters | tojson | e }}'
+            data-initial-search='{{ (search or "") | e }}'
+            data-current-user-id='{{ (current_user.person_id if current_user and current_user.person_id is defined else (current_user.id if current_user and current_user.id is defined else (current_user.email if current_user and current_user.email is defined else "anonymous"))) | e }}'
+            data-doctype="User"
+            class="space-y-4"
+        >
+            <input type="hidden" name="filters" x-bind:value="filtersJson">
+            <input type="hidden" name="order_by" value="{{ order_by | default('last_name') }}">
+            <input type="hidden" name="order_dir" value="{{ order_dir | default('asc') }}">
+
+            <div class="relative">
+                <input type="text" name="search"
+                       x-ref="searchInput"
+                       value="{{ search or '' }}"
+                       placeholder="Search users..."
+                       hx-get="/admin/system/users/search?offset=0&limit={{ limit }}"
+                       hx-trigger="input changed delay:300ms"
+                       x-on:input="persistState()"
+                       hx-include="[name='filters'],[name='order_by'],[name='order_dir']"
+                       hx-target="#users-table-content"
+                       class="block w-full rounded-lg border border-slate-300 bg-white pl-10 pr-4 py-2 text-sm shadow-sm placeholder-slate-400 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
+                <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+
+            <div class="space-y-3">
+                <template x-for="(row, index) in rows" :key="row.id">
+                    <div class="grid grid-cols-1 gap-2 md:grid-cols-12">
+                        <div class="md:col-span-3">
+                            <select x-model="row.field"
+                                    x-on:change="onFieldChange(index)"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <template x-for="field in schema" :key="field.field">
+                                    <option :value="field.field" x-text="field.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="md:col-span-2">
+                            <select x-model="row.operator"
+                                    x-on:change="onOperatorChange(index)"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <template x-for="operator in operatorOptions(row.field)" :key="operator.value">
+                                    <option :value="operator.value" x-text="operator.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="md:col-span-4">
+                            <template x-if="row.operator === 'between'">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <input :type="inputType(row.field)"
+                                           x-model="row.value[0]"
+                                           x-on:change="syncFilters()"
+                                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <input :type="inputType(row.field)"
+                                           x-model="row.value[1]"
+                                           x-on:change="syncFilters()"
+                                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                            </template>
+                            <template x-if="row.operator !== 'between'">
+                                <div>
+                                    <template x-if="selectOptions(row.field).length > 0">
+                                        <select x-model="row.value"
+                                                x-on:change="syncFilters()"
+                                                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                            <option value="">Select value</option>
+                                            <template x-for="option in selectOptions(row.field)" :key="option.value">
+                                                <option :value="option.value" x-text="option.label"></option>
+                                            </template>
+                                        </select>
+                                    </template>
+                                    <template x-if="selectOptions(row.field).length === 0">
+                                        <input :type="inputType(row.field)"
+                                               x-model="row.value"
+                                               x-on:input="syncFilters()"
+                                               placeholder="Value"
+                                               class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                        <div class="md:col-span-2">
+                            <select x-model="row.group"
+                                    x-on:change="syncFilters()"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="and">AND</option>
+                                <option value="or">OR</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-1">
+                            <button type="button"
+                                    x-on:click="removeRow(index)"
+                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                                Remove
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <button type="button"
+                        x-on:click="addRow(); persistState()"
+                        class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Add Filter
+                </button>
+                <button type="button"
+                        x-on:click="clearRows(); persistState()"
+                        class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Clear
+                </button>
+                <button type="button"
+                        x-on:click="persistState()"
+                        hx-get="/admin/system/users/filter?offset=0&limit={{ limit }}"
+                        hx-include="[name='search'],[name='filters'],[name='order_by'],[name='order_dir']"
+                        hx-target="#users-table-content"
+                        class="rounded-lg bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                    Apply Filters
+                </button>
+            </div>
+        </div>
+    {% endcall %}
+
+    {# ── Users Table ── #}
+    {% call card(color="slate", padding=False) %}
+        <div x-show="selectedIds.length > 0"
+             x-cloak
+             class="mx-4 mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span x-text="selectedIds.length"></span> user(s) selected
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select x-model="bulkUserType"
+                            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Set user type...</option>
+                        {% for value, label in user_type_options %}
+                        <option value="{{ value }}">{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button"
+                            @click="applyBulkUserType()"
+                            :disabled="bulkLoading || !bulkUserType"
+                            class="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
+                        Apply Type
+                    </button>
+                    <button type="button"
+                            @click="bulkInvite()"
+                            :disabled="bulkLoading"
+                            class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-800 dark:bg-slate-800 dark:text-blue-400 dark:hover:bg-blue-900/20">
+                        Send Welcome Invite
+                    </button>
+                    <button type="button"
+                            @click="bulkDelete()"
+                            :disabled="bulkLoading"
+                            class="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-900/20">
+                        Delete Selected
+                    </button>
                 </div>
             </div>
-            <div class="flex gap-3">
-                <select name="role"
-                        hx-get="/admin/system/users/filter"
-                        hx-trigger="change"
-                        hx-include="[name='search'],[name='status']"
-                        hx-target="#users-table-body"
-                        class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All Roles</option>
-                    {% for role in roles %}
-                    <option value="{{ role.id }}">{{ role.name }}</option>
-                    {% endfor %}
-                </select>
-                <select name="status"
-                        hx-get="/admin/system/users/filter"
-                        hx-trigger="change"
-                        hx-include="[name='search'],[name='role']"
-                        hx-target="#users-table-body"
-                        class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All Status</option>
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="pending">Pending</option>
-                </select>
-            </div>
         </div>
-    </div>
-
-    <!-- Users Table -->
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">User</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Role</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">MFA</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Active</th>
-                        <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
-                    </tr>
-                </thead>
-                <tbody id="users-table-body" class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% include "admin/system/users/_table_rows.html" %}
-                </tbody>
-            </table>
-        </div>
-
-        {% if pagination %}
-        <div class="border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800 sm:px-6">
-            {% include "components/data/table_pagination.html" %}
-        </div>
-        {% endif %}
-    </div>
+        {% include "admin/system/users/_table_content.html" %}
+    {% endcall %}
 </div>
 
-<!-- Create User Modal -->
+{# ── Create User Modal ── #}
 <div x-data="{ open: false, loading: false }"
      x-on:open-modal.window="if ($event.detail.name === 'create-user') open = true"
      x-on:close-modal.window="open = false"
@@ -167,31 +260,40 @@
                         <div>
                             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">First Name</label>
                             <input type="text" name="first_name" required
-                                   class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                   class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Last Name</label>
                             <input type="text" name="last_name" required
-                                   class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                   class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         </div>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Email</label>
                         <input type="email" name="email" required
-                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Role</label>
                         <select name="role_id" required
-                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for role in roles %}
                             <option value="{{ role.id }}">{{ role.name }}</option>
                             {% endfor %}
                         </select>
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">User Type</label>
+                        <select name="user_type" required
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for value, label in user_type_options %}
+                            <option value="{{ value }}" {% if value == 'system_user' %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     <div class="flex items-center gap-2">
                         <input type="checkbox" name="send_invite" id="send_invite" checked
-                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                               class="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700">
                         <label for="send_invite" class="text-sm text-slate-700 dark:text-slate-300">Send invitation email</label>
                     </div>
                     <div id="form-response"></div>
@@ -201,9 +303,8 @@
                             class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
                         Cancel
                     </button>
-                    <button type="submit"
-                            :disabled="loading"
-                            class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50">
+                    <button type="submit" :disabled="loading"
+                            class="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
                         <svg x-show="loading" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -215,4 +316,420 @@
         </div>
     </div>
 </div>
+
+{{ animation_styles() }}
+
+<script>
+function usersFilterBuilder() {
+    return {
+        schema: [],
+        doctype: 'User',
+        rows: [],
+        filtersJson: '',
+        storageKey: '',
+        hydrating: false,
+
+        init(el) {
+            this.hydrating = true;
+            this.schema = this.parseJsonAttribute(el.getAttribute('data-filter-schema'), []);
+            this.doctype = el.getAttribute('data-doctype') || 'User';
+            const initialFilters = this.parseJsonAttribute(el.getAttribute('data-initial-filters'), null);
+            const initialSearch = el.getAttribute('data-initial-search') || '';
+            const userId = el.getAttribute('data-current-user-id') || 'anonymous';
+            this.storageKey = `users.filter.state.${userId}`;
+
+            this.rows = this.parseInitialFilters(initialFilters);
+            if (this.rows.length === 0) {
+                this.addRow();
+            }
+            this.syncFilters();
+            this.restorePersistedState(initialSearch, initialFilters);
+            this.hydrating = false;
+            this.persistState();
+        },
+
+        parseJsonAttribute(rawValue, fallbackValue) {
+            if (!rawValue || rawValue === 'null') return fallbackValue;
+            try {
+                return JSON.parse(rawValue);
+            } catch (_error) {
+                return fallbackValue;
+            }
+        },
+
+        parseInitialFilters(initialFilters) {
+            if (!initialFilters) return [];
+            try {
+                const parsed = typeof initialFilters === 'string' ? JSON.parse(initialFilters) : initialFilters;
+                const rows = [];
+                const andRows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.and) ? parsed.and : []);
+                const orRows = parsed && Array.isArray(parsed.or) ? parsed.or : [];
+
+                andRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'and'));
+                    }
+                });
+                orRows.forEach((item) => {
+                    if (Array.isArray(item) && item.length === 4) {
+                        rows.push(this.rowFromPayload(item, 'or'));
+                    }
+                });
+                return rows;
+            } catch (_error) {
+                return [];
+            }
+        },
+
+        rowFromPayload(item, group) {
+            const fieldEntry = this.schema.find((entry) => entry.field === item[1]);
+            const field = (fieldEntry && fieldEntry.field) ? fieldEntry.field : this.defaultField();
+            const operator = item[2] || this.defaultOperator(field);
+            let value = item[3];
+            if (operator === 'between' && !Array.isArray(value)) {
+                value = ['', ''];
+            }
+            return { id: this.newId(), field, operator, value, group };
+        },
+
+        newId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return `${Date.now()}-${Math.random()}`;
+        },
+
+        defaultField() {
+            if (this.schema.length > 0 && this.schema[0] && this.schema[0].field) {
+                return this.schema[0].field;
+            }
+            return 'email';
+        },
+
+        defaultOperator(field) {
+            const operators = this.operatorOptions(field);
+            if (operators.length > 0 && operators[0] && operators[0].value) {
+                return operators[0].value;
+            }
+            return '=';
+        },
+
+        operatorOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.operators ? fieldEntry.operators : [{ value: '=', label: 'Equals' }];
+        },
+
+        selectOptions(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.options ? fieldEntry.options : [];
+        },
+
+        fieldType(field) {
+            const fieldEntry = this.schema.find((entry) => entry.field === field);
+            return fieldEntry && fieldEntry.type ? fieldEntry.type : 'text';
+        },
+
+        inputType(field) {
+            const type = this.fieldType(field);
+            if (type === 'number') return 'number';
+            if (type === 'date') return 'date';
+            if (type === 'datetime') return 'datetime-local';
+            return 'text';
+        },
+
+        addRow() {
+            const field = this.defaultField();
+            this.rows.push({
+                id: this.newId(),
+                field,
+                operator: this.defaultOperator(field),
+                value: '',
+                group: 'and',
+            });
+            this.syncFilters();
+        },
+
+        removeRow(index) {
+            this.rows.splice(index, 1);
+            if (this.rows.length === 0) {
+                this.addRow();
+                return;
+            }
+            this.syncFilters();
+        },
+
+        clearRows() {
+            this.rows = [];
+            this.addRow();
+        },
+
+        onFieldChange(index) {
+            const row = this.rows[index];
+            const options = this.operatorOptions(row.field).map((item) => item.value);
+            if (!options.includes(row.operator)) {
+                row.operator = this.defaultOperator(row.field);
+            }
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        onOperatorChange(index) {
+            const row = this.rows[index];
+            if (row.operator === 'between' && !Array.isArray(row.value)) {
+                row.value = ['', ''];
+            }
+            if (row.operator !== 'between' && Array.isArray(row.value)) {
+                row.value = '';
+            }
+            this.syncFilters();
+        },
+
+        syncFilters() {
+            const andRows = [];
+            const orRows = [];
+            this.rows.forEach((row) => {
+                if (!row.field || !row.operator) return;
+                const payload = [this.doctype, row.field, row.operator, row.value];
+                if (row.group === 'or') {
+                    orRows.push(payload);
+                } else {
+                    andRows.push(payload);
+                }
+            });
+            this.filtersJson = JSON.stringify({ and: andRows, or: orRows });
+            this.persistState();
+        },
+
+        getSearchValue() {
+            if (!this.$refs || !this.$refs.searchInput) return '';
+            return this.$refs.searchInput.value || '';
+        },
+
+        setSearchValue(value) {
+            if (!this.$refs || !this.$refs.searchInput) return;
+            this.$refs.searchInput.value = value || '';
+        },
+
+        persistState() {
+            if (this.hydrating) return;
+            if (!this.storageKey) return;
+            try {
+                const payload = {
+                    search: this.getSearchValue(),
+                    filters: this.filtersJson,
+                    rows: this.rows.map((row) => ({
+                        field: row.field,
+                        operator: row.operator,
+                        value: row.value,
+                        group: row.group === 'or' ? 'or' : 'and',
+                    })),
+                    savedAt: Date.now(),
+                };
+                window.localStorage.setItem(this.storageKey, JSON.stringify(payload));
+            } catch (_error) {
+                // ignore storage errors (quota/private mode)
+            }
+        },
+
+        restorePersistedState(initialSearch, initialFilters) {
+            if (!this.storageKey) return;
+            let saved = null;
+            try {
+                const raw = window.localStorage.getItem(this.storageKey);
+                saved = raw ? JSON.parse(raw) : null;
+            } catch (_error) {
+                saved = null;
+            }
+            if (!saved || typeof saved !== 'object') return;
+
+            const savedSearch = typeof saved.search === 'string' ? saved.search : '';
+            const savedFilters = typeof saved.filters === 'string' ? saved.filters : '';
+            const savedRows = Array.isArray(saved.rows) ? saved.rows : [];
+            const restored = this.normalizeSavedRows(savedRows);
+            if (restored.length > 0) {
+                this.rows = restored;
+                this.syncFilters();
+            } else if (savedFilters) {
+                const parsedRestored = this.parseInitialFilters(savedFilters);
+                if (parsedRestored.length > 0) {
+                    this.rows = parsedRestored;
+                    this.syncFilters();
+                }
+            }
+            this.setSearchValue(savedSearch);
+
+            if (savedSearch || restored.length > 0 || (savedFilters && savedFilters !== '{"and":[],"or":[]}')) {
+                this.applyRestoredState();
+            }
+        },
+
+        normalizeSavedRows(rows) {
+            if (!Array.isArray(rows)) return [];
+            return rows
+                .filter((row) => row && typeof row === 'object')
+                .map((row) => {
+                    const field = typeof row.field === 'string' && row.field ? row.field : this.defaultField();
+                    const operator = typeof row.operator === 'string' && row.operator ? row.operator : this.defaultOperator(field);
+                    let value = row.value;
+                    if (operator === 'between') {
+                        if (!Array.isArray(value) || value.length !== 2) {
+                            value = ['', ''];
+                        }
+                    } else if (Array.isArray(value)) {
+                        value = '';
+                    }
+                    return {
+                        id: this.newId(),
+                        field,
+                        operator,
+                        value,
+                        group: row.group === 'or' ? 'or' : 'and',
+                    };
+                });
+        },
+
+        applyRestoredState() {
+            if (!this.$refs || !this.$refs.searchInput) return;
+            const event = new Event('input', { bubbles: true });
+            this.$refs.searchInput.dispatchEvent(event);
+        },
+    };
+}
+
+function usersBulkActions() {
+    return {
+        selectedIds: [],
+        allIds: [],
+        bulkUserType: '',
+        bulkLoading: false,
+        csrfToken: '',
+
+        init() {
+            this.csrfToken = this.getCsrfToken();
+            this.refreshIds();
+            document.body.addEventListener('htmx:afterSwap', () => {
+                this.refreshIds();
+            });
+        },
+
+        getCsrfToken() {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            const metaToken = meta ? meta.getAttribute('content') : '';
+            if (metaToken) return metaToken;
+
+            const match = document.cookie.match(/(?:^|;\\s*)csrf_token=([^;]+)/);
+            return match ? decodeURIComponent(match[1]) : '';
+        },
+
+        refreshIds() {
+            this.allIds = Array.from(this.$root.querySelectorAll('[data-bulk-id]')).map((el) => el.dataset.bulkId);
+            this.selectedIds = this.selectedIds.filter((id) => this.allIds.includes(id));
+        },
+
+        isSelected(id) {
+            return this.selectedIds.includes(id);
+        },
+
+        toggleRow(id, checked) {
+            if (checked) {
+                if (!this.selectedIds.includes(id)) {
+                    this.selectedIds.push(id);
+                }
+                return;
+            }
+            this.selectedIds = this.selectedIds.filter((item) => item !== id);
+        },
+
+        toggleAll(checked) {
+            this.selectedIds = checked ? [...this.allIds] : [];
+        },
+
+        get isAllSelected() {
+            return this.allIds.length > 0 && this.selectedIds.length === this.allIds.length;
+        },
+
+        async applyBulkUserType() {
+            if (!this.bulkUserType || this.selectedIds.length === 0) return;
+            this.bulkLoading = true;
+            try {
+                const response = await fetch('/admin/system/users/bulk/user-type', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': this.csrfToken,
+                    },
+                    body: JSON.stringify({
+                        user_ids: this.selectedIds,
+                        user_type: this.bulkUserType,
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    alert(data.detail || 'Bulk user type update failed.');
+                    return;
+                }
+                window.location.reload();
+            } finally {
+                this.bulkLoading = false;
+            }
+        },
+
+        async bulkDelete() {
+            if (this.selectedIds.length === 0) return;
+            if (!confirm('Delete selected users? Active users or linked users will be skipped.')) return;
+            this.bulkLoading = true;
+            try {
+                const response = await fetch('/admin/system/users/bulk/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': this.csrfToken,
+                    },
+                    body: JSON.stringify({
+                        user_ids: this.selectedIds,
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    alert(data.detail || 'Bulk delete failed.');
+                    return;
+                }
+                window.location.reload();
+            } finally {
+                this.bulkLoading = false;
+            }
+        },
+
+        async bulkInvite() {
+            if (this.selectedIds.length === 0) return;
+            this.bulkLoading = true;
+            try {
+                const response = await fetch('/admin/system/users/bulk/invite', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': this.csrfToken,
+                    },
+                    body: JSON.stringify({
+                        user_ids: this.selectedIds,
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    alert(data.detail || 'Bulk invite failed.');
+                    return;
+                }
+                alert(data.message || 'Welcome invites sent.');
+            } finally {
+                this.bulkLoading = false;
+            }
+        },
+    };
+}
+</script>
 {% endblock %}

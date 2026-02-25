@@ -1,4 +1,11 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card, card, data_table,
+    table_head, table_row, row_actions, row_action, status_badge,
+    empty_state, action_button, metric_row, alert_count_badge,
+    connection_status, progress_bar,
+    icon_plus, icon_view
+%}
 
 {% block title %}Dashboard - DotMac Subs{% endblock %}
 
@@ -8,25 +15,17 @@
 {% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data="dashboard()">
-    <!-- Ambient Background -->
-    <div class="fixed inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
-        <div class="absolute inset-0 bg-gradient-to-br from-amber-500/5 via-transparent to-slate-500/5 dark:from-amber-500/10 dark:via-transparent dark:to-slate-900/50"></div>
-        <div class="absolute -top-40 -right-40 w-[600px] h-[600px] bg-amber-500/10 rounded-full blur-3xl dark:bg-amber-500/5"></div>
-        <div class="absolute -bottom-40 -left-40 w-[500px] h-[500px] bg-slate-500/10 rounded-full blur-3xl dark:bg-slate-800/50"></div>
-    </div>
+{{ ambient_background("amber", "slate") }}
 
-    <!-- Header -->
-    <header class="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-center gap-4">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 shadow-lg shadow-amber-500/30">
-                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-            </div>
-            <div>
-                <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Dashboard</h1>
-                <p class="text-sm text-slate-500 dark:text-slate-400">Subscription overview and key metrics</p>
-            </div>
-        </div>
+<div class="space-y-6">
+    {# ── Header ── #}
+    {% call(content) page_header(
+        "Dashboard",
+        subtitle="Subscription overview and key metrics",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+        color="amber",
+        color2="amber"
+    ) %}
         <div class="flex items-center gap-4">
             <div class="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 dark:bg-emerald-900/30">
                 <span class="relative flex h-2 w-2">
@@ -37,145 +36,106 @@
             </div>
             <span class="text-sm text-slate-400 dark:text-slate-500">Updated {{ now.strftime('%H:%M') if now else '--:--' }}</span>
         </div>
-    </header>
+    {% endcall %}
 
-    <!-- Network Health & Alarms Row -->
+    {# ── Network Health & Alarms Row ── #}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
-        <!-- Network Health Summary -->
-        <div class="lg:col-span-1 animate-fade-in-up" style="animation-delay: 0.1s">
-            <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 h-full">
-                <div class="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-500/10 to-emerald-600/5"></div>
-                <div class="relative">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-2">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                            </div>
-                            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Network Health</h3>
-                        </div>
-                        {% if stats.olts_total > 0 %}
-                        {% set health_pct = network_health.percent if network_health else 0 %}
-                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium {% if network_health.status == 'healthy' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% elif network_health.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400{% endif %}">
-                            <span class="h-1.5 w-1.5 rounded-full {% if network_health.status == 'healthy' %}bg-emerald-500{% elif network_health.status == 'warning' %}bg-amber-500{% else %}bg-red-500{% endif %}"></span>
-                            {% if network_health.status == 'healthy' %}Healthy{% elif network_health.status == 'warning' %}Warning{% else %}Critical{% endif %}
-                        </span>
-                        {% else %}
-                        <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                            No Data
-                        </span>
-                        {% endif %}
+        {# Network Health Summary #}
+        <div class="lg:col-span-1">
+            {% call card("Network Health", color="emerald") %}
+            {% if stats.olts_total > 0 %}
+            {% set health_pct = network_health.percent if network_health else 0 %}
+            <div class="flex items-center justify-end mb-4 -mt-2">
+                {% if network_health.status == 'healthy' %}
+                    {{ status_badge("Healthy", variant="success") }}
+                {% elif network_health.status == 'warning' %}
+                    {{ status_badge("Warning", variant="warning") }}
+                {% else %}
+                    {{ status_badge("Critical", variant="error") }}
+                {% endif %}
+            </div>
+            <div class="flex items-center justify-center mb-4">
+                <div class="relative flex h-28 w-28 items-center justify-center">
+                    <svg class="h-28 w-28 -rotate-90 transform" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" class="text-slate-100 dark:text-slate-700"/>
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" stroke-dasharray="{{ (health_pct * 251.2) / 100 }}, 251.2" stroke-linecap="round" class="{% if network_health.status == 'healthy' %}text-emerald-500{% elif network_health.status == 'warning' %}text-amber-500{% else %}text-red-500{% endif %} transition-all duration-1000"/>
+                    </svg>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span class="text-2xl font-bold text-slate-900 dark:text-white">{{ health_pct }}%</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Uptime</span>
                     </div>
-
-                    {% if stats.olts_total > 0 %}
-                    <!-- Health Ring Visualization -->
-                    <div class="flex items-center justify-center mb-4">
-                        <div class="relative flex h-28 w-28 items-center justify-center">
-                            <svg class="h-28 w-28 -rotate-90 transform" viewBox="0 0 100 100">
-                                <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" class="text-slate-100 dark:text-slate-700"/>
-                                <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" stroke-dasharray="{{ (health_pct * 251.2) / 100 }}, 251.2" stroke-linecap="round" class="{% if network_health.status == 'healthy' %}text-emerald-500{% elif network_health.status == 'warning' %}text-amber-500{% else %}text-red-500{% endif %} transition-all duration-1000"/>
-                            </svg>
-                            <div class="absolute inset-0 flex flex-col items-center justify-center">
-                                <span class="text-2xl font-bold text-slate-900 dark:text-white">{{ health_pct }}%</span>
-                                <span class="text-xs text-slate-500 dark:text-slate-400">Uptime</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="space-y-2">
-                        <div class="flex items-center justify-between text-sm">
-                            <span class="flex items-center gap-2 text-slate-600 dark:text-slate-400">
-                                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>OLTs Online
-                            </span>
-                            <span class="font-semibold text-slate-900 dark:text-white">{{ stats.olts_online }}/{{ stats.olts_total }}</span>
-                        </div>
-                        <div class="flex items-center justify-between text-sm">
-                            <span class="flex items-center gap-2 text-slate-600 dark:text-slate-400">
-                                <span class="h-2 w-2 rounded-full bg-amber-500"></span>ONTs Active
-                            </span>
-                            <span class="font-semibold text-slate-900 dark:text-white">{{ stats.onts_active }}/{{ stats.onts_total }}</span>
-                        </div>
-                    </div>
-                    {% else %}
-                    <div class="flex flex-col items-center justify-center py-6">
-                        <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                            <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                        </div>
-                        <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Network monitoring not configured</p>
-                        <a href="/admin/network/monitoring" class="mt-2 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Configure Network</a>
-                    </div>
-                    {% endif %}
                 </div>
             </div>
+            {{ metric_row("OLTs Online", stats.olts_online ~ "/" ~ stats.olts_total, color="emerald") }}
+            {{ metric_row("ONTs Active", stats.onts_active ~ "/" ~ stats.onts_total, color="amber") }}
+            {% else %}
+            <div class="flex flex-col items-center justify-center py-6">
+                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
+                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                </div>
+                <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Network monitoring not configured</p>
+                <a href="/admin/network/monitoring" class="mt-2 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Configure Network</a>
+            </div>
+            {% endif %}
+            {% endcall %}
         </div>
 
-        <!-- Active Alarms -->
-        <div class="lg:col-span-3 animate-fade-in-up" style="animation-delay: 0.15s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 h-full">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Active Alarms</h3>
-                    </div>
-                    <a href="/admin/network/alarms" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>
+        {# Active Alarms #}
+        <div class="lg:col-span-3">
+            {% call card("Active Alarms", color="rose",
+                actions='<a href="/admin/network/alarms" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
+            ) %}
+            <div class="grid grid-cols-4 gap-3 mb-4">
+                <div class="rounded-xl bg-gradient-to-br from-red-50 to-red-100/50 p-3 dark:from-red-900/20 dark:to-red-900/10 border border-red-100 dark:border-red-900/30">
+                    <p class="text-2xl font-bold text-red-600 dark:text-red-400">{{ stats.alarms_critical }}</p>
+                    <p class="text-xs font-medium text-red-600/70 dark:text-red-400/70">Critical</p>
                 </div>
-                <div class="p-5">
-                    <!-- Alarm Summary Cards -->
-                    <div class="grid grid-cols-4 gap-3 mb-4">
-                        <div class="rounded-xl bg-gradient-to-br from-red-50 to-red-100/50 p-3 dark:from-red-900/20 dark:to-red-900/10 border border-red-100 dark:border-red-900/30">
-                            <p class="text-2xl font-bold text-red-600 dark:text-red-400">{{ stats.alarms_critical }}</p>
-                            <p class="text-xs font-medium text-red-600/70 dark:text-red-400/70">Critical</p>
-                        </div>
-                        <div class="rounded-xl bg-gradient-to-br from-orange-50 to-orange-100/50 p-3 dark:from-orange-900/20 dark:to-orange-900/10 border border-orange-100 dark:border-orange-900/30">
-                            <p class="text-2xl font-bold text-orange-600 dark:text-orange-400">{{ stats.alarms_major }}</p>
-                            <p class="text-xs font-medium text-orange-600/70 dark:text-orange-400/70">Major</p>
-                        </div>
-                        <div class="rounded-xl bg-gradient-to-br from-amber-50 to-amber-100/50 p-3 dark:from-amber-900/20 dark:to-amber-900/10 border border-amber-100 dark:border-amber-900/30">
-                            <p class="text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.alarms_minor }}</p>
-                            <p class="text-xs font-medium text-amber-600/70 dark:text-amber-400/70">Minor</p>
-                        </div>
-                        <div class="rounded-xl bg-gradient-to-br from-blue-50 to-blue-100/50 p-3 dark:from-blue-900/20 dark:to-blue-900/10 border border-blue-100 dark:border-blue-900/30">
-                            <p class="text-2xl font-bold text-blue-600 dark:text-blue-400">{{ stats.alarms_warning }}</p>
-                            <p class="text-xs font-medium text-blue-600/70 dark:text-blue-400/70">Warning</p>
-                        </div>
-                    </div>
-
-                    {% if active_alarms %}
-                    <div class="space-y-2">
-                        {% for alarm in active_alarms[:3] %}
-                        <div class="group flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition hover:bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-700/50">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg {% if alarm.severity == 'critical' %}bg-red-100 dark:bg-red-900/30{% elif alarm.severity == 'major' %}bg-orange-100 dark:bg-orange-900/30{% elif alarm.severity == 'minor' %}bg-amber-100 dark:bg-amber-900/30{% else %}bg-blue-100 dark:bg-blue-900/30{% endif %}">
-                                <span class="flex h-2.5 w-2.5 rounded-full {% if alarm.severity == 'critical' %}bg-red-500 animate-pulse{% elif alarm.severity == 'major' %}bg-orange-500{% elif alarm.severity == 'minor' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <p class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ alarm.message }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ alarm.device }} · {{ alarm.time }}</p>
-                            </div>
-                            <button class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 opacity-0 transition group-hover:opacity-100 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Acknowledge</button>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% else %}
-                    <div class="flex flex-col items-center justify-center py-6">
-                        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
-                            <svg class="h-7 w-7 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        </div>
-                        <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Clear</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">No active alarms</p>
-                    </div>
-                    {% endif %}
+                <div class="rounded-xl bg-gradient-to-br from-orange-50 to-orange-100/50 p-3 dark:from-orange-900/20 dark:to-orange-900/10 border border-orange-100 dark:border-orange-900/30">
+                    <p class="text-2xl font-bold text-orange-600 dark:text-orange-400">{{ stats.alarms_major }}</p>
+                    <p class="text-xs font-medium text-orange-600/70 dark:text-orange-400/70">Major</p>
+                </div>
+                <div class="rounded-xl bg-gradient-to-br from-amber-50 to-amber-100/50 p-3 dark:from-amber-900/20 dark:to-amber-900/10 border border-amber-100 dark:border-amber-900/30">
+                    <p class="text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.alarms_minor }}</p>
+                    <p class="text-xs font-medium text-amber-600/70 dark:text-amber-400/70">Minor</p>
+                </div>
+                <div class="rounded-xl bg-gradient-to-br from-blue-50 to-blue-100/50 p-3 dark:from-blue-900/20 dark:to-blue-900/10 border border-blue-100 dark:border-blue-900/30">
+                    <p class="text-2xl font-bold text-blue-600 dark:text-blue-400">{{ stats.alarms_warning }}</p>
+                    <p class="text-xs font-medium text-blue-600/70 dark:text-blue-400/70">Warning</p>
                 </div>
             </div>
+
+            {% if active_alarms %}
+            <div class="space-y-2">
+                {% for alarm in active_alarms[:3] %}
+                <div class="group flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition hover:bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-700/50">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-lg {% if alarm.severity == 'critical' %}bg-red-100 dark:bg-red-900/30{% elif alarm.severity == 'major' %}bg-orange-100 dark:bg-orange-900/30{% elif alarm.severity == 'minor' %}bg-amber-100 dark:bg-amber-900/30{% else %}bg-blue-100 dark:bg-blue-900/30{% endif %}">
+                        <span class="flex h-2.5 w-2.5 rounded-full {% if alarm.severity == 'critical' %}bg-red-500 animate-pulse{% elif alarm.severity == 'major' %}bg-orange-500{% elif alarm.severity == 'minor' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ alarm.message }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ alarm.device_id or '' }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="flex flex-col items-center justify-center py-6">
+                <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
+                    <svg class="h-7 w-7 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Clear</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">No active alarms</p>
+            </div>
+            {% endif %}
+            {% endcall %}
         </div>
     </div>
 
-    <!-- Server Health -->
+    {# ── Server Health (HTMX lazy-loaded) ── #}
     <div hx-get="/admin/dashboard/server-health"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up">
+        <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
@@ -188,362 +148,216 @@
         </div>
     </div>
 
-    <!-- Key Metrics Row -->
-    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4 animate-fade-in-up" style="animation-delay: 0.2s">
-        <!-- MRR Card -->
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-emerald-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-emerald-800">
-            <div class="absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 transition-transform duration-500 group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between mb-2">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">MRR</p>
-                    <div class="flex items-end gap-0.5 h-4">
-                        {% for i in range(6) %}
-                        <div class="w-1 rounded-t bg-emerald-{{ 200 + i * 100 if i < 4 else 500 }} dark:bg-emerald-{{ 800 - i * 100 if i < 4 else 500 }}" style="height: {{ 30 + i * 12 }}%"></div>
-                        {% endfor %}
-                    </div>
-                </div>
-                <p class="text-2xl font-bold tabular-nums text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.mrr) }}</p>
-                <p class="mt-1 text-xs">
-                    <span class="inline-flex items-center gap-0.5 font-medium text-emerald-600 dark:text-emerald-400">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                        {{ stats.mrr_growth | default(5.2) }}%
-                    </span>
-                    <span class="text-slate-400 dark:text-slate-500">vs last month</span>
-                </p>
-            </div>
-        </div>
-
-        <!-- ARPU Card -->
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-blue-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-blue-800">
-            <div class="absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br from-blue-500/10 to-blue-600/5 transition-transform duration-500 group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between mb-2">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">ARPU</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                    </div>
-                </div>
-                <p class="text-2xl font-bold tabular-nums text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.arpu) }}</p>
-                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Per subscriber</p>
-            </div>
-        </div>
-
-        <!-- Active Subscribers Card -->
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-amber-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-amber-800">
-            <div class="absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br from-amber-500/10 to-amber-600/5 transition-transform duration-500 group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between mb-2">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Subscribers</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                    </div>
-                </div>
-                <p class="text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.active_subscribers }}</p>
-                <p class="mt-1 text-xs">
-                    <span class="inline-flex items-center gap-0.5 font-medium text-emerald-600 dark:text-emerald-400">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                        {{ stats.new_subscribers | default(12) }}
-                    </span>
-                    <span class="text-slate-400 dark:text-slate-500">this week</span>
-                </p>
-            </div>
-        </div>
-
-        <!-- Pending Orders Card -->
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-rose-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-rose-800">
-            <div class="absolute -right-6 -top-6 h-20 w-20 rounded-full bg-gradient-to-br from-rose-500/10 to-rose-600/5 transition-transform duration-500 group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between mb-2">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Pending Orders</p>
-                    {% if stats.orders_new > 0 %}
-                    <span class="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-xs font-bold text-white">{{ [stats.orders_new, 99] | min }}</span>
-                    {% endif %}
-                </div>
-                <p class="text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.orders_new }}</p>
-                <p class="mt-1 text-xs">
-                    <span class="text-slate-400 dark:text-slate-500">Awaiting processing</span>
-                </p>
-            </div>
-        </div>
+    {# ── Key Metrics Row ── #}
+    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {{ stats_card(
+            label="MRR",
+            value="₦" ~ "{:,.0f}".format(stats.mrr),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>',
+            color="emerald",
+            color2="green"
+        ) }}
+        {{ stats_card(
+            label="ARPU",
+            value="₦" ~ "{:,.0f}".format(stats.arpu),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>',
+            color="blue",
+            color2="indigo"
+        ) }}
+        {{ stats_card(
+            label="Subscribers",
+            value=stats.active_subscribers,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+            color="amber",
+            color2="orange"
+        ) }}
+        {{ stats_card(
+            label="Pending Orders",
+            value=stats.orders_new,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>',
+            color="rose",
+            color2="pink"
+        ) }}
     </div>
 
-    <!-- Revenue & Pipeline Row -->
+    {# ── Revenue & Pipeline Row ── #}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <!-- Revenue Trend Chart -->
-        <div class="lg:col-span-2 animate-fade-in-up" style="animation-delay: 0.25s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-amber-100 to-amber-200 text-amber-600 dark:from-amber-900/40 dark:to-amber-900/20 dark:text-amber-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Revenue Trend</h3>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <select id="revenuePeriod" class="rounded-lg border-0 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-slate-200 dark:ring-slate-600">
-                            <option value="30">Last 30 Days</option>
-                            <option value="90">Last 90 Days</option>
-                            <option value="365">Last Year</option>
-                        </select>
-                        <a href="/admin/reports/revenue" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Full Report</a>
-                    </div>
-                </div>
-                <div class="p-5">
-                    <div class="chart-container" style="height: 280px;">
-                        <canvas id="revenueChart"></canvas>
-                    </div>
-                </div>
+        {# Revenue Trend Chart #}
+        <div class="lg:col-span-2">
+            {% call card("Revenue Trend", color="amber",
+                actions='<div class="flex items-center gap-3"><select id="revenuePeriod" class="rounded-lg border-0 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-slate-200 dark:ring-slate-600"><option value="30">Last 30 Days</option><option value="90">Last 90 Days</option><option value="365">Last Year</option></select><a href="/admin/reports/revenue" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Full Report</a></div>'
+            ) %}
+            <div class="chart-container" style="height: 280px;">
+                <canvas id="revenueChart"></canvas>
             </div>
+            {% endcall %}
         </div>
 
-        <!-- Service Orders Pipeline -->
-        <div class="lg:col-span-1 animate-fade-in-up" style="animation-delay: 0.3s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 h-full">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Order Pipeline</h3>
-                    </div>
-                    <a href="/admin/operations/service-orders" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>
+        {# Service Orders Pipeline #}
+        {% call card("Order Pipeline", color="indigo",
+            actions='<a href="/admin/provisioning/orders" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
+        ) %}
+        <div class="grid grid-cols-3 gap-2 mb-4">
+            <div class="rounded-lg bg-slate-50 p-2 text-center dark:bg-slate-700/50">
+                <p class="text-lg font-bold text-slate-900 dark:text-white">{{ stats.orders_new }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">New</p>
+            </div>
+            <div class="rounded-lg bg-indigo-50 p-2 text-center dark:bg-indigo-900/30">
+                <p class="text-lg font-bold text-indigo-600 dark:text-indigo-400">{{ stats.orders_in_progress }}</p>
+                <p class="text-xs text-indigo-600/70 dark:text-indigo-400/70">Active</p>
+            </div>
+            <div class="rounded-lg bg-emerald-50 p-2 text-center dark:bg-emerald-900/30">
+                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ stats.orders_completed_today }}</p>
+                <p class="text-xs text-emerald-600/70 dark:text-emerald-400/70">Done</p>
+            </div>
+        </div>
+        <div class="chart-container" style="height: 180px;">
+            <canvas id="pipelineChart"></canvas>
+        </div>
+        {% set total_orders = stats.orders_new + stats.orders_in_progress + stats.orders_scheduled + stats.orders_pending_activation %}
+        {% if total_orders > 0 %}
+        <div class="mt-4">
+            {{ progress_bar(stats.orders_new + stats.orders_in_progress, max=total_orders, label="Pipeline", color="indigo") }}
+        </div>
+        {% endif %}
+        {% endcall %}
+    </div>
+
+    {# ── Billing & Activity Row ── #}
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        {# Accounts Receivable #}
+        <div class="lg:col-span-2">
+            {% call card("Accounts Receivable", color="amber",
+                actions='<a href="/admin/billing" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View Billing</a>'
+            ) %}
+            {% set total_ar = stats.ar_current + stats.ar_30 + stats.ar_60 + stats.ar_90 %}
+            {% if total_ar > 0 %}
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="space-y-1">
+                    {{ metric_row("Current", "₦" ~ "{:,.0f}".format(stats.ar_current), color="emerald", mono=True) }}
+                    {{ metric_row("1-30 Days", "₦" ~ "{:,.0f}".format(stats.ar_30), color="amber", mono=True) }}
+                    {{ metric_row("31-60 Days", "₦" ~ "{:,.0f}".format(stats.ar_60), color="orange", mono=True) }}
+                    {{ metric_row("60+ Days", "₦" ~ "{:,.0f}".format(stats.ar_90), color="red", mono=True) }}
                 </div>
-                <div class="p-5">
-                    <!-- Pipeline Mini Stats -->
-                    <div class="grid grid-cols-3 gap-2 mb-4">
-                        <div class="rounded-lg bg-slate-50 p-2 text-center dark:bg-slate-700/50">
-                            <p class="text-lg font-bold text-slate-900 dark:text-white">{{ stats.orders_new }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">New</p>
-                        </div>
-                        <div class="rounded-lg bg-indigo-50 p-2 text-center dark:bg-indigo-900/30">
-                            <p class="text-lg font-bold text-indigo-600 dark:text-indigo-400">{{ stats.orders_in_progress }}</p>
-                            <p class="text-xs text-indigo-600/70 dark:text-indigo-400/70">Active</p>
-                        </div>
-                        <div class="rounded-lg bg-emerald-50 p-2 text-center dark:bg-emerald-900/30">
-                            <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ stats.orders_completed_today }}</p>
-                            <p class="text-xs text-emerald-600/70 dark:text-emerald-400/70">Done</p>
-                        </div>
+                <div class="flex flex-col items-center justify-center">
+                    <div class="chart-container-sm" style="height: 160px; width: 160px;">
+                        <canvas id="arAgingChart"></canvas>
                     </div>
-
-                    <!-- Pipeline Chart -->
-                    <div class="chart-container" style="height: 180px;">
-                        <canvas id="pipelineChart"></canvas>
-                    </div>
-
-                    <!-- Pipeline Progress -->
-                    <div class="mt-4 space-y-2">
-                        {% set total_orders = stats.orders_new + stats.orders_in_progress + stats.orders_scheduled + stats.orders_pending_activation %}
-                        {% if total_orders > 0 %}
-                        <div class="flex h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                            <div class="bg-slate-400" style="width: {{ (stats.orders_new / total_orders * 100) | int }}%"></div>
-                            <div class="bg-indigo-500" style="width: {{ (stats.orders_in_progress / total_orders * 100) | int }}%"></div>
-                            <div class="bg-blue-500" style="width: {{ (stats.orders_scheduled / total_orders * 100) | int }}%"></div>
-                            <div class="bg-amber-500" style="width: {{ (stats.orders_pending_activation / total_orders * 100) | int }}%"></div>
-                        </div>
-                        <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                            <span>{{ total_orders }} orders in pipeline</span>
-                            <span>{{ stats.orders_scheduled }} scheduled</span>
-                        </div>
+                    <div class="mt-4 text-center">
+                        <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ "{:,.0f}".format(total_ar) }}</p>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Total Outstanding</p>
+                        {% if stats.suspended_accounts > 0 %}
+                        <p class="mt-2 text-xs text-rose-600 dark:text-rose-400">{{ stats.suspended_accounts }} accounts suspended</p>
                         {% endif %}
                     </div>
                 </div>
             </div>
+            {% else %}
+            <div class="flex flex-col items-center justify-center py-8">
+                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
+                    <svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Accounts Current</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">No outstanding receivables</p>
+            </div>
+            {% endif %}
+            {% endcall %}
         </div>
     </div>
 
-    <!-- Billing & Activity Row -->
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <!-- Billing Health -->
-        <div class="lg:col-span-2 animate-fade-in-up" style="animation-delay: 0.35s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Accounts Receivable</h3>
-                    </div>
-                    <a href="/admin/billing" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View Billing</a>
-                </div>
-                <div class="p-5">
-                    {% set total_ar = stats.ar_current + stats.ar_30 + stats.ar_60 + stats.ar_90 %}
-                    {% if total_ar > 0 %}
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <!-- AR Breakdown -->
-                        <div class="space-y-3">
-                            <div class="flex items-center justify-between p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30">
-                                <div class="flex items-center gap-3">
-                                    <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Current</span>
-                                </div>
-                                <span class="text-sm font-bold text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.ar_current) }}</span>
-                            </div>
-                            <div class="flex items-center justify-between p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30">
-                                <div class="flex items-center gap-3">
-                                    <div class="h-3 w-3 rounded-full bg-amber-500"></div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">1-30 Days</span>
-                                </div>
-                                <span class="text-sm font-bold text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.ar_30) }}</span>
-                            </div>
-                            <div class="flex items-center justify-between p-3 rounded-xl bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-900/30">
-                                <div class="flex items-center gap-3">
-                                    <div class="h-3 w-3 rounded-full bg-orange-500"></div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">31-60 Days</span>
-                                </div>
-                                <span class="text-sm font-bold text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.ar_60) }}</span>
-                            </div>
-                            <div class="flex items-center justify-between p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30">
-                                <div class="flex items-center gap-3">
-                                    <div class="h-3 w-3 rounded-full bg-red-500"></div>
-                                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300">60+ Days</span>
-                                </div>
-                                <span class="text-sm font-bold text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(stats.ar_90) }}</span>
-                            </div>
-                        </div>
-
-                        <!-- AR Summary -->
-                        <div class="flex flex-col items-center justify-center">
-                            <div class="chart-container-sm" style="height: 160px; width: 160px;">
-                                <canvas id="arAgingChart"></canvas>
-                            </div>
-                            <div class="mt-4 text-center">
-                                <p class="text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.0f}".format(total_ar) }}</p>
-                                <p class="text-sm text-slate-500 dark:text-slate-400">Total Outstanding</p>
-                                {% if stats.suspended_accounts > 0 %}
-                                <p class="mt-2 text-xs text-rose-600 dark:text-rose-400">{{ stats.suspended_accounts }} accounts suspended</p>
-                                {% endif %}
-                            </div>
-                        </div>
-                    </div>
+    {# ── Recent Activity & Subscribers Row ── #}
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        {# Recent Activity #}
+        {% call card("Recent Activity", color="slate",
+            actions='<a href="/admin/system/audit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
+        ) %}
+        {% if recent_activities %}
+        <div class="divide-y divide-slate-100 dark:divide-slate-700 -mx-6 -mb-6">
+            {% for activity in recent_activities[:5] %}
+            <div class="flex items-start gap-3 px-6 py-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg mt-0.5
+                    {% if activity.type == 'activation' %}bg-emerald-100 dark:bg-emerald-900/30
+                    {% elif activity.type == 'payment' %}bg-amber-100 dark:bg-amber-900/30
+                    {% elif activity.type == 'signup' %}bg-blue-100 dark:bg-blue-900/30
+                    {% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
+                    {% if activity.type == 'activation' %}
+                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    {% elif activity.type == 'payment' %}
+                    <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    {% elif activity.type == 'signup' %}
+                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
                     {% else %}
-                    <div class="flex flex-col items-center justify-center py-8">
-                        <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
-                            <svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        </div>
-                        <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Accounts Current</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">No outstanding receivables</p>
-                    </div>
+                    <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     {% endif %}
                 </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.message }}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ activity.detail }}</p>
+                </div>
+                <span class="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">{{ activity.time }}</span>
             </div>
+            {% endfor %}
         </div>
-
-    </div>
-
-    <!-- Recent Activity & Subscribers Row -->
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <!-- Recent Activity -->
-        <div class="animate-fade-in-up" style="animation-delay: 0.45s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Recent Activity</h3>
-                    </div>
-                    <a href="/admin/system/audit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>
-                </div>
-                {% if recent_activities %}
-                <div class="divide-y divide-slate-100 dark:divide-slate-700">
-                    {% for activity in recent_activities[:5] %}
-                    <div class="flex items-start gap-3 px-5 py-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg mt-0.5
-                            {% if activity.type == 'activation' %}bg-emerald-100 dark:bg-emerald-900/30
-                            {% elif activity.type == 'payment' %}bg-amber-100 dark:bg-amber-900/30
-                            {% elif activity.type == 'signup' %}bg-blue-100 dark:bg-blue-900/30
-                            {% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
-                            {% if activity.type == 'activation' %}
-                            <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                            {% elif activity.type == 'payment' %}
-                            <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            {% elif activity.type == 'signup' %}
-                            <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-                            {% else %}
-                            <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            {% endif %}
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.message }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ activity.detail }}</p>
-                        </div>
-                        <span class="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">{{ activity.time }}</span>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="flex flex-col items-center justify-center py-10">
-                    <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                        <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    </div>
-                    <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Recent Activity</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Activity will appear here</p>
-                </div>
-                {% endif %}
+        {% else %}
+        <div class="flex flex-col items-center justify-center py-10">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
+                <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             </div>
+            <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Recent Activity</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Activity will appear here</p>
         </div>
+        {% endif %}
+        {% endcall %}
 
-        <!-- Recent Subscribers -->
-        <div class="animate-fade-in-up" style="animation-delay: 0.5s">
-            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                        </div>
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Recent Subscribers</h3>
-                    </div>
-                    <a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>
+        {# Recent Subscribers #}
+        {% call card("Recent Subscribers", color="blue",
+            actions='<a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
+        ) %}
+        {% if recent_subscribers %}
+        <div class="divide-y divide-slate-100 dark:divide-slate-700 -mx-6 -mb-6">
+            {% for subscriber in recent_subscribers[:5] %}
+            <a href="/admin/subscribers/{{ subscriber.id }}" class="flex items-center gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-sm font-semibold text-white shadow-sm">
+                    {{ (subscriber.person.first_name[0] if subscriber.person and subscriber.person.first_name else subscriber.organization.name[0] if subscriber.organization else '?')|upper }}
                 </div>
-                {% if recent_subscribers %}
-                <div class="divide-y divide-slate-100 dark:divide-slate-700">
-                    {% for subscriber in recent_subscribers[:5] %}
-                    <a href="/admin/subscribers/{{ subscriber.id }}" class="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-sm font-semibold text-white shadow-sm">
-                            {{ (subscriber.person.first_name[0] if subscriber.person and subscriber.person.first_name else subscriber.organization.name[0] if subscriber.organization else '?')|upper }}
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <p class="text-sm font-medium text-slate-900 dark:text-white truncate">
-                                {% if subscriber.person %}
-                                {{ subscriber.person.first_name }} {{ subscriber.person.last_name }}
-                                {% elif subscriber.organization %}
-                                {{ subscriber.organization.name }}
-                                {% else %}
-                                Unknown
-                                {% endif %}
-                            </p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ subscriber.subscriber_type.value if subscriber.subscriber_type else 'N/A' }}</p>
-                        </div>
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                    {% endfor %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white truncate">
+                        {% if subscriber.person %}
+                        {{ subscriber.person.first_name }} {{ subscriber.person.last_name }}
+                        {% elif subscriber.organization %}
+                        {{ subscriber.organization.name }}
+                        {% else %}
+                        Unknown
+                        {% endif %}
+                    </p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ subscriber.subscriber_type.value if subscriber.subscriber_type else 'N/A' }}</p>
                 </div>
-                {% else %}
-                <div class="flex flex-col items-center justify-center py-10">
-                    <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-7 w-7 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-                    </div>
-                    <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Subscribers Yet</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Add your first subscriber</p>
-                    <a href="/admin/subscribers/new" class="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 transition">
-                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                        Add Subscriber
-                    </a>
-                </div>
-                {% endif %}
-            </div>
+                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </a>
+            {% endfor %}
         </div>
+        {% else %}
+        <div class="flex flex-col items-center justify-center py-10">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 dark:bg-blue-900/30">
+                <svg class="h-7 w-7 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+            </div>
+            <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Subscribers Yet</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Add your first subscriber</p>
+            {{ action_button("Add Subscriber", href="/admin/subscribers/new", icon=icon_plus("h-3.5 w-3.5"), color="amber", size="sm") }}
+        </div>
+        {% endif %}
+        {% endcall %}
     </div>
 </div>
 
-<!-- Quick Actions Bar -->
+{# ── Quick Actions Bar ── #}
 <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 hidden lg:block animate-fade-in-up" style="animation-delay: 0.6s">
     <div class="flex items-center gap-1 rounded-2xl bg-slate-900/95 backdrop-blur-sm px-2 py-2 shadow-2xl shadow-slate-900/50 ring-1 ring-white/10">
         <a href="/admin/subscribers/new" class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/30 hover:from-amber-600 hover:to-amber-700 transition">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
             New Subscriber
         </a>
-        <a href="/admin/operations/service-orders/new" class="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition">
+        <a href="/admin/provisioning/orders/new" class="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
             Service Order
         </a>
@@ -559,30 +373,16 @@
 
 <style>
 @keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
-
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out backwards;
-}
+.animate-fade-in-up { animation: fadeInUp 0.5s ease-out backwards; }
 </style>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function dashboard() {
-    return {};
-}
-
 document.addEventListener('DOMContentLoaded', function() {
-    // Chart color scheme matching Industrial Modern aesthetic
     const colors = {
         amber: { 500: '#f59e0b', 400: '#fbbf24' },
         emerald: { 500: '#10b981', 400: '#34d399' },

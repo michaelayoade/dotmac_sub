@@ -1,0 +1,130 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Bank Reconciliation - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/billing/payments" class="hover:text-primary-600">Payments</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Reconciliation</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Bank Reconciliation</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Match imported statement totals against recorded payments and review anomalies.</p>
+        </div>
+        <a href="/admin/billing/payments/import" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">Import Payments</a>
+    </div>
+
+    <form method="get" class="grid gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-800">
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Date Range</label>
+            <select name="date_range" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="" {% if not date_range %}selected{% endif %}>All time</option>
+                <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                <option value="week" {% if date_range == 'week' %}selected{% endif %}>This week</option>
+                <option value="month" {% if date_range == 'month' %}selected{% endif %}>This month</option>
+                <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This quarter</option>
+            </select>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Statement Handler</label>
+            <select name="handler" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All</option>
+                {% for row in handler_options %}
+                <option value="{{ row.id }}" {% if selected_handler == row.id %}selected{% endif %}>{{ row.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="sm:col-span-2 flex items-end gap-2">
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Apply</button>
+            <a href="/admin/billing/payments/reconciliation" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600">Reset</a>
+        </div>
+    </form>
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Statement Total</p>
+            <p class="mt-2 text-xl font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(summary.statement_total or 0) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ summary.statement_rows }} rows</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">System Payments</p>
+            <p class="mt-2 text-xl font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(summary.payment_total or 0) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ summary.system_payment_count }} payments</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Unmatched</p>
+            <p class="mt-2 text-xl font-semibold text-amber-600 dark:text-amber-300">{{ summary.unmatched_rows }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">rows from import history</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Difference</p>
+            {% set diff = summary.difference or 0 %}
+            <p class="mt-2 text-xl font-semibold {% if diff == 0 %}text-emerald-600 dark:text-emerald-300{% else %}text-red-600 dark:text-red-300{% endif %}">₦{{ "{:,.2f}".format(diff) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">statement minus payments</p>
+        </div>
+    </div>
+
+    <div class="grid gap-6 xl:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Unmatched Statement Batches</h2>
+            </div>
+            <div class="max-h-[420px] overflow-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Date</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">File</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Unmatched</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for row in unmatched_imports %}
+                        <tr>
+                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.occurred_at.strftime('%Y-%m-%d %H:%M') if row.occurred_at else '-' }}</td>
+                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
+                            <td class="px-4 py-2 text-sm font-semibold text-amber-600 dark:text-amber-300">{{ row.unmatched_count }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No unmatched rows found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Potential Duplicate Payments</h2>
+            </div>
+            <div class="max-h-[420px] overflow-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">External ID</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Count</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for row in duplicate_candidates %}
+                        <tr>
+                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.external_id }}</td>
+                            <td class="px-4 py-2 text-sm font-semibold text-red-600 dark:text-red-300">{{ row.count }}</td>
+                            <td class="px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(row.total_amount or 0) }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No duplicate candidates.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

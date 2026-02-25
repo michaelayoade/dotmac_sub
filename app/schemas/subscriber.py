@@ -11,6 +11,7 @@ from app.models.subscriber import (
     ChannelType,
     ContactMethod,
     Gender,
+    SubscriberCategory,
     SubscriberStatus,
 )
 
@@ -116,6 +117,7 @@ class SubscriberBase(BaseModel):
     account_number: str | None = Field(default=None, max_length=80)
     account_start_date: datetime | None = None
     status: SubscriberStatus = SubscriberStatus.active
+    category: SubscriberCategory = SubscriberCategory.residential
     is_active: bool = True
     marketing_opt_in: bool = False
 
@@ -155,7 +157,7 @@ class SubscriberCreate(SubscriberBase):
     # If person_id is provided these can be omitted; service will update the existing row.
     first_name: str | None = Field(default=None, min_length=1, max_length=80)  # type: ignore[assignment]
     last_name: str | None = Field(default=None, min_length=1, max_length=80)  # type: ignore[assignment]
-    email: EmailStr | None = None
+    email: EmailStr | None = None  # type: ignore[assignment]
 
     @model_validator(mode="after")
     def _require_identity_when_creating_new(self) -> SubscriberCreate:
@@ -194,6 +196,7 @@ class SubscriberUpdate(BaseModel):
     account_number: str | None = Field(default=None, max_length=80)
     account_start_date: datetime | None = None
     status: SubscriberStatus | None = None
+    category: SubscriberCategory | None = None
     is_active: bool | None = None
     marketing_opt_in: bool | None = None
 

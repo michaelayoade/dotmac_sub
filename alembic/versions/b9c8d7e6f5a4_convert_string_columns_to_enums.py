@@ -1,6 +1,6 @@
 """convert string columns to enums
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: b9c8d7e6f5a4
 Revises: 2d4f7d5b3b0a
 Create Date: 2026-02-17 00:00:00.000000
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import ENUM
 
 
 # revision identifiers, used by Alembic.
-revision = "a1b2c3d4e5f6"
+revision = "b9c8d7e6f5a4"
 down_revision = "2d4f7d5b3b0a"
 branch_labels = None
 depends_on = None
@@ -21,7 +21,7 @@ depends_on = None
 HEALTH_STATUS_VALUES = ("unknown", "healthy", "degraded", "unhealthy")
 PROVISIONING_LOG_STATUS_VALUES = ("pending", "running", "success", "failed", "timeout")
 EXECUTION_METHOD_VALUES = ("ssh", "api", "radius_coa")
-DISCOUNT_TYPE_VALUES = ("percentage", "fixed")
+DISCOUNT_TYPE_VALUES = ("percentage", "percent", "fixed")
 SERVICE_ORDER_TYPE_VALUES = (
     "new_install",
     "upgrade",

@@ -1,76 +1,175 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, status_badge, empty_state, action_button, metric_row, animation_styles %}
 
 {% block title %}System Overview - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">System Overview</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage users, roles, audits, and operational settings</p>
-        </div>
-        <div class="flex items-center gap-3">
-            <a href="/admin/system/settings" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                System Settings
-            </a>
-        </div>
+{{ ambient_background("slate", "gray") }}
+
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="System Overview",
+        subtitle="Manage users, roles, audits, and operational settings",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}
+        {{ action_button("System Settings", "/admin/system/settings", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', "primary", "slate", "gray") }}
+    {% endcall %}
+
+    {# KPI Cards #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Admin Users", user_stats.active|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>', color="slate", color2="gray") }}
+        {{ stats_card("Roles Defined", role_count|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="blue", color2="indigo") }}
+        {{ stats_card("API Keys", api_key_count|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>', color="violet", color2="purple") }}
+        {% if health_status == 'ok' %}
+        {{ stats_card("System Health", "Healthy", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
+        {% elif health_status == 'warning' %}
+        {{ stats_card("System Health", "Warning", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {% elif health_status == 'critical' %}
+        {{ stats_card("System Health", "Critical", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="rose", color2="pink") }}
+        {% else %}
+        {{ stats_card("System Health", "--", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="slate", color2="gray") }}
+        {% endif %}
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <a href="/admin/system/users" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-primary-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-700">
-            <div class="flex items-center justify-between">
+    {# System Status + Recent Audit Events Row #}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {# System Status #}
+        {% call card("System Status", color="slate") %}
+        <div class="space-y-3">
+            {{ metric_row("Uptime", health_summary.uptime|default('--'), color="emerald") }}
+            {{ metric_row("CPU Cores", health_summary.cpu_count|default(0), color="blue") }}
+            {{ metric_row("Memory Usage", health_summary.memory_pct|default('--'), color="violet") }}
+            {{ metric_row("Disk Usage", health_summary.disk_pct|default('--'), color="amber") }}
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700">
+            <a href="/admin/system/health" class="text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">View Full Health Report &rarr;</a>
+        </div>
+        {% endcall %}
+
+        {# Recent Audit Events #}
+        {% call card("Recent Audit Events", color="slate") %}
+        {% if recent_audits %}
+        <div class="space-y-3">
+            {% for event in recent_audits[:5] %}
+            <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
                 <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Users</p>
-                    <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Manage</p>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Access & roles</p>
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">
+                        {{ event.action|replace('_', ' ')|title }}
+                    </p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {{ event.entity_type|replace('_', ' ')|title }}
+                        {% if event.actor_id %}&middot; {{ event.actor_type.value if event.actor_type else 'system' }}{% endif %}
+                    </p>
                 </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-100 dark:bg-primary-900/30">
-                    <svg class="h-5 w-5 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                <div class="flex flex-col items-end gap-1">
+                    {% if event.is_success %}
+                    {{ status_badge("OK", "active", size="sm") }}
+                    {% else %}
+                    {{ status_badge("Failed", "error", size="sm") }}
+                    {% endif %}
+                    <span class="text-xs text-slate-400 dark:text-slate-500">
+                        {{ event.occurred_at.strftime('%Y-%m-%d %H:%M') if event.occurred_at else '' }}
+                    </span>
                 </div>
             </div>
-        </a>
-        <a href="/admin/system/roles" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-primary-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-700">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Roles</p>
-                    <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Permissions</p>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">RBAC policies</p>
-                </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                    <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                </div>
+            {% endfor %}
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700">
+            <a href="/admin/system/audit" class="text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">View All Audit Events &rarr;</a>
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+            <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No audit events</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">System events will appear here as actions are performed.</p>
+        </div>
+        {% endif %}
+        {% endcall %}
+    </div>
+
+    {# Quick Actions #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 150ms;">
+        <a href="/admin/system/users" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-500">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 group-hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Users</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Access & roles</p>
             </div>
         </a>
-        <a href="/admin/system/audit" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-primary-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-700">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Audit Log</p>
-                    <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Track</p>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">System events</p>
-                </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
-                    <svg class="h-5 w-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
+        <a href="/admin/system/roles" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-600 group-hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Roles</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">RBAC policies</p>
             </div>
         </a>
-        <a href="/admin/system/scheduler" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-primary-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-700">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Scheduler</p>
-                    <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Automations</p>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Jobs & syncs</p>
-                </div>
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
-                    <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                </div>
+        <a href="/admin/system/audit" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-amber-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-amber-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-600 group-hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Audit Log</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Track events</p>
+            </div>
+        </a>
+        <a href="/admin/system/scheduler" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-emerald-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 group-hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Scheduler</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Jobs & syncs</p>
             </div>
         </a>
     </div>
 
-    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Configuration Notes</h2>
-        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">System settings are scoped by domain. Review scheduler and audit logs regularly to ensure operational integrity.</p>
+    {# Additional Quick Links #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 200ms;">
+        <a href="/admin/system/api-keys" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-violet-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-violet-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 text-violet-600 group-hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">API Keys</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Manage access tokens</p>
+            </div>
+        </a>
+        <a href="/admin/system/webhooks" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-cyan-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-100 text-cyan-600 group-hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Webhooks</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Event delivery</p>
+            </div>
+        </a>
+        <a href="/admin/system/health" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-emerald-600">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 group-hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Server Health</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Resources & uptime</p>
+            </div>
+        </a>
+        <a href="/admin/system/settings" class="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-500">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600 group-hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+            </div>
+            <div>
+                <p class="text-sm font-medium text-slate-900 dark:text-white">Settings</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Domain configuration</p>
+            </div>
+        </a>
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

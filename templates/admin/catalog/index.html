@@ -1,214 +1,229 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, row_actions, row_action, status_badge, empty_state, action_button, metric_row, icon_plus, icon_view, animation_styles %}
 
-{% block title %}Services - Admin{% endblock %}
+{% block title %}Service Catalog - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Services</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define tariffs that power subscriptions, billing, and NAS/MikroTik queues.</p>
-        </div>
-        <div class="flex flex-wrap items-center gap-3">
-            <button type="button" onclick="document.getElementById('tariff-create-modal').classList.remove('hidden')" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                Add Tariff
-            </button>
-        </div>
-    </div>
+{{ ambient_background("violet", "purple") }}
 
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Tariffs</h2>
-                <form method="get" action="/admin/catalog" class="flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <div class="relative w-full sm:w-80">
-                        <input type="text" name="search" value="{{ search or '' }}" placeholder="Search tariffs..." class="block h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                        <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.85-5.65a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                    </div>
-                    <select name="status" class="block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">All statuses</option>
-                        {% for item in offer_statuses %}
-                        <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
-                        {% endfor %}
-                    </select>
-                    <button type="submit" class="inline-flex h-10 w-full items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 sm:w-auto">Filter</button>
-                </form>
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="Service Catalog",
+        subtitle="Manage tariffs, plans, and service definitions",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+        color="violet",
+        color2="purple"
+    ) %}
+        {{ action_button("Add Tariff", "/admin/catalog/offers/create", icon_plus(), "primary", "violet", "purple") }}
+    {% endcall %}
+
+    {# KPI Cards #}
+    {% if catalog_stats %}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Active Offers", catalog_stats.active_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="violet", color2="purple") }}
+        {{ stats_card("Total Plans", catalog_stats.total_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>', color="blue", color2="indigo") }}
+        {{ stats_card("Active Subscriptions", catalog_stats.total_subscriptions, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="emerald", color2="teal") }}
+        {{ stats_card("Archived", catalog_stats.archived_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>', color="slate", color2="gray") }}
+    </div>
+    {% endif %}
+
+    {# Charts Row #}
+    {% if catalog_stats %}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {# Subscriptions by Plan #}
+        {% call card("Subscriptions by Plan", color="violet") %}
+        <div class="h-64">
+            <canvas id="subscriptionsByPlanChart"></canvas>
+        </div>
+        {% endcall %}
+
+        {# Offer Status Distribution #}
+        {% call card("Offer Status", color="blue") %}
+        <div class="flex items-center gap-6">
+            <div class="h-48 w-48 flex-shrink-0">
+                <canvas id="offerStatusChart"></canvas>
+            </div>
+            <div class="flex-1 space-y-2">
+                {% for label, value, color_class in [
+                    ("Active", catalog_stats.chart_data["values"][0], "bg-emerald-500"),
+                    ("Inactive", catalog_stats.chart_data["values"][1], "bg-amber-500"),
+                    ("Archived", catalog_stats.chart_data["values"][2], "bg-slate-400"),
+                    ("Draft", catalog_stats.chart_data["values"][3], "bg-slate-600"),
+                ] %}
+                {% if value %}
+                {{ metric_row(label, value, color="slate") }}
+                {% endif %}
+                {% endfor %}
             </div>
         </div>
-        {% if offers %}
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tariff</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Bandwidth</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriptions</th>
-                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                        <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% for offer in offers %}
-                    {% set offer_status = offer.status.value if offer.status is not string and offer.status else (offer.status | default('active')) %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <a href="/admin/catalog/offers/{{ offer.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ offer.name }}</a>
-                            {% if offer.code %}
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ offer.code }}</p>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                            {{ offer.service_type.value if offer.service_type is not string and offer.service_type else offer.service_type }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                            {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
-                            {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                            <span class="font-medium text-slate-900 dark:text-white">{{ offer_active_subscription_counts.get(offer.id|string, 0) }}</span>
-                            <span class="text-xs text-slate-400 dark:text-slate-500">active</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if offer_status == 'active' %}
-                            {{ status_badge("Active", "active", size="sm") }}
-                            {% elif offer_status == 'inactive' %}
-                            {{ status_badge("Inactive", "inactive", size="sm") }}
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ offer_status | title }}</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <a href="/admin/catalog/offers/{{ offer.id }}/edit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="px-6 py-12 text-center">
-            <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No tariffs yet.</p>
-            <button type="button" onclick="document.getElementById('tariff-create-modal').classList.remove('hidden')" class="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                Create a tariff
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </button>
-        </div>
-        {% endif %}
+        {% endcall %}
+    </div>
+    {% endif %}
 
+    {# Tariffs Table #}
+    <div class="animate-fade-in-up" style="animation-delay: 150ms;">
+    {% call card("Tariffs", color="violet") %}
+        {# Filter Bar #}
+        <div class="mb-4">
+            <form method="get" action="/admin/catalog" class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div class="relative flex-1">
+                    <input type="text" name="search" value="{{ search or '' }}" placeholder="Search tariffs..."
+                           class="block h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.85-5.65a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                </div>
+                <select name="status" class="block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-48">
+                    <option value="">All statuses</option>
+                    {% for item in offer_statuses %}
+                    <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg bg-violet-600 px-4 text-sm font-medium text-white hover:bg-violet-700 sm:w-auto">Filter</button>
+            </form>
+        </div>
+
+        {% if offers %}
+        {% call data_table() %}
+            {{ table_head(["Tariff", "Type", "Bandwidth", "Subscriptions", "Status", ""]) }}
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                {% for offer in offers %}
+                {% set offer_status = offer.status.value if offer.status is not string and offer.status else (offer.status | default('active')) %}
+                {% call table_row(offer.id) %}
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <a href="/admin/catalog/offers/{{ offer.id }}" class="text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">{{ offer.name }}</a>
+                        {% if offer.code %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ offer.code }}</p>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                        {{ offer.service_type.value if offer.service_type is not string and offer.service_type else offer.service_type }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-500 dark:text-slate-400">
+                        {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
+                        {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <span class="font-medium text-slate-900 dark:text-white">{{ offer_active_subscription_counts.get(offer.id|string, 0) }}</span>
+                        <span class="text-xs text-slate-400 dark:text-slate-500">active</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        {% if offer_status == 'active' %}
+                        {{ status_badge("Active", "active", size="sm") }}
+                        {% elif offer_status == 'inactive' %}
+                        {{ status_badge("Inactive", "warning", size="sm") }}
+                        {% elif offer_status == 'archived' %}
+                        {{ status_badge("Archived", "neutral", size="sm") }}
+                        {% else %}
+                        {{ status_badge(offer_status | title, "neutral", size="sm") }}
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right">
+                        {% call row_actions() %}
+                            {{ row_action("/admin/catalog/offers/" ~ offer.id, icon_view(), "View") }}
+                            {{ row_action("/admin/catalog/offers/" ~ offer.id ~ "/edit", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', "Edit") }}
+                        {% endcall %}
+                    </td>
+                {% endcall %}
+                {% endfor %}
+            </tbody>
+        {% endcall %}
+
+        {# Pagination #}
         {% if total_pages and total_pages > 1 %}
-        <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
+        <div class="mt-4 flex flex-col items-center justify-between gap-4 sm:flex-row">
             <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
             <div class="flex items-center gap-2">
                 {% if page > 1 %}
-                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}"
+                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
                 {% if page < total_pages %}
-                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}"
+                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>
         </div>
         {% endif %}
+
+        {% else %}
+        {% call empty_state("No tariffs found", "Create your first tariff to power subscriptions, billing, and provisioning.") %}
+            {{ action_button("Create Tariff", "/admin/catalog/offers/create", icon_plus(), "primary", "violet", "purple") }}
+        {% endcall %}
+        {% endif %}
+    {% endcall %}
     </div>
 </div>
 
-<!-- Tariff Create Modal -->
-<div id="tariff-create-modal" class="hidden fixed inset-0 z-50 overflow-y-auto" aria-modal="true">
-    <div class="flex min-h-screen items-center justify-center p-4">
-        <div class="fixed inset-0 bg-slate-900/50 transition-opacity" onclick="document.getElementById('tariff-create-modal').classList.add('hidden')"></div>
-        <div class="relative w-full max-w-3xl rounded-xl bg-white shadow-xl dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Create Tariff</h3>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a new subscription tariff with provisioning settings.</p>
-            </div>
-            <form method="post" action="/admin/catalog/offers">
-                <input type="hidden" name="return_to" value="/admin/catalog">
-                <input type="hidden" name="available_for_services" value="true">
-                <input type="hidden" name="show_on_customer_portal" value="true">
-                <div class="p-6 space-y-6">
-                    <div class="grid gap-4 sm:grid-cols-2">
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Tariff Name <span class="text-red-500">*</span></label>
-                            <input type="text" name="name" required class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Home Unlimited 50000Kbps" />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
-                            <select name="status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for item in offer_statuses %}
-                                <option value="{{ item }}" {% if item == 'active' %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Service Type</label>
-                            <select name="service_type" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for value in service_types %}
-                                <option value="{{ value }}">{{ value | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Access Type</label>
-                            <select name="access_type" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for value in access_types %}
-                                <option value="{{ value }}">{{ value | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Price Basis</label>
-                            <select name="price_basis" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for value in price_bases %}
-                                <option value="{{ value }}" {% if value == 'flat' %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Billing Cycle</label>
-                            <select name="billing_cycle" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for value in billing_cycles %}
-                                <option value="{{ value }}" {% if value == 'monthly' %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Contract Term</label>
-                            <select name="contract_term" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                {% for value in contract_terms %}
-                                <option value="{{ value }}" {% if value == 'month_to_month' %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="sm:col-span-2">
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">RADIUS Profile <span class="text-red-500">*</span></label>
-                            <select name="radius_profile_id" required class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                <option value="">Select a profile</option>
-                                {% for profile in radius_profiles %}
-                                <option value="{{ profile.id }}">{{ profile.name }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-4">
-                        <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="is_active" value="true" checked class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                            Active
-                        </label>
-                        <a href="/admin/catalog/offers/create" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Open full form</a>
-                    </div>
-                </div>
-                <div class="border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-800/50 flex justify-end gap-3">
-                    <button type="button" onclick="document.getElementById('tariff-create-modal').classList.add('hidden')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</button>
-                    <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Create Tariff</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
+{{ animation_styles() }}
+
+{# Chart.js Scripts #}
+{% if catalog_stats %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const isDark = document.documentElement.classList.contains('dark');
+    const textColor = isDark ? '#cbd5e1' : '#64748b';
+    const gridColor = isDark ? 'rgba(100,116,139,0.2)' : 'rgba(226,232,240,0.8)';
+
+    // Subscriptions by Plan (horizontal bar)
+    const planLabels = {{ catalog_stats.subscriptions_by_plan["labels"] | tojson | safe }};
+    const planValues = {{ catalog_stats.subscriptions_by_plan["values"] | tojson | safe }};
+    if (planLabels.length > 0) {
+        new Chart(document.getElementById('subscriptionsByPlanChart'), {
+            type: 'bar',
+            data: {
+                labels: planLabels,
+                datasets: [{
+                    label: 'Active Subscriptions',
+                    data: planValues,
+                    backgroundColor: isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(139, 92, 246, 0.8)',
+                    borderColor: 'rgba(139, 92, 246, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: textColor }, grid: { color: gridColor } },
+                    y: { ticks: { color: textColor }, grid: { display: false } }
+                }
+            }
+        });
+    }
+
+    // Offer Status (doughnut)
+    const statusLabels = {{ catalog_stats.chart_data["labels"] | tojson | safe }};
+    const statusValues = {{ catalog_stats.chart_data["values"] | tojson | safe }};
+    const statusColors = {{ catalog_stats.chart_data["colors"] | tojson | safe }};
+    if (statusValues.some(v => v > 0)) {
+        new Chart(document.getElementById('offerStatusChart'), {
+            type: 'doughnut',
+            data: {
+                labels: statusLabels,
+                datasets: [{
+                    data: statusValues,
+                    backgroundColor: statusColors,
+                    borderWidth: 0,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '65%',
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+});
+</script>
+{% endif %}
 {% endblock %}

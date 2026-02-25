@@ -26,14 +26,25 @@ def get_csrf_token(request: Request) -> str:
     return token
 
 
-def set_csrf_cookie(response: Response, token: str) -> None:
+def _is_https_request(request: Request | None) -> bool:
+    """Return True when request is HTTPS (directly or via proxy header)."""
+    if not request:
+        return False
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip().lower() == "https"
+    return request.url.scheme == "https"
+
+
+def set_csrf_cookie(response: Response, token: str, request: Request | None = None) -> None:
     """Set CSRF token in a secure cookie."""
+    secure_cookie = settings.secure_cookies and _is_https_request(request)
     response.set_cookie(
         key=CSRF_COOKIE_NAME,
         value=token,
         httponly=False,  # Must be readable by JS for HTMX/fetch
         samesite="strict",
-        secure=settings.secure_cookies,
+        secure=secure_cookie,
         max_age=3600 * 24,  # 24 hours
     )
 

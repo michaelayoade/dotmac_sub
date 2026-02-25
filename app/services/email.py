@@ -3,18 +3,36 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationStatus,
 )
+from app.schemas.settings import DomainSettingUpdate
+from app.services.domain_settings import notification_settings
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+
+SMTP_DEFAULT_SENDER_KEY_SETTING = "smtp_default_sender_key"
+SMTP_SENDER_KEY_PREFIX = "smtp_sender."
+SMTP_ACTIVITY_KEY_PREFIX = "smtp_activity_sender."
+SMTP_SENDER_ALLOWED_KEY_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+SMTP_ACTIVITY_CHOICES: list[tuple[str, str]] = [
+    ("notification_queue", "Notification Queue"),
+    ("notification_test", "Notification Template Tests"),
+    ("billing_invoice", "Billing Invoices"),
+    ("subscription_welcome", "Subscription Welcome"),
+    ("auth_password_reset", "Password Reset"),
+    ("auth_user_invite", "User Invite"),
+]
 
 
 def _env_value(name: str) -> str | None:
@@ -67,7 +85,7 @@ def _setting_value(db: Session | None, key: str) -> str | None:
     return None
 
 
-def _get_smtp_config(db: Session | None) -> dict:
+def _legacy_smtp_config(db: Session | None) -> dict:
     username = _env_value("SMTP_USERNAME") or _env_value("SMTP_USER") or _setting_value(
         db, "smtp_username"
     )
@@ -93,6 +111,295 @@ def _get_smtp_config(db: Session | None) -> dict:
         "user": username,
         "from_addr": from_email,
     }
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+def _setting_raw_value(setting: DomainSetting) -> Any:
+    if setting.value_text is not None:
+        return setting.value_text
+    return setting.value_json
+
+
+def _sender_setting_key(sender_key: str, field: str) -> str:
+    return f"{SMTP_SENDER_KEY_PREFIX}{sender_key}.{field}"
+
+
+def _valid_sender_key(sender_key: str) -> bool:
+    normalized = sender_key.strip().lower()
+    if not normalized:
+        return False
+    return all(ch in SMTP_SENDER_ALLOWED_KEY_CHARS for ch in normalized)
+
+
+def list_smtp_senders(db: Session | None) -> list[dict[str, Any]]:
+    if db is None:
+        return []
+    settings = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.is_active.is_(True))
+        .filter(DomainSetting.key.like(f"{SMTP_SENDER_KEY_PREFIX}%"))
+        .all()
+    )
+
+    senders: dict[str, dict[str, Any]] = {}
+    for setting in settings:
+        parts = setting.key.split(".", 2)
+        if len(parts) != 3:
+            continue
+        _, sender_key, field = parts
+        if not sender_key:
+            continue
+        profile = senders.setdefault(
+            sender_key,
+            {
+                "sender_key": sender_key,
+                "host": "",
+                "port": 587,
+                "username": "",
+                "password": None,
+                "has_password": False,
+                "from_email": "",
+                "from_name": "DotMac SM",
+                "use_tls": True,
+                "use_ssl": False,
+                "is_active": True,
+            },
+        )
+        raw = _setting_raw_value(setting)
+        if field == "password":
+            profile["has_password"] = bool(raw)
+            continue
+        if field == "port":
+            profile["port"] = _coerce_int(raw, 587)
+        elif field in {"use_tls", "use_ssl", "is_active"}:
+            profile[field] = _coerce_bool(raw, field != "use_ssl")
+        elif field in {"host", "username", "from_email", "from_name"}:
+            profile[field] = "" if raw is None else str(raw)
+
+    return [senders[key] for key in sorted(senders.keys())]
+
+
+def get_default_smtp_sender_key(db: Session | None) -> str:
+    if db is None:
+        return "default"
+    raw = _setting_value(db, SMTP_DEFAULT_SENDER_KEY_SETTING)
+    key = (raw or "").strip().lower()
+    return key or "default"
+
+
+def get_smtp_activity_map(db: Session | None) -> dict[str, str]:
+    if db is None:
+        return {}
+    settings = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.is_active.is_(True))
+        .filter(DomainSetting.key.like(f"{SMTP_ACTIVITY_KEY_PREFIX}%"))
+        .all()
+    )
+    activity_map: dict[str, str] = {}
+    for setting in settings:
+        activity = setting.key.replace(SMTP_ACTIVITY_KEY_PREFIX, "", 1).strip()
+        if not activity:
+            continue
+        value = _setting_raw_value(setting)
+        if value is None:
+            continue
+        sender_key = str(value).strip().lower()
+        if sender_key:
+            activity_map[activity] = sender_key
+    return activity_map
+
+
+def set_default_smtp_sender_key(db: Session, sender_key: str) -> None:
+    notification_settings.upsert_by_key(
+        db,
+        SMTP_DEFAULT_SENDER_KEY_SETTING,
+        DomainSettingUpdate(
+            value_type=SettingValueType.string,
+            value_text=sender_key.strip().lower(),
+            is_secret=False,
+            is_active=True,
+        ),
+    )
+
+
+def upsert_smtp_activity_mapping(db: Session, activity: str, sender_key: str | None) -> None:
+    key = f"{SMTP_ACTIVITY_KEY_PREFIX}{activity.strip()}"
+    normalized = (sender_key or "").strip().lower()
+    if normalized:
+        notification_settings.upsert_by_key(
+            db,
+            key,
+            DomainSettingUpdate(
+                value_type=SettingValueType.string,
+                value_text=normalized,
+                is_active=True,
+            ),
+        )
+        return
+    existing = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.key == key)
+        .first()
+    )
+    if existing:
+        notification_settings.upsert_by_key(db, key, DomainSettingUpdate(is_active=False))
+
+
+def upsert_smtp_sender(
+    db: Session,
+    *,
+    sender_key: str,
+    host: str,
+    port: int,
+    username: str | None,
+    password: str | None,
+    from_email: str,
+    from_name: str | None,
+    use_tls: bool,
+    use_ssl: bool,
+    is_active: bool,
+) -> str:
+    normalized_key = sender_key.strip().lower()
+    if not _valid_sender_key(normalized_key):
+        raise ValueError("Sender key must use only lowercase letters, numbers, '-' or '_'")
+    if not host.strip():
+        raise ValueError("SMTP host is required")
+    if not from_email.strip():
+        raise ValueError("From email is required")
+
+    values: dict[str, tuple[SettingValueType, str | None, object | None, bool]] = {
+        "host": (SettingValueType.string, host.strip(), None, False),
+        "port": (SettingValueType.integer, str(int(port)), None, False),
+        "username": (SettingValueType.string, (username or "").strip(), None, False),
+        "from_email": (SettingValueType.string, from_email.strip(), None, False),
+        "from_name": (SettingValueType.string, (from_name or "DotMac SM").strip() or "DotMac SM", None, False),
+        "use_tls": (SettingValueType.boolean, "true" if use_tls else "false", use_tls, False),
+        "use_ssl": (SettingValueType.boolean, "true" if use_ssl else "false", use_ssl, False),
+        "is_active": (SettingValueType.boolean, "true" if is_active else "false", is_active, False),
+    }
+    for field, (value_type, value_text, value_json, is_secret) in values.items():
+        notification_settings.upsert_by_key(
+            db,
+            _sender_setting_key(normalized_key, field),
+            DomainSettingUpdate(
+                value_type=value_type,
+                value_text=value_text,
+                value_json=value_json,
+                is_secret=is_secret,
+                is_active=True,
+            ),
+        )
+
+    if password is not None and password.strip():
+        notification_settings.upsert_by_key(
+            db,
+            _sender_setting_key(normalized_key, "password"),
+            DomainSettingUpdate(
+                value_type=SettingValueType.string,
+                value_text=password.strip(),
+                is_secret=True,
+                is_active=True,
+            ),
+        )
+
+    return normalized_key
+
+
+def deactivate_smtp_sender(db: Session, sender_key: str) -> None:
+    prefix = f"{SMTP_SENDER_KEY_PREFIX}{sender_key.strip().lower()}."
+    settings = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.key.like(f"{prefix}%"))
+        .filter(DomainSetting.is_active.is_(True))
+        .all()
+    )
+    for setting in settings:
+        notification_settings.upsert_by_key(
+            db,
+            setting.key,
+            DomainSettingUpdate(is_active=False),
+        )
+
+
+def _resolve_smtp_sender_config(
+    db: Session,
+    *,
+    sender_key: str | None = None,
+    activity: str | None = None,
+) -> dict[str, Any] | None:
+    available = {sender["sender_key"]: sender for sender in list_smtp_senders(db) if sender.get("is_active", True)}
+    if not available:
+        return None
+
+    selected_key = (sender_key or "").strip().lower()
+    if not selected_key and activity:
+        selected_key = get_smtp_activity_map(db).get(activity.strip(), "")
+    if not selected_key:
+        selected_key = get_default_smtp_sender_key(db)
+    if selected_key not in available:
+        selected_key = sorted(available.keys())[0]
+
+    selected = dict(available[selected_key])
+    if selected.get("has_password"):
+        password = _setting_value(db, _sender_setting_key(selected_key, "password"))
+        if password:
+            selected["password"] = password
+    selected["user"] = selected.get("username")
+    selected["from_addr"] = selected.get("from_email")
+    selected["sender_key"] = selected_key
+    return selected
+
+
+def _get_smtp_config(
+    db: Session | None,
+    *,
+    sender_key: str | None = None,
+    activity: str | None = None,
+) -> dict:
+    if db is not None:
+        selected = _resolve_smtp_sender_config(db, sender_key=sender_key, activity=activity)
+        if selected:
+            return selected
+    return _legacy_smtp_config(db)
+
+
+def get_smtp_config(
+    db: Session | None,
+    *,
+    sender_key: str | None = None,
+    activity: str | None = None,
+) -> dict:
+    """Public accessor for resolved SMTP configuration."""
+    return _get_smtp_config(db, sender_key=sender_key, activity=activity)
 
 
 def _get_app_url(db: Session | None) -> str:
@@ -158,6 +465,8 @@ def send_email(
     body_html: str,
     body_text: str | None = None,
     track: bool = True,
+    sender_key: str | None = None,
+    activity: str | None = None,
 ) -> bool:
     """
     Send an email via SMTP.
@@ -173,7 +482,7 @@ def send_email(
     Returns:
         True if email was sent successfully, False otherwise
     """
-    config = _get_smtp_config(db)
+    config = _get_smtp_config(db, sender_key=sender_key, activity=activity)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -218,7 +527,11 @@ def send_email(
             notification.status = NotificationStatus.delivered
             db.commit()
 
-        logger.info(f"Email sent successfully to {to_email}")
+        logger.info(
+            "Email sent successfully to %s via sender %s",
+            to_email,
+            config.get("sender_key", "legacy"),
+        )
         return True
 
     except smtplib.SMTPAuthenticationError as exc:
@@ -230,7 +543,12 @@ def send_email(
             db.commit()
         return False
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {e}")
+        logger.error(
+            "Failed to send email to %s via sender %s: %s",
+            to_email,
+            config.get("sender_key", "legacy"),
+            e,
+        )
         if notification:
             assert db is not None
             notification.status = NotificationStatus.failed
@@ -380,10 +698,23 @@ If you didn't request a password reset, you can safely ignore this email.
 This is an automated message. Please do not reply to this email.
 """
 
-    return send_email(db, to_email, subject, body_html, body_text)
+    return send_email(
+        db,
+        to_email,
+        subject,
+        body_html,
+        body_text,
+        activity="auth_password_reset",
+    )
 
 
-def send_user_invite_email(db: Session, to_email: str, reset_token: str, person_name: str | None = None) -> bool:
+def send_user_invite_email(
+    db: Session,
+    to_email: str,
+    reset_token: str,
+    person_name: str | None = None,
+    next_login_path: str | None = None,
+) -> bool:
     """
     Send a new user invitation email.
 
@@ -397,7 +728,10 @@ def send_user_invite_email(db: Session, to_email: str, reset_token: str, person_
         True if email was sent successfully, False otherwise
     """
     app_url = _get_app_url(db)
-    reset_url = f"{app_url}/auth/reset-password?token={reset_token}"
+    query = {"token": reset_token}
+    if next_login_path and next_login_path.startswith("/"):
+        query["next_login"] = next_login_path
+    reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
 
     # Get configurable expiry minutes
     expiry_minutes = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
@@ -455,4 +789,11 @@ This link will expire in {expiry_minutes} minutes.
 This is an automated message. Please do not reply to this email.
 """
 
-    return send_email(db, to_email, subject, body_html, body_text)
+    return send_email(
+        db,
+        to_email,
+        subject,
+        body_html,
+        body_text,
+        activity="auth_user_invite",
+    )

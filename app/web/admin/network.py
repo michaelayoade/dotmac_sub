@@ -2,8 +2,14 @@
 
 from typing import cast
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -29,9 +35,12 @@ from app.services import web_network_fiber as web_network_fiber_service
 from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services import web_network_olts as web_network_olts_service
+from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
 )
+from app.services import web_network_ont_charts as web_network_ont_charts_service
+from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_pop_sites as web_network_pop_sites_service
 from app.services import web_network_radius as web_network_radius_service
 from app.services import (
@@ -39,6 +48,7 @@ from app.services import (
 )
 from app.services import web_network_strands as web_network_strands_service
 from app.services import web_network_vlans as web_network_vlans_service
+from app.services import web_network_zones as web_network_zones_service
 from app.services.audit_helpers import (
     build_audit_activities,
     build_audit_activities_for_types,
@@ -46,6 +56,8 @@ from app.services.audit_helpers import (
     log_audit_event,
     model_to_dict,
 )
+from app.services.file_storage import build_content_disposition, file_uploads
+from app.services.object_storage import ObjectNotFoundError
 from app.web.request_parsing import parse_form_data_sync, parse_json_body_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -182,9 +194,34 @@ def olt_detail(request: Request, olt_id: str, db: Session = Depends(get_db)) -> 
 
 
 @router.get("/onts", response_class=HTMLResponse)
-def onts_list(request: Request, status: str | None = None, db: Session = Depends(get_db)) -> HTMLResponse:
-    """List all ONT/CPE devices."""
-    page_data = web_network_core_devices_service.onts_list_page_data(db, status)
+def onts_list(
+    request: Request,
+    status: str | None = None,
+    olt_id: str | None = None,
+    zone_id: str | None = None,
+    online_status: str | None = None,
+    signal_quality: str | None = None,
+    search: str | None = None,
+    vendor: str | None = None,
+    order_by: str = "serial_number",
+    order_dir: str = "asc",
+    page: int = 1,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """List all ONT/CPE devices with advanced filtering."""
+    page_data = web_network_core_devices_service.onts_list_page_data(
+        db,
+        status=status,
+        olt_id=olt_id,
+        zone_id=zone_id,
+        online_status=online_status,
+        signal_quality=signal_quality,
+        search=search,
+        vendor=vendor,
+        order_by=order_by,
+        order_dir=order_dir,
+        page=page,
+    )
     context = _base_context(request, db, active_page="onts")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/onts/index.html", context)
@@ -430,6 +467,261 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
     return RedirectResponse(f"/admin/network/onts/{ont.id}", status_code=303)
+
+
+# ── ONT Remote Actions ─────────────────────────────────────────────
+
+
+@router.post("/onts/{ont_id}/reboot")
+def ont_reboot(request: Request, ont_id: str, db: Session = Depends(get_db)) -> JSONResponse:
+    """Send reboot command to ONT via GenieACS."""
+    result = web_network_ont_actions_service.execute_reboot(db, ont_id)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="reboot",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": result.success, "message": result.message},
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/refresh")
+def ont_refresh(request: Request, ont_id: str, db: Session = Depends(get_db)) -> JSONResponse:
+    """Force status refresh for ONT via GenieACS."""
+    result = web_network_ont_actions_service.execute_refresh(db, ont_id)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="refresh",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": result.success},
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.get("/onts/{ont_id}/config", response_class=HTMLResponse)
+def ont_config(request: Request, ont_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Fetch and display running config from ONT."""
+    result = web_network_ont_actions_service.fetch_running_config(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update({
+        "ont_id": ont_id,
+        "config_result": result,
+    })
+    return templates.TemplateResponse(
+        "admin/network/onts/_config_partial.html", context
+    )
+
+
+@router.post("/onts/{ont_id}/factory-reset")
+def ont_factory_reset(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Send factory reset command to ONT via GenieACS."""
+    result = web_network_ont_actions_service.execute_factory_reset(db, ont_id)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="factory_reset",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": result.success, "message": result.message},
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/wifi-ssid")
+def ont_set_wifi_ssid(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set WiFi SSID on ONT via GenieACS TR-069."""
+    ssid = request.query_params.get("ssid", "")
+    result = web_network_ont_actions_service.set_wifi_ssid(db, ont_id, ssid)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="set_wifi_ssid",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": result.success, "ssid": ssid},
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/wifi-password")
+def ont_set_wifi_password(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set WiFi password on ONT via GenieACS TR-069."""
+    password = request.query_params.get("password", "")
+    result = web_network_ont_actions_service.set_wifi_password(db, ont_id, password)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="set_wifi_password",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": result.success},
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/lan-port")
+def ont_toggle_lan_port(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Toggle LAN port on ONT via GenieACS TR-069."""
+    port_str = request.query_params.get("port", "1")
+    enabled_str = request.query_params.get("enabled", "true")
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 1
+    enabled = enabled_str.lower() in ("true", "1", "yes")
+    result = web_network_ont_actions_service.toggle_lan_port(
+        db, ont_id, port, enabled
+    )
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="toggle_lan_port",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "success": result.success,
+            "port": port,
+            "enabled": enabled,
+        },
+    )
+    status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.get("/onts/{ont_id}/tr069", response_class=HTMLResponse)
+def ont_tr069_detail(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: TR-069 device details for ONT detail page tab."""
+    data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_tr069_partial.html", context
+    )
+
+
+@router.get("/onts/{ont_id}/charts", response_class=HTMLResponse)
+def ont_charts(
+    request: Request,
+    ont_id: str,
+    time_range: str = "24h",
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Traffic and signal charts for ONT detail page."""
+    data = web_network_ont_charts_service.charts_tab_data(db, ont_id, time_range)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_charts_partial.html", context
+    )
 
 
 @router.get("/cpes/{cpe_id}", response_class=HTMLResponse)
@@ -869,6 +1161,20 @@ def vlan_detail(request: Request, vlan_id: str, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="vlans")
     context.update({**state, "activities": activities})
     return templates.TemplateResponse("admin/network/vlans/detail.html", context)
+
+
+@router.get("/vlans/{vlan_id}/edit", response_class=HTMLResponse)
+def vlan_edit(request: Request, vlan_id: str, db: Session = Depends(get_db)):
+    state = web_network_vlans_service.build_vlan_edit_form_data(db, vlan_id=vlan_id)
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "VLAN not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="vlans")
+    context.update(state)
+    return templates.TemplateResponse("admin/network/vlans/form.html", context)
 
 
 @router.get("/radius", response_class=HTMLResponse)
@@ -1537,7 +1843,12 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
 
 
 @router.get("/pop-sites/{pop_site_id}", response_class=HTMLResponse)
-def pop_site_detail(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
+def pop_site_detail(
+    request: Request,
+    pop_site_id: str,
+    tab: str = "information",
+    db: Session = Depends(get_db),
+):
     page_data = web_network_pop_sites_service.detail_page_data(db, pop_site_id)
     if not page_data:
         return templates.TemplateResponse(
@@ -1546,11 +1857,260 @@ def pop_site_detail(request: Request, pop_site_id: str, db: Session = Depends(ge
             status_code=404,
         )
 
+    if tab not in {
+        "information",
+        "hardware",
+        "customer-services",
+        "map",
+        "gallery",
+        "documents",
+        "contacts",
+    }:
+        tab = "information"
+
     activities = build_audit_activities(db, "pop_site", str(pop_site_id))
     context = _base_context(request, db, active_page="pop-sites")
     context.update(page_data)
+    context["active_tab"] = tab
     context["activities"] = activities
     return templates.TemplateResponse("admin/network/pop-sites/detail.html", context)
+
+
+@router.post("/pop-sites/{pop_site_id}/photos", response_class=HTMLResponse)
+def pop_site_photo_upload(
+    request: Request,
+    pop_site_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
+    if not pop_site:
+        raise HTTPException(status_code=404, detail="POP Site not found")
+    if not file.filename:
+        return RedirectResponse(
+            f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
+            status_code=303,
+        )
+    payload = file.file.read()
+    if not payload:
+        return RedirectResponse(
+            f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
+            status_code=303,
+        )
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = current_user.get("subscriber_id")
+    organization_id = (
+        file_uploads.resolve_user_organization(db, actor_id) if actor_id else None
+    )
+    file_uploads.upload(
+        db=db,
+        domain="branding",
+        entity_type="pop_site_photo",
+        entity_id=str(pop_site_id),
+        original_filename=file.filename,
+        content_type=file.content_type,
+        data=payload,
+        uploaded_by=actor_id,
+        organization_id=organization_id,
+    )
+    return RedirectResponse(
+        f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
+        status_code=303,
+    )
+
+
+@router.post("/pop-sites/{pop_site_id}/documents", response_class=HTMLResponse)
+def pop_site_document_upload(
+    request: Request,
+    pop_site_id: str,
+    category: str = Form("other"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
+    if not pop_site:
+        raise HTTPException(status_code=404, detail="POP Site not found")
+    if category not in {"lease", "permit", "survey", "asbuilt", "other"}:
+        category = "other"
+    if not file.filename:
+        return RedirectResponse(
+            f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
+            status_code=303,
+        )
+    payload = file.file.read()
+    if not payload:
+        return RedirectResponse(
+            f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
+            status_code=303,
+        )
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = current_user.get("subscriber_id")
+    organization_id = (
+        file_uploads.resolve_user_organization(db, actor_id) if actor_id else None
+    )
+    file_uploads.upload(
+        db=db,
+        domain="attachments",
+        entity_type=f"pop_site_document_{category}",
+        entity_id=str(pop_site_id),
+        original_filename=file.filename,
+        content_type=file.content_type,
+        data=payload,
+        uploaded_by=actor_id,
+        organization_id=organization_id,
+    )
+    return RedirectResponse(
+        f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
+        status_code=303,
+    )
+
+
+@router.get("/pop-sites/{pop_site_id}/files/{file_id}/download")
+def pop_site_file_download(
+    request: Request,
+    pop_site_id: str,
+    file_id: str,
+    db: Session = Depends(get_db),
+):
+    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
+    if not record or record.entity_id != str(pop_site_id):
+        raise HTTPException(status_code=404, detail="File not found")
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    current_org = (
+        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else None
+    )
+    file_uploads.assert_tenant_access(record, current_org)
+    try:
+        stream = file_uploads.stream_file(record)
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+
+    headers = {"Content-Disposition": build_content_disposition(record.original_filename)}
+    if stream.content_length is not None:
+        headers["Content-Length"] = str(stream.content_length)
+    return StreamingResponse(
+        stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.get("/pop-sites/{pop_site_id}/files/{file_id}/preview")
+def pop_site_file_preview(
+    request: Request,
+    pop_site_id: str,
+    file_id: str,
+    db: Session = Depends(get_db),
+):
+    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
+    if not record or record.entity_id != str(pop_site_id):
+        raise HTTPException(status_code=404, detail="File not found")
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    current_org = (
+        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else None
+    )
+    file_uploads.assert_tenant_access(record, current_org)
+    try:
+        stream = file_uploads.stream_file(record)
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    return StreamingResponse(
+        stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+    )
+
+
+@router.post("/pop-sites/{pop_site_id}/files/{file_id}/delete")
+def pop_site_file_delete(
+    request: Request,
+    pop_site_id: str,
+    file_id: str,
+    tab: str = Form("documents"),
+    db: Session = Depends(get_db),
+):
+    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
+    if not record or record.entity_id != str(pop_site_id):
+        raise HTTPException(status_code=404, detail="File not found")
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    current_org = (
+        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else None
+    )
+    file_uploads.assert_tenant_access(record, current_org)
+    file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+    if tab not in {"gallery", "documents"}:
+        tab = "documents"
+    return RedirectResponse(
+        f"/admin/network/pop-sites/{pop_site_id}?tab={tab}",
+        status_code=303,
+    )
+
+
+@router.post("/pop-sites/{pop_site_id}/contacts")
+def pop_site_contact_create(
+    pop_site_id: str,
+    name: str = Form(...),
+    role: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    notes: str = Form(""),
+    is_primary: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
+    if not pop_site:
+        raise HTTPException(status_code=404, detail="POP Site not found")
+    if not name.strip():
+        return RedirectResponse(
+            f"/admin/network/pop-sites/{pop_site_id}?tab=contacts",
+            status_code=303,
+        )
+    web_network_pop_sites_service.create_contact(
+        db,
+        pop_site_id=pop_site_id,
+        name=name.strip(),
+        role=role.strip() or None,
+        phone=phone.strip() or None,
+        email=email.strip() or None,
+        notes=notes.strip() or None,
+        is_primary=is_primary,
+    )
+    return RedirectResponse(
+        f"/admin/network/pop-sites/{pop_site_id}?tab=contacts",
+        status_code=303,
+    )
+
+
+@router.post("/pop-sites/{pop_site_id}/contacts/{contact_id}/delete")
+def pop_site_contact_delete(
+    pop_site_id: str,
+    contact_id: str,
+    db: Session = Depends(get_db),
+):
+    web_network_pop_sites_service.delete_contact(
+        db,
+        pop_site_id=pop_site_id,
+        contact_id=contact_id,
+    )
+    return RedirectResponse(
+        f"/admin/network/pop-sites/{pop_site_id}?tab=contacts",
+        status_code=303,
+    )
 
 
 # ==================== Network Devices (Consolidated) ====================
@@ -1559,10 +2119,11 @@ def pop_site_detail(request: Request, pop_site_id: str, db: Session = Depends(ge
 def network_devices_consolidated(
     request: Request,
     tab: str = "core",
+    search: str | None = None,
     db: Session = Depends(get_db),
 ):
     """Consolidated view of all network devices - core, OLTs, ONTs/CPE."""
-    page_data = web_network_core_devices_service.consolidated_page_data(tab, db)
+    page_data = web_network_core_devices_service.consolidated_page_data(tab, db, search)
     context = _base_context(request, db, active_page="network-devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/network-devices/index.html", context)
@@ -3434,3 +3995,102 @@ def site_survey_delete_los(request: Request, path_id: str, db: Session = Depends
     )
     ws_service.survey_los.delete(db, path_id)
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
+
+
+# ==================== Network Zones ====================
+
+
+@router.get("/zones", response_class=HTMLResponse)
+def zones_list(request: Request, status: str | None = None, db: Session = Depends(get_db)) -> HTMLResponse:
+    """List all network zones."""
+    page_data = web_network_zones_service.list_page_data(db, status)
+    context = _base_context(request, db, active_page="zones")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/zones/index.html", context)
+
+
+@router.get("/zones/new", response_class=HTMLResponse)
+def zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Show new zone form."""
+    form_context = web_network_zones_service.build_form_context(
+        db, zone=None, action_url="/admin/network/zones",
+    )
+    context = _base_context(request, db, active_page="zones")
+    context.update(form_context)
+    return templates.TemplateResponse("admin/network/zones/form.html", context)
+
+
+@router.post("/zones", response_class=HTMLResponse)
+def zone_create(request: Request, db: Session = Depends(get_db)) -> Response:
+    """Create a new zone."""
+    form = parse_form_data_sync(request)
+    values = web_network_zones_service.parse_form_values(form)
+    error = web_network_zones_service.validate_form(values)
+    if error:
+        form_context = web_network_zones_service.build_form_context(
+            db, zone=None, action_url="/admin/network/zones", error=error,
+        )
+        context = _base_context(request, db, active_page="zones")
+        context.update(form_context)
+        return templates.TemplateResponse("admin/network/zones/form.html", context)
+
+    zone = web_network_zones_service.create_zone(db, values)
+    return RedirectResponse(f"/admin/network/zones/{zone.id}", status_code=303)
+
+
+@router.get("/zones/{zone_id}", response_class=HTMLResponse)
+def zone_detail(request: Request, zone_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Show zone detail page."""
+    page_data = web_network_zones_service.detail_page_data(db, zone_id)
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Network zone not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="zones")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/zones/detail.html", context)
+
+
+@router.get("/zones/{zone_id}/edit", response_class=HTMLResponse)
+def zone_edit(request: Request, zone_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Show zone edit form."""
+    zone = network_service.network_zones.get_or_none(db, zone_id)
+    if not zone:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Network zone not found"},
+            status_code=404,
+        )
+    form_context = web_network_zones_service.build_form_context(
+        db, zone=zone, action_url=f"/admin/network/zones/{zone.id}",
+    )
+    context = _base_context(request, db, active_page="zones")
+    context.update(form_context)
+    return templates.TemplateResponse("admin/network/zones/form.html", context)
+
+
+@router.post("/zones/{zone_id}", response_class=HTMLResponse)
+def zone_update(request: Request, zone_id: str, db: Session = Depends(get_db)) -> Response:
+    """Update an existing zone."""
+    zone = network_service.network_zones.get_or_none(db, zone_id)
+    if not zone:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Network zone not found"},
+            status_code=404,
+        )
+    form = parse_form_data_sync(request)
+    values = web_network_zones_service.parse_form_values(form)
+    error = web_network_zones_service.validate_form(values)
+    if error:
+        form_context = web_network_zones_service.build_form_context(
+            db, zone=zone, action_url=f"/admin/network/zones/{zone.id}", error=error,
+        )
+        context = _base_context(request, db, active_page="zones")
+        context.update(form_context)
+        return templates.TemplateResponse("admin/network/zones/form.html", context)
+
+    web_network_zones_service.update_zone(db, zone_id, values)
+    return RedirectResponse(f"/admin/network/zones/{zone_id}", status_code=303)

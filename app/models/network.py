@@ -109,6 +109,28 @@ class SplitterPortType(enum.Enum):
     output = "output"
 
 
+class OnuOnlineStatus(enum.Enum):
+    online = "online"
+    offline = "offline"
+    unknown = "unknown"
+
+
+class OnuOfflineReason(enum.Enum):
+    power_fail = "power_fail"
+    los = "los"
+    dying_gasp = "dying_gasp"
+    unknown = "unknown"
+
+
+class VlanPurpose(enum.Enum):
+    internet = "internet"
+    management = "management"
+    tr069 = "tr069"
+    iptv = "iptv"
+    voip = "voip"
+    other = "other"
+
+
 class CPEDevice(Base):
     __tablename__ = "cpe_devices"
 
@@ -216,6 +238,11 @@ class Vlan(Base):
     tag: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str | None] = mapped_column(String(120))
     description: Mapped[str | None] = mapped_column(Text)
+    purpose: Mapped[VlanPurpose | None] = mapped_column(
+        Enum(VlanPurpose, name="vlanpurpose", create_constraint=False),
+        nullable=True,
+    )
+    dhcp_snooping: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -461,6 +488,39 @@ class OLTDevice(Base):
     pon_ports = relationship("PonPort", back_populates="olt")
     power_units = relationship("OltPowerUnit", back_populates="olt")
     shelves = relationship("OltShelf", back_populates="olt")
+    config_backups = relationship("OltConfigBackup", back_populates="olt")
+
+
+class OltConfigBackupType(enum.Enum):
+    auto = "auto"
+    manual = "manual"
+
+
+class OltConfigBackup(Base):
+    """OLT running-config backup snapshot."""
+
+    __tablename__ = "olt_config_backups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id"), nullable=False, index=True
+    )
+    backup_type: Mapped[OltConfigBackupType] = mapped_column(
+        Enum(OltConfigBackupType, name="oltconfigbackuptype", create_constraint=False),
+        nullable=False,
+        default=OltConfigBackupType.auto,
+    )
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice", back_populates="config_backups")
 
 
 class OltShelf(Base):
@@ -671,6 +731,24 @@ class OntUnit(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Optical signal monitoring fields
+    onu_rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    olt_rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    distance_meters: Mapped[int | None] = mapped_column(Integer)
+    signal_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    online_status: Mapped[OnuOnlineStatus] = mapped_column(
+        Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
+        default=OnuOnlineStatus.unknown,
+        server_default="unknown",
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    offline_reason: Mapped[OnuOfflineReason | None] = mapped_column(
+        Enum(OnuOfflineReason, name="onuofflinereason", create_constraint=False),
+    )
+    zone_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_zones.id")
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -679,6 +757,7 @@ class OntUnit(Base):
     )
 
     assignments = relationship("OntAssignment", back_populates="ont_unit")
+    zone = relationship("NetworkZone", back_populates="ont_units")
 
 
 class OntAssignment(Base):
@@ -728,6 +807,40 @@ class OntAssignment(Base):
     service_address = relationship("Address")
 
 
+class NetworkZone(Base):
+    """Geographic zone for organizing network infrastructure."""
+
+    __tablename__ = "network_zones"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_network_zones_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_zones.id")
+    )
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    geom = mapped_column(Geometry("POINT", srid=4326), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    parent = relationship("NetworkZone", remote_side="NetworkZone.id", backref="children")
+    ont_units = relationship("OntUnit", back_populates="zone")
+    splitters = relationship("Splitter", back_populates="zone")
+    fdh_cabinets = relationship("FdhCabinet", back_populates="zone")
+
+
 class FdhCabinet(Base):
     __tablename__ = "fdh_cabinets"
     __table_args__ = (
@@ -745,6 +858,9 @@ class FdhCabinet(Base):
     latitude: Mapped[float | None] = mapped_column(Float)
     longitude: Mapped[float | None] = mapped_column(Float)
     geom = mapped_column(Geometry("POINT", srid=4326), nullable=True)
+    zone_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_zones.id")
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -757,6 +873,7 @@ class FdhCabinet(Base):
 
     splitters = relationship("Splitter", back_populates="fdh")
     region = relationship("RegionZone")
+    zone = relationship("NetworkZone", back_populates="fdh_cabinets")
 
 
 class Splitter(Base):
@@ -775,6 +892,9 @@ class Splitter(Base):
     splitter_ratio: Mapped[str | None] = mapped_column(String(40))
     input_ports: Mapped[int] = mapped_column(Integer, default=1)
     output_ports: Mapped[int] = mapped_column(Integer, default=8)
+    zone_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_zones.id")
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -787,6 +907,7 @@ class Splitter(Base):
 
     fdh = relationship("FdhCabinet", back_populates="splitters")
     ports = relationship("SplitterPort", back_populates="splitter")
+    zone = relationship("NetworkZone", back_populates="splitters")
 
 
 class SplitterPort(Base):

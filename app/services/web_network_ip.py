@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
+from collections import defaultdict
+
 from pydantic import ValidationError
 
 from app.models.network import IPv4Address, IPv6Address
@@ -9,6 +12,18 @@ from app.schemas.network import IpBlockCreate, IpPoolCreate, IpPoolUpdate
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
+
+
+def _usable_ipv4_count(cidr: str) -> int:
+    try:
+        network = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return 0
+    if network.version != 4:
+        return 0
+    if network.prefixlen >= 31:
+        return int(network.num_addresses)
+    return max(0, int(network.num_addresses) - 2)
 
 
 def build_ip_management_data(db) -> dict[str, object]:
@@ -334,6 +349,64 @@ def build_ip_pools_data(db) -> dict[str, object]:
         limit=100,
         offset=0,
     )
+    pool_ids = [str(pool.id) for pool in pools if pool.ip_version.value == "ipv4"]
+    ipv4_records = network_service.ipv4_addresses.list(
+        db=db,
+        pool_id=None,
+        is_reserved=None,
+        order_by="address",
+        order_dir="asc",
+        limit=50000,
+        offset=0,
+    )
+    ipv4_by_pool: dict[str, list[str]] = defaultdict(list)
+    for record in ipv4_records:
+        if record.pool_id and str(record.pool_id) in pool_ids:
+            ipv4_by_pool[str(record.pool_id)].append(str(record.address))
+
+    pool_utilization: dict[str, dict[str, int]] = {}
+    for pool in pools:
+        pool_id = str(pool.id)
+        if pool.ip_version.value != "ipv4":
+            pool_utilization[pool_id] = {"used": 0, "total": 0, "percent": 0}
+            continue
+        total = _usable_ipv4_count(str(pool.cidr))
+        used = len(ipv4_by_pool.get(pool_id, []))
+        percent = int(round((used / total) * 100)) if total > 0 else 0
+        pool_utilization[pool_id] = {
+            "used": used,
+            "total": total,
+            "percent": max(0, min(percent, 100)),
+        }
+
+    block_utilization: dict[str, dict[str, int]] = {}
+    for block in blocks:
+        block_id = str(block.id)
+        pool = getattr(block, "pool", None)
+        pool_id = str(pool.id) if pool else None
+        if not pool_id or not pool or pool.ip_version.value != "ipv4":
+            block_utilization[block_id] = {"used": 0, "total": 0, "percent": 0}
+            continue
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            block_utilization[block_id] = {"used": 0, "total": 0, "percent": 0}
+            continue
+        used = 0
+        for address in ipv4_by_pool.get(pool_id, []):
+            try:
+                if ipaddress.ip_address(address) in network:
+                    used += 1
+            except ValueError:
+                continue
+        total = _usable_ipv4_count(str(block.cidr))
+        percent = int(round((used / total) * 100)) if total > 0 else 0
+        block_utilization[block_id] = {
+            "used": used,
+            "total": total,
+            "percent": max(0, min(percent, 100)),
+        }
+
     stats = {
         "total_pools": len(pools),
         "total_blocks": len(blocks),
@@ -343,5 +416,7 @@ def build_ip_pools_data(db) -> dict[str, object]:
     return {
         "pools": pools,
         "blocks": blocks,
+        "pool_utilization": pool_utilization,
+        "block_utilization": block_utilization,
         "stats": stats,
     }

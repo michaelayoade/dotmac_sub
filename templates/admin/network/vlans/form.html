@@ -59,11 +59,28 @@
                     </div>
 
                     <div>
+                        <label for="purpose" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Purpose</label>
+                        <select name="purpose" id="purpose"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- None --</option>
+                            {% for choice in purpose_choices %}
+                            <option value="{{ choice.value }}" {% if vlan and vlan.purpose and vlan.purpose.value == choice.value %}selected{% endif %}>{{ choice.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="space-y-3">
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="is_active" value="true" {% if not vlan or vlan.is_active %}checked{% endif %}
                                 class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
                         </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="dhcp_snooping" value="true" {% if vlan and vlan.dhcp_snooping %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Snooping</span>
+                        </label>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Enable DHCP snooping to prevent rogue DHCP servers on this VLAN</p>
                     </div>
 
                     <div class="sm:col-span-2">

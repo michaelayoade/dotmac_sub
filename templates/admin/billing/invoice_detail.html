@@ -39,6 +39,14 @@
         status=status_html
     ) %}
         {{ action_button("Edit", href="/admin/billing/invoices/" ~ invoice.id ~ "/edit", icon=icon_edit(), variant="secondary", color="emerald") }}
+        {% if is_proforma %}
+        <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/convert-proforma" class="inline-flex">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition hover:-translate-y-0.5 hover:shadow-xl">
+                Convert Proforma
+            </button>
+        </form>
+        {% endif %}
         {{ action_button("Download PDF", href="/admin/billing/invoices/" ~ invoice.id ~ "/pdf", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', variant="secondary", color="emerald") }}
         {% if status_val in ['draft', 'pending'] %}
         {{ action_button("Send Invoice", href="#", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>', variant="primary", color="emerald", color2="teal") }}

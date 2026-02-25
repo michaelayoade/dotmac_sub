@@ -3,6 +3,17 @@
 
 {% block title %}{% if device %}Edit{% else %}New{% endif %} NAS Device - Admin{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<style>
+    #nas-location-map { height: 220px; border-radius: 0.5rem; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="space-y-6">
     <!-- Header -->
@@ -62,12 +73,13 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address *</label>
-                        <input type="text" name="ip_address" value="{{ device.ip_address if device else (form_data.ip_address if form_data else '') }}" required
+                        <input type="text" name="ip_address" id="ip_address" value="{{ device.ip_address if device else (form_data.ip_address if form_data else '') }}" required
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="192.168.1.1">
+                        <p id="ip_address_error" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor *</label>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">NAS Type *</label>
                         <select name="vendor" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select Vendor</option>
                             {% for v in vendors %}
@@ -76,7 +88,7 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Model</label>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor / Model</label>
                         <input type="text" name="model" value="{{ device.model if device else (form_data.model if form_data else '') }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="e.g., CCR2004-16G-2S+">
@@ -90,15 +102,23 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">POP Site</label>
-                        <div class="relative" data-typeahead-url="/api/v1/search/pop-sites">
-                            <input type="text" data-typeahead-input
-                                   value="{{ pop_site_label or '' }}"
-                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                                   placeholder="Search POP sites...">
-                            <input type="hidden" name="pop_site_id" data-typeahead-hidden value="{{ device.pop_site_id|string if device and device.pop_site_id else '' }}">
-                            <div data-typeahead-results></div>
-                        </div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location (POP Site)</label>
+                        <select name="pop_site_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select location</option>
+                            {% for site in pop_sites %}
+                            {% set selected_site = (device and device.pop_site_id and device.pop_site_id|string == site.id|string) or (form_data and form_data.pop_site_id == site.id|string) %}
+                            <option value="{{ site.id }}" {% if selected_site %}selected{% endif %}>{{ site.name }}{% if site.city %} ({{ site.city }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Partner / Organization</label>
+                        <select name="partner_org_ids" multiple
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for org in organizations %}
+                            <option value="{{ org.id }}" {% if selected_partner_org_ids and org.id|string in selected_partner_org_ids %}selected{% endif %}>{{ org.name }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                     <div class="sm:col-span-2">
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
@@ -146,6 +166,27 @@
                         <option value="{{ ct.value }}" {% if device and device.default_connection_type and device.default_connection_type.value == ct.value %}selected{% endif %}>{{ ct.label }}</option>
                         {% endfor %}
                     </select>
+                </div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Authorization Type</label>
+                        <select name="authorization_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set auth_val = (form_data.authorization_type if form_data else (enhanced_fields.authorization_type if enhanced_fields else '')) %}
+                            <option value="">None</option>
+                            <option value="ppp_dhcp_radius" {% if auth_val == 'ppp_dhcp_radius' %}selected{% endif %}>PPP/DHCP Radius</option>
+                            <option value="hotspot" {% if auth_val == 'hotspot' %}selected{% endif %}>Hotspot</option>
+                            <option value="none" {% if auth_val == 'none' %}selected{% endif %}>None</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Accounting Type</label>
+                        <select name="accounting_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set acct_val = (form_data.accounting_type if form_data else (enhanced_fields.accounting_type if enhanced_fields else '')) %}
+                            <option value="">None</option>
+                            <option value="radius_accounting" {% if acct_val == 'radius_accounting' %}selected{% endif %}>Radius accounting</option>
+                            <option value="none" {% if acct_val == 'none' %}selected{% endif %}>None</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -272,10 +313,35 @@
                                placeholder="e.g., core-router-01">
                     </div>
                     <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NAS IP *</label>
+                        <input type="text" name="nas_ip" id="nas_ip"
+                               value="{{ device.nas_ip if device else (form_data.nas_ip if form_data else '') }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="10.0.0.1">
+                        <p id="nas_ip_error" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
+                    </div>
+                    <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">CoA Port</label>
                         <input type="number" name="coa_port" value="{{ device.coa_port if device else 3799 }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="3799">
+                    </div>
+                    <div class="sm:col-span-3">
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                            RADIUS Pool Assignment
+                        </label>
+                        <select name="radius_pool_ids" multiple
+                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for pool in ip_pools %}
+                            <option value="{{ pool.id }}"
+                                {% if selected_radius_pool_ids and pool.id|string in selected_radius_pool_ids %}selected{% endif %}>
+                                {{ pool.name }} ({{ pool.cidr }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Use only these pools, if selected (in service set as Any pool).
+                        </p>
                     </div>
                 </div>
             </div>
@@ -339,6 +405,31 @@
                                placeholder="Rack 5, Unit 22">
                     </div>
                     <div class="sm:col-span-2 lg:col-span-3">
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Physical Address</label>
+                        <input type="text" name="physical_address"
+                               value="{{ (form_data.physical_address if form_data else (enhanced_fields.physical_address if enhanced_fields else '')) }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="Street, area, city">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Latitude</label>
+                        <input type="text" id="latitude" name="latitude"
+                               value="{{ (form_data.latitude if form_data else (enhanced_fields.latitude if enhanced_fields else '')) }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="9.0820">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Longitude</label>
+                        <input type="text" id="longitude" name="longitude"
+                               value="{{ (form_data.longitude if form_data else (enhanced_fields.longitude if enhanced_fields else '')) }}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="8.6753">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-3">
+                        <div id="nas-location-map"></div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Click map to set GPS coordinates.</p>
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-3">
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Notes</label>
                         <textarea name="notes" rows="3"
                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
@@ -381,11 +472,89 @@
 </div>
 
 <script>
+// Leaflet map picker
+const latitudeInput = document.getElementById('latitude');
+const longitudeInput = document.getElementById('longitude');
+const mapEl = document.getElementById('nas-location-map');
+if (mapEl && window.L) {
+    const startLat = parseFloat(latitudeInput?.value || '9.0820');
+    const startLng = parseFloat(longitudeInput?.value || '8.6753');
+    const map = L.map('nas-location-map').setView([startLat, startLng], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
+    }).addTo(map);
+    let marker = L.marker([startLat, startLng], { draggable: true }).addTo(map);
+    function syncFromMarker() {
+        const pos = marker.getLatLng();
+        latitudeInput.value = pos.lat.toFixed(6);
+        longitudeInput.value = pos.lng.toFixed(6);
+    }
+    marker.on('dragend', syncFromMarker);
+    map.on('click', (event) => {
+        marker.setLatLng(event.latlng);
+        syncFromMarker();
+    });
+}
+
 // Collect checked connection types into JSON array before form submit
-document.querySelector('form').addEventListener('submit', function(e) {
+const form = document.querySelector('form');
+const ipAddressInput = document.getElementById('ip_address');
+const nasIpInput = document.getElementById('nas_ip');
+const ipAddressError = document.getElementById('ip_address_error');
+const nasIpError = document.getElementById('nas_ip_error');
+const radiusTypes = new Set(['pppoe', 'ipoe', 'hotspot']);
+
+function validateIpv4(value) {
+    const parts = value.trim().split('.');
+    if (parts.length !== 4) return false;
+    return parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function selectedConnTypes() {
+    return Array.from(document.querySelectorAll('input[name^="conn_type_"]:checked')).map((cb) => cb.value);
+}
+
+function validateNasForm() {
+    let valid = true;
+    if (!validateIpv4(ipAddressInput.value)) {
+        ipAddressError.textContent = 'Enter a valid IPv4 address (e.g. 172.16.1.5).';
+        ipAddressError.classList.remove('hidden');
+        valid = false;
+    } else {
+        ipAddressError.classList.add('hidden');
+    }
+
+    const connTypes = selectedConnTypes();
+    const requiresNasIp = connTypes.some((value) => radiusTypes.has(value));
+    const nasIpValue = nasIpInput.value.trim();
+    if (nasIpValue && !validateIpv4(nasIpValue)) {
+        nasIpError.textContent = 'Enter a valid IPv4 NAS IP.';
+        nasIpError.classList.remove('hidden');
+        valid = false;
+    } else if (requiresNasIp && !nasIpValue) {
+        nasIpError.textContent = 'NAS IP is required for PPPoE, IPoE, or Hotspot.';
+        nasIpError.classList.remove('hidden');
+        valid = false;
+    } else {
+        nasIpError.classList.add('hidden');
+    }
+    return valid;
+}
+
+form.addEventListener('submit', function(e) {
     const checkboxes = document.querySelectorAll('input[name^="conn_type_"]:checked');
     const types = Array.from(checkboxes).map(cb => cb.value);
     document.getElementById('supported_connection_types').value = JSON.stringify(types);
+    if (!validateNasForm()) {
+        e.preventDefault();
+    }
+});
+
+ipAddressInput?.addEventListener('input', validateNasForm);
+nasIpInput?.addEventListener('input', validateNasForm);
+document.querySelectorAll('input[name^="conn_type_"]').forEach((el) => {
+    el.addEventListener('change', validateNasForm);
 });
 </script>
 {% endblock %}

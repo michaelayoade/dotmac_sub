@@ -1,0 +1,206 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_head, table_row, row_action, status_badge,
+    empty_state, action_button, animation_styles,
+    icon_plus, icon_view, icon_delete
+%}
+
+{% block title %}Payment Providers - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-6">
+
+    {# Page Header #}
+    {% call(content) page_header(
+        "Payment Providers",
+        subtitle="Configure payment gateway integrations",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+        color="emerald",
+        breadcrumbs=[
+            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Payment Providers"}
+        ]
+    ) %}
+        {{ action_button("New Provider", href="#create-form", icon=icon_plus("h-4 w-4"), variant="primary", color="emerald") }}
+    {% endcall %}
+
+    {# Stats #}
+    {% set active_count = providers | selectattr('is_active') | list | length %}
+    {% set inactive_count = providers | rejectattr('is_active') | list | length if show_inactive else 0 %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3" style="animation-delay: 50ms;">
+        {{ stats_card(
+            "Total Providers",
+            providers | length,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+            color="emerald", color2="teal"
+        ) }}
+        {{ stats_card(
+            "Active",
+            active_count,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card(
+            "Provider Types",
+            providers | map(attribute='provider_type') | unique | list | length,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>',
+            color="teal", color2="cyan"
+        ) }}
+    </div>
+
+    {# Filter bar #}
+    <div class="animate-fade-in-up flex items-center justify-between rounded-xl border border-slate-200/60 bg-white/80 px-5 py-3 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <input type="checkbox" onchange="window.location.href='/admin/billing/payment-providers{% if not show_inactive %}?show_inactive=true{% endif %}'"
+                   {% if show_inactive %}checked{% endif %}
+                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+            Show inactive providers
+        </label>
+    </div>
+
+    {# Error display #}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {# Data table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Provider"},
+                    {"label": "Type"},
+                    {"label": "Status"},
+                    {"label": "Created"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if providers %}
+                    {% for provider in providers %}
+                    {% call table_row(color="emerald") %}
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
+                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <p class="font-semibold text-slate-900 dark:text-white">{{ provider.name }}</p>
+                                    {% if provider.notes %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ provider.notes }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set ptype = provider.provider_type.value if provider.provider_type else 'custom' %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">
+                                {{ ptype | replace('_', ' ') | title }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if provider.is_active %}
+                                {{ status_badge("Active", variant="active") }}
+                            {% else %}
+                                {{ status_badge("Inactive", variant="neutral") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ provider.created_at.strftime('%Y-%m-%d') if provider.created_at else 'N/A' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href="/admin/billing/payment-providers/" ~ provider.id ~ "/edit", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', title="Edit Provider", color="blue") }}
+                                {% if provider.is_active %}
+                                <form method="post" action="/admin/billing/payment-providers/{{ provider.id }}/deactivate" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Deactivate this provider?')"
+                                            class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/20 dark:hover:text-rose-400 transition-colors"
+                                            title="Deactivate">
+                                        {{ icon_delete() }}
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No payment providers configured",
+                        message="Add a payment gateway to start accepting online payments",
+                        icon='<svg class="h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+                        color="emerald",
+                        action_label="New Provider",
+                        action_href="#create-form",
+                        colspan=5
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Inline Create Form #}
+    <div id="create-form" class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 200ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50 px-6 py-4 dark:border-slate-700 dark:from-emerald-900/20 dark:to-teal-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Add Payment Provider</h3>
+        </div>
+        <form method="post" action="/admin/billing/payment-providers" class="space-y-4 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Name</label>
+                    <input type="text" id="name" name="name" required placeholder="e.g. Paystack Production"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="provider_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Provider Type</label>
+                    <select id="provider_type" name="provider_type"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for pt in provider_types %}
+                        <option value="{{ pt }}">{{ pt | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="webhook_secret_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Webhook Secret Reference</label>
+                    <input type="text" id="webhook_secret_ref" name="webhook_secret_ref" placeholder="Optional"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-center gap-2 pt-6">
+                    <input type="checkbox" id="is_active" name="is_active" checked
+                           class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="is_active" class="text-sm text-slate-600 dark:text-slate-400">Active</label>
+                </div>
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                <textarea id="notes" name="notes" rows="2" placeholder="Optional notes"
+                          class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+            </div>
+
+            <div class="flex justify-end gap-3 pt-2">
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
+                    Create Provider
+                </button>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

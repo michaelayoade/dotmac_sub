@@ -1,0 +1,158 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, detail_header, info_row, info_grid,
+    table_head, table_row, status_badge, card,
+    animation_styles
+%}
+
+{% block title %}Payment Arrangement Detail - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-6">
+
+    {# Header #}
+    {% set st = arrangement.status.value if arrangement.status else 'pending' %}
+    {% if st == 'active' %}
+        {% set badge_variant = "active" %}
+    {% elif st == 'pending' %}
+        {% set badge_variant = "pending" %}
+    {% elif st == 'completed' %}
+        {% set badge_variant = "success" %}
+    {% elif st == 'defaulted' %}
+        {% set badge_variant = "error" %}
+    {% else %}
+        {% set badge_variant = "neutral" %}
+    {% endif %}
+
+    {{ detail_header(
+        back_url="/admin/billing/payment-arrangements",
+        back_label="Payment Arrangements",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>',
+        title="Payment Arrangement",
+        status=st | replace('_', ' ') | title,
+        status_variant=badge_variant,
+        color="emerald"
+    ) }}
+
+    {# Summary Cards #}
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+
+        {# Arrangement Details #}
+        {% call card(title="Arrangement Details", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
+            {% call info_grid() %}
+                {{ info_row("Total Amount", "{:,.2f}".format(arrangement.total_amount)) }}
+                {{ info_row("Installment Amount", "{:,.2f}".format(arrangement.installment_amount)) }}
+                {{ info_row("Frequency", arrangement.frequency.value | replace('_', ' ') | title if arrangement.frequency else 'N/A') }}
+                {{ info_row("Progress", "{} / {} installments".format(arrangement.installments_paid, arrangement.installments_total)) }}
+                {{ info_row("Start Date", arrangement.start_date.strftime('%Y-%m-%d') if arrangement.start_date else 'N/A') }}
+                {{ info_row("End Date", arrangement.end_date.strftime('%Y-%m-%d') if arrangement.end_date else 'N/A') }}
+                {{ info_row("Next Due Date", arrangement.next_due_date.strftime('%Y-%m-%d') if arrangement.next_due_date else 'N/A') }}
+                {{ info_row("Created", arrangement.created_at.strftime('%Y-%m-%d %H:%M') if arrangement.created_at else 'N/A') }}
+            {% endcall %}
+            {% if arrangement.notes %}
+            <div class="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Notes</p>
+                <p class="text-sm text-slate-700 dark:text-slate-300">{{ arrangement.notes }}</p>
+            </div>
+            {% endif %}
+        {% endcall %}
+
+        {# Actions #}
+        {% call card(title="Actions", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="emerald") %}
+            <div class="space-y-3">
+                {% if st == 'pending' %}
+                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/approve">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Approve Arrangement
+                    </button>
+                </form>
+                {% endif %}
+                {% if st in ['pending', 'active'] %}
+                <form method="post" action="/admin/billing/payment-arrangements/{{ arrangement.id }}/cancel">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" onclick="return confirm('Cancel this payment arrangement?')"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20 transition-colors">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        Cancel Arrangement
+                    </button>
+                </form>
+                {% endif %}
+                {% if st == 'completed' or st == 'canceled' or st == 'defaulted' %}
+                <p class="text-center text-sm text-slate-500 dark:text-slate-400 py-4">
+                    No actions available for {{ st }} arrangements.
+                </p>
+                {% endif %}
+            </div>
+        {% endcall %}
+
+    </div>
+
+    {# Installments Table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <div class="border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-teal-50 px-6 py-4 dark:border-slate-700 dark:from-emerald-900/20 dark:to-teal-900/20">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Installments</h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "#"},
+                    {"label": "Amount"},
+                    {"label": "Due Date"},
+                    {"label": "Status"},
+                    {"label": "Paid At"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if installments %}
+                    {% for inst in installments %}
+                    {% call table_row(color="emerald") %}
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">
+                            {{ inst.installment_number }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <span class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">
+                                {{ "{:,.2f}".format(inst.amount) }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ inst.due_date.strftime('%Y-%m-%d') if inst.due_date else 'N/A' }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set ist = inst.status.value if inst.status else 'pending' %}
+                            {% if ist == 'paid' %}
+                                {{ status_badge("Paid", variant="active") }}
+                            {% elif ist == 'due' %}
+                                {{ status_badge("Due", variant="info") }}
+                            {% elif ist == 'overdue' %}
+                                {{ status_badge("Overdue", variant="error") }}
+                            {% elif ist == 'waived' %}
+                                {{ status_badge("Waived", variant="neutral") }}
+                            {% else %}
+                                {{ status_badge("Pending", variant="pending") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {{ inst.paid_at.strftime('%Y-%m-%d %H:%M') if inst.paid_at else '—' }}
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No installments found.
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

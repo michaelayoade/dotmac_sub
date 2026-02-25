@@ -11,81 +11,195 @@
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                 <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">AR Aging</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Accounts Receivable Aging</h1>
         </div>
+        <form method="get" action="/admin/billing/ar-aging" class="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <label for="period" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Period</label>
+            <select id="period" name="period" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                <option value="all" {% if selected_period == 'all' %}selected{% endif %}>All time</option>
+                <option value="this_year" {% if selected_period == 'this_year' %}selected{% endif %}>This year</option>
+            </select>
+            <select name="partner_id" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                <option value="">All partners</option>
+                {% for partner in partner_options %}
+                <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="location" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                <option value="">All locations</option>
+                {% for loc in location_options %}
+                <option value="{{ loc }}" {% if selected_location == loc %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+            <select name="debtor_period" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                <option value="all" {% if selected_debtor_period == 'all' %}selected{% endif %}>Debtors: All</option>
+                <option value="this_month" {% if selected_debtor_period == 'this_month' %}selected{% endif %}>Debtors: This Month</option>
+                <option value="last_month" {% if selected_debtor_period == 'last_month' %}selected{% endif %}>Debtors: Last Month</option>
+            </select>
+            <button type="submit" class="inline-flex items-center rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700">Apply</button>
+            {% if selected_bucket %}
+            <input type="hidden" name="bucket" value="{{ selected_bucket }}" />
+            {% endif %}
+        </form>
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Current</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals.current or 0) }}</p>
+        {% for card in bucket_order %}
+        <a
+            href="/admin/billing/ar-aging?period={{ selected_period }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if selected_location %}&location={{ selected_location }}{% endif %}{% if selected_debtor_period %}&debtor_period={{ selected_debtor_period }}{% endif %}{% if selected_bucket == card.key %}{% else %}&bucket={{ card.key }}{% endif %}"
+            class="rounded-xl border bg-white p-4 shadow-sm transition hover:border-primary-300 hover:shadow dark:bg-slate-800 {% if card.is_selected %}border-primary-400 ring-2 ring-primary-100 dark:border-primary-500 dark:ring-primary-900/40{% else %}border-slate-200 dark:border-slate-700{% endif %}"
+        >
+            <div class="flex items-center justify-between gap-2">
+                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ card.label }}</p>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-100">{{ card.count }} invoice{% if card.count != 1 %}s{% endif %}</span>
+            </div>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(card.amount or 0) }}</p>
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if selected_bucket %}
+    <div class="flex flex-wrap items-center justify-end gap-3">
+        {% if selected_bucket != 'current' and bucket_invoice_ids[selected_bucket] %}
+        <form method="post" action="/admin/billing/invoices/bulk/send" onsubmit="return confirm('Send reminders for all invoices in this aging bucket?');">
+            <input type="hidden" name="invoice_ids" value="{{ bucket_invoice_ids[selected_bucket] }}" />
+            <button type="submit" class="inline-flex items-center rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700">
+                Send Reminders ({{ counts[selected_bucket] }})
+            </button>
+        </form>
+        {% endif %}
+        <a href="/admin/billing/ar-aging?period={{ selected_period }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if selected_location %}&location={{ selected_location }}{% endif %}{% if selected_debtor_period %}&debtor_period={{ selected_debtor_period }}{% endif %}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Clear bucket filter</a>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-2">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Aging Distribution</h2>
+            </div>
+            <div class="p-6">
+                <div class="chart-container" style="min-height: 280px;">
+                    <canvas id="ar-aging-chart"></canvas>
+                </div>
+            </div>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">1-30 Days</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["1_30"] or 0) }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">31-60 Days</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["31_60"] or 0) }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">61-90 Days</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["61_90"] or 0) }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">90+ Days</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(totals["90_plus"] or 0) }}</p>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Top 10 Debtors</h2>
+            </div>
+            <div class="p-4">
+                <div class="mb-4" style="min-height: 190px;">
+                    <canvas id="top-debtors-chart"></canvas>
+                </div>
+                {% if top_debtors %}
+                <div class="space-y-2">
+                    {% for debtor in top_debtors %}
+                    <div class="flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
+                        <span class="truncate text-slate-700 dark:text-slate-200">{{ debtor.account_label }}</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(debtor.amount or 0) }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No overdue balances for this period.</p>
+                {% endif %}
+            </div>
         </div>
     </div>
 
-    <!-- AR Aging Chart -->
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <h2 class="font-semibold text-slate-900 dark:text-white">Aging Distribution</h2>
+            <h2 class="font-semibold text-slate-900 dark:text-white">Aging Trend (Last 6 Months)</h2>
         </div>
         <div class="p-6">
             <div class="chart-container" style="min-height: 280px;">
-                <canvas id="ar-aging-chart"></canvas>
+                <canvas id="ar-aging-trend-chart"></canvas>
             </div>
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('ar-aging-chart');
-                if (!ctx) return;
-                const chartData = {
-                    labels: ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days'],
-                    datasets: [{
-                        label: 'Outstanding Amount',
-                        data: [
-                            {{ totals.current or 0 }},
-                            {{ totals["1_30"] or 0 }},
-                            {{ totals["31_60"] or 0 }},
-                            {{ totals["61_90"] or 0 }},
-                            {{ totals["90_plus"] or 0 }}
-                        ],
-                        backgroundColor: ['#10b981', '#06b6d4', '#f59e0b', '#f97316', '#ef4444']
-                    }]
-                };
-                const chart = DotmacCharts.createBarChart(ctx, chartData, {
-                    plugins: { legend: { display: false } }
-                });
-                DotmacCharts.registerChart('ar-aging-chart', chart);
-            });
-            </script>
         </div>
     </div>
 
-    {% for label, items in [
-        ("Current", buckets.current),
-        ("1-30 Days", buckets["1_30"]),
-        ("31-60 Days", buckets["31_60"]),
-        ("61-90 Days", buckets["61_90"]),
-        ("90+ Days", buckets["90_plus"])
-    ] %}
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const agingCtx = document.getElementById('ar-aging-chart');
+        if (agingCtx) {
+            const chartData = {
+                labels: ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days'],
+                datasets: [{
+                    label: 'Outstanding Amount',
+                    data: [
+                        {{ totals.current or 0 }},
+                        {{ totals["1_30"] or 0 }},
+                        {{ totals["31_60"] or 0 }},
+                        {{ totals["61_90"] or 0 }},
+                        {{ totals["90_plus"] or 0 }}
+                    ],
+                    backgroundColor: ['#10b981', '#06b6d4', '#f59e0b', '#f97316', '#ef4444']
+                }]
+            };
+            const chart = DotmacCharts.createBarChart(agingCtx, chartData, {
+                plugins: { legend: { display: false } }
+            });
+            DotmacCharts.registerChart('ar-aging-chart', chart);
+        }
+
+        const debtorCtx = document.getElementById('top-debtors-chart');
+        if (debtorCtx) {
+            const debtors = {{ top_debtors | tojson }};
+            if (debtors.length > 0) {
+                const debtorChartData = {
+                    labels: debtors.map(item => item.account_label),
+                    datasets: [{
+                        data: debtors.map(item => item.amount),
+                        backgroundColor: ['#2563eb', '#0891b2', '#0ea5e9', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#db2777', '#8b5cf6', '#6366f1']
+                    }]
+                };
+                const debtorChart = DotmacCharts.createDoughnutChart(debtorCtx, debtorChartData, {
+                    plugins: { legend: { display: false } }
+                });
+                DotmacCharts.registerChart('top-debtors-chart', debtorChart);
+            }
+        }
+
+        const trendCtx = document.getElementById('ar-aging-trend-chart');
+        if (trendCtx) {
+            const trend = {{ aging_trend | tojson }};
+            const trendData = {
+                labels: trend.labels || [],
+                datasets: [
+                    { label: 'Current', data: trend.series.current || [], backgroundColor: '#10b981' },
+                    { label: '1-30', data: trend.series['1_30'] || [], backgroundColor: '#06b6d4' },
+                    { label: '31-60', data: trend.series['31_60'] || [], backgroundColor: '#f59e0b' },
+                    { label: '61-90', data: trend.series['61_90'] || [], backgroundColor: '#f97316' },
+                    { label: '90+', data: trend.series['90_plus'] || [], backgroundColor: '#ef4444' }
+                ]
+            };
+            const trendChart = DotmacCharts.createBarChart(trendCtx, trendData, {
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true }
+                }
+            });
+            DotmacCharts.registerChart('ar-aging-trend-chart', trendChart);
+        }
+    });
+    </script>
+
+    {% for bucket_key in visible_bucket_keys %}
+    {% set label_map = {
+        'current': 'Current',
+        '1_30': '1-30 Days',
+        '31_60': '31-60 Days',
+        '61_90': '61-90 Days',
+        '90_plus': '90+ Days'
+    } %}
+    {% set label = label_map[bucket_key] %}
+    {% set items = bucket_rows[bucket_key] %}
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ label }}</h2>
@@ -98,34 +212,25 @@
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Balance Due</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due Date</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Payment</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                     {% if items %}
-                    {% for invoice in items %}
+                    {% for row in items %}
+                    {% set invoice = row.invoice %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                         <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">
                             <a class="text-primary-600 hover:text-primary-700 dark:text-primary-400" href="/admin/billing/invoices/{{ invoice.id }}">{{ invoice.invoice_number | default('Invoice') }}</a>
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {% if invoice.account and invoice.account.subscriber %}
-                                {% if invoice.account.subscriber.person %}
-                                    {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
-                                {% elif invoice.account.subscriber.organization %}
-                                    {{ invoice.account.subscriber.organization.name }}
-                                {% else %}
-                                    Account
-                                {% endif %}
-                            {% else %}
-                                Account
-                            {% endif %}
-                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ row.account_label }}</td>
                         <td class="px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ row.last_payment_at.strftime('%b %d, %Y') if row.last_payment_at else 'No payment' }}</td>
                     </tr>
                     {% endfor %}
                     {% else %}
-                    <tr><td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No invoices</td></tr>
+                    <tr><td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No invoices</td></tr>
                     {% endif %}
                 </tbody>
             </table>

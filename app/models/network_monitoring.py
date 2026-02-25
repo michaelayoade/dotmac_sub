@@ -103,6 +103,9 @@ class PopSite(Base):
     latitude: Mapped[float | None] = mapped_column(Float)
     longitude: Mapped[float | None] = mapped_column(Float)
     geom = mapped_column(Geometry("POINT", srid=4326), nullable=True)
+    zone_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_zones.id")
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -115,6 +118,42 @@ class PopSite(Base):
 
     devices = relationship("NetworkDevice", back_populates="pop_site")
     nas_devices = relationship("NasDevice", back_populates="pop_site")
+    contacts = relationship(
+        "PopSiteContact",
+        back_populates="pop_site",
+        cascade="all, delete-orphan",
+        order_by="PopSiteContact.created_at.desc()",
+    )
+    zone = relationship("NetworkZone")
+
+
+class PopSiteContact(Base):
+    __tablename__ = "pop_site_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pop_site_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(40))
+    email: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pop_site = relationship("PopSite", back_populates="contacts")
 
 
 class NetworkDevice(Base):

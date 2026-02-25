@@ -20,7 +20,10 @@ def get_subscriber(db: Session, user_id: str | UUID | None) -> Subscriber | None
     """Resolve a subscriber by id."""
     if not user_id:
         return None
-    return db.get(Subscriber, coerce_uuid(user_id))
+    try:
+        return db.get(Subscriber, coerce_uuid(user_id))
+    except (TypeError, ValueError):
+        return None
 
 
 def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any]:

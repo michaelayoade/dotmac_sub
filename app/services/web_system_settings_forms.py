@@ -118,6 +118,12 @@ def process_settings_update(
             db,
             web_system_settings_views_service.ENFORCEMENT_DOMAIN,
         )
+    elif domain_value == web_system_settings_views_service.BRANDING_DOMAIN:
+        settings_context = web_system_settings_views_service.build_settings_context(
+            db,
+            web_system_settings_views_service.BRANDING_DOMAIN,
+        )
+        errors.append("Use the Branding form to update logo settings.")
     else:
         selected_domain = web_system_settings_views_service.resolve_settings_domain(domain_value)
         specs = settings_spec.list_specs(selected_domain)

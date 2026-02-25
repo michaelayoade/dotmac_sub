@@ -1,10 +1,10 @@
 """Tests for legal document services."""
 
 import os
-import tempfile
 import uuid
 
 from app.models.legal import LegalDocument, LegalDocumentType
+from app.models.stored_file import StoredFile
 from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
 from app.services import legal
 
@@ -431,10 +431,11 @@ class TestLegalDocumentDelete:
 
     def test_delete_with_file(self, db_session):
         """Test deleting document removes associated file."""
-        # Create a temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+        uploads_dir = os.path.join("uploads", "legal", "tests")
+        os.makedirs(uploads_dir, exist_ok=True)
+        temp_path = os.path.join(uploads_dir, f"{uuid.uuid4()}.pdf")
+        with open(temp_path, "wb") as f:
             f.write(b"test content")
-            temp_path = f.name
 
         doc = LegalDocument(
             document_type=LegalDocumentType.other,
@@ -461,11 +462,16 @@ class TestLegalDocumentDelete:
 class TestLegalDocumentFileUpload:
     """Tests for file upload operations."""
 
-    def test_upload_file(self, db_session, tmp_path, monkeypatch):
+    def test_upload_file(self, db_session, monkeypatch):
         """Test uploading a file."""
-        # Set upload dir to temp path
-        upload_dir = str(tmp_path / "legal")
-        monkeypatch.setattr(legal, "UPLOAD_DIR", upload_dir)
+        class _Storage:
+            def upload(self, key: str, data: bytes, content_type: str | None):
+                return None
+
+            def delete(self, key: str):
+                return None
+
+        monkeypatch.setattr(legal.file_uploads, "storage", _Storage())
 
         doc = LegalDocument(
             document_type=LegalDocumentType.terms_of_service,
@@ -476,7 +482,7 @@ class TestLegalDocumentFileUpload:
         db_session.add(doc)
         db_session.commit()
 
-        file_content = b"PDF content here"
+        file_content = b"%PDF-1.4 content here"
         result = legal.legal_documents.upload_file(
             db_session,
             str(doc.id),
@@ -489,7 +495,10 @@ class TestLegalDocumentFileUpload:
         assert result.file_name == "terms.pdf"
         assert result.file_size == len(file_content)
         assert result.mime_type == "application/pdf"
-        assert os.path.exists(result.file_path)
+        assert result.file_path is not None
+        record = legal.legal_documents.get_active_file_record(db_session, str(doc.id))
+        assert record is not None
+        assert record.storage_provider == "s3"
 
     def test_upload_file_not_found(self, db_session):
         """Test uploading to non-existent document."""
@@ -502,10 +511,18 @@ class TestLegalDocumentFileUpload:
         )
         assert result is None
 
-    def test_upload_replaces_old_file(self, db_session, tmp_path, monkeypatch):
+    def test_upload_replaces_old_file(self, db_session, monkeypatch):
         """Test uploading replaces existing file."""
-        upload_dir = str(tmp_path / "legal")
-        monkeypatch.setattr(legal, "UPLOAD_DIR", upload_dir)
+        deleted: list[str] = []
+
+        class _Storage:
+            def upload(self, key: str, data: bytes, content_type: str | None):
+                return None
+
+            def delete(self, key: str):
+                deleted.append(key)
+
+        monkeypatch.setattr(legal.file_uploads, "storage", _Storage())
 
         doc = LegalDocument(
             document_type=LegalDocumentType.terms_of_service,
@@ -518,20 +535,25 @@ class TestLegalDocumentFileUpload:
 
         # Upload first file
         legal.legal_documents.upload_file(
-            db_session, str(doc.id), b"first", "first.pdf", "application/pdf"
+            db_session, str(doc.id), b"%PDF-1.4 first", "first.pdf", "application/pdf"
         )
-        first_path = doc.file_path
 
         # Upload second file
         updated = legal.legal_documents.upload_file(
-            db_session, str(doc.id), b"second", "second.pdf", "application/pdf"
+            db_session, str(doc.id), b"%PDF-1.4 second", "second.pdf", "application/pdf"
         )
 
         assert updated is not None
         assert updated.file_name == "second.pdf"
-        assert os.path.exists(first_path)
-        with open(first_path, "rb") as file_handle:
-            assert file_handle.read() == b"second"
+        all_records = (
+            db_session.query(StoredFile)
+            .filter(StoredFile.entity_type == "legal_document")
+            .filter(StoredFile.entity_id == str(doc.id))
+            .all()
+        )
+        assert len(all_records) == 2
+        assert len(deleted) == 1
+        assert sum(1 for r in all_records if r.is_deleted) == 1
 
 
 # =============================================================================
@@ -542,10 +564,18 @@ class TestLegalDocumentFileUpload:
 class TestLegalDocumentFileDelete:
     """Tests for file deletion operations."""
 
-    def test_delete_file(self, db_session, tmp_path, monkeypatch):
+    def test_delete_file(self, db_session, monkeypatch):
         """Test deleting a file."""
-        upload_dir = str(tmp_path / "legal")
-        monkeypatch.setattr(legal, "UPLOAD_DIR", upload_dir)
+        deleted: list[str] = []
+
+        class _Storage:
+            def upload(self, key: str, data: bytes, content_type: str | None):
+                return None
+
+            def delete(self, key: str):
+                deleted.append(key)
+
+        monkeypatch.setattr(legal.file_uploads, "storage", _Storage())
 
         doc = LegalDocument(
             document_type=LegalDocumentType.terms_of_service,
@@ -558,10 +588,10 @@ class TestLegalDocumentFileDelete:
 
         # Upload a file first
         legal.legal_documents.upload_file(
-            db_session, str(doc.id), b"content", "test.pdf", "application/pdf"
+            db_session, str(doc.id), b"%PDF-1.4 content", "test.pdf", "application/pdf"
         )
         file_path = doc.file_path
-        assert os.path.exists(file_path)
+        assert file_path is not None
 
         # Delete the file
         result = legal.legal_documents.delete_file(db_session, str(doc.id))
@@ -569,7 +599,7 @@ class TestLegalDocumentFileDelete:
         assert result is not None
         assert result.file_path is None
         assert result.file_name is None
-        assert not os.path.exists(file_path)
+        assert len(deleted) == 1
 
     def test_delete_file_not_found(self, db_session):
         """Test deleting file from non-existent document."""

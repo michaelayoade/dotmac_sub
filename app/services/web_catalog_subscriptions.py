@@ -44,6 +44,13 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
+def _normalize_discount_type(value: object) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "percent":
+        return "percentage"
+    return raw
+
+
 def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, object]:
     """Return default values for subscription create form."""
     return {
@@ -99,7 +106,7 @@ def parse_subscription_form(form: FormData, *, subscription_id: str | None = Non
         "unit_price": _form_str(form, "unit_price").strip(),
         "discount": form.get("discount") == "true",
         "discount_value": _form_str(form, "discount_value").strip(),
-        "discount_type": _form_str(form, "discount_type").strip(),
+        "discount_type": _normalize_discount_type(_form_str(form, "discount_type").strip()),
         "service_status_raw": _form_str(form, "service_status_raw").strip(),
         "login": _form_str(form, "login").strip(),
         "ipv4_address": _form_str(form, "ipv4_address").strip(),
@@ -274,6 +281,7 @@ def send_welcome_email_for_subscription(db: Session, created: Subscription) -> N
         subject="Welcome to your new subscription",
         body_html=body_html,
         body_text=body_text,
+        activity="subscription_welcome",
     )
 
 
@@ -307,7 +315,9 @@ def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
         "unit_price": subscription_obj.unit_price or "",
         "discount": subscription_obj.discount,
         "discount_value": subscription_obj.discount_value or "",
-        "discount_type": subscription_obj.discount_type or "",
+        "discount_type": _normalize_discount_type(
+            subscription_obj.discount_type.value if subscription_obj.discount_type else ""
+        ),
         "service_status_raw": subscription_obj.service_status_raw or "",
         "login": subscription_obj.login or "",
         "ipv4_address": subscription_obj.ipv4_address or "",

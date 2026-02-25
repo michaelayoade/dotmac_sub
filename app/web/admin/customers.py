@@ -371,6 +371,8 @@ def customer_create(
     except HTTPException:
         raise
     except Exception as e:
+        # Ensure failed transactions don't break error-page queries/rendering.
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
@@ -998,9 +1000,14 @@ def geocode_address(
     """Update address coordinates from a geocoding selection."""
     from app.schemas.subscriber import AddressUpdate
 
+    try:
+        parsed_address_id = uuid.UUID(address_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid address id") from exc
+
     address = subscriber_service.addresses.update(
         db=db,
-        address_id=address_id,
+        address_id=str(parsed_address_id),
         payload=AddressUpdate(latitude=latitude, longitude=longitude),
     )
     return JSONResponse(
@@ -1009,6 +1016,79 @@ def geocode_address(
             "address_id": str(address.id),
             "latitude": address.latitude,
             "longitude": address.longitude,
+        }
+    )
+
+
+@router.post(
+    "/profile/{customer_id}/geocode-primary",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def geocode_primary_address(
+    customer_id: str,
+    latitude: float = Body(...),
+    longitude: float = Body(...),
+    db: Session = Depends(get_db),
+):
+    """Save coordinates to a primary address, creating one from profile address if missing."""
+    from app.schemas.subscriber import AddressCreate, AddressUpdate
+
+    try:
+        parsed_customer_id = uuid.UUID(customer_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid customer id") from exc
+
+    customer = subscriber_service.subscribers.get(db=db, subscriber_id=str(parsed_customer_id))
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    addresses = subscriber_service.addresses.list(
+        db=db,
+        subscriber_id=str(parsed_customer_id),
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    primary_address = next((addr for addr in addresses if addr.is_primary), addresses[0] if addresses else None)
+
+    created = False
+    if primary_address is None:
+        if not (customer.address_line1 or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="No address exists to geolocate. Add an address first.",
+            )
+        primary_address = subscriber_service.addresses.create(
+            db=db,
+            payload=AddressCreate(
+                subscriber_id=parsed_customer_id,
+                address_line1=customer.address_line1,
+                address_line2=customer.address_line2,
+                city=customer.city,
+                region=customer.region,
+                postal_code=customer.postal_code,
+                country_code=customer.country_code,
+                latitude=latitude,
+                longitude=longitude,
+                is_primary=True,
+            ),
+        )
+        created = True
+
+    updated = subscriber_service.addresses.update(
+        db=db,
+        address_id=str(primary_address.id),
+        payload=AddressUpdate(latitude=latitude, longitude=longitude),
+    )
+    return JSONResponse(
+        {
+            "success": True,
+            "created_address": created,
+            "address_id": str(updated.id),
+            "latitude": updated.latitude,
+            "longitude": updated.longitude,
         }
     )
 

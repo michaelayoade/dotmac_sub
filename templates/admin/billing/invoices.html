@@ -1,21 +1,18 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, status_badge, empty_state, action_button, row_action, icon_plus, icon_invoice, icon_view, icon_edit, animation_styles %}
 
 {% block title %}Invoices - Admin{% endblock %}
 
 {% block content %}
-<!-- Ambient Background -->
-<div class="pointer-events-none fixed inset-0 overflow-hidden">
-    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-blue-400/5 to-indigo-500/5 blur-3xl"></div>
-    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-amber-400/5 to-orange-500/5 blur-3xl"></div>
-</div>
+{{ ambient_background("emerald", "teal") }}
 
 <div class="relative space-y-6" x-data="invoiceBulkActions()">
-    <!-- Bulk Action Bar -->
+    {# Floating Bulk Action Bar #}
     <div x-show="selectedIds.length > 0" x-cloak
          class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-fade-in-up">
         <div class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white px-6 py-3 shadow-xl dark:border-slate-700 dark:bg-slate-800">
             <span class="text-sm font-medium text-slate-600 dark:text-slate-300">
-                <span x-text="selectedIds.length" class="font-bold text-amber-600"></span> selected
+                <span x-text="selectedIds.length" class="font-bold text-emerald-600"></span> selected
             </span>
             <div class="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
             <button type="button" @click="bulkIssue()"
@@ -33,6 +30,38 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
                 Void
             </button>
+            <button type="button" @click="bulkMarkPaid()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Mark Paid
+            </button>
+            <button type="button" @click="bulkExport()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>
+                Export Selected
+            </button>
+            <button type="button" @click="bulkExportPdf()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0014.5 5H7a2 2 0 00-2 2v12a2 2 0 002 2zm3-8h4m-4 4h4"/></svg>
+                Export PDFs
+            </button>
+            <button type="button" @click="bulkGeneratePdf()"
+                    class="inline-flex items-center gap-2 rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-medium text-white hover:bg-fuchsia-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Generate PDFs
+            </button>
+            <button type="button" @click="bulkPrepareAndExportPdf()"
+                    :disabled="isPreparingPdfs"
+                    :class="{ 'opacity-70 cursor-not-allowed': isPreparingPdfs }"
+                    class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700">
+                <svg x-show="!isPreparingPdfs" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>
+                <svg x-show="isPreparingPdfs" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+                <span x-show="!isPreparingPdfs">Generate + Export PDFs</span>
+                <span x-show="isPreparingPdfs">Preparing PDFs...</span>
+            </button>
             <button type="button" @click="clearSelection()"
                     class="ml-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                 Clear
@@ -40,109 +69,33 @@
         </div>
     </div>
 
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-start gap-4">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/25">
-                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                </svg>
-            </div>
-            <div>
-                <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-1">
-                    <a href="/admin/billing" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Billing</a>
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    <span class="text-slate-900 dark:text-white font-medium">Invoices</span>
-                </nav>
-                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Invoices</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track and manage all customer invoices</p>
-            </div>
-        </div>
-        <div class="flex flex-col gap-2 sm:flex-row">
-            <a href="/admin/billing/invoices/batch" class="group inline-flex items-center justify-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition-all hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-amber-600 dark:hover:bg-amber-900/20 dark:hover:text-amber-400">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                Generate Batch
-            </a>
-            <a href="/admin/billing/invoices/new" class="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
-                <svg class="h-5 w-5 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                New Invoice
-            </a>
-        </div>
-    </div>
+    {# Page Header #}
+    {% call page_header(
+        title="Invoices",
+        subtitle="Track and manage all customer invoices",
+        icon=icon_invoice(),
+        color="emerald",
+        color2="teal",
+        breadcrumbs=[{"label": "Billing", "href": "/admin/billing"}, {"label": "Invoices"}]
+    ) %}
+        {{ action_button("Generate Batch", "/admin/billing/invoices/batch", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "emerald", "teal") }}
+        {{ action_button("Export CSV", "/admin/billing/invoices/export.csv?partner_id=" ~ (selected_partner_id or '') ~ "&status=" ~ (status or '') ~ "&proforma_only=" ~ ('true' if proforma_only else 'false') ~ "&customer_ref=" ~ (customer_ref or '') ~ "&search=" ~ (search or '') ~ "&date_range=" ~ (date_range or ''), '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>', "secondary", "emerald", "teal") }}
+        {{ action_button("Charge", "/admin/billing/invoices/new", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>', "secondary", "emerald", "teal") }}
+        {{ action_button("New Invoice", "/admin/billing/invoices/new", icon_plus("h-5 w-5"), "primary", "emerald", "teal") }}
+    {% endcall %}
 
-    <!-- Summary Stats -->
+    {# KPI Cards #}
     {% set total_invoiced = invoices | sum(attribute='total') if invoices else 0 %}
-    {% set paid_invoices = invoices | selectattr('status', 'defined') | list %}
-    {% set overdue_count = 0 %}
-    {% set pending_amount = 0 %}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 0.1s;">
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-blue-500/10 to-indigo-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Invoiced</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(total_invoiced) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All invoices value</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-500/10 to-green-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Paid</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ invoices | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'paid') | list | length if invoices else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Fully paid invoices</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-yellow-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pending</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ invoices | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'issued') | list | length if invoices else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Awaiting payment</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-red-500/10 to-rose-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Overdue</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-red-100 dark:bg-red-900/30">
-                        <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ invoices | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'overdue') | list | length if invoices else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Requires attention</p>
-            </div>
-        </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Total Invoiced", "₦" ~ "{:,.2f}".format(total_invoiced), icon=icon_invoice("h-6 w-6 text-white"), color="blue", color2="indigo") }}
+        {{ stats_card("Paid", invoices | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'paid') | list | length if invoices else 0, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="green") }}
+        {{ stats_card("Proforma", (proforma_summary.total if proforma_summary else 0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m2 5H7a2 2 0 01-2-2V7a2 2 0 012-2h7l5 5v7a2 2 0 01-2 2z"/></svg>', color="amber", color2="yellow") }}
+        {{ stats_card("Overdue", invoices | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'overdue') | list | length if invoices else 0, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="red", color2="rose") }}
     </div>
 
-    <!-- Filters -->
-    <div class="rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80 animate-fade-in-up" style="animation-delay: 0.2s;">
+    {# Filters #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card(color="emerald") %}
         <form hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="submit, change from:select" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>
@@ -151,16 +104,26 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                     </svg>
                     <input type="text" name="search" placeholder="Search invoices..."
-                           hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="keyup changed delay:300ms"
-                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                           value="{{ search or '' }}"
+                           hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="keyup changed delay:300ms" hx-include="closest form"
+                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                 </div>
+            </div>
+            <div class="w-full sm:w-52">
+                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Partner</label>
+                <select name="partner_id" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="">All Partners</option>
+                    {% for partner in partner_options %}
+                    <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div class="w-full sm:w-64">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
                 <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
                     <input type="text" data-typeahead-input
                            placeholder="Search customers..."
-                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
+                           class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-4 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
                     <input type="hidden" name="customer_ref" data-typeahead-hidden
                            hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="change" hx-include="closest form"
                            value="{{ customer_ref or '' }}">
@@ -169,49 +132,56 @@
             </div>
             <div class="w-full sm:w-44">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Status</label>
-                <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
                     <option value="">All Status</option>
-                    <option value="draft">Draft</option>
-                    <option value="issued">Issued</option>
-                    <option value="partially_paid">Partially Paid</option>
-                    <option value="paid">Paid</option>
-                    <option value="overdue">Overdue</option>
-                    <option value="void">Void</option>
+                    <option value="draft" {% if status == 'draft' %}selected{% endif %}>Draft</option>
+                    <option value="issued" {% if status == 'issued' %}selected{% endif %}>Issued</option>
+                    <option value="partially_paid" {% if status == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
+                    <option value="paid" {% if status == 'paid' %}selected{% endif %}>Paid</option>
+                    <option value="overdue" {% if status == 'overdue' %}selected{% endif %}>Overdue</option>
+                    <option value="void" {% if status == 'void' %}selected{% endif %}>Void</option>
                 </select>
             </div>
             <div class="w-full sm:w-44">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Date Range</label>
-                <select name="date_range" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Time</option>
-                    <option value="today">Today</option>
-                    <option value="week">This Week</option>
-                    <option value="month">This Month</option>
-                    <option value="quarter">This Quarter</option>
+                <select name="date_range" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
+                    <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
+                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
+                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
+                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
+                    <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
                 </select>
             </div>
+            <label class="flex w-full items-center gap-2 pb-1 sm:w-auto">
+                <input type="checkbox" name="proforma_only" value="true" {% if proforma_only %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+                <span class="text-sm text-slate-600 dark:text-slate-300">Proforma only</span>
+            </label>
         </form>
+    {% endcall %}
     </div>
 
-    <!-- Invoices Table -->
-    <div id="invoices-table" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 0.3s;">
+    {# Invoices Table #}
+    <div id="invoices-table" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead>
-                    <tr class="bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-slate-800/80 dark:to-slate-700/50">
-                        <th class="w-12 px-4 py-4">
+                    <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                        <th scope="col" class="w-12 px-4 py-3">
                             <input type="checkbox"
                                    @change="toggleAll($event.target.checked)"
                                    :checked="selectedIds.length === invoiceIds.length && invoiceIds.length > 0"
                                    :indeterminate.prop="selectedIds.length > 0 && selectedIds.length < invoiceIds.length"
-                                   class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700">
+                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
                         </th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Invoice</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Customer</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Amount</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Status</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Issued</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Due</th>
-                        <th class="relative px-6 py-4"><span class="sr-only">Actions</span></th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Invoice</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Customer</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Amount</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Issued</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Due</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Due</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Received</th>
+                        <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
@@ -219,31 +189,23 @@
                     {% for invoice in invoices %}
                     {% set status = invoice.status | default('draft') %}
                     {% set status_val = status.value if status is not string else status %}
-                    <tr class="group transition-colors hover:bg-amber-50/50 dark:hover:bg-amber-900/10"
-                        :class="{ 'bg-amber-50/30 dark:bg-amber-900/5': selectedIds.includes('{{ invoice.id }}') }">
+                    {% set status_map = {'paid': 'paid', 'issued': 'info', 'partially_paid': 'warning', 'overdue': 'overdue', 'void': 'inactive', 'draft': 'draft'} %}
+                    <tr class="group transition-all hover:bg-gradient-to-r hover:from-emerald-50/50 hover:to-emerald-50/30 dark:hover:from-emerald-900/10 dark:hover:to-emerald-900/5"
+                        :class="{ 'bg-emerald-50/30 dark:bg-emerald-900/5': selectedIds.includes('{{ invoice.id }}') }">
                         <td class="whitespace-nowrap px-4 py-4">
                             <input type="checkbox"
                                    value="{{ invoice.id }}"
                                    @change="toggleSelection('{{ invoice.id }}')"
                                    :checked="selectedIds.includes('{{ invoice.id }}')"
-                                   class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700">
+                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 transition-all group-hover:from-blue-100 group-hover:to-indigo-100 group-hover:text-blue-700 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400 dark:group-hover:from-blue-900/30 dark:group-hover:to-indigo-900/30 dark:group-hover:text-blue-400">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                    </svg>
-                                </div>
-                                <div>
-                                    <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">
-                            {{ invoice.invoice_number | default('INV-' ~ (invoice.id|string)[:8]) }}
-                                    </a>
-                                    {% if status_val == 'draft' %}
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">Draft</p>
-                                    {% endif %}
-                                </div>
-                            </div>
+                            <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400 transition-colors">
+                                {{ invoice.invoice_number | default('INV-' ~ (invoice.id|string)[:8]) }}
+                            </a>
+                            {% if status_val == 'draft' %}
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Draft</p>
+                            {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if invoice.account and invoice.account.subscriber %}
@@ -266,45 +228,14 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <div>
-                                <p class="text-sm font-bold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</p>
-                                {% if invoice.balance_due and invoice.balance_due > 0 and invoice.balance_due != invoice.total %}
-                                <p class="text-xs text-amber-600 dark:text-amber-400">₦{{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
-                                {% endif %}
-                            </div>
+                            <p class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total or 0) }}</p>
+                            {% if invoice.balance_due and invoice.balance_due > 0 and invoice.balance_due != invoice.total %}
+                            <p class="text-xs font-mono tabular-nums text-amber-600 dark:text-amber-400">₦{{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
+                            {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if status_val == 'paid' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                                Paid
-                            </span>
-                            {% elif status_val == 'issued' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
-                                Issued
-                            </span>
-                            {% elif status_val == 'partially_paid' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                                Partial
-                            </span>
-                            {% elif status_val == 'overdue' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400 animate-pulse">
-                                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-                                Overdue
-                            </span>
-                            {% elif status_val == 'void' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                Void
-                            </span>
-                            {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                {{ status_val | title }}
-                            </span>
-                            {% endif %}
+                            {% set badge_variant = status_map.get(status_val, 'default') %}
+                            {{ status_badge(status_val|replace('_', ' ')|title, badge_variant, size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</span>
@@ -318,44 +249,46 @@
                             <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
                             {% endif %}
                         </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">
+                            ₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">
+                            ₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
+                        </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                            <a href="/admin/billing/invoices/{{ invoice.id }}" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-amber-100 hover:text-amber-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-amber-900/30 dark:hover:text-amber-400" title="View Details">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                            </a>
-                            <a href="/admin/billing/invoices/{{ invoice.id }}/edit" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-amber-100 hover:text-amber-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-amber-900/30 dark:hover:text-amber-400" title="Edit">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                            </a>
-                            <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-blue-100 hover:text-blue-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-blue-900/30 dark:hover:text-blue-400" title="Download PDF">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            </a>
+                            <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id, icon_view(), "View Details", "emerald") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/edit", icon_edit(), "Edit", "emerald") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', "Download PDF", "blue") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 17h8M8 13h8m-8-4h8M6 21h12a2 2 0 002-2V7.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0015.5 3H6a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>', "Print", "slate") }}
+                                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return" class="inline-flex">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="next_url" value="/admin/billing/invoices?page={{ page }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}">
+                                    <button type="submit" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-600 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-emerald-400" title="Send Email">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                    </button>
+                                </form>
                                 {% if status_val in ['issued', 'overdue', 'partially_paid'] %}
-                                <a href="/admin/billing/payments/new?invoice={{ invoice.id }}" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-emerald-100 hover:text-emerald-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-emerald-900/30 dark:hover:text-emerald-400" title="Record Payment">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                                </a>
+                                {{ row_action("/admin/billing/payments/new?invoice=" ~ invoice.id, '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>', "Record Payment", "emerald") }}
                                 {% endif %}
                             </div>
                         </td>
                     </tr>
                     {% endfor %}
-                    {% else %}
-                    <tr>
-                        <td colspan="8" class="px-6 py-16 text-center">
-                            <div class="flex flex-col items-center">
-                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                    </svg>
-                                </div>
-                                <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No invoices found</p>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create your first invoice to get started</p>
-                                <a href="/admin/billing/invoices/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 transition-colors">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                                    New Invoice
-                                </a>
+                    <tr class="bg-slate-50 dark:bg-slate-800/70">
+                        <td colspan="10" class="px-6 py-3">
+                            <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                                <span>Draft: {{ status_totals.draft.count }} (₦{{ "{:,.2f}".format(status_totals.draft.amount) }})</span>
+                                <span>Issued: {{ status_totals.issued.count }} (₦{{ "{:,.2f}".format(status_totals.issued.amount) }})</span>
+                                <span>Partially Paid: {{ status_totals.partially_paid.count }} (₦{{ "{:,.2f}".format(status_totals.partially_paid.amount) }})</span>
+                                <span>Paid: {{ status_totals.paid.count }} (₦{{ "{:,.2f}".format(status_totals.paid.amount) }})</span>
+                                <span>Overdue: {{ status_totals.overdue.count }} (₦{{ "{:,.2f}".format(status_totals.overdue.amount) }})</span>
+                                <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
                             </div>
                         </td>
                     </tr>
+                    {% else %}
+                    {{ empty_state("No invoices found", "Create your first invoice to get started", icon=icon_invoice("h-8 w-8 text-slate-400"), color="emerald", color2="teal", action_label="New Invoice", action_href="/admin/billing/invoices/new", colspan=10) }}
                     {% endif %}
                 </tbody>
             </table>
@@ -368,6 +301,7 @@ function invoiceBulkActions() {
     return {
         selectedIds: [],
         invoiceIds: [{% for invoice in invoices %}'{{ invoice.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+        isPreparingPdfs: false,
 
         toggleSelection(id) {
             const index = this.selectedIds.indexOf(id);
@@ -407,8 +341,16 @@ function invoiceBulkActions() {
                 });
 
                 if (response.ok) {
+                    const actionLabels = {
+                        'issue': 'issued',
+                        'send': 'sent',
+                        'void': 'voided',
+                        'mark-paid': 'marked as paid',
+                        'generate-pdf': 'queued for PDF generation'
+                    };
+                    const label = actionLabels[action] || `${action}ed`;
                     window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: `Successfully ${action}ed ${this.selectedIds.length} invoices`, type: 'success' }
+                        detail: { message: `Successfully ${label} ${this.selectedIds.length} invoices`, type: 'success' }
                     }));
                     window.location.reload();
                 } else {
@@ -438,24 +380,118 @@ function invoiceBulkActions() {
             if (confirm(`Void ${this.selectedIds.length} selected invoices? This cannot be undone.`)) {
                 this.bulkAction('void');
             }
+        },
+
+        bulkMarkPaid() {
+            if (confirm(`Mark ${this.selectedIds.length} selected invoices as paid?`)) {
+                this.bulkAction('mark-paid');
+            }
+        },
+
+        bulkExport() {
+            if (this.selectedIds.length === 0) return;
+            const query = encodeURIComponent(this.selectedIds.join(','));
+            window.location.href = `/admin/billing/invoices/bulk/export.csv?invoice_ids=${query}`;
+        },
+
+        bulkExportPdf() {
+            if (this.selectedIds.length === 0) return;
+            const query = encodeURIComponent(this.selectedIds.join(','));
+            window.location.href = `/admin/billing/invoices/bulk/export.zip?invoice_ids=${query}`;
+        },
+
+        bulkGeneratePdf() {
+            if (confirm(`Queue PDF generation for ${this.selectedIds.length} selected invoices?`)) {
+                this.bulkAction('generate-pdf');
+            }
+        },
+
+        async waitForPdfReadiness(invoiceIds, maxAttempts = 15, delayMs = 1200, onProgress = null) {
+            const query = encodeURIComponent(invoiceIds.join(','));
+            let latestStatus = null;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    const response = await fetch(`/admin/billing/invoices/bulk/pdf-ready?invoice_ids=${query}`);
+                    if (response.ok) {
+                        const status = await response.json();
+                        latestStatus = status;
+                        if (typeof onProgress === 'function') {
+                            onProgress(status, attempt, maxAttempts);
+                        }
+                        if (status.all_ready) {
+                            return { allReady: true, status };
+                        }
+                    }
+                } catch (error) {
+                    console.error('PDF readiness poll failed:', error);
+                }
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+            return { allReady: false, status: latestStatus };
+        },
+
+        async bulkPrepareAndExportPdf() {
+            if (this.selectedIds.length === 0) return;
+            if (!confirm(`Queue and then export PDFs for ${this.selectedIds.length} selected invoices?`)) return;
+            if (this.isPreparingPdfs) return;
+
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
+                             document.querySelector('[name="_csrf_token"]')?.value || '';
+            this.isPreparingPdfs = true;
+
+            try {
+                const response = await fetch('/admin/billing/invoices/bulk/generate-pdf', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    body: `invoice_ids=${this.selectedIds.join(',')}`
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: payload.message || 'Failed to queue invoice PDF generation', type: 'error' }
+                    }));
+                    return;
+                }
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: payload.message || 'Queued selected invoice PDF generation', type: 'success' }
+                }));
+                const ids = [...this.selectedIds];
+                let lastReadyCount = -1;
+                const readiness = await this.waitForPdfReadiness(ids, 15, 1200, (status, attempt) => {
+                    const total = Number(status.total || 0);
+                    const readyCount = Number(status.ready_count || 0);
+                    if (total <= 0 || readyCount === lastReadyCount) return;
+                    if (attempt === 1 || readyCount > lastReadyCount) {
+                        window.dispatchEvent(new CustomEvent('show-toast', {
+                            detail: {
+                                message: `Preparing PDFs: ${readyCount}/${total} ready`,
+                                type: 'info'
+                            }
+                        }));
+                        lastReadyCount = readyCount;
+                    }
+                });
+                if (!readiness.allReady) {
+                    const total = Number(readiness.status?.total || ids.length);
+                    const readyCount = Number(readiness.status?.ready_count || 0);
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: `Still processing PDFs (${readyCount}/${total} ready). Downloading available files now.`, type: 'warning' }
+                    }));
+                }
+                const query = encodeURIComponent(ids.join(','));
+                window.location.href = `/admin/billing/invoices/bulk/export.zip?invoice_ids=${query}`;
+            } catch (error) {
+                console.error('Bulk generate/export error:', error);
+            } finally {
+                this.isPreparingPdfs = false;
+            }
         }
     };
 }
 </script>
 
-<style>
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out backwards;
-}
-</style>
+{{ animation_styles() }}
 {% endblock %}

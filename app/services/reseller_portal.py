@@ -1,8 +1,10 @@
 import secrets
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import func
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, selectinload
 
 import app.services.auth_flow as auth_flow_service
@@ -66,12 +68,32 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
 
 
 def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
-    return (
-        db.query(ResellerUser)
-        .filter(ResellerUser.subscriber_id == coerce_uuid(subscriber_id))
-        .filter(ResellerUser.is_active.is_(True))
-        .order_by(ResellerUser.created_at.desc())
-        .first()
+    # Preferred path for schemas with dedicated reseller user link table.
+    try:
+        return (
+            db.query(ResellerUser)
+            .filter(ResellerUser.subscriber_id == coerce_uuid(subscriber_id))
+            .filter(ResellerUser.is_active.is_(True))
+            .order_by(ResellerUser.created_at.desc())
+            .first()
+        )
+    except ProgrammingError:
+        # Compatibility path for schemas without reseller_users* table.
+        db.rollback()
+
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber or not subscriber.is_active or not subscriber.reseller_id:
+        return None
+    user_type = getattr(subscriber, "user_type", None)
+    if getattr(user_type, "value", user_type) != "reseller":
+        return None
+    return SimpleNamespace(
+        id=subscriber.id,
+        subscriber_id=subscriber.id,
+        person_id=subscriber.id,
+        reseller_id=subscriber.reseller_id,
+        is_active=True,
+        created_at=subscriber.created_at,
     )
 
 

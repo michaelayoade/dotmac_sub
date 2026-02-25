@@ -5,6 +5,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
@@ -491,35 +492,96 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         return order
 
     @staticmethod
-    def dashboard_stats(db: Session) -> dict:
+    def get_dashboard_stats(db: Session) -> dict:
         """Return aggregated stats for the provisioning dashboard."""
-        orders = (
-            db.query(ServiceOrder)
-            .order_by(ServiceOrder.created_at.desc())
-            .limit(200)
+        from sqlalchemy import func as sa_func
+
+        total = db.query(sa_func.count(ServiceOrder.id)).scalar() or 0
+        pending = (
+            db.query(sa_func.count(ServiceOrder.id))
+            .filter(
+                ServiceOrder.status.in_([
+                    ServiceOrderStatus.draft,
+                    ServiceOrderStatus.submitted,
+                ])
+            )
+            .scalar()
+            or 0
+        )
+        in_progress = (
+            db.query(sa_func.count(ServiceOrder.id))
+            .filter(
+                ServiceOrder.status.in_([
+                    ServiceOrderStatus.scheduled,
+                    ServiceOrderStatus.provisioning,
+                ])
+            )
+            .scalar()
+            or 0
+        )
+        completed = (
+            db.query(sa_func.count(ServiceOrder.id))
+            .filter(ServiceOrder.status == ServiceOrderStatus.active)
+            .scalar()
+            or 0
+        )
+        failed = (
+            db.query(sa_func.count(ServiceOrder.id))
+            .filter(ServiceOrder.status == ServiceOrderStatus.failed)
+            .scalar()
+            or 0
+        )
+        canceled = (
+            db.query(sa_func.count(ServiceOrder.id))
+            .filter(ServiceOrder.status == ServiceOrderStatus.canceled)
+            .scalar()
+            or 0
+        )
+
+        # Status funnel chart data
+        funnel_labels = ["Draft", "Submitted", "Scheduled", "Provisioning", "Active", "Failed"]
+        funnel_keys = [
+            ServiceOrderStatus.draft,
+            ServiceOrderStatus.submitted,
+            ServiceOrderStatus.scheduled,
+            ServiceOrderStatus.provisioning,
+            ServiceOrderStatus.active,
+            ServiceOrderStatus.failed,
+        ]
+        funnel_colors = ["#94a3b8", "#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#ef4444"]
+        status_rows = (
+            db.execute(
+                select(ServiceOrder.status, sa_func.count(ServiceOrder.id))
+                .group_by(ServiceOrder.status)
+            )
             .all()
         )
-        total = len(orders)
-        pending = sum(
-            1
-            for o in orders
-            if o.status in (ServiceOrderStatus.draft, ServiceOrderStatus.submitted)
+        status_counts = {
+            row[0]: row[1] for row in status_rows
+        }
+        chart_data = {
+            "labels": funnel_labels,
+            "values": [status_counts.get(k, 0) for k in funnel_keys],
+            "colors": funnel_colors,
+        }
+
+        # Recent orders (last 10)
+        recent_orders = (
+            db.query(ServiceOrder)
+            .order_by(ServiceOrder.created_at.desc())
+            .limit(10)
+            .all()
         )
-        in_progress = sum(
-            1
-            for o in orders
-            if o.status
-            in (ServiceOrderStatus.scheduled, ServiceOrderStatus.provisioning)
-        )
-        completed = sum(
-            1 for o in orders if o.status == ServiceOrderStatus.active
-        )
+
         return {
             "total": total,
             "pending": pending,
             "in_progress": in_progress,
             "completed": completed,
-            "recent_orders": orders[:10],
+            "failed": failed,
+            "canceled": canceled,
+            "chart_data": chart_data,
+            "recent_orders": recent_orders,
         }
 
     @staticmethod

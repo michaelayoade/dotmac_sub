@@ -1,21 +1,28 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, metric_row, animation_styles %}
 
 {% block title %}Server Health - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Server Health</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Live resource usage and uptime for this node.</p>
-        </div>
-        <div class="text-xs text-slate-400 dark:text-slate-500">
-            Updated {{ health.generated_at.strftime('%Y-%m-%d %H:%M') if health.generated_at else '' }}
-        </div>
-    </div>
+{{ ambient_background("slate", "gray") }}
 
+<div class="relative space-y-6">
+    {# Page Header #}
+    {% call page_header(
+        title="Server Health",
+        subtitle="Live resource usage and uptime for this node",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}
+        <span class="text-xs text-slate-400 dark:text-slate-500">
+            Updated {{ health.generated_at.strftime('%Y-%m-%d %H:%M') if health.generated_at else '' }}
+        </span>
+    {% endcall %}
+
+    {# Health Alerts Banner #}
     {% if health_status.issues %}
-    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+    <div class="animate-fade-in-up rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
         <p class="font-semibold">Health Alerts</p>
         <ul class="mt-2 list-disc pl-5 space-y-1">
             {% for issue in health_status.issues %}
@@ -25,61 +32,47 @@
     </div>
     {% endif %}
 
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Uptime</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ health.uptime_display }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">CPU Cores</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ health.cpu_count }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Process Memory</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ health.process.rss }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Load Avg</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
-                {% if health.load_avg %}
-                {{ "%.2f"|format(health.load_avg[0]) }} / {{ "%.2f"|format(health.load_avg[1]) }} / {{ "%.2f"|format(health.load_avg[2]) }}
-                {% else %}
-                --
-                {% endif %}
-            </p>
-        </div>
+    {# KPI Cards #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Uptime", health.uptime_display, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
+        {{ stats_card("CPU Cores", health.cpu_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>', color="blue", color2="indigo") }}
+        {{ stats_card("Process Memory", health.process.rss, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>', color="violet", color2="purple") }}
+        {{ stats_card("Load Average", ("%.2f / %.2f / %.2f"|format(health.load_avg[0], health.load_avg[1], health.load_avg[2]) if health.load_avg else "--"), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="amber", color2="orange") }}
     </div>
 
-    <div class="grid gap-6 lg:grid-cols-2">
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Memory</h2>
-            <div class="mt-4 flex items-center justify-between">
-                <div>
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ health.memory.used_pct }}</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
-                </div>
-                <div class="text-right text-sm text-slate-500 dark:text-slate-400">
-                    <p>{{ health.memory.used }} used</p>
-                    <p>{{ health.memory.available }} available</p>
-                    <p>{{ health.memory.total }} total</p>
-                </div>
+    {# Memory + Disk Detail #}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {# Memory #}
+        {% call card("Memory", color="violet") %}
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <p class="text-3xl font-bold text-slate-900 dark:text-white">{{ health.memory.used_pct }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
             </div>
         </div>
+        <div class="space-y-2">
+            {{ metric_row("Used", health.memory.used, color="violet") }}
+            {{ metric_row("Available", health.memory.available, color="emerald") }}
+            {{ metric_row("Total", health.memory.total, color="slate") }}
+        </div>
+        {% endcall %}
 
-        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Disk</h2>
-            <div class="mt-4 flex items-center justify-between">
-                <div>
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ health.disk.used_pct }}</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
-                </div>
-                <div class="text-right text-sm text-slate-500 dark:text-slate-400">
-                    <p>{{ health.disk.used }} used</p>
-                    <p>{{ health.disk.free }} free</p>
-                    <p>{{ health.disk.total }} total</p>
-                </div>
+        {# Disk #}
+        {% call card("Disk", color="amber") %}
+        <div class="flex items-center justify-between mb-4">
+            <div>
+                <p class="text-3xl font-bold text-slate-900 dark:text-white">{{ health.disk.used_pct }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
             </div>
         </div>
+        <div class="space-y-2">
+            {{ metric_row("Used", health.disk.used, color="amber") }}
+            {{ metric_row("Free", health.disk.free, color="emerald") }}
+            {{ metric_row("Total", health.disk.total, color="slate") }}
+        </div>
+        {% endcall %}
     </div>
 </div>
+
+{{ animation_styles() }}
 {% endblock %}

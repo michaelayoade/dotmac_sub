@@ -1,0 +1,66 @@
+<div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+        <thead class="bg-slate-50 dark:bg-slate-800/50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Cycle</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Scanned</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Billed</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoices</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Lines</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Skipped</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Duration</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Message</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Run ID</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+            {% if recent_runs %}
+            {% for run in recent_runs %}
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.run_at.strftime('%b %d, %Y %H:%M') if run.run_at else 'N/A' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.billing_cycle|upper }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.subscriptions_scanned }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.subscriptions_billed }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.invoices_created }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.lines_created }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.skipped }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.duration_seconds ~ 's' if run.duration_seconds is not none else '—' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm">
+                    {% if run.status_badge == 'success' %}
+                    <span class="inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">{{ run.status }}</span>
+                    {% elif run.status_badge == 'danger' %}
+                    <span class="inline-flex rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-800 dark:bg-red-900/30 dark:text-red-300">{{ run.status }}</span>
+                    {% elif run.status_badge == 'warning' %}
+                    <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">{{ run.status }}</span>
+                    {% else %}
+                    <span class="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ run.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4 text-xs text-slate-600 dark:text-slate-300">{{ run.status_message or '—' }}</td>
+                <td class="px-6 py-4 text-xs font-mono text-slate-500 dark:text-slate-400">{{ run.id }}</td>
+                <td class="px-6 py-4 text-sm">
+                    <div class="flex items-center gap-2">
+                        <a href="/admin/billing/invoices/batch/{{ run.id }}/export.csv" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                            Download
+                        </a>
+                        <form method="post" action="/admin/billing/invoices/batch/{{ run.id }}/retry" onsubmit="return confirm('Retry this billing run?');">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                                Retry
+                            </button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr>
+                <td colspan="12" class="px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No billing runs recorded yet.</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>

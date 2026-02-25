@@ -16,9 +16,14 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Import Payments</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Bulk import payments from CSV file</p>
         </div>
-        <a href="/admin/billing/payments" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
-            Back to Payments
-        </a>
+        <div class="flex items-center gap-2">
+            <a href="/admin/billing/payments/reconciliation" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                Reconciliation
+            </a>
+            <a href="/admin/billing/payments" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                Back to Payments
+            </a>
+        </div>
     </div>
 
     <div class="grid gap-6 lg:grid-cols-3">
@@ -29,6 +34,47 @@
                     <h2 class="font-semibold text-slate-900 dark:text-white">Upload CSV File</h2>
                 </div>
                 <div class="p-6">
+                    <div class="mb-4 grid gap-3 sm:grid-cols-5">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Handler</label>
+                            <select x-model="handler" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="base_csv">Base (CSV)</option>
+                                <option value="zenith_bank">Zenith Bank</option>
+                                <option value="gtbank">GTBank</option>
+                                <option value="access_bank">Access Bank</option>
+                                <option value="fixed_width_basic">Fixed Width (Basic)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Delimiter</label>
+                            <select x-model="delimiter" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value=",">Comma (,)</option>
+                                <option value="tab">Tab</option>
+                                <option value=";">Semicolon (;)</option>
+                                <option value="|">Pipe (|)</option>
+                                <option value="fixed">Fixed Width</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment Source</label>
+                            <input x-model="paymentSource" type="text" placeholder="e.g. Zenith 461 Bank" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment Method</label>
+                            <select x-model="paymentMethodType" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="transfer">Bank Transfer</option>
+                                <option value="cash">Cash</option>
+                                <option value="card">Card</option>
+                                <option value="bank_account">Bank Account</option>
+                                <option value="check">Check</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <label class="flex items-end gap-2 pb-2">
+                            <input x-model="pairInactiveCustomers" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700" />
+                            <span class="text-sm text-slate-600 dark:text-slate-300">Pair to inactive customers</span>
+                        </label>
+                    </div>
                     <div x-show="!file"
                          class="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-primary-400 transition-colors dark:border-slate-600"
                          @dragover.prevent="$event.currentTarget.classList.add('border-primary-500', 'bg-primary-50')"
@@ -144,6 +190,101 @@
                     <span x-text="importing ? 'Importing...' : 'Import ' + validCount + ' Payments'"></span>
                 </button>
             </div>
+
+            <div x-show="importResult" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                    Import Result: <span x-text="importResult?.imported || 0"></span> imported,
+                    <span x-text="importResult?.total_errors || 0"></span> failed
+                </p>
+                <template x-if="importErrors.length > 0">
+                    <ul class="mt-3 list-disc space-y-1 pl-5 text-sm text-red-600 dark:text-red-400">
+                        <template x-for="(err, idx) in importErrors" :key="idx">
+                            <li x-text="err"></li>
+                        </template>
+                    </ul>
+                </template>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Import History</h2>
+                        <form method="get" action="/admin/billing/payments/import" class="flex flex-wrap items-end gap-2">
+                            <select name="history_handler" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">All handlers</option>
+                                <option value="base_csv" {% if history_handler == 'base_csv' %}selected{% endif %}>Base (CSV)</option>
+                                <option value="zenith_bank" {% if history_handler == 'zenith_bank' %}selected{% endif %}>Zenith Bank</option>
+                                <option value="gtbank" {% if history_handler == 'gtbank' %}selected{% endif %}>GTBank</option>
+                                <option value="access_bank" {% if history_handler == 'access_bank' %}selected{% endif %}>Access Bank</option>
+                                <option value="fixed_width_basic" {% if history_handler == 'fixed_width_basic' %}selected{% endif %}>Fixed Width (Basic)</option>
+                            </select>
+                            <select name="history_status" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">All statuses</option>
+                                <option value="success" {% if history_status == 'success' %}selected{% endif %}>Success</option>
+                                <option value="partial" {% if history_status == 'partial' %}selected{% endif %}>Partial</option>
+                                <option value="failed" {% if history_status == 'failed' %}selected{% endif %}>Failed</option>
+                            </select>
+                            <select name="history_date_range" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">All time</option>
+                                <option value="today" {% if history_date_range == 'today' %}selected{% endif %}>Today</option>
+                                <option value="week" {% if history_date_range == 'week' %}selected{% endif %}>This week</option>
+                                <option value="month" {% if history_date_range == 'month' %}selected{% endif %}>This month</option>
+                                <option value="quarter" {% if history_date_range == 'quarter' %}selected{% endif %}>This quarter</option>
+                            </select>
+                            <button type="submit" class="rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700">Apply</button>
+                            <a href="/admin/billing/payments/import/history.csv?history_handler={{ history_handler or '' }}&history_status={{ history_status or '' }}&history_date_range={{ history_date_range or '' }}" class="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Export CSV</a>
+                        </form>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800/50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Date</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">File</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Handler</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Status</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Method</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Rows</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Matched</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Unmatched</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% if import_history %}
+                            {% for row in import_history %}
+                            <tr>
+                                <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.occurred_at.strftime('%b %d, %Y %I:%M %p') if row.occurred_at else '-' }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.handler }}</td>
+                                <td class="px-4 py-3 text-sm">
+                                    {% if row.status == 'success' %}
+                                    <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Success</span>
+                                    {% elif row.status == 'partial' %}
+                                    <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Partial</span>
+                                    {% elif row.status == 'failed' %}
+                                    <span class="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">Failed</span>
+                                    {% else %}
+                                    <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ row.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.payment_method_type }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.row_count }}</td>
+                                <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ row.matched_count }}</td>
+                                <td class="px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400">{{ row.unmatched_count }}</td>
+                                <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(row.total_amount or 0) }}</td>
+                            </tr>
+                            {% endfor %}
+                            {% else %}
+                            <tr>
+                                <td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No import history yet</td>
+                            </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
         <!-- Instructions Sidebar -->
@@ -208,11 +349,32 @@ ACC-003,10000,TRF789,2024-01-17</pre>
 
 <script>
 function paymentImport() {
+    const getCookie = (name) => {
+        const match = document.cookie.match(new RegExp('(^|; )' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    };
+
+    const getCsrfToken = () => {
+        return (
+            document.querySelector('meta[name="csrf-token"]')?.content ||
+            document.querySelector('[name="_csrf_token"]')?.value ||
+            getCookie('csrf_token') ||
+            ''
+        );
+    };
+
     return {
         file: null,
+        handler: 'base_csv',
+        delimiter: ',',
+        paymentSource: '',
+        paymentMethodType: 'transfer',
+        pairInactiveCustomers: true,
         parsing: false,
         importing: false,
         rows: [],
+        importResult: null,
+        importErrors: [],
 
         get validCount() {
             return this.rows.filter(r => !r.error).length;
@@ -236,6 +398,8 @@ function paymentImport() {
         clearFile() {
             this.file = null;
             this.rows = [];
+            this.importResult = null;
+            this.importErrors = [];
         },
 
         formatFileSize(bytes) {
@@ -252,24 +416,75 @@ function paymentImport() {
             try {
                 const text = await this.file.text();
                 const lines = text.split('\n').filter(line => line.trim());
-                const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-
-                this.rows = [];
-                for (let i = 1; i < lines.length; i++) {
-                    const values = lines[i].split(',').map(v => v.trim());
-                    const row = {};
-                    headers.forEach((h, idx) => {
-                        row[h] = values[idx] || '';
-                    });
-
-                    // Validate row
-                    if (!row.account_number && !row.account_id) {
-                        row.error = 'Missing account';
-                    } else if (!row.amount || isNaN(parseFloat(row.amount))) {
-                        row.error = 'Invalid amount';
+                const parseDelimitedLine = (line, delim) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+                    for (let i = 0; i < line.length; i++) {
+                        const ch = line[i];
+                        if (ch === '\"') {
+                            if (inQuotes && line[i + 1] === '\"') {
+                                current += '\"';
+                                i += 1;
+                            } else {
+                                inQuotes = !inQuotes;
+                            }
+                        } else if (ch === delim && !inQuotes) {
+                            result.push(current);
+                            current = '';
+                        } else {
+                            current += ch;
+                        }
                     }
+                    result.push(current);
+                    return result.map(v => v.trim());
+                };
+                this.rows = [];
+                if (this.delimiter === 'fixed') {
+                    // Basic fixed-width layout:
+                    // account_number[0:20], amount[20:35], currency[35:38], reference[38:78], date[78:88]
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i];
+                        const row = {
+                            account_number: (line.slice(0, 20) || '').trim(),
+                            amount: (line.slice(20, 35) || '').trim(),
+                            currency: (line.slice(35, 38) || '').trim(),
+                            reference: (line.slice(38, 78) || '').trim(),
+                            date: (line.slice(78, 88) || '').trim(),
+                        };
 
-                    this.rows.push(row);
+                        // Skip blank lines
+                        if (!row.account_number && !row.amount && !row.reference && !row.date) {
+                            continue;
+                        }
+
+                        if (!row.account_number && !row.account_id) {
+                            row.error = 'Missing account';
+                        } else if (!row.amount || isNaN(parseFloat(row.amount))) {
+                            row.error = 'Invalid amount';
+                        }
+
+                        this.rows.push(row);
+                    }
+                } else {
+                    const actualDelimiter = this.delimiter === 'tab' ? '\t' : this.delimiter;
+                    const headers = parseDelimitedLine(lines[0], actualDelimiter).map(h => h.trim().toLowerCase());
+                    for (let i = 1; i < lines.length; i++) {
+                        const values = parseDelimitedLine(lines[i], actualDelimiter);
+                        const row = {};
+                        headers.forEach((h, idx) => {
+                            row[h] = values[idx] || '';
+                        });
+
+                        // Validate row
+                        if (!row.account_number && !row.account_id) {
+                            row.error = 'Missing account';
+                        } else if (!row.amount || isNaN(parseFloat(row.amount))) {
+                            row.error = 'Invalid amount';
+                        }
+
+                        this.rows.push(row);
+                    }
                 }
             } catch (error) {
                 console.error('Parse error:', error);
@@ -283,33 +498,65 @@ function paymentImport() {
             this.importing = true;
 
             const validRows = this.rows.filter(r => !r.error);
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
-                             document.querySelector('[name="_csrf_token"]')?.value || '';
+            const csrfToken = getCsrfToken();
 
             try {
                 const response = await fetch('/admin/billing/payments/import', {
                     method: 'POST',
                     headers: {
+                        'Accept': 'application/json',
                         'Content-Type': 'application/json',
                         'X-CSRF-Token': csrfToken
                     },
-                    body: JSON.stringify({ payments: validRows })
+                    credentials: 'same-origin',
+                    body: JSON.stringify({
+                        payments: validRows,
+                        file_name: this.file?.name || null,
+                        handler: this.handler,
+                        payment_source: this.paymentSource || null,
+                        payment_method_type: this.paymentMethodType || null,
+                        pair_inactive_customers: this.pairInactiveCustomers
+                    })
                 });
 
-                if (response.ok) {
-                    const result = await response.json();
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: `Successfully imported ${result.imported} payments`, type: 'success' }
-                    }));
-                    window.location.href = '/admin/billing/payments';
+                const contentType = response.headers.get('content-type') || '';
+                const isJson = contentType.includes('application/json');
+                const payload = isJson ? await response.json() : null;
+
+                if (response.ok && payload) {
+                    const result = payload;
+                    this.importResult = result;
+                    this.importErrors = Array.isArray(result.errors) ? result.errors : [];
+
+                    if ((result.imported || 0) > 0 && (result.total_errors || 0) === 0) {
+                        window.dispatchEvent(new CustomEvent('show-toast', {
+                            detail: { message: `Successfully imported ${result.imported} payments`, type: 'success' }
+                        }));
+                        window.location.href = '/admin/billing/payments';
+                    } else if ((result.imported || 0) > 0) {
+                        window.dispatchEvent(new CustomEvent('show-toast', {
+                            detail: { message: `Imported ${result.imported} payments with ${result.total_errors || 0} errors`, type: 'warning' }
+                        }));
+                    } else {
+                        window.dispatchEvent(new CustomEvent('show-toast', {
+                            detail: { message: `No payments imported. ${result.total_errors || 0} row(s) failed.`, type: 'error' }
+                        }));
+                    }
                 } else {
-                    const error = await response.json();
+                    const errorMessage =
+                        payload?.message ||
+                        (response.status === 403
+                            ? 'CSRF token invalid or expired. Refresh the page and try again.'
+                            : 'Import failed');
                     window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || 'Import failed', type: 'error' }
+                        detail: { message: errorMessage, type: 'error' }
                     }));
                 }
             } catch (error) {
                 console.error('Import error:', error);
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: 'Import request failed. Please try again.', type: 'error' }
+                }));
             } finally {
                 this.importing = false;
             }

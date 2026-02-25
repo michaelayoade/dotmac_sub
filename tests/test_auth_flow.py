@@ -81,6 +81,48 @@ def test_login_rejects_unsupported_provider(db_session, person):
     assert exc.value.status_code == 400
 
 
+def test_login_local_allows_email_identifier(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.email = "person-login@example.com"
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username="admin-username",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    request = _make_request()
+    tokens = AuthFlow.login(db_session, "person-login@example.com", "secret", request, None)
+    assert tokens.get("access_token")
+    assert tokens.get("refresh_token")
+
+
+def test_login_radius_allows_email_identifier(monkeypatch, db_session, person):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    person.email = "radius-login@example.com"
+    called = {"username": None}
+
+    def _fake_authenticate(db, username, password, server_id):
+        called["username"] = username
+
+    monkeypatch.setattr("app.services.auth_flow.radius_auth_service.authenticate", _fake_authenticate)
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.radius,
+        username="radius-user-001",
+        password_hash=None,
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    AuthFlow.login(db_session, "radius-login@example.com", "secret", _make_request(), AuthProvider.radius)
+    assert called["username"] == "radius-user-001"
+
+
 def test_mfa_setup_confirm(db_session, person, monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)

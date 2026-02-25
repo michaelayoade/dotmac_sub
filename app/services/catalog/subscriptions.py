@@ -218,7 +218,7 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
 
     try:
         payload = ServiceOrderCreate(
-            subscriber_id=subscription.subscriber_id,
+            account_id=subscription.subscriber_id,
             subscription_id=subscription.id,
             requested_by_contact_id=requested_by_contact_id,
             status=ServiceOrderStatus.submitted,

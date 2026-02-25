@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="htmx-config" content='{"defaultSwapStyle":"innerHTML","globalViewTransitions":true}' />
     <title>{% block title %}{{ title | default("DotMac Subs") }}{% endblock %}</title>
+    {% set resolved_favicon = (
+        sidebar_stats.favicon_url
+        if sidebar_stats is defined and sidebar_stats and sidebar_stats.favicon_url
+        else (branding_favicon_url if branding_favicon_url is defined and branding_favicon_url else "/favicon.ico")
+    ) %}
+    <link rel="icon" href="{{ resolved_favicon }}" />
+    <link rel="shortcut icon" href="{{ resolved_favicon }}" />
 
     <!-- Apply dark mode immediately to prevent flash -->
     <script>

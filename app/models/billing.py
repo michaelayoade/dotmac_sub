@@ -30,6 +30,13 @@ class InvoiceStatus(enum.Enum):
     overdue = "overdue"
 
 
+class InvoicePdfExportStatus(enum.Enum):
+    queued = "queued"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+
+
 class BillingRunStatus(enum.Enum):
     running = "running"
     success = "success"
@@ -139,6 +146,7 @@ class Invoice(Base):
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     memo: Mapped[str | None] = mapped_column(Text)
+    is_proforma: Mapped[bool] = mapped_column(Boolean, default=False)
     is_sent: Mapped[bool | None] = mapped_column(Boolean, default=False)
     added_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
@@ -164,6 +172,43 @@ class Invoice(Base):
     credit_note_applications = relationship(
         "CreditNoteApplication", back_populates="invoice"
     )
+    pdf_exports = relationship("InvoicePdfExport", back_populates="invoice")
+
+
+class InvoicePdfExport(Base):
+    __tablename__ = "invoice_pdf_exports"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=False
+    )
+    status: Mapped[InvoicePdfExportStatus] = mapped_column(
+        Enum(InvoicePdfExportStatus, name="invoicepdfexportstatus"),
+        default=InvoicePdfExportStatus.queued,
+        nullable=False,
+    )
+    requested_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    celery_task_id: Mapped[str | None] = mapped_column(String(120))
+    file_path: Mapped[str | None] = mapped_column(String(500))
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    invoice = relationship("Invoice", back_populates="pdf_exports")
+    requested_by = relationship("Subscriber")
 
 
 class CreditNoteStatus(enum.Enum):
@@ -727,3 +772,71 @@ class BillingRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class BillingRunSchedule(Base):
+    __tablename__ = "billing_run_schedules"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    run_day: Mapped[int] = mapped_column(Integer, default=1)
+    run_time: Mapped[str] = mapped_column(String(8), default="02:00")
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    billing_cycle: Mapped[str] = mapped_column(String(40), default="monthly")
+    partner_ids: Mapped[list | None] = mapped_column(JSON, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class BankReconciliationRun(Base):
+    __tablename__ = "bank_reconciliation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    date_range: Mapped[str | None] = mapped_column(String(20))
+    handler: Mapped[str | None] = mapped_column(String(120))
+    statement_rows: Mapped[int] = mapped_column(Integer, default=0)
+    imported_rows: Mapped[int] = mapped_column(Integer, default=0)
+    unmatched_rows: Mapped[int] = mapped_column(Integer, default=0)
+    system_payment_count: Mapped[int] = mapped_column(Integer, default=0)
+    statement_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    payment_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    difference_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    items = relationship("BankReconciliationItem", back_populates="run")
+
+
+class BankReconciliationItem(Base):
+    __tablename__ = "bank_reconciliation_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("bank_reconciliation_runs.id"), nullable=False
+    )
+    item_type: Mapped[str] = mapped_column(String(20), default="unmatched")
+    reference: Mapped[str | None] = mapped_column(String(255))
+    file_name: Mapped[str | None] = mapped_column(String(255))
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    run = relationship("BankReconciliationRun", back_populates="items")

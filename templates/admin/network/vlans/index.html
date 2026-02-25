@@ -53,6 +53,7 @@
                     <tr>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">VLAN ID</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Purpose</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                         <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
@@ -72,6 +73,17 @@
                         <td class="px-6 py-4 whitespace-nowrap">
                             <span class="text-sm font-medium text-slate-900 dark:text-white">{{ vlan.name or '-' }}</span>
                         </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if vlan.purpose %}
+                            {% set pd = purpose_display.get(vlan.purpose.value, {"label": vlan.purpose.value, "classes": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"}) %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ pd.classes }}">{{ pd.label }}</span>
+                            {% if vlan.dhcp_snooping %}
+                            <span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400" title="DHCP Snooping enabled">DHCP</span>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-sm text-slate-400 dark:text-slate-500">-</span>
+                            {% endif %}
+                        </td>
                         <td class="px-6 py-4">
                             <span class="text-sm text-slate-500 dark:text-slate-400">{{ vlan.description or '-' }}</span>
                         </td>
@@ -88,7 +100,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-6 py-12 text-center">
+                        <td colspan="6" class="px-6 py-12 text-center">
                             <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
                             <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No VLANs configured</h3>
                             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by adding a VLAN.</p>

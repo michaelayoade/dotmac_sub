@@ -14,6 +14,7 @@ from app.schemas.auth import UserCredentialCreate
 from app.services import auth as auth_service
 from app.services import rbac as rbac_service
 from app.services import web_system_profiles as web_system_profiles_service
+from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
 
@@ -29,6 +30,7 @@ def parse_edit_form(form_data) -> dict[str, object]:
         "display_name": form_data.get("display_name"),
         "email": form_data.get("email", ""),
         "phone": form_data.get("phone"),
+        "user_type": form_data.get("user_type"),
         "is_active": form_data.get("is_active"),
         "new_password": form_data.get("new_password"),
         "confirm_password": form_data.get("confirm_password"),
@@ -74,6 +76,7 @@ def apply_user_edit(
     display_name: str | None,
     email: str,
     phone: str | None,
+    user_type: str | None,
     is_active: bool,
     role_ids: list[str],
     direct_permission_ids: list[str],
@@ -89,6 +92,7 @@ def apply_user_edit(
     subscriber.display_name = display_name.strip() if display_name else None
     subscriber.email = email.strip()
     subscriber.phone = phone.strip() if phone else None
+    subscriber.user_type = web_system_users_service.normalize_user_type(user_type)
     subscriber.is_active = is_active
     subscriber.status = SubscriberStatus.active if is_active else SubscriberStatus.suspended
 

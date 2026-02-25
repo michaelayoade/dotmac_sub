@@ -53,6 +53,21 @@ class SubscriberStatus(enum.Enum):
 AccountStatus = SubscriberStatus  # Alias for legacy code
 
 
+class UserType(enum.Enum):
+    """Classification for admin/system user accounts."""
+
+    system_user = "system_user"
+    customer = "customer"
+    reseller = "reseller"
+
+
+class SubscriberCategory(enum.Enum):
+    residential = "residential"
+    business = "business"
+    government = "government"
+    ngo = "ngo"
+
+
 class AddressType(enum.Enum):
     service = "service"
     billing = "billing"
@@ -170,6 +185,9 @@ class Subscriber(Base):
     status: Mapped[SubscriberStatus] = mapped_column(
         Enum(SubscriberStatus), default=SubscriberStatus.active
     )
+    user_type: Mapped[UserType] = mapped_column(
+        Enum(UserType), default=UserType.system_user
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     marketing_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -244,6 +262,34 @@ class Subscriber(Base):
     def full_name(self) -> str:
         """Return full name."""
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def category(self) -> SubscriberCategory:
+        """Normalized subscriber category stored in metadata."""
+        raw = (self.metadata_ or {}).get("subscriber_category")
+        if isinstance(raw, str):
+            try:
+                return SubscriberCategory(raw)
+            except ValueError:
+                pass
+        return SubscriberCategory.residential
+
+    @category.setter
+    def category(self, value: SubscriberCategory | str | None) -> None:
+        if isinstance(value, SubscriberCategory):
+            normalized = value.value
+        elif isinstance(value, str):
+            normalized = value.strip().lower()
+            try:
+                normalized = SubscriberCategory(normalized).value
+            except ValueError:
+                normalized = SubscriberCategory.residential.value
+        else:
+            normalized = SubscriberCategory.residential.value
+
+        metadata = dict(self.metadata_ or {})
+        metadata["subscriber_category"] = normalized
+        self.metadata_ = metadata
 
 
 class SubscriberChannel(Base):
@@ -360,19 +406,24 @@ SubscriberAccount = Subscriber
 class ResellerUser(Base):
     """Reseller user linkage model.
 
-    Uses the legacy table name for migration compatibility.
+    Maps to the active reseller_users table while preserving
+    subscriber_id/person_id compatibility across callers.
     """
-    __tablename__ = "reseller_users_deprecated"
+    __tablename__ = "reseller_users"
     __table_args__ = {"extend_existing": True}
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # DB column name is person_id in legacy schemas.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column("person_id", UUID(as_uuid=True))
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     reseller_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )

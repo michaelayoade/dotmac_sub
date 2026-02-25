@@ -1,0 +1,96 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, animation_styles %}
+
+{% block title %}{{ form_title }} - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-6">
+
+    {# Header #}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/billing" class="hover:text-emerald-600 dark:hover:text-emerald-400">Billing</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/billing/payment-providers" class="hover:text-emerald-600 dark:hover:text-emerald-400">Payment Providers</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ form_title }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ form_title }}</h1>
+        </div>
+        <a href="/admin/billing/payment-providers"
+           class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            Back to Providers
+        </a>
+    </div>
+
+    {# Error display #}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {# Form #}
+    <div class="animate-fade-in-up overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Name</label>
+                    <input type="text" id="name" name="name" value="{{ provider.name }}" required
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="provider_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Provider Type</label>
+                    <select id="provider_type" name="provider_type"
+                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for pt in provider_types %}
+                        <option value="{{ pt }}" {% if provider.provider_type and provider.provider_type.value == pt %}selected{% endif %}>
+                            {{ pt | replace('_', ' ') | title }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="webhook_secret_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Webhook Secret Reference</label>
+                    <input type="text" id="webhook_secret_ref" name="webhook_secret_ref" value="{{ provider.webhook_secret_ref or '' }}"
+                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-center gap-2 pt-6">
+                    <input type="checkbox" id="is_active" name="is_active" {% if provider.is_active %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label for="is_active" class="text-sm text-slate-600 dark:text-slate-400">Active</label>
+                </div>
+            </div>
+
+            <div>
+                <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
+                <textarea id="notes" name="notes" rows="3"
+                          class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ provider.notes or '' }}</textarea>
+            </div>
+
+            <div class="flex justify-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                <a href="/admin/billing/payment-providers"
+                   class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors">
+                    {{ submit_label }}
+                </button>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

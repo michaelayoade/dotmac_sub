@@ -16,17 +16,18 @@
         </div>
         <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-600 dark:text-slate-200">Auto</span>
     </div>
-    <input type="hidden" name="account_id" value="{{ account.id }}"
-           {% if account_x_model %}x-model="{{ account_x_model }}"{% endif %}>
+    <input type="hidden" name="account_id" value="{{ account.id }}">
     <script>
-        const accountInput = document.querySelector("input[name='account_id']");
-        if (accountInput) {
-            accountInput.dispatchEvent(new Event("change", { bubbles: true }));
-        }
+        (() => {
+            const script = document.currentScript;
+            const accountInput = script && script.previousElementSibling;
+            if (accountInput && accountInput.name === "account_id") {
+                accountInput.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        })();
     </script>
     {% elif accounts and accounts|length > 1 %}
     <select name="account_id" required
-            {% if account_x_model %}x-model="{{ account_x_model }}"{% endif %}
             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
         <option value="">Select billing account...</option>
         {% for account in accounts %}

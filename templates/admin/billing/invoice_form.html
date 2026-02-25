@@ -37,7 +37,7 @@
     </div>
     {% endif %}
 
-    <form method="post" action="{{ action_url }}" class="space-y-6" x-data="{ submitting: false }" @submit="submitting = true">
+    <form method="post" action="{{ action_url }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
 
         <!-- Main Form Grid -->
@@ -107,6 +107,11 @@
                                       placeholder="Optional notes for this invoice..."
                                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ invoice.memo if invoice else '' }}</textarea>
                         </div>
+                        {% set proforma_checked = ((invoice and invoice.memo and '[PROFORMA]' in invoice.memo) or (invoice and invoice.invoice_number and invoice.invoice_number.startswith('PF-'))) %}
+                        <label class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/40">
+                            <input type="checkbox" name="proforma_invoice" value="1" {% if proforma_checked %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">Save as proforma invoice</span>
+                        </label>
                     </div>
                 </div>
 

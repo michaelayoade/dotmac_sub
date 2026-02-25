@@ -71,7 +71,7 @@ router = APIRouter(prefix="/provisioning", tags=["provisioning"])
 )
 def get_order_stats(db: Session = Depends(get_db)):
     """Get aggregated service order statistics."""
-    return ServiceOrders.dashboard_stats(db)
+    return ServiceOrders.get_dashboard_stats(db)
 
 
 @router.get(

@@ -61,6 +61,18 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ user.phone or '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">User Type</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if user.user_type and user.user_type.value == 'customer' %}
+                                Customer
+                                {% elif user.user_type and user.user_type.value == 'reseller' %}
+                                Reseller
+                                {% else %}
+                                System User
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
                             <dd class="mt-1">
                                 {% if user.is_active %}
@@ -198,13 +210,19 @@
                     <h2 class="font-semibold text-slate-900 dark:text-white">Actions</h2>
                 </div>
                 <div class="p-6 space-y-3">
-                    <form method="POST" action="/admin/system/users/{{ user.id }}/reset-password" class="inline w-full">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" onclick="return confirm('Send password reset?')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                            Reset Password
-                        </button>
-                    </form>
+                    <button hx-post="/admin/system/users/{{ user.id }}/reset-password"
+                            hx-confirm="Send a password reset link to this user's email?"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                        Send Reset Link
+                    </button>
+
+                    <button hx-post="/admin/system/users/{{ user.id }}/invite"
+                            hx-confirm="Send welcome invitation email to this user?"
+                            class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-primary-300 bg-primary-50 px-4 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m-2 10H5a2 2 0 01-2-2V8a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2z"/></svg>
+                        Send Welcome Invite
+                    </button>
 
                     {% if mfa_methods %}
                     <form method="POST" action="/admin/system/users/{{ user.id }}/disable-mfa" class="inline w-full">

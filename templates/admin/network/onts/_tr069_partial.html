@@ -1,0 +1,279 @@
+{# HTMX partial: TR-069 device details for ONT detail page #}
+{% from "components/ui/macros.html" import card, empty_state, data_table, table_head %}
+
+{% if tr069 and tr069.available %}
+<div class="space-y-6" x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, showSsidModal: false, showPasswordModal: false, ssid: '{{ tr069.wireless.SSID or '' }}', wifiPassword: '' }">
+    {# System Section #}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <button @click="sysOpen = !sysOpen" class="flex w-full items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">System</span>
+            </div>
+            <svg :class="sysOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="sysOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
+            <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {% for key, value in tr069.system.items() %}
+                <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+
+    {# WAN Section #}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <button @click="wanOpen = !wanOpen" class="flex w-full items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">WAN / Internet</span>
+            </div>
+            <svg :class="wanOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="wanOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
+            <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {% for key, value in tr069.wan.items() %}
+                <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+
+    {# LAN Section #}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <button @click="lanOpen = !lanOpen" class="flex w-full items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">LAN</span>
+            </div>
+            <svg :class="lanOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="lanOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
+            <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {% for key, value in tr069.lan.items() %}
+                <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+
+    {# Wireless Section #}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <div class="flex items-center justify-between px-5 py-3">
+            <button @click="wifiOpen = !wifiOpen" class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">Wireless</span>
+                <svg :class="wifiOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div class="flex items-center gap-1">
+                <button @click.stop="showSsidModal = true" class="rounded-md px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20" title="Change SSID">
+                    Change SSID
+                </button>
+                <button @click.stop="showPasswordModal = true" class="rounded-md px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20" title="Change Password">
+                    Change Password
+                </button>
+            </div>
+        </div>
+        <div x-show="wifiOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
+            <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {% for key, value in tr069.wireless.items() %}
+                <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                </div>
+                {% endfor %}
+            </dl>
+        </div>
+    </div>
+
+    {# Ethernet Ports #}
+    {% if tr069.ethernet_ports %}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <button @click="ethOpen = !ethOpen" class="flex w-full items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">Ethernet Ports</span>
+                <span class="text-xs text-slate-400">({{ tr069.ethernet_ports | length }})</span>
+            </div>
+            <svg :class="ethOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="ethOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/60">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Port</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Enabled</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Speed</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Duplex</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">MAC</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for port in tr069.ethernet_ports %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-4 py-2 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port.index }}</td>
+                        <td class="px-4 py-2 text-sm">
+                            {% if port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Yes</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">No</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-sm">
+                            {% if port.Status == 'Up' %}
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Up</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">{{ port.Status or 'Down' }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.MaxBitRate or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ port.DuplexMode or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ port.MACAddress or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-right">
+                            {% set is_enabled = port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
+                            {% if is_enabled %}
+                            <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port.index }}&enabled=false"
+                                hx-swap="none"
+                                class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
+                                Disable
+                            </button>
+                            {% else %}
+                            <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port.index }}&enabled=true"
+                                hx-swap="none"
+                                class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
+                                Enable
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {# LAN Hosts #}
+    {% if tr069.lan_hosts %}
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <button @click="hostsOpen = !hostsOpen" class="flex w-full items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">Connected Hosts</span>
+                <span class="text-xs text-slate-400">({{ tr069.lan_hosts | length }})</span>
+            </div>
+            <svg :class="hostsOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="hostsOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/60">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Hostname</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">IP Address</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">MAC Address</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Interface</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Active</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for host in tr069.lan_hosts %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.HostName or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.IPAddress or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.MACAddress or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.InterfaceType or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm">
+                            {% if host.Active == true or host.Active == '1' or host.Active == 'true' %}
+                            <span class="h-2 w-2 rounded-full bg-emerald-500 inline-block"></span>
+                            {% else %}
+                            <span class="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600 inline-block"></span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {# WiFi SSID Modal #}
+    <div x-show="showSsidModal" x-transition.opacity x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+         @keydown.escape.window="showSsidModal = false">
+        <div @click.outside="showSsidModal = false"
+             class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change WiFi SSID</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This will push a new SSID to the device via TR-069.</p>
+            <div class="mt-4">
+                <label for="wifi-ssid-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSID</label>
+                <input type="text" id="wifi-ssid-input" x-model="ssid" maxlength="32"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                       placeholder="MyNetwork">
+                <p class="mt-1 text-xs text-slate-500">1-32 characters</p>
+            </div>
+            <div class="mt-6 flex justify-end gap-3">
+                <button @click="showSsidModal = false"
+                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
+                    Cancel
+                </button>
+                <button @click="fetch('/admin/network/onts/{{ ont.id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}}).then(r=>r.json()).then(d=>{showSsidModal=false; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Apply
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {# WiFi Password Modal #}
+    <div x-show="showPasswordModal" x-transition.opacity x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+         @keydown.escape.window="showPasswordModal = false">
+        <div @click.outside="showPasswordModal = false"
+             class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change WiFi Password</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This will push a new WiFi password to the device via TR-069.</p>
+            <div class="mt-4">
+                <label for="wifi-password-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                <input type="password" id="wifi-password-input" x-model="wifiPassword" minlength="8"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                       placeholder="New WiFi password">
+                <p class="mt-1 text-xs text-slate-500">Minimum 8 characters</p>
+            </div>
+            <div class="mt-6 flex justify-end gap-3">
+                <button @click="showPasswordModal = false"
+                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
+                    Cancel
+                </button>
+                <button @click="fetch('/admin/network/onts/{{ ont.id }}/wifi-password?password=' + encodeURIComponent(wifiPassword), {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}}).then(r=>r.json()).then(d=>{showPasswordModal=false; wifiPassword=''; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Apply
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% elif tr069 and tr069.error %}
+<div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-800/60">
+    <svg class="mx-auto h-10 w-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{{ tr069.error }}</p>
+</div>
+
+{% else %}
+<div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-800/60">
+    <svg class="mx-auto h-10 w-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+    <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">No TR-069 data available for this device.</p>
+</div>
+{% endif %}

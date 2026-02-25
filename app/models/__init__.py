@@ -8,7 +8,10 @@ from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     BankAccount,
     BankAccountType,
+    BankReconciliationItem,
+    BankReconciliationRun,
     BillingRun,
+    BillingRunSchedule,
     BillingRunStatus,
     CreditNote,
     CreditNoteApplication,
@@ -16,6 +19,8 @@ from app.models.billing import (  # noqa: F401
     CreditNoteStatus,
     Invoice,
     InvoiceLine,
+    InvoicePdfExport,
+    InvoicePdfExportStatus,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -160,9 +165,12 @@ from app.models.network import (  # noqa: F401
     IPv4Address,
     IPv6Address,
     IPVersion,
+    NetworkZone,
     ODNEndpointType,
     OltCard,
     OltCardPort,
+    OltConfigBackup,
+    OltConfigBackupType,
     OLTDevice,
     OltPortType,
     OltPowerUnit,
@@ -170,6 +178,8 @@ from app.models.network import (  # noqa: F401
     OltShelf,
     OntAssignment,
     OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
     PonPort,
     PonPortSplitterLink,
     Port,
@@ -196,6 +206,7 @@ from app.models.network_monitoring import (  # noqa: F401
     MetricType,
     NetworkDevice,
     PopSite,
+    PopSiteContact,
 )
 from app.models.network_monitoring import (  # noqa: F401
     DeviceStatus as MonitoringDeviceStatus,
@@ -285,6 +296,7 @@ from app.models.splynx_archive import (  # noqa: F401
     SplynxArchivedTicket,
     SplynxArchivedTicketMessage,
 )
+from app.models.stored_file import StoredFile  # noqa: F401
 from app.models.subscriber import (  # noqa: F401
     Address,
     AddressType,
@@ -306,6 +318,10 @@ from app.models.subscription_engine import (  # noqa: F401
     SettingValueType,
     SubscriptionEngine,
     SubscriptionEngineSetting,
+)
+from app.models.table_column_config import TableColumnConfig  # noqa: F401
+from app.models.table_column_default_config import (  # noqa: F401
+    TableColumnDefaultConfig,
 )
 from app.models.tr069 import (  # noqa: F401
     Tr069AcsServer,

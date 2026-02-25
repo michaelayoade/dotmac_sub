@@ -1,11 +1,13 @@
 """Service helpers for subscriber create/edit web forms."""
 
+import re
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider
+from app.models.subscriber import Organization
 from app.models.subscriber import Subscriber
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.subscriber import SubscriberUpdate
@@ -31,18 +33,56 @@ def resolve_customer_ref(
     customer_search: str | None,
 ) -> tuple[str, UUID] | None:
     if customer_ref:
-        return parse_customer_ref(customer_ref)
+        try:
+            return parse_customer_ref(customer_ref)
+        except ValueError:
+            # Some clients can submit raw UUIDs from typeahead items.
+            # Accept those by resolving against person/subscriber first, then organization.
+            raw_ref = customer_ref.strip()
+            try:
+                raw_uuid = UUID(raw_ref)
+            except (TypeError, ValueError):
+                raw_uuid = None
+            if raw_uuid:
+                if db.get(Subscriber, raw_uuid):
+                    return "person", raw_uuid
+                if db.get(Organization, raw_uuid):
+                    return "organization", raw_uuid
     search_term = (customer_search or "").strip()
     if not search_term:
         return None
     from app.services import customer_search as customer_search_service
 
-    matches = customer_search_service.search(db=db, query=search_term, limit=2)
-    if len(matches) == 1:
-        return parse_customer_ref(matches[0].get("ref"))
-    if not matches:
-        raise ValueError("No customer matches that search")
-    raise ValueError("customer_ref must be selected from the list")
+    candidate_terms: list[str] = [search_term]
+
+    # Support labels like: "John Doe (john@example.com)" by searching the inner token too.
+    paren_match = re.search(r"\(([^()]+)\)\s*$", search_term)
+    if paren_match:
+        inner = paren_match.group(1).strip()
+        outer = search_term[:paren_match.start()].strip()
+        if inner:
+            candidate_terms.append(inner)
+        if outer:
+            candidate_terms.append(outer)
+
+    # Add conservative token fallback for full-name labels.
+    parts = [part for part in re.split(r"\s+", search_term) if part]
+    if len(parts) >= 2:
+        candidate_terms.append(f"{parts[0]} {parts[-1]}")
+    candidate_terms.extend(parts[:2])
+
+    seen: set[str] = set()
+    for term in candidate_terms:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        matches = customer_search_service.search(db=db, query=term, limit=2)
+        if len(matches) == 1:
+            return parse_customer_ref(matches[0].get("ref"))
+
+    # If every strategy failed, keep message actionable for user flow.
+    raise ValueError("No customer matches that search")
 
 
 def resolve_subscriber_for_org(db: Session, org_id: UUID) -> UUID | None:
@@ -96,6 +136,7 @@ def create_subscriber_with_optional_login(
     person_uuid: UUID,
     organization_uuid: UUID | None,
     subscriber_number: str | None,
+    subscriber_category: str | None,
     notes: str | None,
     is_active: str | None,
     create_user: str | None,
@@ -129,6 +170,7 @@ def create_subscriber_with_optional_login(
     payload = SubscriberUpdate(
         organization_id=organization_uuid if subscriber_type == "organization" else None,
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
+        category=subscriber_category.strip().lower() if subscriber_category else None,
         notes=notes.strip() if notes else None,
         is_active=is_active == "true",
     )
@@ -215,6 +257,7 @@ def build_subscriber_update_form_values(
     person_id: str | None,
     organization_id: str | None,
     subscriber_number: str | None,
+    subscriber_category: str | None,
     notes: str | None,
     is_active: str | None,
 ) -> dict:
@@ -226,6 +269,7 @@ def build_subscriber_update_form_values(
         "person_id": person_id or "",
         "organization_id": organization_id or "",
         "subscriber_number": subscriber_number or "",
+        "subscriber_category": subscriber_category or "",
         "notes": notes or "",
         "is_active": is_active == "true",
     }

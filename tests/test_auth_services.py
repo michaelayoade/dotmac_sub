@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.models.auth import SessionStatus
 from app.schemas.auth import (
@@ -16,6 +17,7 @@ from app.schemas.auth import (
     UserCredentialUpdate,
 )
 from app.services import auth as auth_service
+from app.services import web_auth as web_auth_service
 from app.services.auth_flow import hash_password
 
 
@@ -40,6 +42,17 @@ class _FakeRedisLimit:
 
     def expire(self, _key, _seconds):
         return True
+
+
+def _make_request(user_agent: str = "pytest") -> Request:
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/login",
+        "headers": [(b"user-agent", user_agent.encode("utf-8"))],
+        "client": ("127.0.0.1", 12345),
+    }
+    return Request(scope)
 
 
 def test_user_credentials_soft_delete(db_session, person):
@@ -239,3 +252,24 @@ def test_api_key_update_and_revoke(db_session, person):
     db_session.refresh(created)
     assert created.is_active is False
     assert created.revoked_at is not None
+
+
+def test_web_login_submit_redirects_to_mfa_when_required(monkeypatch, db_session):
+    monkeypatch.setattr(
+        web_auth_service.auth_flow_service.auth_flow,
+        "login",
+        lambda **_kwargs: {"mfa_required": True, "mfa_token": "mfa-token"},
+    )
+
+    response = web_auth_service.login_submit(
+        _make_request(),
+        db_session,
+        "admin",
+        "secret",
+        False,
+        "",
+    )
+
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/auth/mfa"
+    assert "mfa_pending=mfa-token" in response.headers.get("set-cookie", "")

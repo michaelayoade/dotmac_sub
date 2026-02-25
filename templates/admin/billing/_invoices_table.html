@@ -8,6 +8,8 @@
                 <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Issued</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Payment Due</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Payment Received</th>
                 <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
         </thead>
@@ -47,6 +49,8 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-amber-700 dark:text-amber-300">₦{{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-right">
                     <div class="flex items-center justify-end gap-2">
                         <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-primary-600" title="View">
@@ -58,12 +62,34 @@
                         <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="text-slate-400 hover:text-slate-600" title="Download PDF">
                             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                         </a>
+                        <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="text-slate-400 hover:text-slate-600" title="Print">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 17h8M8 13h8m-8-4h8M6 21h12a2 2 0 002-2V7.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0015.5 3H6a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                        </a>
+                        <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return" class="inline-flex">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="hidden" name="next_url" value="/admin/billing/invoices?page={{ page }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}">
+                            <button type="submit" class="text-slate-400 hover:text-emerald-600" title="Send Email">
+                                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                            </button>
+                        </form>
                     </div>
                 </td>
             </tr>
             {% endfor %}
+            <tr class="bg-slate-50 dark:bg-slate-800/70">
+                <td colspan="10" class="px-6 py-3">
+                    <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
+                        <span>Draft: {{ status_totals.draft.count }} (₦{{ "{:,.2f}".format(status_totals.draft.amount) }})</span>
+                        <span>Issued: {{ status_totals.issued.count }} (₦{{ "{:,.2f}".format(status_totals.issued.amount) }})</span>
+                        <span>Partially Paid: {{ status_totals.partially_paid.count }} (₦{{ "{:,.2f}".format(status_totals.partially_paid.amount) }})</span>
+                        <span>Paid: {{ status_totals.paid.count }} (₦{{ "{:,.2f}".format(status_totals.paid.amount) }})</span>
+                        <span>Overdue: {{ status_totals.overdue.count }} (₦{{ "{:,.2f}".format(status_totals.overdue.amount) }})</span>
+                        <span>Total: {{ status_totals.all.count }} (₦{{ "{:,.2f}".format(status_totals.all.amount) }})</span>
+                    </div>
+                </td>
+            </tr>
             {% else %}
-            <tr><td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found</td></tr>
+            <tr><td colspan="10" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found</td></tr>
             {% endif %}
         </tbody>
     </table>
@@ -80,7 +106,7 @@
     </p>
     <div class="flex items-center gap-1">
         {% if page > 1 %}
-        <a href="/admin/billing/invoices?page={{ page - 1 }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+        <a href="/admin/billing/invoices?page={{ page - 1 }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         </a>
         {% else %}
@@ -93,14 +119,14 @@
             {% if p == page %}
             <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-sm font-medium text-white">{{ p }}</span>
             {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
-            <a href="/admin/billing/invoices?page={{ p }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ p }}</a>
+            <a href="/admin/billing/invoices?page={{ p }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ p }}</a>
             {% elif p == page - 2 or p == page + 2 %}
             <span class="inline-flex h-9 w-9 items-center justify-center text-slate-400">...</span>
             {% endif %}
         {% endfor %}
 
         {% if page < total_pages %}
-        <a href="/admin/billing/invoices?page={{ page + 1 }}&per_page={{ per_page }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
+        <a href="/admin/billing/invoices?page={{ page + 1 }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </a>
         {% else %}

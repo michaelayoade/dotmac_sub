@@ -182,6 +182,8 @@ class ExecutionMethod(enum.Enum):
 
 class DiscountType(enum.Enum):
     percentage = "percentage"
+    # Legacy value kept for backward compatibility with older imported data.
+    percent = "percent"
     fixed = "fixed"
 
 

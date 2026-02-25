@@ -293,8 +293,9 @@ def _build_map_payload(primary_address, customer_name: str):
                 },
             }
         else:
+            target_id = getattr(primary_address, "id", None)
             geocode_target = {
-                "id": str(primary_address.id),
+                "id": str(target_id) if target_id is not None else None,
                 "address_line1": primary_address.address_line1,
                 "address_line2": primary_address.address_line2,
                 "city": primary_address.city,

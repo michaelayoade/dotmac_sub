@@ -35,6 +35,7 @@ def create_subscriber_from_form(
     person_id: str | None,
     organization_id: str | None,
     subscriber_number: str | None,
+    subscriber_category: str | None,
     notes: str | None,
     is_active: str | None,
     create_user: str | None,
@@ -57,6 +58,7 @@ def create_subscriber_from_form(
         person_uuid=person_uuid,
         organization_uuid=org_uuid,
         subscriber_number=subscriber_number,
+        subscriber_category=subscriber_category,
         notes=notes,
         is_active=is_active,
         create_user=create_user,
@@ -73,6 +75,7 @@ def build_subscriber_create_form_values(
     person_id: str | None,
     organization_id: str | None,
     subscriber_number: str | None,
+    subscriber_category: str | None,
     notes: str | None,
     is_active: str | None,
     create_user: str | None,
@@ -85,6 +88,7 @@ def build_subscriber_create_form_values(
         "person_id": person_id or "",
         "organization_id": organization_id or "",
         "subscriber_number": subscriber_number or "",
+        "subscriber_category": subscriber_category or "",
         "notes": notes or "",
         "is_active": is_active == "true",
         "create_user": create_user == "true",
@@ -102,6 +106,7 @@ def update_subscriber_from_form(
     person_id: str | None,
     organization_id: str | None,
     subscriber_number: str | None,
+    subscriber_category: str | None,
     notes: str | None,
     is_active: str | None,
 ):
@@ -118,6 +123,7 @@ def update_subscriber_from_form(
     payload = SubscriberUpdate(
         organization_id=org_uuid if resolved_type == "organization" else None,
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
+        category=subscriber_category.strip().lower() if subscriber_category else None,
         notes=notes.strip() if notes else None,
         is_active=active,
     )

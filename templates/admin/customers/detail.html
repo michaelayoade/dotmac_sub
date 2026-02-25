@@ -370,6 +370,40 @@
                     <div class="p-2">
                         <div id="customer-mini-map" class="rounded-xl overflow-hidden"></div>
                     </div>
+                    <div class="px-5 pb-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button type="button"
+                                    id="customer-map-click-toggle"
+                                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                                Set by map click
+                            </button>
+                            <span id="customer-map-edit-status" class="text-xs text-slate-500 dark:text-slate-400"></span>
+                        </div>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <div>
+                                <label for="customer-map-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                <input id="customer-map-latitude"
+                                       type="number"
+                                       step="0.000001"
+                                       value="{{ map_data.center[0] if map_data and map_data.center else '' }}"
+                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="customer-map-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                <input id="customer-map-longitude"
+                                       type="number"
+                                       step="0.000001"
+                                       value="{{ map_data.center[1] if map_data and map_data.center else '' }}"
+                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            </div>
+                        </div>
+                        <button type="button"
+                                id="customer-map-save-btn"
+                                data-address-id="{{ primary_address.id if primary_address and primary_address.id else '' }}"
+                                class="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                            Save coordinates
+                        </button>
+                    </div>
                     <div class="px-5 pb-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
                         <div id="customer-map-nearby-assets"></div>
                     </div>
@@ -384,7 +418,7 @@
                         </div>
                         <button type="button"
                                 id="customer-geocode-btn"
-                                data-address-id="{{ geocode_target.id }}"
+                                data-address-id="{{ geocode_target.id or '' }}"
                                 data-address='{{ geocode_target.payload | tojson | safe }}'
                                 class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -392,6 +426,29 @@
                         </button>
                         <p id="customer-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
                         <div id="customer-geocode-results" class="space-y-2"></div>
+                        <div class="grid grid-cols-2 gap-2 pt-2">
+                            <div>
+                                <label for="customer-latitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Latitude</label>
+                                <input id="customer-latitude"
+                                       type="number"
+                                       step="0.000001"
+                                       placeholder="0.000000"
+                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="customer-longitude" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Longitude</label>
+                                <input id="customer-longitude"
+                                       type="number"
+                                       step="0.000001"
+                                       placeholder="0.000000"
+                                       class="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            </div>
+                        </div>
+                        <button type="button"
+                                id="customer-coords-save-btn"
+                                class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                            Save coordinates
+                        </button>
                     </div>
                     {% else %}
                     <div class="px-5 py-8 text-center">
@@ -1183,6 +1240,11 @@ function customerDetail() {
         attributionControl: false
     }).setView(mapData.center, 15);
 
+    function refreshMapLayout() {
+        // The card can finish layout after map init; force Leaflet recalculation.
+        map.invalidateSize();
+    }
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19
     }).addTo(map);
@@ -1244,6 +1306,85 @@ function customerDetail() {
         }
         summaryEl.innerHTML = html;
     }
+
+    map.whenReady(() => {
+        setTimeout(refreshMapLayout, 0);
+        setTimeout(refreshMapLayout, 180);
+    });
+    window.addEventListener('resize', refreshMapLayout);
+
+    const clickToggleBtn = document.getElementById('customer-map-click-toggle');
+    const editStatusEl = document.getElementById('customer-map-edit-status');
+    const latitudeInput = document.getElementById('customer-map-latitude');
+    const longitudeInput = document.getElementById('customer-map-longitude');
+    const saveBtn = document.getElementById('customer-map-save-btn');
+    let clickMode = false;
+    let selectedMarker = null;
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    }
+
+    async function persistSelection(addressId, latitude, longitude) {
+        const isValidAddressId = addressId && addressId !== 'None';
+        const url = isValidAddressId
+            ? `/admin/customers/addresses/${addressId}/geocode`
+            : `/admin/customers/profile/{{ customer.id }}/geocode-primary`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': getCookie('csrf_token')
+            },
+            body: JSON.stringify({ latitude, longitude })
+        });
+        if (!resp.ok) {
+            throw new Error('Geocode save failed');
+        }
+        return resp.json();
+    }
+
+    if (clickToggleBtn && editStatusEl) {
+        clickToggleBtn.addEventListener('click', () => {
+            clickMode = !clickMode;
+            clickToggleBtn.classList.toggle('bg-emerald-50', clickMode);
+            clickToggleBtn.classList.toggle('border-emerald-300', clickMode);
+            clickToggleBtn.classList.toggle('text-emerald-700', clickMode);
+            editStatusEl.textContent = clickMode ? 'Click on the map to place the marker.' : '';
+        });
+    }
+
+    map.on('click', (event) => {
+        if (!clickMode || !latitudeInput || !longitudeInput) return;
+        const lat = Number(event.latlng.lat.toFixed(6));
+        const lng = Number(event.latlng.lng.toFixed(6));
+        latitudeInput.value = String(lat);
+        longitudeInput.value = String(lng);
+        if (selectedMarker) {
+            map.removeLayer(selectedMarker);
+        }
+        selectedMarker = L.marker([lat, lng]).addTo(map);
+    });
+
+    if (saveBtn && latitudeInput && longitudeInput && editStatusEl) {
+        saveBtn.addEventListener('click', async () => {
+            const addressId = saveBtn.dataset.addressId;
+            const latitude = Number(latitudeInput.value);
+            const longitude = Number(longitudeInput.value);
+            if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+                editStatusEl.textContent = 'Enter valid latitude and longitude values.';
+                return;
+            }
+            editStatusEl.textContent = 'Saving coordinates...';
+            try {
+                await persistSelection(addressId, latitude, longitude);
+                window.location.reload();
+            } catch (err) {
+                editStatusEl.textContent = 'Failed to save coordinates.';
+            }
+        });
+    }
 })();
 </script>
 {% endif %}
@@ -1254,6 +1395,9 @@ function customerDetail() {
     const button = document.getElementById('customer-geocode-btn');
     const statusEl = document.getElementById('customer-geocode-status');
     const resultsEl = document.getElementById('customer-geocode-results');
+    const manualSaveBtn = document.getElementById('customer-coords-save-btn');
+    const latitudeInput = document.getElementById('customer-latitude');
+    const longitudeInput = document.getElementById('customer-longitude');
     if (!button || !resultsEl || !statusEl) return;
 
     function getCookie(name) {
@@ -1277,7 +1421,11 @@ function customerDetail() {
     }
 
     async function persistSelection(addressId, latitude, longitude) {
-        const resp = await fetch(`/admin/customers/addresses/${addressId}/geocode`, {
+        const isValidAddressId = addressId && addressId !== 'None';
+        const url = isValidAddressId
+            ? `/admin/customers/addresses/${addressId}/geocode`
+            : `/admin/customers/profile/{{ customer.id }}/geocode-primary`;
+        const resp = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1294,7 +1442,7 @@ function customerDetail() {
     button.addEventListener('click', async () => {
         const addressId = button.dataset.addressId;
         const payload = JSON.parse(button.dataset.address || '{}');
-        if (!addressId || !payload.address_line1) return;
+        if (!payload.address_line1) return;
 
         button.disabled = true;
         statusEl.textContent = 'Searching for matches...';
@@ -1340,6 +1488,26 @@ function customerDetail() {
             statusEl.textContent = 'Failed to save coordinates.';
         }
     });
+
+    if (manualSaveBtn && latitudeInput && longitudeInput) {
+        manualSaveBtn.addEventListener('click', async () => {
+            const addressId = button.dataset.addressId;
+            const latitude = Number(latitudeInput.value);
+            const longitude = Number(longitudeInput.value);
+            if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+                statusEl.textContent = 'Enter valid latitude and longitude values.';
+                return;
+            }
+
+            statusEl.textContent = 'Saving coordinates...';
+            try {
+                await persistSelection(addressId, latitude, longitude);
+                window.location.reload();
+            } catch (err) {
+                statusEl.textContent = 'Failed to save coordinates.';
+            }
+        });
+    }
 })();
 </script>
 {% endif %}

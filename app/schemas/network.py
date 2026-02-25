@@ -112,6 +112,8 @@ class VlanBase(BaseModel):
     tag: int = Field(ge=1, le=4094)
     name: str | None = Field(default=None, max_length=120)
     description: str | None = None
+    purpose: str | None = None
+    dhcp_snooping: bool = False
     is_active: bool = True
 
 
@@ -124,6 +126,8 @@ class VlanUpdate(BaseModel):
     tag: int | None = Field(default=None, ge=1, le=4094)
     name: str | None = Field(default=None, max_length=120)
     description: str | None = None
+    purpose: str | None = None
+    dhcp_snooping: bool | None = None
     is_active: bool | None = None
 
 
@@ -442,6 +446,13 @@ class OntUnitRead(OntUnitBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    onu_rx_signal_dbm: float | None = None
+    olt_rx_signal_dbm: float | None = None
+    distance_meters: int | None = None
+    signal_updated_at: datetime | None = None
+    online_status: str | None = None
+    last_seen_at: datetime | None = None
+    offline_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 

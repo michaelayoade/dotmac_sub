@@ -136,6 +136,17 @@
     {% endcall %}
 
     {% call card("Recent Activities", icon='<svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="amber") %}
+        <form method="POST" action="/admin/provisioning/orders/{{ order.id }}/comments" class="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+            {% include "components/forms/csrf_input.html" %}
+            <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Add Comment</label>
+            <textarea name="comment" rows="2" required
+                      placeholder="Write a comment. Mention users with @user@example.com"
+                      class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"></textarea>
+            <div class="mt-2 flex items-center justify-between">
+                <p class="text-xs text-slate-500 dark:text-slate-400">Tagged users get email and in-app notifications.</p>
+                <button type="submit" class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700">Post Comment</button>
+            </div>
+        </form>
         {% if activities %}
         {% for activity in activities %}
         {{ timeline_item(

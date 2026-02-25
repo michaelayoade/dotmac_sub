@@ -14,29 +14,29 @@ from the main network module for backwards compatibility.
 """
 
 # Import from submodules
-# Import fiber/splitter services from legacy module
-from app.services.network._legacy import (
-    # Splitter services
-    FdhCabinets,
+from app.services.network.fiber_services import (
     FiberSegments,
     FiberSpliceClosures,
     FiberSplices,
     FiberSpliceTrays,
-    # Fiber services
     FiberStrands,
     FiberTerminationPoints,
-    # PON port splitter links
-    PonPortSplitterLinks,
-    SplitterPortAssignments,
-    SplitterPorts,
-    Splitters,
-    fdh_cabinets,
     fiber_segments,
     fiber_splice_closures,
     fiber_splice_trays,
     fiber_splices,
     fiber_strands,
     fiber_termination_points,
+)
+from app.services.network.splitters import (
+    # Splitter services
+    FdhCabinets,
+    PonPortSplitterLinks,
+    # PON port splitter links
+    SplitterPortAssignments,
+    SplitterPorts,
+    Splitters,
+    fdh_cabinets,
     pon_port_splitter_links,
     splitter_port_assignments,
     splitter_ports,
@@ -83,6 +83,18 @@ from app.services.network.olt import (
     ont_assignments,
     ont_units,
     pon_ports,
+)
+from app.services.network.ont_actions import (
+    OntActions,
+    ont_actions,
+)
+from app.services.network.ont_tr069 import (
+    OntTR069,
+    ont_tr069,
+)
+from app.services.network.zones import (
+    NetworkZones,
+    network_zones,
 )
 
 __all__ = [
@@ -150,4 +162,13 @@ __all__ = [
     # PON port splitter links
     "PonPortSplitterLinks",
     "pon_port_splitter_links",
+    # ONT actions
+    "OntActions",
+    "ont_actions",
+    # ONT TR-069
+    "OntTR069",
+    "ont_tr069",
+    # Zone services
+    "NetworkZones",
+    "network_zones",
 ]

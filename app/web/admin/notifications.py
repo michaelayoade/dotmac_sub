@@ -14,8 +14,19 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
 )
+from app.schemas.notification import (
+    AlertNotificationPolicyCreate,
+    AlertNotificationPolicyStepCreate,
+    AlertNotificationPolicyUpdate,
+    OnCallRotationCreate,
+    OnCallRotationMemberCreate,
+    OnCallRotationUpdate,
+)
 from app.services import notification as notification_service
 from app.services import web_admin_notifications as web_admin_notifications_service
+from app.services import (
+    web_notifications_alert_policies as web_alert_policies_service,
+)
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
@@ -267,6 +278,7 @@ def notification_template_test(
                 to_email=test_recipient.strip(),
                 subject=template.subject or "Test Notification",
                 body_html=template.body,
+                activity="notification_test",
             )
             message = f"Test email sent to {test_recipient}"
         else:
@@ -410,4 +422,516 @@ def notification_history(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Alert Notification Policies
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/alert-policies",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
+def alert_policies_list(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    """List alert notification policies."""
+    state = web_alert_policies_service.alert_policies_list_data(
+        db, page=page, per_page=per_page
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    return templates.TemplateResponse(
+        "admin/notifications/alert_policies.html",
+        {
+            "request": request,
+            **state,
+            "active_page": "alert-policies",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.get(
+    "/alert-policies/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_new(request: Request, db: Session = Depends(get_db)):
+    """Create new alert policy form."""
+    state = web_alert_policies_service.alert_policy_form_data(db)
+    from app.web.admin import get_current_user, get_sidebar_stats
+    return templates.TemplateResponse(
+        "admin/notifications/alert_policy_form.html",
+        {
+            "request": request,
+            **state,
+            "action_url": "/admin/notifications/alert-policies",
+            "form_title": "New Alert Policy",
+            "submit_label": "Create Policy",
+            "active_page": "alert-policies",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/alert-policies",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_create(
+    request: Request,
+    name: str = Form(...),
+    channel: str = Form(...),
+    recipient: str = Form(...),
+    severity_min: str = Form("warning"),
+    template_id: str | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create an alert notification policy."""
+    from app.models.network_monitoring import AlertSeverity
+
+    try:
+        payload = AlertNotificationPolicyCreate(
+            name=name.strip(),
+            channel=NotificationChannel(channel),
+            recipient=recipient.strip(),
+            severity_min=AlertSeverity(severity_min),
+            template_id=UUID(template_id) if template_id else None,
+            notes=notes.strip() if notes else None,
+            is_active=is_active is not None,
+        )
+        policy = notification_service.alert_notification_policies.create(
+            db=db, payload=payload
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/alert-policies/{policy.id}",
+            status_code=303,
+        )
+    except Exception as exc:
+        state = web_alert_policies_service.alert_policy_form_data(db)
+        from app.web.admin import get_current_user, get_sidebar_stats
+        return templates.TemplateResponse(
+            "admin/notifications/alert_policy_form.html",
+            {
+                "request": request,
+                **state,
+                "action_url": "/admin/notifications/alert-policies",
+                "form_title": "New Alert Policy",
+                "submit_label": "Create Policy",
+                "error": str(exc),
+                "active_page": "alert-policies",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+
+@router.get(
+    "/alert-policies/{policy_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
+def alert_policy_detail(
+    request: Request,
+    policy_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """View and edit alert policy with escalation steps."""
+    state = web_alert_policies_service.alert_policy_detail_data(
+        db, policy_id=str(policy_id)
+    )
+    if not state:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Alert policy not found"},
+            status_code=404,
+        )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    return templates.TemplateResponse(
+        "admin/notifications/alert_policy_form.html",
+        {
+            "request": request,
+            **state,
+            "action_url": f"/admin/notifications/alert-policies/{policy_id}",
+            "form_title": "Edit Alert Policy",
+            "submit_label": "Update Policy",
+            "active_page": "alert-policies",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/alert-policies/{policy_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_update(
+    request: Request,
+    policy_id: UUID,
+    name: str = Form(...),
+    channel: str = Form(...),
+    recipient: str = Form(...),
+    severity_min: str = Form("warning"),
+    template_id: str | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Update an alert notification policy."""
+    from app.models.network_monitoring import AlertSeverity
+
+    try:
+        payload = AlertNotificationPolicyUpdate(
+            name=name.strip(),
+            channel=NotificationChannel(channel),
+            recipient=recipient.strip(),
+            severity_min=AlertSeverity(severity_min),
+            template_id=UUID(template_id) if template_id else None,
+            notes=notes.strip() if notes else None,
+            is_active=is_active is not None,
+        )
+        notification_service.alert_notification_policies.update(
+            db=db, policy_id=str(policy_id), payload=payload
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/alert-policies/{policy_id}",
+            status_code=303,
+        )
+    except Exception as exc:
+        state = web_alert_policies_service.alert_policy_detail_data(
+            db, policy_id=str(policy_id)
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+        return templates.TemplateResponse(
+            "admin/notifications/alert_policy_form.html",
+            {
+                "request": request,
+                **(state or {}),
+                "action_url": f"/admin/notifications/alert-policies/{policy_id}",
+                "form_title": "Edit Alert Policy",
+                "submit_label": "Update Policy",
+                "error": str(exc),
+                "active_page": "alert-policies",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+
+@router.post(
+    "/alert-policies/{policy_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
+    """Delete an alert notification policy."""
+    notification_service.alert_notification_policies.delete(
+        db=db, policy_id=str(policy_id)
+    )
+    return RedirectResponse(url="/admin/notifications/alert-policies", status_code=303)
+
+
+@router.post(
+    "/alert-policies/{policy_id}/steps",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_step_create(
+    request: Request,
+    policy_id: UUID,
+    step_index: int = Form(0),
+    delay_minutes: int = Form(0),
+    step_channel: str = Form("email"),
+    step_recipient: str | None = Form(None),
+    step_rotation_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Add an escalation step to an alert policy."""
+    try:
+        payload = AlertNotificationPolicyStepCreate(
+            policy_id=policy_id,
+            step_index=step_index,
+            delay_minutes=delay_minutes,
+            channel=NotificationChannel(step_channel),
+            recipient=step_recipient.strip() if step_recipient else None,
+            rotation_id=UUID(step_rotation_id) if step_rotation_id else None,
+        )
+        notification_service.alert_notification_policy_steps.create(
+            db=db, payload=payload
+        )
+    except Exception:
+        pass  # Redirect back regardless
+    return RedirectResponse(
+        url=f"/admin/notifications/alert-policies/{policy_id}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/alert-policies/{policy_id}/steps/{step_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def alert_policy_step_delete(
+    policy_id: UUID,
+    step_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Delete an escalation step."""
+    notification_service.alert_notification_policy_steps.delete(
+        db=db, step_id=str(step_id)
+    )
+    return RedirectResponse(
+        url=f"/admin/notifications/alert-policies/{policy_id}",
+        status_code=303,
+    )
+
+
+# ---------------------------------------------------------------------------
+# On-Call Rotations
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/oncall-rotations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
+def oncall_rotations_list(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    """List on-call rotations."""
+    state = web_alert_policies_service.oncall_rotations_list_data(
+        db, page=page, per_page=per_page
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    return templates.TemplateResponse(
+        "admin/notifications/oncall_rotations.html",
+        {
+            "request": request,
+            **state,
+            "active_page": "oncall-rotations",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/oncall-rotations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def oncall_rotation_create(
+    request: Request,
+    name: str = Form(...),
+    timezone: str = Form("UTC"),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Create an on-call rotation."""
+    try:
+        payload = OnCallRotationCreate(
+            name=name.strip(),
+            timezone=timezone.strip(),
+            notes=notes.strip() if notes else None,
+        )
+        rotation = notification_service.on_call_rotations.create(
+            db=db, payload=payload
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/oncall-rotations/{rotation.id}",
+            status_code=303,
+        )
+    except Exception as exc:
+        state = web_alert_policies_service.oncall_rotations_list_data(
+            db, page=1, per_page=25
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+        return templates.TemplateResponse(
+            "admin/notifications/oncall_rotations.html",
+            {
+                "request": request,
+                **state,
+                "error": str(exc),
+                "active_page": "oncall-rotations",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+
+@router.get(
+    "/oncall-rotations/{rotation_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
+def oncall_rotation_detail(
+    request: Request,
+    rotation_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """View on-call rotation with members."""
+    state = web_alert_policies_service.oncall_rotation_detail_data(
+        db, rotation_id=str(rotation_id)
+    )
+    if not state:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "On-call rotation not found"},
+            status_code=404,
+        )
+    from app.web.admin import get_current_user, get_sidebar_stats
+    return templates.TemplateResponse(
+        "admin/notifications/oncall_form.html",
+        {
+            "request": request,
+            **state,
+            "active_page": "oncall-rotations",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/oncall-rotations/{rotation_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def oncall_rotation_update(
+    request: Request,
+    rotation_id: UUID,
+    name: str = Form(...),
+    timezone: str = Form("UTC"),
+    notes: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Update an on-call rotation."""
+    try:
+        payload = OnCallRotationUpdate(
+            name=name.strip(),
+            timezone=timezone.strip(),
+            notes=notes.strip() if notes else None,
+            is_active=is_active is not None,
+        )
+        notification_service.on_call_rotations.update(
+            db=db, rotation_id=str(rotation_id), payload=payload
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/oncall-rotations/{rotation_id}",
+            status_code=303,
+        )
+    except Exception as exc:
+        state = web_alert_policies_service.oncall_rotation_detail_data(
+            db, rotation_id=str(rotation_id)
+        )
+        from app.web.admin import get_current_user, get_sidebar_stats
+        return templates.TemplateResponse(
+            "admin/notifications/oncall_form.html",
+            {
+                "request": request,
+                **(state or {}),
+                "error": str(exc),
+                "active_page": "oncall-rotations",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+
+@router.post(
+    "/oncall-rotations/{rotation_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def oncall_rotation_delete(rotation_id: UUID, db: Session = Depends(get_db)):
+    """Delete an on-call rotation."""
+    notification_service.on_call_rotations.delete(
+        db=db, rotation_id=str(rotation_id)
+    )
+    return RedirectResponse(
+        url="/admin/notifications/oncall-rotations", status_code=303
+    )
+
+
+@router.post(
+    "/oncall-rotations/{rotation_id}/members",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def oncall_rotation_member_create(
+    request: Request,
+    rotation_id: UUID,
+    member_name: str = Form(...),
+    member_contact: str = Form(...),
+    member_priority: int = Form(0),
+    db: Session = Depends(get_db),
+):
+    """Add a member to an on-call rotation."""
+    try:
+        payload = OnCallRotationMemberCreate(
+            rotation_id=rotation_id,
+            name=member_name.strip(),
+            contact=member_contact.strip(),
+            priority=member_priority,
+        )
+        notification_service.on_call_rotation_members.create(
+            db=db, payload=payload
+        )
+    except Exception:
+        pass  # Redirect back regardless
+    return RedirectResponse(
+        url=f"/admin/notifications/oncall-rotations/{rotation_id}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/oncall-rotations/{rotation_id}/members/{member_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def oncall_rotation_member_delete(
+    rotation_id: UUID,
+    member_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Remove a member from an on-call rotation."""
+    notification_service.on_call_rotation_members.delete(
+        db=db, member_id=str(member_id)
+    )
+    return RedirectResponse(
+        url=f"/admin/notifications/oncall-rotations/{rotation_id}",
+        status_code=303,
     )

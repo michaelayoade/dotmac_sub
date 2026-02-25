@@ -41,7 +41,9 @@ def get_current_user(request) -> dict:
 
 def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
+    from app.models.domain_settings import SettingDomain
     from app.services import provisioning as provisioning_service
+    from app.services import settings_spec
 
     try:
         orders = provisioning_service.service_orders.list(
@@ -61,7 +63,26 @@ def get_sidebar_stats(db: Session) -> dict:
     except Exception:
         service_orders_count = 0
 
+    try:
+        logo_raw = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+        sidebar_logo_url = str(logo_raw).strip() if logo_raw else ""
+    except Exception:
+        sidebar_logo_url = ""
+    try:
+        dark_logo_raw = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_dark_url")
+        sidebar_logo_dark_url = str(dark_logo_raw).strip() if dark_logo_raw else ""
+    except Exception:
+        sidebar_logo_dark_url = ""
+    try:
+        favicon_raw = settings_spec.resolve_value(db, SettingDomain.comms, "favicon_url")
+        favicon_url = str(favicon_raw).strip() if favicon_raw else ""
+    except Exception:
+        favicon_url = ""
+
     return {
         "service_orders": service_orders_count,
         "dispatch_jobs": 0,
+        "sidebar_logo_url": sidebar_logo_url,
+        "sidebar_logo_dark_url": sidebar_logo_dark_url,
+        "favicon_url": favicon_url,
     }

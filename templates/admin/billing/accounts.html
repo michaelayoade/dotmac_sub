@@ -1,109 +1,60 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_head, table_row, row_actions, row_action, status_badge,
+    empty_state, action_button, animation_styles,
+    icon_plus, icon_view, icon_invoice, icon_delete
+%}
 
 {% block title %}Billing Accounts - Admin{% endblock %}
 
 {% block content %}
-<!-- Ambient Background -->
-<div class="pointer-events-none fixed inset-0 overflow-hidden">
-    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-amber-400/5 to-orange-500/5 blur-3xl"></div>
-    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-emerald-400/5 to-cyan-500/5 blur-3xl"></div>
-</div>
+{{ ambient_background("emerald", "teal") }}
 
 <div class="relative space-y-6">
-    <!-- Header -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-start gap-4">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg shadow-amber-500/25">
-                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
-                </svg>
-            </div>
-            <div>
-                <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-1">
-                    <a href="/admin/billing" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Billing</a>
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    <span class="text-slate-900 dark:text-white font-medium">Accounts</span>
-                </nav>
-                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Billing Accounts</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage customer billing accounts and balances</p>
-            </div>
-        </div>
-        <a href="/admin/billing/accounts/new" class="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
-            <svg class="h-5 w-5 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-            New Account
-        </a>
+    {# ── Page Header ── #}
+    {% call(content) page_header(
+        "Billing Accounts",
+        subtitle="Manage customer billing accounts and balances",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>',
+        color="emerald",
+        color2="teal",
+        breadcrumbs=[{"label": "Billing", "href": "/admin/billing"}, {"label": "Accounts"}]
+    ) %}
+        {{ action_button("New Account", href="/admin/billing/accounts/new", icon=icon_plus("h-4 w-4"), variant="primary", color="amber", color2="orange") }}
+    {% endcall %}
+
+    {# ── Summary Stats ── #}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {% set total_balance_value = total_balance | default(0) %}
+        {{ stats_card(
+            "Total Balance",
+            "₦" ~ "{:,.2f}".format(total_balance_value),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="amber", color2="orange"
+        ) }}
+        {{ stats_card(
+            "Active Accounts",
+            active_count | default(0),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card(
+            "Suspended",
+            suspended_count | default(0),
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+            color="amber", color2="yellow"
+        ) }}
+        {{ stats_card(
+            "Total Accounts",
+            accounts | length if accounts else 0,
+            icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
     </div>
 
-    <!-- Summary Stats -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 0.1s;">
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-orange-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Balance</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                {% set total_balance_value = total_balance | default(0) %}
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(total_balance_value) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Outstanding receivables</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-emerald-500/10 to-green-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Active Accounts</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ active_count | default(0) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Currently billing</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-500/10 to-yellow-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Suspended</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ suspended_count | default(0) }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Requires attention</p>
-            </div>
-        </div>
-
-        <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-blue-500/10 to-indigo-500/10 blur-2xl transition-all group-hover:scale-150"></div>
-            <div class="relative">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Accounts</p>
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
-                        </svg>
-                    </div>
-                </div>
-                <p class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">{{ accounts | length if accounts else 0 }}</p>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All billing accounts</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filters -->
-    <div class="rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80 animate-fade-in-up" style="animation-delay: 0.2s;">
+    {# ── Filters ── #}
+    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         <form hx-get="/admin/billing/accounts" hx-target="#accounts-table" hx-trigger="submit, change from:select" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>
@@ -149,24 +100,22 @@
         </form>
     </div>
 
-    <!-- Accounts Table -->
-    <div id="accounts-table" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 0.3s;">
+    {# ── Accounts Table ── #}
+    <div id="accounts-table" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead>
-                    <tr class="bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-slate-800/80 dark:to-slate-700/50">
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Account</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Subscriber</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Balance</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Status</th>
-                        <th class="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">Created</th>
-                        <th class="relative px-6 py-4"><span class="sr-only">Actions</span></th>
-                    </tr>
-                </thead>
+                {{ table_head([
+                    {"label": "Account"},
+                    {"label": "Subscriber"},
+                    {"label": "Balance"},
+                    {"label": "Status"},
+                    {"label": "Created"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if accounts %}
                     {% for account in accounts %}
-                    <tr class="group transition-colors hover:bg-amber-50/50 dark:hover:bg-amber-900/10">
+                    {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <div class="flex items-center gap-4">
                                 <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 transition-all group-hover:from-amber-100 group-hover:to-orange-100 group-hover:text-amber-700 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400 dark:group-hover:from-amber-900/30 dark:group-hover:to-orange-900/30 dark:group-hover:text-amber-400">
@@ -207,7 +156,7 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% set balance = account.balance | default(0) %}
-                            <span class="text-sm font-bold {% if balance > 0 %}text-amber-600 dark:text-amber-400{% elif balance < 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-600 dark:text-slate-400{% endif %}">
+                            <span class="text-sm font-bold font-mono tabular-nums {% if balance > 0 %}text-amber-600 dark:text-amber-400{% elif balance < 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-600 dark:text-slate-400{% endif %}">
                                 ₦{{ "{:,.2f}".format(balance) }}
                             </span>
                             {% if balance > 0 %}
@@ -220,39 +169,27 @@
                             {% set status = account.status | default('active') %}
                             {% set status_val = status.value if status is not string else status %}
                             {% if status_val == 'active' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                Active
-                            </span>
+                            {{ status_badge("Active", variant="active") }}
                             {% elif status_val == 'suspended' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-                                Suspended
-                            </span>
+                            {{ status_badge("Suspended", variant="warning") }}
                             {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                {{ status_val | default('Unknown') | title }}
-                            </span>
+                            {{ status_badge(status_val | default('Unknown') | title, variant="default") }}
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at.strftime('%b %d, %Y') if account.created_at else 'N/A' }}</span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <div class="flex items-center justify-end gap-2">
-                                <a href="/admin/billing/accounts/{{ account.id }}" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-amber-100 hover:text-amber-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-amber-900/30 dark:hover:text-amber-400" title="View Details">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                                </a>
-                                <a href="/admin/billing/invoices/new?account={{ account.id }}" class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-emerald-100 hover:text-emerald-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-emerald-900/30 dark:hover:text-emerald-400" title="Create Invoice">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                </a>
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href="/admin/billing/accounts/" ~ account.id, icon=icon_view(), title="View Details", color="amber") }}
+                                {{ row_action(href="/admin/billing/accounts/" ~ account.id ~ "/edit", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', title="Edit Account", color="blue") }}
+                                {{ row_action(href="/admin/billing/invoices/new?account=" ~ account.id, icon=icon_invoice("h-4 w-4"), title="Create Invoice", color="emerald") }}
                                 {% set status_action = account.status | default('active') %}
                                 {% set status_action_val = status_action.value if status_action is not string else status_action %}
                                 {% if status_action_val == 'active' %}
                                 <button hx-post="/admin/billing/accounts/{{ account.id }}/deactivate"
                                         hx-confirm="Deactivate this account before deleting?"
-                                        class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-amber-100 hover:text-amber-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-amber-900/30 dark:hover:text-amber-400"
+                                        class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-amber-100 hover:text-amber-600 dark:hover:bg-amber-900/30 dark:hover:text-amber-400"
                                         title="Deactivate Account">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
                                 </button>
@@ -261,32 +198,24 @@
                                         hx-confirm="Delete this billing account? This action cannot be undone."
                                         hx-target="closest tr"
                                         hx-swap="outerHTML swap:0.5s"
-                                        class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-all hover:bg-red-100 hover:text-red-700 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                                        class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
                                         title="Delete Account">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                    {{ icon_delete() }}
                                 </button>
                             </div>
                         </td>
-                    </tr>
+                    {% endcall %}
                     {% endfor %}
                     {% else %}
-                    <tr>
-                        <td colspan="6" class="px-6 py-16 text-center">
-                            <div class="flex flex-col items-center">
-                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
-                                    </svg>
-                                </div>
-                                <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No billing accounts found</p>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create your first billing account to get started</p>
-                                <a href="/admin/billing/accounts/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 transition-colors">
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                                    New Account
-                                </a>
-                            </div>
-                        </td>
-                    </tr>
+                    {{ empty_state(
+                        title="No billing accounts found",
+                        message="Create your first billing account to get started",
+                        icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>',
+                        color="emerald",
+                        action_label="New Account",
+                        action_href="/admin/billing/accounts/new",
+                        colspan=6
+                    ) }}
                     {% endif %}
                 </tbody>
             </table>
@@ -294,19 +223,5 @@
     </div>
 </div>
 
-<style>
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-.animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out backwards;
-}
-</style>
+{{ animation_styles() }}
 {% endblock %}

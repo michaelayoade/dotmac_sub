@@ -7,4 +7,4 @@
        <!-- rest of form -->
    </form>
 #}
-<input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="_csrf_token" value="{{ csrf_token|default(request.state.csrf_token, true)|default('', true) }}">

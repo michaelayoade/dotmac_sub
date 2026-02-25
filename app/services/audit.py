@@ -1,5 +1,6 @@
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.schemas.audit import AuditEventCreate
@@ -118,11 +119,26 @@ class AuditEvents(ListResponseMixin):
         }
         person = getattr(request.state, "user", None)
         if person:
-            display_name = person.display_name or f"{person.first_name} {person.last_name}".strip()
+            # request.state.user can be detached by middleware ordering; read only
+            # already-loaded values to avoid lazy-loading on a dead Session.
+            state = getattr(person, "__dict__", {})
+            try:
+                first_name = (state.get("first_name") or "").strip()
+                last_name = (state.get("last_name") or "").strip()
+                display_name = (state.get("display_name") or "").strip()
+                if not display_name:
+                    display_name = f"{first_name} {last_name}".strip()
+                email = state.get("email")
+            except DetachedInstanceError:
+                display_name = None
+                email = None
+            except Exception:
+                display_name = None
+                email = None
             if display_name:
                 metadata["actor_name"] = display_name
-            if getattr(person, "email", None):
-                metadata["actor_email"] = person.email
+            if email:
+                metadata["actor_email"] = email
         payload = AuditEventCreate(
             actor_type=resolved_actor_type,
             actor_id=actor_id,

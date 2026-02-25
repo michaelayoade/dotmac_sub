@@ -1,14 +1,14 @@
 """Service helpers for public legal document pages."""
 
-import os
-
 from fastapi import Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.models.legal import LegalDocumentType
 from app.services import legal as legal_service
+from app.services.file_storage import build_content_disposition
+from app.services.object_storage import ObjectNotFoundError
 
 templates = Jinja2Templates(directory="templates")
 
@@ -132,10 +132,18 @@ def download_document(db: Session, document_id: str):
     document = legal_service.legal_documents.get(db=db, document_id=document_id)
     if not document or not document.is_published:
         return HTMLResponse(content="Document not found", status_code=404)
-    if not document.file_path or not os.path.exists(document.file_path):
+    try:
+        stream, filename = legal_service.legal_documents.stream_file(
+            db, document, require_published=True
+        )
+    except ObjectNotFoundError:
         return HTMLResponse(content="File not found", status_code=404)
-    return FileResponse(
-        path=document.file_path,
-        filename=document.file_name or "document",
-        media_type=document.mime_type or "application/octet-stream",
+
+    headers = {"Content-Disposition": build_content_disposition(filename)}
+    if stream.content_length is not None:
+        headers["Content-Length"] = str(stream.content_length)
+    return StreamingResponse(
+        stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+        headers=headers,
     )

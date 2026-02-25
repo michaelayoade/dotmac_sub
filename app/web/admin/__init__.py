@@ -49,6 +49,21 @@ def get_sidebar_stats(db: Session) -> dict:
 def admin_root():
     return RedirectResponse(url="/admin/dashboard", status_code=303)
 
+
+@router.get("/operations/service-orders")
+def operations_service_orders_legacy():
+    """Legacy route redirect for service orders list."""
+    return RedirectResponse(url="/admin/provisioning/orders", status_code=307)
+
+
+@router.get("/operations/service-orders/new")
+def operations_service_orders_new_legacy(subscriber: str | None = None):
+    """Legacy route redirect for service order create form."""
+    url = "/admin/provisioning/orders/new"
+    if subscriber:
+        url = f"{url}?subscriber={subscriber}"
+    return RedirectResponse(url=url, status_code=307)
+
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(subscribers_router)

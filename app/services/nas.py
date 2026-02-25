@@ -8,7 +8,9 @@ Provides CRUD operations and business logic for:
 - Device provisioning execution
 """
 import hashlib
+import ipaddress
 import re
+import subprocess
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -26,6 +28,7 @@ from app.models.catalog import (
     NasVendor,
     ProvisioningAction,
     ProvisioningLog,
+    ProvisioningLogStatus,
     ProvisioningTemplate,
     RadiusProfile,
 )
@@ -50,6 +53,46 @@ _REDACT_KEYS = {
     "ssh_key",
     "shared_secret",
 }
+
+
+def _build_ping_command(host: str) -> list[str]:
+    command = ["ping", "-c", "1", "-W", "2", host]
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.version == 6:
+            return ["ping", "-6", "-c", "1", "-W", "2", host]
+    except ValueError:
+        pass
+    return command
+
+
+def get_ping_status(host: str | None) -> dict[str, object]:
+    """Return lightweight ping status for list/detail badges."""
+    if not host:
+        return {"state": "unknown", "label": "No host"}
+    try:
+        result = subprocess.run(
+            _build_ping_command(host),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=4,
+        )
+    except Exception:
+        return {"state": "unreachable", "label": "Unreachable"}
+    if result.returncode != 0:
+        return {"state": "unreachable", "label": "Unreachable"}
+    output = f"{result.stdout or ''} {result.stderr or ''}"
+    latency_ms = None
+    match = re.search(r"time[=<]\s*([0-9.]+)\s*ms", output)
+    if match:
+        try:
+            latency_ms = float(match.group(1))
+        except ValueError:
+            latency_ms = None
+    if latency_ms is None:
+        return {"state": "reachable", "label": "Reachable"}
+    return {"state": "reachable", "label": f"Reachable {latency_ms:.1f} ms", "latency_ms": latency_ms}
 
 
 def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
@@ -697,7 +740,7 @@ class ProvisioningLogs(ListResponseMixin):
         nas_device_id: UUID | None = None,
         subscriber_id: UUID | None = None,
         action: ProvisioningAction | None = None,
-        status: str | None = None,
+        status: ProvisioningLogStatus | None = None,
     ) -> list[ProvisioningLog]:
         """List provisioning logs with filtering."""
         query = select(ProvisioningLog).order_by(ProvisioningLog.created_at.desc())
@@ -721,7 +764,7 @@ class ProvisioningLogs(ListResponseMixin):
         nas_device_id: UUID | None = None,
         subscriber_id: UUID | None = None,
         action: ProvisioningAction | None = None,
-        status: str | None = None,
+        status: ProvisioningLogStatus | None = None,
     ) -> int:
         """Count provisioning logs with filtering (same filters as list)."""
         query = select(func.count(ProvisioningLog.id))
@@ -741,7 +784,7 @@ class ProvisioningLogs(ListResponseMixin):
     def update_status(
         db: Session,
         log_id: UUID,
-        status: str,
+        status: ProvisioningLogStatus,
         response: str | None = None,
         error: str | None = None,
         execution_time_ms: int | None = None,
@@ -895,7 +938,7 @@ class DeviceProvisioner:
                 template_id=template.id,
                 action=action,
                 command_sent=command,
-                status="running",
+                status=ProvisioningLogStatus.running,
                 triggered_by=triggered_by,
                 request_data=_redact_sensitive(variables),
             ),
@@ -920,7 +963,11 @@ class DeviceProvisioner:
 
             # Update log with success
             ProvisioningLogs.update_status(
-                db, log.id, "success", response=response, execution_time_ms=execution_time
+                db,
+                log.id,
+                ProvisioningLogStatus.success,
+                response=response,
+                execution_time_ms=execution_time,
             )
 
             # Handle queue mapping for bandwidth monitoring
@@ -931,7 +978,11 @@ class DeviceProvisioner:
         except Exception as e:
             execution_time = int((time.time() - start_time) * 1000)
             ProvisioningLogs.update_status(
-                db, log.id, "failed", error=str(e), execution_time_ms=execution_time
+                db,
+                log.id,
+                ProvisioningLogStatus.failed,
+                error=str(e),
+                execution_time_ms=execution_time,
             )
             raise
 

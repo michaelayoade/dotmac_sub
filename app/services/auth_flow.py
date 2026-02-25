@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select as sa_select
+from sqlalchemy import func, select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -319,6 +319,32 @@ def _load_rbac_claims(db: Session, subscriber_id: str):
     return role_names, permission_keys
 
 
+def _resolve_login_credential(
+    db: Session,
+    *,
+    provider: AuthProvider,
+    identifier: str,
+) -> UserCredential | None:
+    """Resolve active credential using either username or subscriber email."""
+    normalized_identifier = identifier.strip()
+    if not normalized_identifier:
+        return None
+
+    return cast(
+        UserCredential | None,
+        db.query(UserCredential)
+        .join(Subscriber, Subscriber.id == UserCredential.subscriber_id)
+        .filter(UserCredential.provider == provider)
+        .filter(UserCredential.is_active.is_(True))
+        .filter(
+            (UserCredential.username == normalized_identifier)
+            | (func.lower(Subscriber.email) == normalized_identifier.lower())
+        )
+        .order_by(UserCredential.created_at.desc())
+        .first(),
+    )
+
+
 def _primary_totp_method(db: Session, subscriber_id: str) -> MFAMethod | None:
     return cast(
         MFAMethod | None,
@@ -426,25 +452,24 @@ class AuthFlow(ListResponseMixin):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid auth provider") from exc
         if resolved_provider == AuthProvider.radius:
-            credential = (
-                db.query(UserCredential)
-                .filter(UserCredential.username == username)
-                .filter(UserCredential.provider == AuthProvider.radius)
-                .filter(UserCredential.is_active.is_(True))
-                .first()
+            credential = _resolve_login_credential(
+                db,
+                provider=AuthProvider.radius,
+                identifier=username,
             )
             if not credential:
                 raise HTTPException(status_code=401, detail="Invalid credentials")
             radius_auth_service.authenticate(
-                db, username, password, str(credential.radius_server_id) if credential.radius_server_id else None
+                db,
+                str(credential.username or username),
+                password,
+                str(credential.radius_server_id) if credential.radius_server_id else None,
             )
         elif resolved_provider == AuthProvider.local:
-            credential = (
-                db.query(UserCredential)
-                .filter(UserCredential.username == username)
-                .filter(UserCredential.provider == AuthProvider.local)
-                .filter(UserCredential.is_active.is_(True))
-                .first()
+            credential = _resolve_login_credential(
+                db,
+                provider=AuthProvider.local,
+                identifier=username,
             )
             if not credential:
                 raise HTTPException(status_code=401, detail="Invalid credentials")

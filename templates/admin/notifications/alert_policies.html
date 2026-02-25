@@ -1,0 +1,173 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background, page_header, stats_card,
+    table_head, table_row, row_action, status_badge,
+    empty_state, action_button, animation_styles,
+    icon_plus, icon_view, icon_delete
+%}
+
+{% block title %}Alert Notification Policies - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "pink") }}
+
+<div class="relative space-y-6">
+
+    {# Page Header #}
+    {% call(content) page_header(
+        "Alert Notification Policies",
+        subtitle="Configure alert escalation and notification rules",
+        icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>',
+        color="rose",
+        breadcrumbs=[
+            {"label": "Notifications", "href": "/admin/notifications"},
+            {"label": "Alert Policies"}
+        ]
+    ) %}
+        {{ action_button("New Policy", href="/admin/notifications/alert-policies/new", icon=icon_plus("h-4 w-4"), variant="primary", color="rose") }}
+    {% endcall %}
+
+    {# Stats #}
+    {% set active_count = policies | selectattr('is_active') | list | length %}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3" style="animation-delay: 50ms;">
+        {{ stats_card(
+            "Total Policies",
+            total,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>',
+            color="rose", color2="pink"
+        ) }}
+        {{ stats_card(
+            "Active",
+            active_count,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald", color2="green"
+        ) }}
+        {{ stats_card(
+            "Channels Used",
+            policies | map(attribute='channel') | unique | list | length,
+            icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>',
+            color="blue", color2="indigo"
+        ) }}
+    </div>
+
+    {# Data table #}
+    <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                {{ table_head([
+                    {"label": "Policy Name"},
+                    {"label": "Channel"},
+                    {"label": "Recipient"},
+                    {"label": "Min Severity"},
+                    {"label": "Status"},
+                    {"label": "Actions", "align": "right"}
+                ]) }}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% if policies %}
+                    {% for policy in policies %}
+                    {% call table_row(color="rose") %}
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-sm">
+                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <a href="/admin/notifications/alert-policies/{{ policy.id }}" class="font-semibold text-slate-900 hover:text-rose-600 dark:text-white dark:hover:text-rose-400">
+                                        {{ policy.name }}
+                                    </a>
+                                    {% if policy.notes %}
+                                    <p class="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ policy.notes }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set ch = policy.channel.value if policy.channel else 'email' %}
+                            {% if ch == 'email' %}
+                                {{ status_badge("Email", variant="info") }}
+                            {% elif ch == 'sms' %}
+                                {{ status_badge("SMS", variant="active") }}
+                            {% elif ch == 'webhook' %}
+                                {{ status_badge("Webhook", variant="warning") }}
+                            {% else %}
+                                {{ status_badge(ch | title, variant="default") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300 truncate max-w-xs">
+                            {{ policy.recipient }}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set sev = policy.severity_min.value if policy.severity_min else 'warning' %}
+                            {% if sev == 'critical' %}
+                                {{ status_badge("Critical", variant="error") }}
+                            {% elif sev == 'warning' %}
+                                {{ status_badge("Warning", variant="warning") }}
+                            {% else %}
+                                {{ status_badge(sev | title, variant="info") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% if policy.is_active %}
+                                {{ status_badge("Active", variant="active") }}
+                            {% else %}
+                                {{ status_badge("Inactive", variant="neutral") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right">
+                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                {{ row_action(href="/admin/notifications/alert-policies/" ~ policy.id, icon=icon_view(), title="View Details", color="rose") }}
+                                <form method="post" action="/admin/notifications/alert-policies/{{ policy.id }}/delete" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Delete this policy?')"
+                                            class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/20 dark:hover:text-rose-400 transition-colors"
+                                            title="Delete">
+                                        {{ icon_delete() }}
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                    {% else %}
+                    {{ empty_state(
+                        title="No alert policies configured",
+                        message="Create an alert notification policy to set up escalation chains",
+                        icon='<svg class="h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>',
+                        color="rose",
+                        action_label="New Policy",
+                        action_href="/admin/notifications/alert-policies/new",
+                        colspan=6
+                    ) }}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {# Pagination #}
+        {% if total_pages > 1 %}
+        <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <div class="flex items-center justify-between">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} results
+                </p>
+                <nav class="flex items-center gap-1">
+                    {% if page > 1 %}
+                    <a href="/admin/notifications/alert-policies?page={{ page - 1 }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="/admin/notifications/alert-policies?page={{ page + 1 }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
