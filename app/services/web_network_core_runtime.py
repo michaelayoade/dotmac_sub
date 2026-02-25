@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
         return device, "Management IP is missing.", False
 
     ping_success = False
+    latency_ms: float | None = None
     now = datetime.now(UTC)
     try:
         result = subprocess.run(
@@ -70,6 +72,8 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
             timeout=4,
         )
         ping_success = result.returncode == 0
+        if ping_success:
+            latency_ms = _extract_latency_ms(result.stdout)
     except Exception:
         ping_success = False
 
@@ -88,10 +92,51 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
             device.ping_down_since = now
         if _delay_elapsed(device.ping_down_since, now, delay_minutes):
             device.status = DeviceStatus.offline
+    _record_ping_metric(db, device, now=now, success=ping_success, latency_ms=latency_ms)
     db.flush()
     _recompute_parent_rollup(db, device)
     db.flush()
     return device, None, ping_success
+
+
+def _extract_latency_ms(output: str) -> float | None:
+    """Extract ping latency in milliseconds from ping output."""
+    match = re.search(r"time[=<]\s*([0-9.]+)\s*ms", output or "")
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _record_ping_metric(
+    db: Session,
+    device: NetworkDevice,
+    *,
+    now: datetime,
+    success: bool,
+    latency_ms: float | None,
+) -> None:
+    """Store ping status history for trend/last-N badges.
+
+    `MetricType.custom` with unit=`ping_ms` records successful latency;
+    failures use value `-1` with unit=`ping_timeout`.
+    """
+    if device.id is None:
+        return
+    metric_value = int(round(latency_ms)) if (success and latency_ms is not None) else (-1 if not success else 0)
+    metric_unit = "ping_ms" if success else "ping_timeout"
+    db.add(
+        DeviceMetric(
+            device_id=device.id,
+            interface_id=None,
+            metric_type=MetricType.custom,
+            value=metric_value,
+            unit=metric_unit,
+            recorded_at=now,
+        )
+    )
 
 
 def snmp_check_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str | None]:

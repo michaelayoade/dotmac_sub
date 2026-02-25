@@ -30,9 +30,25 @@ from app.models.network_monitoring import (
     NetworkDevice,
     PopSite,
 )
+from app.models.catalog import NasConfigBackup, NasDevice
 from app.services import network as network_service
 
 logger = logging.getLogger(__name__)
+
+
+def _format_uptime_short(seconds: int | None) -> str | None:
+    if seconds is None:
+        return None
+    if seconds < 0:
+        return None
+    days, rem = divmod(int(seconds), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -559,6 +575,7 @@ def list_page_data(
         )
 
     devices = db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all()
+    device_ids = [device.id for device in devices]
     pop_sites = pop_sites_for_forms(db)
     child_impacts: dict[str, dict[str, int | bool]] = {}
     parent_ids = [device.id for device in devices]
@@ -585,6 +602,99 @@ def list_page_data(
             bucket["impacted"] = bool(
                 int(bucket["offline"]) > 0 or int(bucket["degraded"]) > 0
             )
+
+    uptime_map: dict[str, str | None] = {}
+    ping_history_map: dict[str, list[dict[str, object]]] = {}
+    backup_map: dict[str, dict[str, object | None]] = {}
+    if device_ids:
+        latest_uptime_subq = (
+            select(
+                DeviceMetric.device_id,
+                func.max(DeviceMetric.recorded_at).label("latest"),
+            )
+            .where(DeviceMetric.device_id.in_(device_ids))
+            .where(DeviceMetric.metric_type == MetricType.uptime)
+            .group_by(DeviceMetric.device_id)
+            .subquery()
+        )
+        latest_uptime_metrics = db.scalars(
+            select(DeviceMetric)
+            .join(
+                latest_uptime_subq,
+                and_(
+                    DeviceMetric.device_id == latest_uptime_subq.c.device_id,
+                    DeviceMetric.recorded_at == latest_uptime_subq.c.latest,
+                ),
+            )
+            .where(DeviceMetric.metric_type == MetricType.uptime)
+        ).all()
+        for metric in latest_uptime_metrics:
+            uptime_map[str(metric.device_id)] = _format_uptime_short(metric.value)
+
+        recent_ping_metrics = db.scalars(
+            select(DeviceMetric)
+            .where(DeviceMetric.device_id.in_(device_ids))
+            .where(DeviceMetric.metric_type == MetricType.custom)
+            .where(DeviceMetric.unit.in_(["ping_ms", "ping_timeout"]))
+            .order_by(DeviceMetric.recorded_at.desc())
+            .limit(2000)
+        ).all()
+        for metric in recent_ping_metrics:
+            key = str(metric.device_id)
+            bucket = ping_history_map.setdefault(key, [])
+            if len(bucket) >= 5:
+                continue
+            ok = metric.unit == "ping_ms" and metric.value >= 0
+            bucket.append(
+                {
+                    "ok": ok,
+                    "label": f"{metric.value}ms" if ok else "Timeout",
+                    "recorded_at": metric.recorded_at,
+                }
+            )
+
+        nas_devices = db.scalars(
+            select(NasDevice).where(NasDevice.network_device_id.in_(device_ids))
+        ).all()
+        nas_by_network_id = {str(n.network_device_id): n for n in nas_devices if n.network_device_id}
+        nas_ids = [n.id for n in nas_devices]
+        latest_backup_by_nas_id: dict[UUID, NasConfigBackup] = {}
+        if nas_ids:
+            latest_backup_subq = (
+                select(
+                    NasConfigBackup.nas_device_id,
+                    func.max(NasConfigBackup.created_at).label("latest"),
+                )
+                .where(NasConfigBackup.nas_device_id.in_(nas_ids))
+                .group_by(NasConfigBackup.nas_device_id)
+                .subquery()
+            )
+            latest_backups = db.scalars(
+                select(NasConfigBackup)
+                .join(
+                    latest_backup_subq,
+                    and_(
+                        NasConfigBackup.nas_device_id == latest_backup_subq.c.nas_device_id,
+                        NasConfigBackup.created_at == latest_backup_subq.c.latest,
+                    ),
+                )
+            ).all()
+            latest_backup_by_nas_id = {backup.nas_device_id: backup for backup in latest_backups}
+
+        for device in devices:
+            device_key = str(device.id)
+            nas_device = nas_by_network_id.get(device_key)
+            latest_backup = latest_backup_by_nas_id.get(nas_device.id) if nas_device else None
+            status = "none"
+            if latest_backup:
+                notes = (latest_backup.notes or "").lower()
+                status = "failed" if ("fail" in notes or "error" in notes) else "success"
+            elif nas_device and nas_device.backup_enabled:
+                status = "stale"
+            backup_map[device_key] = {
+                "status": status,
+                "last_backup_at": latest_backup.created_at if latest_backup else None,
+            }
     stats = {
         "total": len(devices),
         "core": sum(1 for d in devices if d.role.value == "core"),
@@ -602,6 +712,9 @@ def list_page_data(
         "pop_site_filter": pop_site_filter or "all",
         "search_filter": search_filter,
         "child_impacts": child_impacts,
+        "uptime_map": uptime_map,
+        "ping_history_map": ping_history_map,
+        "backup_map": backup_map,
     }
 
 
@@ -764,6 +877,23 @@ def detail_page_data(
         rx_metric = metrics_by_type.get(MetricType.rx_bps)
         tx_metric = metrics_by_type.get(MetricType.tx_bps)
 
+    ping_history_metrics = db.scalars(
+        select(DeviceMetric)
+        .where(DeviceMetric.device_id == device.id)
+        .where(DeviceMetric.metric_type == MetricType.custom)
+        .where(DeviceMetric.unit.in_(["ping_ms", "ping_timeout"]))
+        .order_by(DeviceMetric.recorded_at.desc())
+        .limit(10)
+    ).all()
+    ping_history = [
+        {
+            "ok": metric.unit == "ping_ms" and metric.value >= 0,
+            "label": f"{metric.value}ms" if (metric.unit == "ping_ms" and metric.value >= 0) else "Timeout",
+            "recorded_at": metric.recorded_at,
+        }
+        for metric in ping_history_metrics
+    ]
+
     return {
         "device": device,
         "interfaces": interfaces,
@@ -781,6 +911,7 @@ def detail_page_data(
             "tx": format_bps(tx_metric.value) if tx_metric else "--",
             "last_seen": device.last_ping_at or device.last_snmp_at,
         },
+        "ping_history": ping_history,
     }
 
 
