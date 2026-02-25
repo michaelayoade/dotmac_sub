@@ -88,11 +88,25 @@
                     <div>
                         <label for="pop_site_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">POP Site</label>
                         <select name="pop_site_id" id="pop_site_id"
+                            hx-get="/admin/network/core-devices/parent-options"
+                            hx-target="#parent-device-id"
+                            hx-trigger="change"
+                            hx-include="[name='pop_site_id'], [name='current_device_id'], [name='parent_device_id']"
+                            hx-swap="innerHTML"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">No site assigned</option>
                             {% for site in pop_sites %}
-                            <option value="{{ site.id }}" {% if device and device.pop_site_id == site.id %}selected{% endif %}>{{ site.name }} ({{ site.code or 'No code' }})</option>
+                            <option value="{{ site.id }}" {% if selected_pop_site_id and selected_pop_site_id == site.id|string %}selected{% elif device and device.pop_site_id == site.id %}selected{% endif %}>{{ site.name }} ({{ site.code or 'No code' }})</option>
                             {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="parent_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Parent Device</label>
+                        <input type="hidden" name="current_device_id" value="{{ current_device_id or '' }}">
+                        <select name="parent_device_id" id="parent-device-id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set selected_parent_id = (device.parent_device_id|string) if device and device.parent_device_id else '' %}
+                            {% include "admin/network/core-devices/_parent_options.html" %}
                         </select>
                     </div>
 
@@ -161,6 +175,21 @@
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable SNMP Monitoring</span>
                         </label>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Collect metrics via SNMP.</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="send_notifications" value="true" {% if not device or device.send_notifications %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Send Notifications</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Alert notifications for this device.</p>
+                    </div>
+                    <div>
+                        <label for="notification_delay_minutes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notification Delay (minutes)</label>
+                        <input type="number" name="notification_delay_minutes" id="notification_delay_minutes" min="0" max="10080"
+                            value="{{ device.notification_delay_minutes if device and device.notification_delay_minutes is not none else 0 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Suppresses transient down alerts until the delay window is exceeded.</p>
                     </div>
                 </div>
 

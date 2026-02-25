@@ -168,26 +168,26 @@ Shows the bottom of the IPv6 networks list with entries 25-30: "CSS IPv6 Range",
 
 ### 6.1 Network Sites Management
 
-- [ ] **Add Network Sites module** -- Create a dedicated "Network Sites" section under Networking that represents physical locations (towers, POPs, data centers, cabinets). Each site should have: title, description, partner/organization assignment, location reference, full physical address, GPS coordinates with embedded map view (OpenStreetMap/Leaflet), and contact details (name, email, phone, additional notes).
-- [ ] **Site-to-hardware relationship** -- Link hardware devices to network sites so operators can view all equipment at a given physical location. Include a "Hardware" tab on each site detail page showing filtered devices with their ping/SNMP status.
-- [ ] **Site-to-customer-services mapping** -- Add a "Customer Services" tab on network sites showing all subscribers served from that site, enabling impact analysis when a site goes down.
-- [ ] **Site map tab** -- Add a "Map" tab per network site showing the site's GPS location on an interactive map with surrounding subscriber/device markers.
-- [ ] **Site photo gallery** -- Allow operators to upload and manage photos of network sites (tower photos, cabinet photos, installation shots) for field reference.
-- [ ] **Site document management** -- Attach documents to network sites (lease agreements, permits, site surveys, as-built drawings) with file upload and categorization.
-- [ ] **Multi-contact support per site** -- Store multiple contact persons per network site with name, phone, and role information for site access and escalation.
+- [x] **Add Network Sites module** -- Create a dedicated "Network Sites" section under Networking that represents physical locations (towers, POPs, data centers, cabinets). Each site should have: title, description, partner/organization assignment, location reference, full physical address, GPS coordinates with embedded map view (OpenStreetMap/Leaflet), and contact details (name, email, phone, additional notes).
+- [x] **Site-to-hardware relationship** -- Link hardware devices to network sites so operators can view all equipment at a given physical location. Include a "Hardware" tab on each site detail page showing filtered devices with their ping/SNMP status.
+- [x] **Site-to-customer-services mapping** -- Add a "Customer Services" tab on network sites showing all subscribers served from that site, enabling impact analysis when a site goes down.
+- [x] **Site map tab** -- Add a "Map" tab per network site showing the site's GPS location on an interactive map with surrounding subscriber/device markers.
+- [x] **Site photo gallery** -- Allow operators to upload and manage photos of network sites (tower photos, cabinet photos, installation shots) for field reference.
+- [x] **Site document management** -- Attach documents to network sites (lease agreements, permits, site surveys, as-built drawings) with file upload and categorization.
+- [x] **Multi-contact support per site** -- Store multiple contact persons per network site with name, phone, and role information for site access and escalation.
 
 ### 6.2 Router / NAS Device Management
 
-- [ ] **Enhanced NAS device form** -- Extend the existing NAS device creation form to include: NAS type dropdown (MikroTik, Ubiquiti, Cisco, Huawei, Other), Vendor/Model free-text field, partner/organization multi-select, location dropdown, physical address, separate NAS IP field distinct from management IP/Host, Authorization type dropdown (PPP/DHCP Radius, Hotspot, None), Accounting type dropdown (Radius accounting, None), and GPS coordinates with map picker.
-- [ ] **Router detail tabbed interface** -- Implement a tabbed detail view for NAS/router devices with tabs: Information, Connection Rules, Vendor-Specific (e.g., MikroTik API), Device Log, Map. This replaces the current flat detail view with a richer, organized interface.
-- [ ] **IP address validation on NAS forms** -- Add real-time IP address format validation on the NAS device form, rejecting invalid octets (e.g., 172.16.300.5) and displaying inline error messages. Also validate that NAS IP is provided when authorization is set to a RADIUS mode.
-- [ ] **MikroTik API integration panel** -- For MikroTik-type NAS devices, add a vendor-specific configuration tab with: Enable API toggle, API login/password, API port (default 8728), "Test API connection" button, and a live status panel showing Platform, Board name, RouterOS Version, CPU usage, IPv6 status, and last status check timestamp.
-- [ ] **Bandwidth shaper configuration** -- Add shaper/QoS configuration per router: Enable Shaper toggle, Shaper target (this router or remote), Shaping type (Simple queue, Queue tree, HTB), Wireless Access-List toggle, Disabled-customers-to-Address-List toggle, and Blocking rules toggle.
-- [ ] **Live bandwidth usage button** -- Add a "Live bandwidth usage" action button on router detail pages that opens a real-time bandwidth monitoring view for the device.
-- [ ] **Router ping status indicator** -- Display a real-time ping badge (green "Reachable X ms" or red "Unreachable") next to the IP/Host field on router detail and list pages.
-- [ ] **RADIUS configuration per router** -- Add a RADIUS section on router detail pages showing: Radius secret, NAS IP, and Pool assignment (with multi-select for IP pools). Include a note: "Use only these pools, if selected (in service set as Any pool)".
-- [ ] **Connection rules tab** -- Add a "Connection rules" tab on router detail pages to define and manage PPPoE/DHCP connection rules, IP assignments, and rate-limit profiles associated with the router.
-- [ ] **Router list filtering** -- Enhance the routers/NAS list page with filters for: Partner, Location, NAS type, online/offline status, and table search.
+- [x] **Enhanced NAS device form** -- Extend the existing NAS device creation form to include: NAS type dropdown (MikroTik, Ubiquiti, Cisco, Huawei, Other), Vendor/Model free-text field, partner/organization multi-select, location dropdown, physical address, separate NAS IP field distinct from management IP/Host, Authorization type dropdown (PPP/DHCP Radius, Hotspot, None), Accounting type dropdown (Radius accounting, None), and GPS coordinates with map picker.
+- [x] **Router detail tabbed interface** -- Implement a tabbed detail view for NAS/router devices with tabs: Information, Connection Rules, Vendor-Specific (e.g., MikroTik API), Device Log, Map. This replaces the current flat detail view with a richer, organized interface.
+- [x] **IP address validation on NAS forms** -- Add real-time IP address format validation on the NAS device form, rejecting invalid octets (e.g., 172.16.300.5) and displaying inline error messages. Also validate that NAS IP is provided when authorization is set to a RADIUS mode.
+- [x] **MikroTik API integration panel** -- For MikroTik-type NAS devices, add a vendor-specific configuration tab with: Enable API toggle, API login/password, API port (default 8728), "Test API connection" button, and a live status panel showing Platform, Board name, RouterOS Version, CPU usage, IPv6 status, and last status check timestamp.
+- [x] **Bandwidth shaper configuration** -- Add shaper/QoS configuration per router: Enable Shaper toggle, Shaper target (this router or remote), Shaping type (Simple queue, Queue tree, HTB), Wireless Access-List toggle, Disabled-customers-to-Address-List toggle, and Blocking rules toggle.
+- [x] **Live bandwidth usage button** -- Add a "Live bandwidth usage" action button on router detail pages that opens a real-time bandwidth monitoring view for the device.
+- [x] **Router ping status indicator** -- Display a real-time ping badge (green "Reachable X ms" or red "Unreachable") next to the IP/Host field on router detail and list pages.
+- [x] **RADIUS configuration per router** -- Add a RADIUS section on router detail pages showing: Radius secret, NAS IP, and Pool assignment (with multi-select for IP pools). Include a note: "Use only these pools, if selected (in service set as Any pool)".
+- [x] **Connection rules tab** -- Add a "Connection rules" tab on router detail pages to define and manage PPPoE/DHCP connection rules, IP assignments, and rate-limit profiles associated with the router.
+- [x] **Router list filtering** -- Enhance the routers/NAS list page with filters for: Partner, Location, NAS type, online/offline status, and table search.
 
 ### 6.3 Hardware / Network Device Inventory
 
@@ -221,9 +221,9 @@ Shows the bottom of the IPv6 networks list with entries 25-30: "CSS IPv6 Range",
 - [ ] **Automated configuration backup system** -- Implement scheduled device configuration backups via SSH with configuration: Enabled toggle, SSH login/password (encrypted at rest using credential_crypto), SSH port, Backup type (Commands/SCP/TFTP), Commands textarea (e.g., "export"), and schedule (hours to backup at, e.g., 2,8,14,20).
 - [ ] **Backup history with download** -- Store backup history per device with: Date/time, Message (IP, timestamp, status), and Operations (download raw config, view formatted config). Support date-range filtering of backup history.
 - [ ] **Configuration comparison/diff** -- Add a "Compare" button that allows selecting two backup snapshots and displaying a side-by-side or unified diff view highlighting configuration changes between versions.
-- [ ] **Test connection and test backup buttons** -- Add "Test connection" (verify SSH connectivity) and "Test backup configuration" (run a test backup) buttons before committing backup schedules, reducing misconfiguration.
-- [ ] **Global backup status overview** -- Create a global "Backups" page under Networking showing all devices with backup status: last backup date, backup message, success/failure status, device type, group, vendor/model, and IP. Allow sorting by last backup date to identify stale backups.
-- [ ] **Backup failure alerts** -- Trigger notifications when scheduled backups fail, allowing operators to address connectivity or credential issues promptly.
+- [x] **Test connection and test backup buttons** -- Add "Test connection" (verify SSH connectivity) and "Test backup configuration" (run a test backup) buttons before committing backup schedules, reducing misconfiguration.
+- [x] **Global backup status overview** -- Create a global "Backups" page under Networking showing all devices with backup status: last backup date, backup message, success/failure status, device type, group, vendor/model, and IP. Allow sorting by last backup date to identify stale backups.
+- [x] **Backup failure alerts** -- Trigger notifications when scheduled backups fail, allowing operators to address connectivity or credential issues promptly.
 
 ### 6.7 IPv4 Network Management (IPAM)
 
@@ -234,32 +234,32 @@ Shows the bottom of the IPv6 networks list with entries 25-30: "CSS IPv6 Range",
 - [ ] **Network categorization** -- Support categorizing networks as: EndNet (end-user subnets), PoolNet (RADIUS/DHCP pools), Management, Point-to-Point, Infrastructure. Allow filtering the list by category.
 - [ ] **Location-based network filtering** -- Filter IPv4 networks by location to quickly find all subnets assigned to a specific POP, city, or region.
 - [ ] **IP address detail view per subnet** -- Click into a subnet to see individual IP address assignments: which IPs are assigned to subscribers, which are reserved, which are available. Show assignment details (subscriber name, service, device).
-- [ ] **Fallback IP range management** -- Support creating "fallback" IP ranges for each location (as seen in Splynx with entries like "Garki Fallback IP", "Lokogoma Fallback IP") that are used when primary pools are exhausted or for temporary assignments.
-- [ ] **IP address conflict detection** -- Detect and alert on overlapping subnets or duplicate IP assignments across the network. Display warnings when adding a network that overlaps with an existing entry.
-- [ ] **Bulk subnet operations** -- Support importing multiple subnets from CSV and bulk-updating network category, location, or type assignments.
+- [x] **Fallback IP range management** -- Support creating "fallback" IP ranges for each location (as seen in Splynx with entries like "Garki Fallback IP", "Lokogoma Fallback IP") that are used when primary pools are exhausted or for temporary assignments.
+- [x] **IP address conflict detection** -- Detect and alert on overlapping subnets or duplicate IP assignments across the network. Display warnings when adding a network that overlaps with an existing entry.
+- [x] **Bulk subnet operations** -- Support importing multiple subnets from CSV and bulk-updating network category, location, or type assignments.
 
 ### 6.8 IPv6 Network Management
 
 - [ ] **IPv6 network management module** -- Create a dedicated IPv6 Networks section under Networking, mirroring the IPv4 module but with IPv6-specific fields: Network address (e.g., 2001:db8::), Prefix length dropdown (showing delegation count, e.g., "/32 = 4,294,967,296 x /64"), Title, Comment, Location, Network category, Network type (EndNet), Type of usage (Static/Dynamic).
-- [ ] **IPv6 subnet calculator** -- Provide an IPv6 subnet calculator button that computes prefix details, delegation breakdowns, and address ranges for the selected prefix length.
-- [ ] **IPv6 utilization tracking** -- Track and display IPv6 prefix utilization (delegated vs. available /48s or /64s) with visual utilization bars in the list view.
-- [ ] **IPv6 network list** -- Display IPv6 networks in a sortable table with columns: ID, Network (IPv6 prefix), Prefix length, Router assignment, Utilization bar, Title, Location, Network type, Network category, and Actions. Support filtering by location and category.
-- [ ] **Dual-stack management view** -- Provide a unified view showing both IPv4 and IPv6 network assignments per location or per subscriber, enabling operators to manage dual-stack deployments cohesively.
+- [x] **IPv6 subnet calculator** -- Provide an IPv6 subnet calculator button that computes prefix details, delegation breakdowns, and address ranges for the selected prefix length.
+- [x] **IPv6 utilization tracking** -- Track and display IPv6 prefix utilization (delegated vs. available /48s or /64s) with visual utilization bars in the list view.
+- [x] **IPv6 network list** -- Display IPv6 networks in a sortable table with columns: ID, Network (IPv6 prefix), Prefix length, Router assignment, Utilization bar, Title, Location, Network type, Network category, and Actions. Support filtering by location and category.
+- [x] **Dual-stack management view** -- Provide a unified view showing both IPv4 and IPv6 network assignments per location or per subscriber, enabling operators to manage dual-stack deployments cohesively.
 
 ### 6.9 Tariff Plans & IP-Based Billing
 
-- [ ] **IP address tariff plans** -- Support creating recurring tariff plans specifically for IP address blocks (/32, /30, /29, /28, etc.) with per-block pricing. Link these to the billing system so subscribers purchasing additional public IPs are automatically billed.
-- [ ] **Subscriber count per plan** -- Display the active subscriber/customer count on each tariff plan in the catalog list, showing plan popularity and enabling capacity planning.
-- [ ] **Device replacement plans** -- Support one-time or recurring "Device Replacement" plans in the catalog for CPE swap fees, hardware upgrades, and similar non-bandwidth charges.
+- [x] **IP address tariff plans** -- Support creating recurring tariff plans specifically for IP address blocks (/32, /30, /29, /28, etc.) with per-block pricing. Link these to the billing system so subscribers purchasing additional public IPs are automatically billed.
+- [x] **Subscriber count per plan** -- Display the active subscriber/customer count on each tariff plan in the catalog list, showing plan popularity and enabling capacity planning.
+- [x] **Device replacement plans** -- Support one-time or recurring "Device Replacement" plans in the catalog for CPE swap fees, hardware upgrades, and similar non-bandwidth charges.
 
 ### 6.10 Additional Networking Features (from Sidebar)
 
-- [ ] **CPE (MikroTik) management** -- Add a dedicated CPE management module for customer-premises equipment, supporting MikroTik devices with remote management via API and Winbox.
-- [ ] **TR-069 (ACS) integration** -- Integrate with TR-069 Auto-Configuration Servers for remote CPE provisioning, firmware updates, and diagnostics (especially for non-MikroTik CPE like fiber ONTs, Wi-Fi routers).
-- [ ] **Network Maps** -- Implement a visual network map module that displays devices on a geographic map with status indicators, allowing operators to see network topology overlaid on real geography.
-- [ ] **SpeedTest results** -- Integrate or log speed test results per subscriber or per link, enabling performance tracking and SLA verification.
-- [ ] **DNS threat monitoring** -- Add a DNS threats module that monitors and reports suspicious DNS queries, blocked domains, and security threats detected at the network edge.
-- [ ] **Network Weathermap** -- Implement a network weathermap visualization showing inter-device link utilization with color-coded bandwidth indicators (green=low, yellow=moderate, red=high), providing a real-time network health overview.
+- [x] **CPE (MikroTik) management** -- Add a dedicated CPE management module for customer-premises equipment, supporting MikroTik devices with remote management via API and Winbox.
+- [x] **TR-069 (ACS) integration** -- Integrate with TR-069 Auto-Configuration Servers for remote CPE provisioning, firmware updates, and diagnostics (especially for non-MikroTik CPE like fiber ONTs, Wi-Fi routers).
+- [x] **Network Maps** -- Implement a visual network map module that displays devices on a geographic map with status indicators, allowing operators to see network topology overlaid on real geography.
+- [x] **SpeedTest results** -- Integrate or log speed test results per subscriber or per link, enabling performance tracking and SLA verification.
+- [x] **DNS threat monitoring** -- Add a DNS threats module that monitors and reports suspicious DNS queries, blocked domains, and security threats detected at the network edge.
+- [x] **Network Weathermap** -- Implement a network weathermap visualization showing inter-device link utilization with color-coded bandwidth indicators (green=low, yellow=moderate, red=high), providing a real-time network health overview.
 
 ---
 

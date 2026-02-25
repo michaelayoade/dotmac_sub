@@ -78,16 +78,24 @@
                     <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
                     {% endfor %}
                 </select>
+                <select name="plan_kind" class="block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-52">
+                    <option value="">All plan kinds</option>
+                    <option value="standard" {% if plan_kind == "standard" %}selected{% endif %}>Standard</option>
+                    <option value="ip_address" {% if plan_kind == "ip_address" %}selected{% endif %}>IP Address</option>
+                    <option value="device_replacement" {% if plan_kind == "device_replacement" %}selected{% endif %}>Device Replacement</option>
+                </select>
                 <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg bg-violet-600 px-4 text-sm font-medium text-white hover:bg-violet-700 sm:w-auto">Filter</button>
             </form>
         </div>
 
         {% if offers %}
         {% call data_table() %}
-            {{ table_head(["Tariff", "Type", "Bandwidth", "Subscriptions", "Status", ""]) }}
+            {{ table_head(["Tariff", "Type", "Plan", "Bandwidth", "Subscriptions", "Status", ""]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for offer in offers %}
                 {% set offer_status = offer.status.value if offer.status is not string and offer.status else (offer.status | default('active')) %}
+                {% set plan_meta = offer_plan_metadata.get(offer.id|string, {}) %}
+                {% set plan_kind_value = plan_meta.get("plan_kind", "standard") %}
                 {% call table_row(offer.id) %}
                     <td class="px-6 py-4 whitespace-nowrap">
                         <a href="/admin/catalog/offers/{{ offer.id }}" class="text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">{{ offer.name }}</a>
@@ -97,6 +105,21 @@
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
                         {{ offer.service_type.value if offer.service_type is not string and offer.service_type else offer.service_type }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                            {% if plan_kind_value == 'ip_address' %}
+                                bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300
+                            {% elif plan_kind_value == 'device_replacement' %}
+                                bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                            {% else %}
+                                bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300
+                            {% endif %}">
+                            {{ plan_kind_value | replace('_', ' ') | title }}
+                        </span>
+                        {% if plan_kind_value == 'ip_address' and plan_meta.get('ip_block_size') %}
+                        <p class="mt-1 text-xs font-mono text-slate-400 dark:text-slate-500">{{ plan_meta.get('ip_block_size') }}</p>
+                        {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-500 dark:text-slate-400">
                         {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
@@ -137,11 +160,11 @@
             <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
             <div class="flex items-center gap-2">
                 {% if page > 1 %}
-                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}"
+                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
                 {% if page < total_pages %}
-                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}"
+                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>

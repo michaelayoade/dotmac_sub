@@ -62,19 +62,45 @@
 
         {# Filter Bar #}
         <div class="mb-4">
-            <form method="get" action="/admin/network/nas" class="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <form method="get" action="/admin/network/nas" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:flex-wrap">
                 <div class="flex-1 min-w-[200px]">
                     <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Search</label>
                     <input type="text" name="search" value="{{ filters.search or '' }}" placeholder="Name, IP, description..."
                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <div class="w-40">
-                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor</label>
-                    <select name="vendor" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">All Vendors</option>
+                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">NAS Type</label>
+                    <select name="nas_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Types</option>
                         {% for v in vendors %}
-                        <option value="{{ v.value }}" {% if filters.vendor == v.value %}selected{% endif %}>{{ v.label }}</option>
+                        <option value="{{ v.value }}" {% if filters.nas_type == v.value %}selected{% endif %}>{{ v.label }}</option>
                         {% endfor %}
+                    </select>
+                </div>
+                <div class="w-44">
+                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Location</label>
+                    <select name="pop_site_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Locations</option>
+                        {% for site in pop_sites %}
+                        <option value="{{ site.id }}" {% if filters.pop_site_id == site.id|string %}selected{% endif %}>{{ site.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="w-44">
+                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Partner</label>
+                    <select name="partner_org_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All Partners</option>
+                        {% for org in organizations %}
+                        <option value="{{ org.id }}" {% if filters.partner_org_id == org.id|string %}selected{% endif %}>{{ org.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="w-40">
+                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Online Status</label>
+                    <select name="online_status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All</option>
+                        <option value="online" {% if filters.online_status == 'online' %}selected{% endif %}>Online</option>
+                        <option value="offline" {% if filters.online_status == 'offline' %}selected{% endif %}>Offline</option>
                     </select>
                 </div>
                 <div class="w-40">
@@ -88,7 +114,7 @@
                 </div>
                 <div class="flex gap-2">
                     <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700">Filter</button>
-                    {% if filters.search or filters.vendor or filters.status %}
+                    {% if filters.search or filters.nas_type or filters.status or filters.pop_site_id or filters.partner_org_id or filters.online_status %}
                     <a href="/admin/network/nas" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700">Clear</a>
                     {% endif %}
                 </div>
@@ -166,12 +192,12 @@
             </p>
             <div class="flex items-center gap-2">
                 {% if pagination.has_prev %}
-                <a href="?page={{ pagination.page - 1 }}{% if filters.vendor %}&vendor={{ filters.vendor }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+                <a href="?page={{ pagination.page - 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.online_status %}&online_status={{ filters.online_status }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
                 <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
                 {% if pagination.has_next %}
-                <a href="?page={{ pagination.page + 1 }}{% if filters.vendor %}&vendor={{ filters.vendor }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}"
+                <a href="?page={{ pagination.page + 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.online_status %}&online_status={{ filters.online_status }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>

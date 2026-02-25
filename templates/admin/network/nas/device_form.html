@@ -233,6 +233,15 @@
                     <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">API Access</h3>
                     <div class="grid gap-4 sm:grid-cols-2">
                         <div class="sm:col-span-2">
+                            {% set api_enabled_val = (form_data.mikrotik_api_enabled if form_data else (enhanced_fields.mikrotik_api_enabled if enhanced_fields else 'false')) %}
+                            <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                                <input type="checkbox" name="mikrotik_api_enabled" value="true"
+                                       {% if api_enabled_val in ['true', 'on', '1', true] %}checked{% endif %}
+                                       class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                                Enable MikroTik API
+                            </label>
+                        </div>
+                        <div class="sm:col-span-2">
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API URL</label>
                             <input type="text" name="api_url" value="{{ device.api_url if device else '' }}"
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
@@ -249,6 +258,13 @@
                             <input type="password" name="api_password" value="{{ device.api_password if device else '' }}"
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="********">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Port</label>
+                            <input type="number" name="mikrotik_api_port"
+                                   value="{{ (form_data.mikrotik_api_port if form_data else (enhanced_fields.mikrotik_api_port if enhanced_fields and enhanced_fields.mikrotik_api_port else 8728)) }}"
+                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="8728">
                         </div>
                         <div class="sm:col-span-2">
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Token (optional)</label>
@@ -380,6 +396,66 @@
             </div>
         </div>
 
+        <!-- Shaper / QoS Settings -->
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Shaper / QoS</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Per-router traffic shaping controls</p>
+            </div>
+            <div class="p-6">
+                {% set shaper_enabled_val = (form_data.shaper_enabled if form_data else (enhanced_fields.shaper_enabled if enhanced_fields else 'false')) %}
+                {% set shaper_target_val = (form_data.shaper_target if form_data else (enhanced_fields.shaper_target if enhanced_fields and enhanced_fields.shaper_target else 'this_router')) %}
+                {% set shaping_type_val = (form_data.shaping_type if form_data else (enhanced_fields.shaping_type if enhanced_fields and enhanced_fields.shaping_type else 'simple_queue')) %}
+                {% set wireless_list_val = (form_data.wireless_access_list if form_data else (enhanced_fields.wireless_access_list if enhanced_fields else 'false')) %}
+                {% set disabled_list_val = (form_data.disabled_customers_address_list if form_data else (enhanced_fields.disabled_customers_address_list if enhanced_fields else 'false')) %}
+                {% set blocking_rules_val = (form_data.blocking_rules_enabled if form_data else (enhanced_fields.blocking_rules_enabled if enhanced_fields else 'false')) %}
+
+                <div class="flex items-center gap-3 mb-4">
+                    <input type="checkbox" name="shaper_enabled" value="true"
+                           {% if shaper_enabled_val in ['true', 'on', '1', true] %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable shaper</label>
+                </div>
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Shaper target</label>
+                        <select name="shaper_target" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="this_router" {% if shaper_target_val == 'this_router' %}selected{% endif %}>This router</option>
+                            <option value="remote_router" {% if shaper_target_val == 'remote_router' %}selected{% endif %}>Remote router</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Shaping type</label>
+                        <select name="shaping_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="simple_queue" {% if shaping_type_val == 'simple_queue' %}selected{% endif %}>Simple queue</option>
+                            <option value="queue_tree" {% if shaping_type_val == 'queue_tree' %}selected{% endif %}>Queue tree</option>
+                            <option value="htb" {% if shaping_type_val == 'htb' %}selected{% endif %}>HTB</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-4 grid gap-3 sm:grid-cols-3">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="wireless_access_list" value="true"
+                               {% if wireless_list_val in ['true', 'on', '1', true] %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Wireless Access-List
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="disabled_customers_address_list" value="true"
+                               {% if disabled_list_val in ['true', 'on', '1', true] %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Disabled customers list
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="blocking_rules_enabled" value="true"
+                               {% if blocking_rules_val in ['true', 'on', '1', true] %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Blocking rules
+                    </label>
+                </div>
+            </div>
+        </div>
+
         <!-- Additional Information -->
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -501,6 +577,7 @@ if (mapEl && window.L) {
 const form = document.querySelector('form');
 const ipAddressInput = document.getElementById('ip_address');
 const nasIpInput = document.getElementById('nas_ip');
+const authorizationTypeInput = document.querySelector('select[name="authorization_type"]');
 const ipAddressError = document.getElementById('ip_address_error');
 const nasIpError = document.getElementById('nas_ip_error');
 const radiusTypes = new Set(['pppoe', 'ipoe', 'hotspot']);
@@ -526,7 +603,8 @@ function validateNasForm() {
     }
 
     const connTypes = selectedConnTypes();
-    const requiresNasIp = connTypes.some((value) => radiusTypes.has(value));
+    const authType = authorizationTypeInput?.value || '';
+    const requiresNasIp = connTypes.some((value) => radiusTypes.has(value)) || authType === 'ppp_dhcp_radius';
     const nasIpValue = nasIpInput.value.trim();
     if (nasIpValue && !validateIpv4(nasIpValue)) {
         nasIpError.textContent = 'Enter a valid IPv4 NAS IP.';
@@ -556,5 +634,6 @@ nasIpInput?.addEventListener('input', validateNasForm);
 document.querySelectorAll('input[name^="conn_type_"]').forEach((el) => {
     el.addEventListener('change', validateNasForm);
 });
+authorizationTypeInput?.addEventListener('change', validateNasForm);
 </script>
 {% endblock %}

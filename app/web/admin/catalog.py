@@ -43,13 +43,14 @@ def _get_actor_id(request: Request) -> str | None:
 def catalog_overview(
     request: Request,
     status: str | None = None,
+    plan_kind: str | None = None,
     search: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     page_data = web_catalog_offers_service.overview_page_data(
-        db, status=status, search=search, page=page, per_page=per_page
+        db, status=status, plan_kind=plan_kind, search=search, page=page, per_page=per_page
     )
     catalog_stats = web_catalog_offers_service.dashboard_stats(db)
     context = _base_context(request, db, active_page="catalog")
@@ -161,10 +162,18 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
         limit=50,
         offset=0,
     )
+    plan_meta, cleaned_description = web_catalog_offers_service.parse_offer_description_metadata(
+        offer.description
+    )
+    plan_kind = str(plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD)
+    ip_block_size = plan_meta.get("ip_block_size")
 
     context = _base_context(request, db, active_page="catalog")
     context.update({
         "offer": offer,
+        "offer_clean_description": cleaned_description,
+        "offer_plan_kind": plan_kind,
+        "offer_ip_block_size": ip_block_size,
         "prices": prices,
         "subscriptions": subscriptions,
         "activities": build_audit_activities(db, "catalog_offer", str(offer_id), limit=10),

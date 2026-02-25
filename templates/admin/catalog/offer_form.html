@@ -139,6 +139,30 @@
                             {% endfor %}
                         </select>
                     </div>
+
+                    <div>
+                        <label for="plan_kind" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Plan Kind</label>
+                        <select name="plan_kind" id="plan_kind"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in plan_kinds %}
+                            <option value="{{ item }}" {% if offer.plan_kind == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="ip_block_size" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Block Size</label>
+                        <select name="ip_block_size" id="ip_block_size"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for item in ip_block_sizes %}
+                            <option value="{{ item }}" {% if offer.ip_block_size == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required when Plan Kind is IP Address.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -146,13 +170,23 @@
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Pricing</h2>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Set the recurring tariff price for billing.</p>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure recurring or one-time pricing used by subscription billing.</p>
             </div>
             <div class="p-6 space-y-6">
                 <input type="hidden" name="price_id" value="{{ offer.price_id }}">
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
-                        <label for="price_amount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Recurring Amount <span class="text-red-500">*</span></label>
+                        <label for="price_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Price Type</label>
+                        <select name="price_type" id="price_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for item in price_types %}
+                            <option value="{{ item }}" {% if offer.price_type == item %}selected{% endif %}>{{ item | replace("_", " ") | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="price_amount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Price Amount <span class="text-red-500">*</span></label>
                         <input type="number" name="price_amount" id="price_amount" step="0.01" min="0" required
                             value="{{ offer.price_amount }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">

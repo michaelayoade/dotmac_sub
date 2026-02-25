@@ -42,6 +42,15 @@
                             </dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Plan Kind</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ offer_plan_kind | replace('_', ' ') | title }}
+                                {% if offer_plan_kind == 'ip_address' and offer_ip_block_size %}
+                                <span class="ml-2 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 font-mono text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ offer_ip_block_size }}</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Access Type</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.access_type.value | replace('_', ' ') | title }}</dd>
                         </div>
@@ -110,10 +119,10 @@
                                 {% endif %}
                             </dd>
                         </div>
-                        {% if offer.description %}
+                        {% if offer_clean_description %}
                         <div class="sm:col-span-2">
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Description</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.description }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer_clean_description }}</dd>
                         </div>
                         {% endif %}
                     </dl>

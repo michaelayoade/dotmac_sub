@@ -60,6 +60,7 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
         return device, "Management IP is missing.", False
 
     ping_success = False
+    now = datetime.now(UTC)
     try:
         result = subprocess.run(
             _build_ping_command(device.mgmt_ip),
@@ -72,9 +73,23 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
     except Exception:
         ping_success = False
 
-    device.last_ping_at = datetime.now(UTC)
+    device.last_ping_at = now
     device.last_ping_ok = ping_success
-    device.status = DeviceStatus.online if ping_success else DeviceStatus.offline
+    delay_minutes = max(0, int(device.notification_delay_minutes or 0))
+    if ping_success:
+        device.ping_down_since = None
+        # Keep degraded when SNMP is still down, otherwise mark online.
+        if device.snmp_enabled and device.last_snmp_ok is False:
+            device.status = DeviceStatus.degraded
+        else:
+            device.status = DeviceStatus.online
+    else:
+        if device.ping_down_since is None:
+            device.ping_down_since = now
+        if _delay_elapsed(device.ping_down_since, now, delay_minutes):
+            device.status = DeviceStatus.offline
+    db.flush()
+    _recompute_parent_rollup(db, device)
     db.flush()
     return device, None, ping_success
 
@@ -88,12 +103,23 @@ def snmp_check_device(db: Session, device_id: str) -> tuple[NetworkDevice | None
     if not device:
         return None, "Device not found."
 
+    now = datetime.now(UTC)
+    delay_minutes = max(0, int(device.notification_delay_minutes or 0))
     if not device.snmp_enabled:
         return device, None
 
     if not device.mgmt_ip and not device.hostname:
-        device.last_snmp_at = datetime.now(UTC)
+        device.last_snmp_at = now
         device.last_snmp_ok = False
+        if device.snmp_down_since is None:
+            device.snmp_down_since = now
+        if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
+            if device.ping_enabled and device.last_ping_ok is False:
+                device.status = DeviceStatus.offline
+            elif device.status != DeviceStatus.offline:
+                device.status = DeviceStatus.degraded
+        db.flush()
+        _recompute_parent_rollup(db, device)
         db.flush()
         return device, None
 
@@ -101,12 +127,28 @@ def snmp_check_device(db: Session, device_id: str) -> tuple[NetworkDevice | None
         from app.services.snmp_discovery import _run_snmpwalk
 
         _run_snmpwalk(device, ".1.3.6.1.2.1.1.3.0", timeout=8)
-        device.last_snmp_at = datetime.now(UTC)
+        device.last_snmp_at = now
         device.last_snmp_ok = True
+        device.snmp_down_since = None
+        if device.status == DeviceStatus.degraded and (
+            not device.ping_enabled or device.last_ping_ok is not False
+        ):
+            device.status = DeviceStatus.online
+        db.flush()
+        _recompute_parent_rollup(db, device)
         db.flush()
     except Exception:
-        device.last_snmp_at = datetime.now(UTC)
+        device.last_snmp_at = now
         device.last_snmp_ok = False
+        if device.snmp_down_since is None:
+            device.snmp_down_since = now
+        if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
+            if device.ping_enabled and device.last_ping_ok is False:
+                device.status = DeviceStatus.offline
+            elif device.status != DeviceStatus.offline:
+                device.status = DeviceStatus.degraded
+        db.flush()
+        _recompute_parent_rollup(db, device)
         db.flush()
 
     return device, None
@@ -161,9 +203,68 @@ def snmp_debug_device(db: Session, device_id: str) -> SnmpDebugResult:
 
 def mark_discovery_failure(db: Session, device: NetworkDevice) -> None:
     """Mark device SNMP as failed and flush."""
-    device.last_snmp_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    delay_minutes = max(0, int(device.notification_delay_minutes or 0))
+    device.last_snmp_at = now
     device.last_snmp_ok = False
+    if device.snmp_down_since is None:
+        device.snmp_down_since = now
+    if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
+        if device.ping_enabled and device.last_ping_ok is False:
+            device.status = DeviceStatus.offline
+        elif device.status != DeviceStatus.offline:
+            device.status = DeviceStatus.degraded
     db.flush()
+    _recompute_parent_rollup(db, device)
+    db.flush()
+
+
+def _delay_elapsed(down_since: datetime | None, now: datetime, delay_minutes: int) -> bool:
+    if delay_minutes <= 0:
+        return True
+    if down_since is None:
+        return False
+    if down_since.tzinfo is None:
+        down_since = down_since.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return (now - down_since).total_seconds() >= (delay_minutes * 60)
+
+
+def _recompute_parent_rollup(db: Session, device: NetworkDevice) -> None:
+    """Propagate child impact statuses up the parent chain."""
+    parent_id = device.parent_device_id
+    if parent_id is None and device.id is not None:
+        parent_id = db.scalars(
+            select(NetworkDevice.parent_device_id).where(NetworkDevice.id == device.id)
+        ).first()
+    visited_ids: set[object] = set()
+    while parent_id and parent_id not in visited_ids:
+        parent = db.get(NetworkDevice, parent_id)
+        if not parent:
+            break
+        visited_ids.add(parent.id)
+        child_statuses = list(
+            db.scalars(
+                select(NetworkDevice.status)
+                .where(NetworkDevice.parent_device_id == parent.id)
+                .where(NetworkDevice.is_active.is_(True))
+            ).all()
+        )
+        has_child_impact = any(
+            status in {DeviceStatus.offline, DeviceStatus.degraded}
+            for status in child_statuses
+        )
+        if parent.status != DeviceStatus.offline:
+            if has_child_impact:
+                parent.status = DeviceStatus.degraded
+            elif (
+                parent.status == DeviceStatus.degraded
+                and parent.ping_down_since is None
+                and (not parent.snmp_enabled or parent.snmp_down_since is None)
+            ):
+                parent.status = DeviceStatus.online
+        parent_id = parent.parent_device_id
 
 
 def get_device(db: Session, device_id: str) -> NetworkDevice | None:

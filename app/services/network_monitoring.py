@@ -316,6 +316,8 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
             if existing:
                 existing.measured_value = float(metric.value)
                 continue
+            if not _can_create_alert_for_metric(db, rule, metric):
+                continue
             alert = Alert(
                 rule_id=rule.id,
                 device_id=metric.device_id,
@@ -354,6 +356,63 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
                 notification_service.alert_notification_policies.emit_for_alert(
                     db, existing, AlertStatus.resolved
                 )
+
+
+def _can_create_alert_for_metric(db: Session, rule: AlertRule, metric: DeviceMetric) -> bool:
+    """Return whether a new alert should be opened for this metric sample."""
+    if not metric.device_id:
+        return True
+    device = db.get(NetworkDevice, metric.device_id)
+    if not device:
+        return True
+    if not device.send_notifications:
+        return False
+    delay_minutes = max(0, int(device.notification_delay_minutes or 0))
+    if delay_minutes == 0:
+        return True
+    if metric.metric_type != MetricType.uptime:
+        return True
+    return _delay_window_violated(db, rule, metric, delay_minutes)
+
+
+def _delay_window_violated(
+    db: Session,
+    rule: AlertRule,
+    metric: DeviceMetric,
+    delay_minutes: int,
+) -> bool:
+    """Check whether violation has persisted long enough to pass delay gate."""
+    metric_recorded_at = _as_utc(metric.recorded_at)
+    if not metric_recorded_at:
+        return False
+    window = timedelta(minutes=delay_minutes)
+    # Walk recent samples backwards and find start of the current violation streak.
+    query = (
+        db.query(DeviceMetric)
+        .filter(DeviceMetric.metric_type == metric.metric_type)
+        .filter(DeviceMetric.device_id == metric.device_id)
+        .filter(DeviceMetric.recorded_at <= metric_recorded_at)
+    )
+    if metric.interface_id is None:
+        query = query.filter(DeviceMetric.interface_id.is_(None))
+    else:
+        query = query.filter(DeviceMetric.interface_id == metric.interface_id)
+    query = query.order_by(DeviceMetric.recorded_at.desc()).limit(500)
+
+    samples = query.all()
+    if not samples:
+        return False
+
+    streak_start = metric_recorded_at
+    for sample in samples:
+        sample_recorded_at = _as_utc(sample.recorded_at)
+        if sample_recorded_at is None:
+            continue
+        if not _operator_check(rule.operator, float(sample.value), float(rule.threshold)):
+            break
+        streak_start = sample_recorded_at
+
+    return (metric_recorded_at - streak_start) >= window
 
 
 class PopSites(ListResponseMixin):

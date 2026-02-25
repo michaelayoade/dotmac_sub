@@ -91,6 +91,18 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pop_site.code or '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Organization</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ pop_site.organization.name if pop_site.organization else '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Partner</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ pop_site.reseller.name if pop_site.reseller else '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Location Reference</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ pop_site.zone.name if pop_site.zone else '-' }}</dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Devices</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ devices | length }}</dd>
                         </div>

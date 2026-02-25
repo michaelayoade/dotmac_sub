@@ -22,6 +22,7 @@ from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import build_changes_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -857,6 +858,10 @@ def process_payment_create(
         "resolved_invoice": resolved_invoice,
         "balance_value": balance_value,
         "balance_display": balance_display,
+        "audit_metadata": {
+            "amount": str(payment.amount),
+            "invoice_id": payment_primary_invoice_id(payment),
+        },
     }
 
 
@@ -905,4 +910,8 @@ def process_payment_update(
             requested_invoice_id=requested_invoice_id,
         )
     after = billing_service.payments.get(db=db, payment_id=payment_id)
-    return {"before": before, "after": after}
+    return {
+        "before": before,
+        "after": after,
+        "audit_metadata": build_changes_metadata(before, after),
+    }

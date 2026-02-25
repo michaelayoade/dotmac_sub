@@ -22,6 +22,7 @@ from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import numbering
 from app.services.audit_helpers import extract_changes, format_changes
+from app.services.audit_helpers import build_changes_metadata
 
 logger = logging.getLogger(__name__)
 PROFORMA_TAG = "[PROFORMA]"
@@ -254,6 +255,174 @@ def maybe_send_invoice_notification(db: Session, *, invoice, send_notification: 
         body_html=body_html,
         activity="billing_invoice",
     )
+
+
+def create_invoice_from_form(
+    db: Session,
+    *,
+    account_id: str | None,
+    customer_ref: str | None,
+    invoice_number: str | None,
+    status: str | None,
+    currency: str,
+    issued_at: str | None,
+    due_at: str | None,
+    memo: str | None,
+    proforma_invoice: str | None,
+    line_description: list[str],
+    line_quantity: list[str],
+    line_unit_price: list[str],
+    line_tax_rate_id: list[str],
+    line_items_json: str | None,
+    issue_immediately: str | None,
+    send_notification: str | None,
+    parse_uuid,
+    parse_datetime,
+    parse_decimal,
+) -> tuple[Invoice, str | None]:
+    """Process invoice-create web form and return created invoice."""
+    resolved_account_id = account_id
+    if not resolved_account_id and customer_ref:
+        customer_accounts = web_billing_customers_service.accounts_for_customer(db, customer_ref)
+        if len(customer_accounts) == 1:
+            resolved_account_id = str(customer_accounts[0]["id"])
+        elif len(customer_accounts) > 1:
+            raise ValueError("Please select a billing account for the selected customer.")
+        else:
+            raise ValueError("No billing account found for the selected customer.")
+
+    invoice_number, memo = apply_proforma_form_values(
+        invoice_number=invoice_number,
+        memo=memo,
+        proforma_invoice=bool(proforma_invoice),
+    )
+    payload_data = build_invoice_payload_data(
+        account_id=parse_uuid(resolved_account_id, "account_id"),
+        invoice_number=invoice_number,
+        status=status,
+        currency=currency,
+        issued_at=parse_datetime(issued_at),
+        due_at=parse_datetime(due_at),
+        memo=memo,
+        is_proforma=bool(proforma_invoice),
+    )
+    payload = InvoiceCreate.model_validate(payload_data)
+    invoice = billing_service.invoices.create(db=db, payload=payload)
+
+    line_items = parse_create_line_items(
+        line_items_json=line_items_json,
+        line_description=line_description,
+        line_quantity=line_quantity,
+        line_unit_price=line_unit_price,
+        line_tax_rate_id=line_tax_rate_id,
+        parse_decimal=parse_decimal,
+    )
+    create_invoice_lines(
+        db,
+        invoice_id=invoice.id,
+        line_items=line_items,
+    )
+    issued_invoice = maybe_issue_invoice(
+        db,
+        invoice_id=invoice.id,
+        issue_immediately=issue_immediately,
+    )
+    if issued_invoice:
+        invoice = issued_invoice
+    maybe_send_invoice_notification(
+        db,
+        invoice=invoice,
+        send_notification=send_notification,
+    )
+    return invoice, resolved_account_id
+
+
+def update_invoice_from_form(
+    db: Session,
+    *,
+    invoice_id: str,
+    account_id: str | None,
+    invoice_number: str | None,
+    status: str | None,
+    currency: str,
+    issued_at: str | None,
+    due_at: str | None,
+    memo: str | None,
+    proforma_invoice: str | None,
+    line_items_json: str | None,
+    parse_uuid,
+    parse_datetime,
+) -> tuple[Invoice, dict[str, object] | None]:
+    """Process invoice-update web form and return updated invoice + audit metadata."""
+    before = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    invoice_number, memo = apply_proforma_form_values(
+        invoice_number=invoice_number,
+        memo=memo,
+        proforma_invoice=bool(proforma_invoice),
+    )
+    payload_data = build_invoice_payload_data(
+        account_id=parse_uuid(account_id, "account_id"),
+        invoice_number=invoice_number,
+        status=status,
+        currency=currency,
+        issued_at=parse_datetime(issued_at),
+        due_at=parse_datetime(due_at),
+        memo=memo,
+        is_proforma=bool(proforma_invoice),
+    )
+    payload = InvoiceUpdate.model_validate(payload_data)
+    billing_service.invoices.update(db=db, invoice_id=invoice_id, payload=payload)
+    apply_line_items_json_update(
+        db,
+        invoice_id=UUID(invoice_id),
+        before_invoice=before,
+        line_items_json=line_items_json,
+    )
+    after = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    metadata_payload = build_changes_metadata(before, after)
+    return after, metadata_payload
+
+
+def apply_credit_note_to_invoice(
+    db: Session,
+    *,
+    invoice_id: str,
+    credit_note_id: str,
+    amount: Decimal | None,
+    memo: str | None,
+) -> dict[str, object] | None:
+    """Apply credit note to invoice and return audit metadata."""
+    before = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
+    payload = CreditNoteApplyRequest(
+        invoice_id=UUID(invoice_id),
+        amount=amount,
+        memo=memo,
+    )
+    billing_service.credit_notes.apply(db, credit_note_id, payload)
+    after = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
+    return build_changes_metadata(before, after)
+
+
+def create_invoice_line_from_form(
+    db: Session,
+    *,
+    invoice_id: str,
+    description: str,
+    quantity: str,
+    unit_price: str,
+    tax_rate_id: str | None,
+    parse_uuid,
+    parse_decimal,
+) -> None:
+    """Create invoice line from raw web form values."""
+    payload = InvoiceLineCreate(
+        invoice_id=parse_uuid(invoice_id, "invoice_id"),
+        description=description.strip(),
+        quantity=parse_decimal(quantity, "quantity"),
+        unit_price=parse_decimal(unit_price, "unit_price"),
+        tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
+    )
+    billing_service.invoice_lines.create(db, payload)
 
 
 def apply_line_items_json_update(db: Session, *, invoice_id, before_invoice, line_items_json: str | None) -> None:

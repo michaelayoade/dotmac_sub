@@ -106,3 +106,19 @@ def apply_bulk_action(db, *, case_ids_csv: str, action: str) -> list[str]:
         except Exception:
             continue
     return processed
+
+
+def execute_action(
+    db,
+    *,
+    action: str,
+    case_id: str | None = None,
+    case_ids_csv: str | None = None,
+) -> list[str]:
+    """Execute single/bulk dunning action and return processed IDs."""
+    if case_id:
+        apply_case_action(db, case_id=case_id, action=action)
+        return [case_id]
+    if case_ids_csv is not None:
+        return apply_bulk_action(db, case_ids_csv=case_ids_csv, action=action)
+    raise ValueError("case_id or case_ids_csv is required")

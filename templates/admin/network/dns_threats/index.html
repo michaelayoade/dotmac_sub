@@ -1,0 +1,118 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}DNS Threat Monitoring - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("rose", "orange") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="DNS Threat Monitoring",
+        subtitle="Track suspicious DNS queries, blocked domains, and edge security events",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+        color="rose",
+        color2="orange"
+    ) %}
+        <a href="/admin/network/dns-threats/new" class="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Log Threat
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Events</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Blocked</p>
+            <p class="mt-1 text-3xl font-bold text-rose-600 dark:text-rose-400">{{ stats.blocked }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Critical</p>
+            <p class="mt-1 text-3xl font-bold text-red-600 dark:text-red-400">{{ stats.critical }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">High</p>
+            <p class="mt-1 text-3xl font-bold text-orange-600 dark:text-orange-400">{{ stats.high }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/dns-threats" class="grid gap-3 md:grid-cols-6">
+            <div class="md:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <input name="search" value="{{ filters.search }}" placeholder="domain, feed, source IP" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Severity</label>
+                <select name="severity" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for item in severities %}
+                    <option value="{{ item }}" {% if filters.severity == item %}selected{% endif %}>{{ item | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Action</label>
+                <select name="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for item in actions %}
+                    <option value="{{ item }}" {% if filters.action == item %}selected{% endif %}>{{ item | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</label>
+                <select name="subscriber_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for subscriber in subscribers %}
+                    <option value="{{ subscriber.id }}" {% if filters.subscriber_id == subscriber.id|string %}selected{% endif %}>{{ subscriber.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Time</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Domain</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Source</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Category/Feed</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Severity</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% for item in events %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.occurred_at.strftime('%Y-%m-%d %H:%M') if item.occurred_at else '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 font-mono">{{ item.queried_domain }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.source_ip or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.threat_category or '-' }}{% if item.threat_feed %} / {{ item.threat_feed }}{% endif %}</td>
+                    <td class="px-4 py-3 text-sm">
+                        <span class="inline-flex rounded-full px-2 py-1 text-xs font-medium {% if item.severity.value == 'critical' %}bg-red-100 text-red-700{% elif item.severity.value == 'high' %}bg-orange-100 text-orange-700{% elif item.severity.value == 'medium' %}bg-amber-100 text-amber-700{% else %}bg-slate-100 text-slate-700{% endif %}">
+                            {{ item.severity.value | title }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                        <span class="inline-flex rounded-full px-2 py-1 text-xs font-medium {% if item.action.value == 'blocked' %}bg-rose-100 text-rose-700{% elif item.action.value == 'allowed' %}bg-green-100 text-green-700{% else %}bg-blue-100 text-blue-700{% endif %}">
+                            {{ item.action.value | title }}
+                        </span>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500">No DNS threat events recorded.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

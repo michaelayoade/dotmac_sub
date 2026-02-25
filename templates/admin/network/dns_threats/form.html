@@ -1,0 +1,107 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}New DNS Threat Event - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Log DNS Threat Event</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Capture suspicious DNS queries and action outcomes for threat analytics.</p>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            {% if error %}
+            <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">{{ error }}</div>
+            {% endif %}
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div class="sm:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Queried Domain *</label>
+                    <input type="text" name="queried_domain" required value="{{ event.queried_domain or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Query Type</label>
+                    <input type="text" name="query_type" value="{{ event.query_type or '' }}" placeholder="A, AAAA, TXT" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Source IP</label>
+                    <input type="text" name="source_ip" value="{{ event.source_ip or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Destination IP</label>
+                    <input type="text" name="destination_ip" value="{{ event.destination_ip or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Threat Category</label>
+                    <input type="text" name="threat_category" value="{{ event.threat_category or '' }}" placeholder="malware, phishing" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Threat Feed</label>
+                    <input type="text" name="threat_feed" value="{{ event.threat_feed or '' }}" placeholder="abuse.ch" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Severity</label>
+                    <select name="severity" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in severities %}
+                        <option value="{{ item }}" {% if event.severity == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Action</label>
+                    <select name="action" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in actions %}
+                        <option value="{{ item }}" {% if event.action == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Confidence (0-100)</label>
+                    <input type="number" min="0" max="100" step="0.1" name="confidence_score" value="{{ event.confidence_score if event.confidence_score is not none else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
+                    <select name="subscriber_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for subscriber in subscribers %}
+                        <option value="{{ subscriber.id }}" {% if event.subscriber_id == subscriber.id|string %}selected{% endif %}>{{ subscriber.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Device</label>
+                    <select name="network_device_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for device in devices %}
+                        <option value="{{ device.id }}" {% if event.network_device_id == device.id|string %}selected{% endif %}>{{ device.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">POP Site</label>
+                    <select name="pop_site_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for site in pop_sites %}
+                        <option value="{{ site.id }}" {% if event.pop_site_id == site.id|string %}selected{% endif %}>{{ site.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Occurred At</label>
+                    <input type="datetime-local" name="occurred_at" value="{{ event.occurred_at.strftime('%Y-%m-%dT%H:%M') if event.occurred_at else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="sm:col-span-3">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" rows="3" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ event.notes or '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/dns-threats" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700">Save Event</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

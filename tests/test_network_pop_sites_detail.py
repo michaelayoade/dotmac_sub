@@ -1,7 +1,13 @@
 """Tests for POP site detail data enrichment (hardware + customer services)."""
 
+import uuid
+
+from starlette.datastructures import FormData
+
 from app.models.catalog import NasVendor, SubscriptionStatus
+from app.models.network import NetworkZone
 from app.models.stored_file import StoredFile
+from app.models.subscriber import Organization, Reseller
 from app.models.subscriber import Address
 from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
@@ -149,3 +155,57 @@ def test_pop_site_contact_lifecycle_helpers(db_session, pop_site):
     payload = pop_sites_service.detail_page_data(db_session, str(pop_site.id))
     assert payload is not None
     assert len(payload["contacts"]) == 0
+
+
+def test_resolve_site_relationships_assigns_zone_org_and_partner(db_session):
+    zone = NetworkZone(name="Abuja Core", is_active=True)
+    organization = Organization(name="Acme Fiber")
+    reseller = Reseller(name="Metro Partner", is_active=True)
+    db_session.add_all([zone, organization, reseller])
+    db_session.commit()
+
+    values = {
+        "name": "POP Main",
+        "zone_id_raw": str(zone.id),
+        "organization_id_raw": str(organization.id),
+        "reseller_id_raw": str(reseller.id),
+    }
+
+    normalized, error = pop_sites_service.resolve_site_relationships(db_session, values)
+    assert error is None
+    assert normalized is not None
+    assert normalized["zone_id"] == zone.id
+    assert normalized["organization_id"] == organization.id
+    assert normalized["reseller_id"] == reseller.id
+
+
+def test_resolve_site_relationships_rejects_unknown_ids(db_session):
+    values = {
+        "name": "POP Main",
+        "zone_id_raw": str(uuid.uuid4()),
+        "organization_id_raw": "",
+        "reseller_id_raw": "",
+    }
+    normalized, error = pop_sites_service.resolve_site_relationships(db_session, values)
+    assert normalized is None
+    assert error == "Selected location reference was not found."
+
+
+def test_parse_mast_form_supports_add_mast_toggle():
+    form = FormData(
+        {
+            "add_mast": "true",
+            "mast_name": "Mast 1",
+            "mast_latitude": "",
+            "mast_longitude": "",
+            "mast_is_active": "true",
+        }
+    )
+    enabled, payload, error, defaults = pop_sites_service.parse_mast_form(form, 9.08, 8.67)
+    assert enabled is True
+    assert error is None
+    assert payload is not None
+    assert payload["latitude"] == 9.08
+    assert payload["longitude"] == 8.67
+    assert payload["is_active"] is True
+    assert defaults["name"] == "Mast 1"

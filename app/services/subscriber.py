@@ -1,3 +1,6 @@
+import builtins
+from uuid import UUID
+
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
@@ -301,6 +304,35 @@ class Subscribers(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_active_by_ids(
+        db: Session, subscriber_ids: builtins.list[UUID]
+    ) -> builtins.list[Subscriber]:
+        """Return active subscribers whose ids are in the provided list."""
+        if not subscriber_ids:
+            return []
+        return (
+            db.query(Subscriber)
+            .filter(Subscriber.id.in_(subscriber_ids))
+            .filter(Subscriber.is_active.is_(True))
+            .all()
+        )
+
+    @staticmethod
+    def list_active_by_emails(
+        db: Session, emails: builtins.list[str]
+    ) -> builtins.list[Subscriber]:
+        """Return active subscribers matching any email (case-insensitive)."""
+        normalized = [email.strip().lower() for email in emails if email.strip()]
+        if not normalized:
+            return []
+        return (
+            db.query(Subscriber)
+            .filter(func.lower(Subscriber.email).in_(normalized))
+            .filter(Subscriber.is_active.is_(True))
+            .all()
+        )
 
     @staticmethod
     def update(db: Session, subscriber_id: str, payload: SubscriberUpdate):

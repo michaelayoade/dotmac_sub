@@ -18,6 +18,8 @@
 
     <form method="POST" action="{{ action_url }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
+        {% set fallback_from_notes = pool and pool.notes and ('[fallback]' in (pool.notes|lower)) %}
+        {% set fallback_from_field = pool and pool.is_fallback is defined and pool.is_fallback %}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Pool Configuration</h2>
@@ -80,6 +82,47 @@
                     </div>
 
                     <div>
+                        <label for="location" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Location</label>
+                        <input type="text" name="location" id="location" maxlength="120"
+                            value="{{ pool.location if pool else '' }}"
+                            placeholder="POP-A"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="category" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Category</label>
+                        <input type="text" name="category" id="category" maxlength="120"
+                            value="{{ pool.category if pool else '' }}"
+                            placeholder="Production"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="network_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Type</label>
+                        <input type="text" name="network_type" id="network_type" maxlength="120"
+                            value="{{ pool.network_type if pool else '' }}"
+                            placeholder="EndNet"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="router" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Router Assignment</label>
+                        <input type="text" name="router" id="router" maxlength="120"
+                            value="{{ pool.router if pool else '' }}"
+                            placeholder="Core-RTR-1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_fallback" value="true" {% if fallback_from_notes or fallback_from_field %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Fallback Pool</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use this pool as overflow when standard ranges are exhausted.</p>
+                    </div>
+
+                    <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="is_active" value="true" {% if not pool or pool.is_active %}checked{% endif %}
                                 class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
@@ -89,9 +132,13 @@
 
                     <div class="sm:col-span-2">
                         <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        {% set notes_value = pool.notes if pool else '' %}
+                        {% if notes_value %}
+                            {% set notes_value = notes_value | replace('[fallback]', '') | replace('[FALLBACK]', '') %}
+                        {% endif %}
                         <textarea name="notes" id="notes" rows="3"
                             placeholder="Additional notes..."
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ pool.notes if pool else '' }}</textarea>
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ notes_value }}</textarea>
                     </div>
                 </div>
             </div>

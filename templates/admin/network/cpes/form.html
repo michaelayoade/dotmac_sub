@@ -1,0 +1,117 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if cpe.id else 'New' }} CPE - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit CPE' if cpe.id else 'Create CPE' }}</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track subscriber CPE and optional MikroTik API/Winbox metadata.</p>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            {% if error %}
+            <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">{{ error }}</div>
+            {% endif %}
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <div>
+                    <label for="subscriber_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
+                    <select name="subscriber_id" id="subscriber_id" required class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select subscriber</option>
+                        {% for subscriber in subscribers %}
+                        <option value="{{ subscriber.id }}" {% if cpe.subscriber_id|string == subscriber.id|string %}selected{% endif %}>
+                            {{ subscriber.full_name }}{% if subscriber.account_number %} ({{ subscriber.account_number }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="device_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Device Type</label>
+                    <select name="device_type" id="device_type" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in device_types %}
+                        <option value="{{ item }}" {% if cpe.device_type == item %}selected{% endif %}>{{ item | upper }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="subscription_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription</label>
+                    <select name="subscription_id" id="subscription_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for sub in subscriptions %}
+                        <option value="{{ sub.id }}" {% if cpe.subscription_id|string == sub.id|string %}selected{% endif %}>
+                            {{ sub.id }}{% if sub.status %} - {{ sub.status.value | title }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="service_address_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Address</label>
+                    <select name="service_address_id" id="service_address_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for addr in addresses %}
+                        <option value="{{ addr.id }}" {% if cpe.service_address_id|string == addr.id|string %}selected{% endif %}>
+                            {{ addr.address_line1 }}{% if addr.city %}, {{ addr.city }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                    <select name="status" id="status" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in statuses %}
+                        <option value="{{ item }}" {% if cpe.status == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="serial_number" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Number</label>
+                    <input type="text" name="serial_number" id="serial_number" value="{{ cpe.serial_number or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="vendor" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
+                    <input type="text" name="vendor" id="vendor" value="{{ cpe.vendor or '' }}" placeholder="MikroTik" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Model</label>
+                    <input type="text" name="model" id="model" value="{{ cpe.model or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="mac_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
+                    <input type="text" name="mac_address" id="mac_address" value="{{ cpe.mac_address or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="installed_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Installed At</label>
+                    <input type="datetime-local" name="installed_at" id="installed_at" value="{{ cpe.installed_at.strftime('%Y-%m-%dT%H:%M') if cpe.installed_at else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="winbox_host" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Winbox Host</label>
+                    <input type="text" name="winbox_host" id="winbox_host" value="{{ cpe.winbox_host or '' }}" placeholder="192.0.2.10" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="api_host" class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Host</label>
+                    <input type="text" name="api_host" id="api_host" value="{{ cpe.api_host or '' }}" placeholder="192.0.2.10" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="api_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Port</label>
+                    <input type="text" name="api_port" id="api_port" value="{{ cpe.api_port or '' }}" placeholder="8728" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="api_user" class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Username</label>
+                    <input type="text" name="api_user" id="api_user" value="{{ cpe.api_user or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="sm:col-span-2">
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" id="notes" rows="3" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ cpe.notes or '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/cpes" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">{{ 'Save Changes' if cpe.id else 'Create CPE' }}</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from uuid import UUID
 
 from sqlalchemy import case, func
@@ -57,6 +58,41 @@ def build_network_map_context(db: Session) -> dict:
                 "device_count": pop_device_counts.get(pop.id, 0),
             },
         }
+        )
+
+    # Network Devices (anchored at POP coordinates with slight spread)
+    network_devices = (
+        db.query(NetworkDevice, PopSite)
+        .outerjoin(PopSite, NetworkDevice.pop_site_id == PopSite.id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(PopSite.latitude.isnot(None))
+        .filter(PopSite.longitude.isnot(None))
+        .order_by(PopSite.id.asc(), NetworkDevice.name.asc())
+        .all()
+    )
+    for idx, (device, pop_site) in enumerate(network_devices):
+        # Spread markers around the POP to avoid complete overlap.
+        angle = (idx % 12) * (math.pi / 6.0)
+        radius = 0.00008 * (1 + (idx % 3))
+        latitude = float(pop_site.latitude or 0.0) + (math.sin(angle) * radius)
+        longitude = float(pop_site.longitude or 0.0) + (math.cos(angle) * radius)
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [longitude, latitude]},
+                "properties": {
+                    "id": str(device.id),
+                    "type": "network_device",
+                    "name": device.name,
+                    "status": device.status.value if device.status else "unknown",
+                    "role": device.role.value if device.role else None,
+                    "device_type": device.device_type.value if device.device_type else None,
+                    "vendor": device.vendor,
+                    "model": device.model,
+                    "mgmt_ip": device.mgmt_ip,
+                    "pop_site_name": pop_site.name if pop_site else None,
+                },
+            }
         )
 
     # FDH Cabinets
@@ -288,6 +324,18 @@ def build_network_map_context(db: Session) -> dict:
         "customers": customer_total,
         "customers_online": online_count,
         "customers_offline": offline_count,
+        "network_devices": len(network_devices),
+        "network_devices_online": sum(
+            1 for device, _ in network_devices if device.status and device.status.value == "online"
+        ),
+        "network_devices_offline": sum(
+            1 for device, _ in network_devices if device.status and device.status.value == "offline"
+        ),
+        "network_devices_degraded": sum(
+            1
+            for device, _ in network_devices
+            if device.status and device.status.value in {"degraded", "maintenance"}
+        ),
         "survey_points": 0,
     }
 

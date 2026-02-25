@@ -34,14 +34,28 @@
             {% if role_filter %}
             <input type="hidden" name="role" value="{{ role_filter }}">
             {% endif %}
+            <label for="search" class="sr-only">Search</label>
+            <input id="search" name="search" type="search" value="{{ search_filter or '' }}"
+                placeholder="Search name, host, IP, vendor..."
+                class="block w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+            <label for="pop_site_id" class="sr-only">Site</label>
+            <select id="pop_site_id" name="pop_site_id"
+                class="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                <option value="all" {% if pop_site_filter == 'all' %}selected{% endif %}>All Sites</option>
+                {% for site in pop_sites %}
+                <option value="{{ site.id }}" {% if pop_site_filter == site.id|string %}selected{% endif %}>{{ site.name }}</option>
+                {% endfor %}
+            </select>
             <label for="status" class="sr-only">Status</label>
             <select id="status" name="status"
-                onchange="this.form.submit()"
                 class="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
                 <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
                 <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
                 <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
             </select>
+            <button type="submit" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                Apply
+            </button>
         </form>
         <a href="/admin/network/core-devices/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5">
             <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -84,8 +98,11 @@
                 {{ table_head([
                     {"label": "Device"},
                     {"label": "Role"},
+                    {"label": "Site"},
                     {"label": "Vendor / Model"},
                     {"label": "Management IP"},
+                    {"label": "Ping"},
+                    {"label": "SNMP"},
                     {"label": "Status"},
                     {"label": "Actions", "align": "right"}
                 ]) }}
@@ -106,10 +123,20 @@
                             </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% set role_colors = {'core': 'purple', 'distribution': 'blue', 'access': 'green', 'aggregation': 'amber', 'edge': 'cyan', 'cpe': 'slate'} %}
+                            {% set role_badge_classes = {
+                                'core': 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+                                'distribution': 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                                'access': 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+                                'aggregation': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+                                'edge': 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
+                                'cpe': 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400'
+                            } %}
                             {% set role_val = device.role.value if device.role else 'edge' %}
-                            {% set color = role_colors.get(role_val, 'slate') %}
-                            <span class="inline-flex items-center rounded-full bg-{{ color }}-100 px-2.5 py-0.5 text-xs font-medium text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ role_val | title }}</span>
+                            {% set badge_classes = role_badge_classes.get(role_val, 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400') %}
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ badge_classes }}">{{ role_val | title }}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="text-sm text-slate-700 dark:text-slate-300">{{ device.pop_site.name if device.pop_site else '-' }}</span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <p class="text-sm text-slate-900 dark:text-white">{{ device.vendor or '-' }}</p>
@@ -119,8 +146,38 @@
                             <span class="font-mono text-sm text-slate-900 dark:text-white">{{ device.mgmt_ip or '-' }}</span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
+                            {% if not device.ping_enabled %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% elif device.last_ping_ok %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">OK</span>
+                            {% elif device.last_ping_at %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">Failed</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if not device.snmp_enabled %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% elif device.last_snmp_ok %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">OK</span>
+                            {% elif device.last_snmp_at %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">Failed</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
                             {% set status_val = device.status.value if device.status else 'offline' %}
                             {{ status_badge(status_val | title, variant=device_status_variants.get(status_val, 'offline')) }}
+                            {% set child_impact = child_impacts.get(device.id|string) if child_impacts else None %}
+                            {% if child_impact and child_impact.impacted %}
+                            <div class="mt-1">
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                                    Child impact
+                                </span>
+                            </div>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
                             <a href="/admin/network/core-devices/{{ device.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">View</a>
@@ -134,7 +191,7 @@
                         color="blue",
                         action_label="Add Device",
                         action_href="/admin/network/core-devices/new",
-                        colspan=6
+                        colspan=9
                     ) }}
                     {% endfor %}
                 </tbody>

@@ -4,142 +4,108 @@
 {% block title %}CPE {{ cpe.serial_number or cpe.id | string | truncate(8, True, '') }} - Admin{% endblock %}
 
 {% block content %}
+{% set vendor_name = (cpe.vendor or '') | lower %}
+{% set is_mikrotik_device = is_mikrotik if is_mikrotik is defined else ('mikrotik' in vendor_name) %}
+{% set cleaned_notes = cpe_notes if cpe_notes is defined else cpe.notes %}
+{% set meta = cpe_meta if cpe_meta is defined and cpe_meta else {} %}
+
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/network/onts" class="hover:text-primary-600">ONTs/CPEs</a>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/network/cpes" class="hover:text-emerald-600">CPEs</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">{{ cpe.serial_number or 'CPE' }}</span>
+                <span class="text-slate-900 dark:text-white">{{ cpe.serial_number or 'CPE Device' }}</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ cpe.serial_number or 'CPE Device' }}</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ cpe.vendor or '' }} {{ cpe.model or '' }}</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ cpe.vendor or '-' }}{% if cpe.model %} / {{ cpe.model }}{% endif %}</p>
         </div>
         <div class="flex items-center gap-2">
-            {% if cpe.status.value == 'active' %}
-                {{ status_badge("Active", "active") }}
-            {% elif cpe.status.value == 'inactive' %}
-                {{ status_badge("Inactive", "inactive") }}
-            {% else %}
-                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">
-                    <span class="h-2 w-2 rounded-full bg-red-500"></span>
-                    {{ cpe.status.value | title }}
-                </span>
+            <a href="/admin/network/cpes/{{ cpe.id }}/edit" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Edit</a>
+            {% if is_mikrotik_device %}
+            <form method="POST" action="/admin/network/cpes/{{ cpe.id }}/test-api">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">Test API</button>
+            </form>
             {% endif %}
         </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <!-- Main Info -->
-        <div class="lg:col-span-2 space-y-6">
-            <!-- Device Details -->
+    {% if test_message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300{% endif %}">
+        {{ test_message }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="space-y-6 lg:col-span-2">
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
                 </div>
                 <div class="p-6">
-                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <dl class="grid grid-cols-1 gap-5 sm:grid-cols-2">
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ cpe.serial_number or '-' }}</dd>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</dt>
+                            <dd class="mt-1">{{ status_badge(cpe.status.value | title, 'active' if cpe.status.value == 'active' else 'inactive') }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Device Type</dt>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Type</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.device_type.value | upper }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.vendor or '-' }}</dd>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">MAC Address</dt>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ cpe.mac_address or '-' }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.model or '-' }}</dd>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Installed</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.installed_at.strftime('%b %d, %Y %H:%M') if cpe.installed_at else '-' }}</dd>
                         </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">MAC Address</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ cpe.mac_address or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Installed</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.installed_at.strftime('%b %d, %Y') if cpe.installed_at else '-' }}</dd>
-                        </div>
-                        {% if cpe.notes %}
+                        {% if cleaned_notes %}
                         <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ cpe.notes }}</dd>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</dt>
+                            <dd class="mt-1 whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-200">{{ cleaned_notes }}</dd>
                         </div>
                         {% endif %}
                     </dl>
                 </div>
             </div>
 
-            <!-- Subscriber Assignment -->
-            {% if cpe.account %}
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Subscriber Assignment</h2>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Assignment</h2>
                 </div>
                 <div class="p-6">
-                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <dl class="grid grid-cols-1 gap-5 sm:grid-cols-2">
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Account</dt>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {% if cpe.account.subscriber %}
-                                    {% if cpe.account.subscriber.person %}
-                                    <a href="/admin/subscribers/{{ cpe.account.subscriber.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ cpe.account.subscriber.person.first_name }} {{ cpe.account.subscriber.person.last_name }}
-                                    </a>
-                                    {% elif cpe.account.subscriber.organization %}
-                                    <a href="/admin/subscribers/{{ cpe.account.subscriber.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ cpe.account.subscriber.organization.name }}
-                                    </a>
-                                    {% else %}
-                                    <a href="/admin/subscribers/accounts/{{ cpe.account.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ cpe.account.account_number }}
-                                    </a>
-                                    {% endif %}
+                                {% if cpe.subscriber %}
+                                <a href="/admin/subscribers/{{ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.full_name }}</a>
+                                {% if cpe.subscriber.account_number %}<span class="text-slate-500"> ({{ cpe.subscriber.account_number }})</span>{% endif %}
                                 {% else %}
-                                    <a href="/admin/subscribers/accounts/{{ cpe.account.id }}" class="text-primary-600 hover:text-primary-700">
-                                        {{ cpe.account.account_number }}
-                                    </a>
+                                -
                                 {% endif %}
                             </dd>
                         </div>
-                        {% if cpe.subscription %}
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscription</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                <a href="/admin/subscribers/subscriptions/{{ cpe.subscription.id }}" class="text-primary-600 hover:text-primary-700">
-                                    {{ cpe.subscription.plan.name if cpe.subscription.plan else 'View Subscription' }}
-                                </a>
-                            </dd>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscription</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.subscription.id if cpe.subscription else '-' }}</dd>
                         </div>
-                        {% endif %}
-                        {% if cpe.service_address %}
                         <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Address</dt>
+                            <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Service Address</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {{ cpe.service_address.line1 or '' }}{% if cpe.service_address.line2 %}, {{ cpe.service_address.line2 }}{% endif %}<br>
-                                {{ cpe.service_address.city or '' }}{% if cpe.service_address.state %}, {{ cpe.service_address.state }}{% endif %} {{ cpe.service_address.postal_code or '' }}
+                                {% if cpe.service_address %}
+                                {{ cpe.service_address.address_line1 }}{% if cpe.service_address.city %}, {{ cpe.service_address.city }}{% endif %}
+                                {% else %}
+                                -
+                                {% endif %}
                             </dd>
                         </div>
-                        {% endif %}
                     </dl>
                 </div>
             </div>
-            {% else %}
-            <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800/50 dark:bg-amber-900/20">
-                <div class="flex items-center gap-3">
-                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                    <div>
-                        <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Unassigned CPE</h3>
-                        <p class="text-sm text-amber-700 dark:text-amber-400">This CPE device is not currently assigned to any subscriber account.</p>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
 
-            <!-- Ports -->
             {% if ports %}
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -149,30 +115,17 @@
                     <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                         <thead class="bg-slate-50 dark:bg-slate-900/50">
                             <tr>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Name</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Type</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
-                                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">VLANs</th>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Name</th>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                             {% for port in ports %}
                             <tr>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white font-mono">{{ port.name }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ port.port_type.value }}</td>
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {% if port.status.value == 'up' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% elif port.status.value == 'down' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-                                        <span class="h-1.5 w-1.5 rounded-full {% if port.status.value == 'up' %}bg-green-500{% elif port.status.value == 'down' %}bg-red-500{% else %}bg-slate-400{% endif %}"></span>
-                                        {{ port.status.value | upper }}
-                                    </span>
-                                </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                                    {% if port.vlans %}
-                                        {% for pv in port.vlans %}
-                                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 mr-1">{{ pv.vlan.tag }}</span>
-                                        {% endfor %}
-                                    {% else %}-{% endif %}
-                                </td>
+                                <td class="px-6 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ port.name }}</td>
+                                <td class="px-6 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.port_type.value }}</td>
+                                <td class="px-6 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.status.value | upper }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -182,45 +135,48 @@
             {% endif %}
         </div>
 
-        <!-- Sidebar -->
         <div class="space-y-6">
-            <!-- Quick Info -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Quick Info</h2>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Lifecycle</h2>
                 </div>
-                <div class="p-6 space-y-4">
+                <div class="space-y-4 p-6">
                     <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
-                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ cpe.id | string | truncate(20, True, '...') }}</p>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Created</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.created_at.strftime('%b %d, %Y %H:%M') if cpe.created_at else '-' }}</p>
                     </div>
                     <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ cpe.created_at.strftime('%B %d, %Y') if cpe.created_at else '-' }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ cpe.updated_at.strftime('%B %d, %Y') if cpe.updated_at else '-' }}</p>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Last Updated</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.updated_at.strftime('%b %d, %Y %H:%M') if cpe.updated_at else '-' }}</p>
                     </div>
                 </div>
             </div>
 
-            <!-- Actions -->
+            {% if is_mikrotik_device %}
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Actions</h2>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">MikroTik Panel</h2>
                 </div>
-                <div class="p-6 space-y-3">
-                    <button type="button" onclick="alert('Rebooting device...')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                        Reboot Device
-                    </button>
-                    <button type="button" onclick="alert('Pinging device...')" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                        Ping Device
-                    </button>
+                <div class="space-y-4 p-6">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Winbox Host</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ meta.get('winbox_host') or '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">API Host</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ meta.get('api_host') or '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">API Port</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ meta.get('api_port') or '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">API User</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ meta.get('api_user') or '-' }}</p>
+                    </div>
                 </div>
             </div>
+            {% endif %}
 
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -231,12 +187,8 @@
                     {% for activity in activities %}
                     <div class="px-6 py-4">
                         <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
-                        {% if activity.description %}
-                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
-                        {% endif %}
-                        {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
-                        {% endif %}
+                        {% if activity.description %}<div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>{% endif %}
+                        {% if activity.occurred_at %}<div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y %H:%M') }}</div>{% endif %}
                     </div>
                     {% endfor %}
                     {% else %}

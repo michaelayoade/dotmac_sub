@@ -29,6 +29,9 @@ class PopSiteBase(BaseModel):
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None
     longitude: float | None = None
+    zone_id: UUID | None = None
+    organization_id: UUID | None = None
+    reseller_id: UUID | None = None
     notes: str | None = None
     is_active: bool = True
 
@@ -48,6 +51,9 @@ class PopSiteUpdate(BaseModel):
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None
     longitude: float | None = None
+    zone_id: UUID | None = None
+    organization_id: UUID | None = None
+    reseller_id: UUID | None = None
     notes: str | None = None
     is_active: bool | None = None
 
@@ -62,6 +68,7 @@ class PopSiteRead(PopSiteBase):
 
 class NetworkDeviceBase(BaseModel):
     pop_site_id: UUID | None = None
+    parent_device_id: UUID | None = None
     name: str = Field(min_length=1, max_length=160)
     hostname: str | None = Field(default=None, max_length=160)
     mgmt_ip: str | None = Field(default=None, max_length=64)
@@ -73,6 +80,8 @@ class NetworkDeviceBase(BaseModel):
     status: DeviceStatus = DeviceStatus.offline
     ping_enabled: bool = True
     snmp_enabled: bool = False
+    send_notifications: bool = True
+    notification_delay_minutes: int = Field(default=0, ge=0)
     snmp_port: int | None = None
     snmp_version: str | None = None
     snmp_community: str | None = None
@@ -91,6 +100,7 @@ class NetworkDeviceCreate(NetworkDeviceBase):
 
 class NetworkDeviceUpdate(BaseModel):
     pop_site_id: UUID | None = None
+    parent_device_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     hostname: str | None = Field(default=None, max_length=160)
     mgmt_ip: str | None = Field(default=None, max_length=64)
@@ -102,6 +112,8 @@ class NetworkDeviceUpdate(BaseModel):
     status: DeviceStatus | None = None
     ping_enabled: bool | None = None
     snmp_enabled: bool | None = None
+    send_notifications: bool | None = None
+    notification_delay_minutes: int | None = Field(default=None, ge=0)
     snmp_port: int | None = None
     snmp_version: str | None = None
     snmp_community: str | None = None

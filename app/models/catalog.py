@@ -811,6 +811,47 @@ class NasDevice(Base):
     config_backups = relationship("NasConfigBackup", back_populates="nas_device")
     provisioning_logs = relationship("ProvisioningLog", back_populates="nas_device")
     subscriptions = relationship("Subscription", back_populates="provisioning_nas_device")
+    connection_rules = relationship(
+        "NasConnectionRule",
+        back_populates="nas_device",
+        cascade="all, delete-orphan",
+        order_by="NasConnectionRule.priority.asc()",
+    )
+
+
+class NasConnectionRule(Base):
+    """Per-router connection rules for PPPoE/DHCP assignment and shaping."""
+
+    __tablename__ = "nas_connection_rules"
+    __table_args__ = (
+        UniqueConstraint("nas_device_id", "name", name="uq_nas_connection_rules_device_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    nas_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nas_devices.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    connection_type: Mapped[ConnectionType | None] = mapped_column(
+        Enum(ConnectionType, values_callable=lambda x: [e.value for e in x])
+    )
+    ip_assignment_mode: Mapped[str | None] = mapped_column(String(40))
+    rate_limit_profile: Mapped[str | None] = mapped_column(String(120))
+    match_expression: Mapped[str | None] = mapped_column(String(255))
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    nas_device = relationship("NasDevice", back_populates="connection_rules")
 
 
 class RadiusProfile(Base):

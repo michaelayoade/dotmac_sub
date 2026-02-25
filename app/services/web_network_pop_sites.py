@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.catalog import NasDevice, Subscription
+from app.models.network import NetworkZone
 from app.models.network_monitoring import NetworkDevice, PopSite, PopSiteContact
 from app.models.stored_file import StoredFile
+from app.models.subscriber import Organization, Reseller
 from app.models.wireless_mast import WirelessMast
 from app.schemas.wireless_mast import WirelessMastCreate
 from app.services import nas as nas_service
@@ -47,7 +49,8 @@ def parse_mast_form(
     fallback_lon: float | None,
 ) -> tuple[bool, dict[str, object] | None, str | None, dict[str, object]]:
     """Parse optional mast creation fields from form data."""
-    mast_enabled = _form_str(form, "create_mast") == "true"
+    mast_enabled = _form_str(form, "create_mast") == "true" or _form_str(form, "add_mast") == "true"
+    mast_is_active_raw = form.get("mast_is_active")
     mast_defaults: dict[str, object] = {
         "name": _form_str(form, "mast_name"),
         "latitude": _form_str(form, "mast_latitude"),
@@ -58,7 +61,7 @@ def parse_mast_form(
         "status": _form_str(form, "mast_status") or "active",
         "notes": _form_str(form, "mast_notes"),
         "metadata": _form_str(form, "mast_metadata"),
-        "is_active": _form_str(form, "mast_is_active") != "false",
+        "is_active": str(mast_is_active_raw).strip().lower() in {"true", "on", "1", "yes"},
     }
     if not mast_enabled:
         return False, None, None, {**default_mast_context(), **mast_defaults}
@@ -126,6 +129,9 @@ def parse_site_form_values(form: FormData) -> dict[str, object]:
         "country_code": (_form_str(form, "country_code") or None),
         "latitude_raw": _form_str(form, "latitude"),
         "longitude_raw": _form_str(form, "longitude"),
+        "zone_id_raw": _form_str(form, "zone_id"),
+        "organization_id_raw": _form_str(form, "organization_id"),
+        "reseller_id_raw": _form_str(form, "reseller_id"),
         "notes": (_form_str(form, "notes") or None),
         "is_active": _form_str(form, "is_active") == "true",
     }
@@ -155,6 +161,51 @@ def validate_site_values(values: dict[str, object]) -> tuple[dict[str, object] |
     return normalized, None
 
 
+def _parse_optional_uuid(value: str, label: str) -> tuple[uuid.UUID | None, str | None]:
+    if not value:
+        return None, None
+    try:
+        return uuid.UUID(value), None
+    except ValueError:
+        return None, f"{label} must be a valid identifier."
+
+
+def resolve_site_relationships(
+    db: Session,
+    values: dict[str, object],
+) -> tuple[dict[str, object] | None, str | None]:
+    normalized = dict(values)
+    zone_id, error = _parse_optional_uuid(str(values.get("zone_id_raw") or ""), "Location reference")
+    if error:
+        return None, error
+    organization_id, error = _parse_optional_uuid(str(values.get("organization_id_raw") or ""), "Organization")
+    if error:
+        return None, error
+    reseller_id, error = _parse_optional_uuid(str(values.get("reseller_id_raw") or ""), "Partner")
+    if error:
+        return None, error
+
+    if zone_id and not db.get(NetworkZone, zone_id):
+        return None, "Selected location reference was not found."
+    if organization_id and not db.get(Organization, organization_id):
+        return None, "Selected organization was not found."
+    if reseller_id and not db.get(Reseller, reseller_id):
+        return None, "Selected partner was not found."
+
+    normalized["zone_id"] = zone_id
+    normalized["organization_id"] = organization_id
+    normalized["reseller_id"] = reseller_id
+    return normalized, None
+
+
+def form_reference_data(db: Session) -> dict[str, object]:
+    return {
+        "zones": db.scalars(select(NetworkZone).where(NetworkZone.is_active.is_(True)).order_by(NetworkZone.name)).all(),
+        "organizations": db.scalars(select(Organization).order_by(Organization.name)).all(),
+        "resellers": db.scalars(select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name)).all(),
+    }
+
+
 def build_form_context(
     *,
     pop_site: PopSite | dict[str, object] | None,
@@ -163,6 +214,7 @@ def build_form_context(
     mast_error: str | None = None,
     mast_enabled: bool = False,
     mast_defaults: dict[str, object] | None = None,
+    reference_data: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build shared context for POP site form page."""
     context: dict[str, object] = {
@@ -171,6 +223,8 @@ def build_form_context(
         "mast_enabled": mast_enabled,
         "mast_defaults": mast_defaults or default_mast_context(),
     }
+    if reference_data:
+        context.update(reference_data)
     if error:
         context["error"] = error
     if mast_error:
@@ -191,6 +245,9 @@ def create_site(db: Session, values: dict[str, object]) -> PopSite:
         country_code=values.get("country_code"),
         latitude=values.get("latitude"),
         longitude=values.get("longitude"),
+        zone_id=values.get("zone_id"),
+        organization_id=values.get("organization_id"),
+        reseller_id=values.get("reseller_id"),
         notes=values.get("notes"),
         is_active=bool(values.get("is_active")),
     )
@@ -212,6 +269,9 @@ def apply_site_update(pop_site: PopSite, values: dict[str, object]) -> None:
     pop_site.country_code = cast(str | None, values.get("country_code"))
     pop_site.latitude = cast(float | None, values.get("latitude"))
     pop_site.longitude = cast(float | None, values.get("longitude"))
+    pop_site.zone_id = cast(uuid.UUID | None, values.get("zone_id"))
+    pop_site.organization_id = cast(uuid.UUID | None, values.get("organization_id"))
+    pop_site.reseller_id = cast(uuid.UUID | None, values.get("reseller_id"))
     pop_site.notes = cast(str | None, values.get("notes"))
     pop_site.is_active = bool(values.get("is_active"))
 

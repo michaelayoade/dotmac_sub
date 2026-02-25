@@ -746,7 +746,7 @@ function ipCalculator() {
             this.error = null;
             this.result = null;
 
-            if (!this.cidr) return;
+            if (!this.cidr || !this.cidr.includes('/')) return;
 
             try {
                 const [ip, prefix] = this.cidr.split('/');
@@ -799,17 +799,93 @@ function ipCalculator() {
                 return;
             }
 
-            const hosts = prefix === 128 ? 1 : Math.pow(2, 128 - prefix);
-            const hostsStr = hosts > 1e15 ? '~' + hosts.toExponential(2) : hosts.toLocaleString();
+            const expanded = this.expandIPv6(ip);
+            if (!expanded) {
+                this.error = 'Invalid IPv6 address';
+                return;
+            }
+            const ipNum = this.ipv6ToBigInt(expanded);
+            const hostBits = 128 - prefix;
+            const fullMask = (1n << 128n) - 1n;
+            const hostMask = hostBits === 0 ? 0n : (1n << BigInt(hostBits)) - 1n;
+            const netMask = fullMask ^ hostMask;
+            const networkNum = ipNum & netMask;
+            const lastNum = networkNum | hostMask;
+            const hosts = 1n << BigInt(hostBits);
 
             this.result = {
-                network: ip + '/' + prefix,
+                network: `${this.bigIntToIPv6(networkNum)}/${prefix}`,
                 broadcast: 'N/A (IPv6)',
                 netmask: '/' + prefix,
-                first: ip,
-                last: 'Varies',
-                hosts: hostsStr
+                first: this.bigIntToIPv6(networkNum),
+                last: this.bigIntToIPv6(lastNum),
+                hosts: this.formatBigInt(hosts)
             };
+        },
+
+        expandIPv6(raw) {
+            const text = (raw || '').trim().toLowerCase();
+            if (!text || text.includes('.')) return null;
+            const pieces = text.split('::');
+            if (pieces.length > 2) return null;
+
+            const left = pieces[0] ? pieces[0].split(':').filter(Boolean) : [];
+            const right = pieces.length === 2 && pieces[1] ? pieces[1].split(':').filter(Boolean) : [];
+            if (left.length > 8 || right.length > 8) return null;
+            if (pieces.length === 1 && left.length !== 8) return null;
+
+            const zerosToInsert = 8 - (left.length + right.length);
+            if (zerosToInsert < 0) return null;
+            if (pieces.length === 2 && zerosToInsert < 1) return null;
+
+            const full = [...left, ...Array(zerosToInsert).fill('0'), ...right];
+            if (full.length !== 8) return null;
+            if (full.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+            return full.map((part) => part.padStart(4, '0'));
+        },
+
+        ipv6ToBigInt(parts) {
+            return parts.reduce((acc, part) => (acc << 16n) + BigInt(parseInt(part, 16)), 0n);
+        },
+
+        bigIntToIPv6(num) {
+            const parts = [];
+            let value = num;
+            for (let i = 0; i < 8; i++) {
+                parts.unshift((value & 0xffffn).toString(16));
+                value >>= 16n;
+            }
+            let bestStart = -1;
+            let bestLen = 0;
+            let curStart = -1;
+            let curLen = 0;
+            for (let i = 0; i <= parts.length; i++) {
+                if (i < parts.length && parts[i] === '0') {
+                    if (curStart === -1) curStart = i;
+                    curLen += 1;
+                } else if (curStart !== -1) {
+                    if (curLen > bestLen) {
+                        bestStart = curStart;
+                        bestLen = curLen;
+                    }
+                    curStart = -1;
+                    curLen = 0;
+                }
+            }
+            if (bestLen >= 2) {
+                const head = parts.slice(0, bestStart).join(':');
+                const tail = parts.slice(bestStart + bestLen).join(':');
+                if (!head && !tail) return '::';
+                if (!head) return `::${tail}`;
+                if (!tail) return `${head}::`;
+                return `${head}::${tail}`;
+            }
+            return parts.join(':');
+        },
+
+        formatBigInt(value) {
+            const s = value.toString();
+            return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
     };
 }

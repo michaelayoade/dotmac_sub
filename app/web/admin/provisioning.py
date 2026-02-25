@@ -9,7 +9,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -22,7 +21,6 @@ from app.models.provisioning import (
     ServiceOrderType,
     TaskStatus,
 )
-from app.models.subscriber import Subscriber
 from app.schemas.notification import NotificationCreate
 from app.schemas.provisioning import (
     InstallAppointmentCreate,
@@ -119,11 +117,8 @@ def _notify_tagged_users(
         return 0
 
     actor_subscriber_id = _actor_id(request)
-    recipients = (
-        db.query(Subscriber)
-        .filter(func.lower(Subscriber.email).in_(mentioned_emails))
-        .filter(Subscriber.is_active.is_(True))
-        .all()
+    recipients = subscriber_service.subscribers.list_active_by_emails(
+        db, mentioned_emails
     )
 
     notified = 0

@@ -1,0 +1,103 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}New Speed Test Result - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Add Speed Test Result</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Log speed tests for subscribers or network links to monitor SLA performance.</p>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            {% if error %}
+            <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">{{ error }}</div>
+            {% endif %}
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
+                    <select name="subscriber_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for subscriber in subscribers %}
+                        <option value="{{ subscriber.id }}" {% if speedtest.subscriber_id and speedtest.subscriber_id == subscriber.id|string %}selected{% endif %}>{{ subscriber.full_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Device</label>
+                    <select name="network_device_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for device in devices %}
+                        <option value="{{ device.id }}" {% if speedtest.network_device_id and speedtest.network_device_id == device.id|string %}selected{% endif %}>{{ device.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">POP Site</label>
+                    <select name="pop_site_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">None</option>
+                        {% for site in pop_sites %}
+                        <option value="{{ site.id }}" {% if speedtest.pop_site_id and speedtest.pop_site_id == site.id|string %}selected{% endif %}>{{ site.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Target Label</label>
+                    <input type="text" name="target_label" value="{{ speedtest.target_label or '' }}" placeholder="Subscriber premises / core link" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Provider</label>
+                    <input type="text" name="provider" value="{{ speedtest.provider or '' }}" placeholder="Ookla, LibreSpeed" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Server Name</label>
+                    <input type="text" name="server_name" value="{{ speedtest.server_name or '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download (Mbps) *</label>
+                    <input type="number" step="0.01" min="0" name="download_mbps" value="{{ speedtest.download_mbps if speedtest.download_mbps is not none else '' }}" required class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload (Mbps) *</label>
+                    <input type="number" step="0.01" min="0" name="upload_mbps" value="{{ speedtest.upload_mbps if speedtest.upload_mbps is not none else '' }}" required class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latency (ms)</label>
+                    <input type="number" step="0.01" min="0" name="latency_ms" value="{{ speedtest.latency_ms if speedtest.latency_ms is not none else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Jitter (ms)</label>
+                    <input type="number" step="0.01" min="0" name="jitter_ms" value="{{ speedtest.jitter_ms if speedtest.jitter_ms is not none else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Packet Loss (%)</label>
+                    <input type="number" step="0.01" min="0" name="packet_loss_pct" value="{{ speedtest.packet_loss_pct if speedtest.packet_loss_pct is not none else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Source</label>
+                    <select name="source" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in sources %}
+                        <option value="{{ item }}" {% if speedtest.source == item %}selected{% endif %}>{{ item | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tested At</label>
+                    <input type="datetime-local" name="tested_at" value="{{ speedtest.tested_at.strftime('%Y-%m-%dT%H:%M') if speedtest.tested_at else '' }}" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="sm:col-span-3">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" rows="3" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ speedtest.notes or '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/speedtests" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">Save Result</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

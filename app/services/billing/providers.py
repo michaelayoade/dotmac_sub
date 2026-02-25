@@ -65,6 +65,16 @@ class PaymentProviders(ListResponseMixin):
         return provider
 
     @staticmethod
+    def get_by_type(db: Session, provider_type: PaymentProviderType) -> PaymentProvider | None:
+        """Return the first provider matching the requested provider type."""
+        return (
+            db.query(PaymentProvider)
+            .filter(PaymentProvider.provider_type == provider_type)
+            .order_by(PaymentProvider.created_at.asc())
+            .first()
+        )
+
+    @staticmethod
     def list(
         db: Session,
         is_active: bool | None,

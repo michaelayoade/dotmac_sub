@@ -1,0 +1,177 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge %}
+
+{% block title %}TR-069 (ACS) - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("sky", "blue") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="TR-069 / ACS",
+        subtitle="Manage ACS servers, discover CPEs, and run remote actions",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>',
+        color="sky",
+        color2="blue"
+    ) %}
+        <a href="/admin/network/tr069/acs/new" class="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Add ACS Server
+        </a>
+    {% endcall %}
+
+    {% if message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300{% endif %}">
+        {{ message }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-5">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">ACS Servers</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.servers }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Devices</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.devices }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Seen 24h</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.seen_24h }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Unlinked</p>
+            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.unlinked }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Failed Jobs</p>
+            <p class="mt-1 text-2xl font-bold text-rose-600 dark:text-rose-400">{{ stats.jobs_failed }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/tr069" class="grid gap-3 md:grid-cols-8">
+            <div class="md:col-span-3">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">ACS Server</label>
+                <select name="acs_server_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for server in servers %}
+                    <option value="{{ server.id }}" {% if selected_server_id == server.id|string %}selected{% endif %}>{{ server.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="md:col-span-3">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <input name="search" value="{{ filters.search }}" placeholder="serial, OUI, product" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="md:col-span-1 flex items-end">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="only_unlinked" value="true" {% if filters.only_unlinked %}checked{% endif %}>
+                    Unlinked
+                </label>
+            </div>
+            <div class="md:col-span-1 flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    {% if selected_server_id %}
+    <div class="flex justify-end">
+        <form method="POST" action="/admin/network/tr069/acs/{{ selected_server_id }}/sync">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Sync from GenieACS</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Identity</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Last Inform</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Linked CPE</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% for device in devices %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ device.serial_number or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                        <div>OUI: {{ device.oui or '-' }}</div>
+                        <div class="text-slate-500">{{ device.product_class or '-' }}</div>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                        {% if device.last_inform_at %}
+                            {{ device.last_inform_at.strftime('%Y-%m-%d %H:%M') }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/link" class="flex items-center gap-2">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+                            <select name="cpe_device_id" class="max-w-[220px] rounded-lg border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Unlinked</option>
+                                {% for cpe in managed_cpes %}
+                                <option value="{{ cpe.id }}" {% if device.cpe_device_id and device.cpe_device_id|string == cpe.id|string %}selected{% endif %}>
+                                    {{ cpe.serial_number or cpe.id|string }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">Save</button>
+                        </form>
+                        {% if device.linked_cpe %}
+                        <a href="/admin/network/cpes/{{ device.linked_cpe.id }}" class="mt-1 inline-block text-xs text-sky-600 hover:text-sky-700">View CPE</a>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                        <div class="flex flex-wrap gap-2">
+                            {% for key, action in job_actions.items() %}
+                            <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="action" value="{{ key }}">
+                                <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+                                <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">{{ action.label }}</button>
+                            </form>
+                            {% endfor %}
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">No TR-069 devices found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Recent Jobs</h2>
+        <div class="space-y-2">
+            {% for job in recent_jobs %}
+            <div class="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
+                <div>
+                    <div class="font-medium text-slate-900 dark:text-white">{{ job.name }}</div>
+                    <div class="text-xs text-slate-500">{{ job.command }} • {{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else '-' }}</div>
+                </div>
+                <div>
+                    {% if job.status.value == 'succeeded' %}
+                        {{ status_badge('Succeeded', 'active') }}
+                    {% elif job.status.value == 'failed' %}
+                        {{ status_badge('Failed', 'inactive') }}
+                    {% else %}
+                        <span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ job.status.value | title }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500">No TR-069 jobs yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

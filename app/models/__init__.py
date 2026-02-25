@@ -52,6 +52,7 @@ from app.models.catalog import (  # noqa: F401
     ExecutionMethod,
     HealthStatus,
     NasConfigBackup,
+    NasConnectionRule,
     NasDevice,
     NasDeviceStatus,
     NasVendor,
@@ -194,6 +195,9 @@ from app.models.network import (  # noqa: F401
 )
 from app.models.network_monitoring import (  # noqa: F401
     Alert,
+    DnsThreatAction,
+    DnsThreatEvent,
+    DnsThreatSeverity,
     AlertEvent,
     AlertOperator,
     AlertRule,
@@ -207,6 +211,8 @@ from app.models.network_monitoring import (  # noqa: F401
     NetworkDevice,
     PopSite,
     PopSiteContact,
+    SpeedTestResult,
+    SpeedTestSource,
 )
 from app.models.network_monitoring import (  # noqa: F401
     DeviceStatus as MonitoringDeviceStatus,

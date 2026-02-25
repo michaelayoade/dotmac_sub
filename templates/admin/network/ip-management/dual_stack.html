@@ -1,0 +1,123 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, empty_state %}
+
+{% block title %}Dual-Stack View - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("sky", "indigo") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Dual-Stack Management",
+        subtitle="Unified IPv4 and IPv6 assignment visibility by subscriber or location",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>',
+        color="sky",
+        color2="indigo"
+    ) %}
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Total Records</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_records }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Dual Stack</p>
+            <p class="mt-1 text-3xl font-bold text-indigo-600 dark:text-indigo-400">{{ stats.dual_stack_records }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">IPv4 Only</p>
+            <p class="mt-1 text-3xl font-bold text-blue-600 dark:text-blue-400">{{ stats.ipv4_only }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">IPv6 Only</p>
+            <p class="mt-1 text-3xl font-bold text-purple-600 dark:text-purple-400">{{ stats.ipv6_only }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/ip-management/dual-stack" class="grid gap-3 md:grid-cols-4">
+            <div>
+                <label for="view_mode" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">View Mode</label>
+                <select id="view_mode" name="view_mode" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="subscriber" {% if view_mode == 'subscriber' %}selected{% endif %}>By Subscriber</option>
+                    <option value="location" {% if view_mode == 'location' %}selected{% endif %}>By Location</option>
+                </select>
+            </div>
+            <div>
+                <label for="subscriber" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</label>
+                <input id="subscriber" name="subscriber" value="{{ subscriber_query }}" placeholder="Name or account number"
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="location" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Location</label>
+                <input id="location" name="location" value="{{ location_query }}" placeholder="City or region"
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Subscriber</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Account</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Location</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">IPv4</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">IPv6</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Mode</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% if rows %}
+                {% for row in rows %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ row.subscriber_name }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.account_number or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.location or '-' }}</td>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ row.ipv4_address or '-' }}</td>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ row.ipv6_address or '-' }}</td>
+                    <td class="px-4 py-3 text-sm">
+                        {% if row.is_dual_stack %}
+                        <span class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">Dual Stack</span>
+                        {% elif row.ipv4_address %}
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">IPv4 Only</span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">IPv6 Only</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right text-sm">
+                        {% if row.subscriber_id %}
+                        <a href="/admin/subscribers/{{ row.subscriber_id }}" class="text-indigo-600 hover:text-indigo-700">Subscriber</a>
+                        {% else %}
+                        <span class="text-slate-400">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="7" class="px-6 py-10">
+                        {{ empty_state(
+                            title="No matching records",
+                            message="Try broadening filters or assign both IPv4 and IPv6 to subscribers.",
+                            icon='<svg class="h-8 w-8 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7h16M4 12h16M4 17h16"/></svg>',
+                            color="sky",
+                            color2="indigo",
+                            action_label="View IP Assignments",
+                            action_href="/admin/network/ip-management/assignments",
+                            colspan=6
+                        ) }}
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

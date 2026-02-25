@@ -9,6 +9,7 @@ from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import build_changes_metadata
 
 
 def build_accounts_list_data(
@@ -119,6 +120,35 @@ def create_account_from_form(
     return account, resolved_subscriber_id
 
 
+def create_account_from_form_with_metadata(
+    db,
+    *,
+    subscriber_id: str | None,
+    customer_ref: str | None,
+    reseller_id: str | None,
+    tax_rate_id: str | None,
+    account_number: str | None,
+    status: str | None,
+    notes: str | None,
+):
+    account, resolved_subscriber_id = create_account_from_form(
+        db,
+        subscriber_id=subscriber_id,
+        customer_ref=customer_ref,
+        reseller_id=reseller_id,
+        tax_rate_id=tax_rate_id,
+        account_number=account_number,
+        status=status,
+        notes=notes,
+    )
+    metadata = {
+        "account_number": account.account_number,
+        "subscriber_id": str(account.id),
+        "reseller_id": reseller_id or None,
+    }
+    return account, resolved_subscriber_id, metadata
+
+
 def update_account_from_form(
     db,
     *,
@@ -148,6 +178,31 @@ def update_account_from_form(
             notes=notes.strip() if notes else None,
         ),
     )
+
+
+def update_account_from_form_with_metadata(
+    db,
+    *,
+    account_id: str,
+    reseller_id: str | None,
+    tax_rate_id: str | None,
+    account_number: str | None,
+    status: str | None,
+    notes: str | None,
+):
+    before = subscriber_service.accounts.get(db, account_id)
+    account = update_account_from_form(
+        db,
+        account_id=account_id,
+        reseller_id=reseller_id,
+        tax_rate_id=tax_rate_id,
+        account_number=account_number,
+        status=status,
+        notes=notes,
+    )
+    after = subscriber_service.accounts.get(db, account_id)
+    metadata = build_changes_metadata(before, after)
+    return account, metadata
 
 
 def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:

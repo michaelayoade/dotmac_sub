@@ -1,0 +1,6 @@
+<option value="">No parent (top-level)</option>
+{% for parent in parent_devices %}
+<option value="{{ parent.id }}" {% if selected_parent_id and selected_parent_id == parent.id|string %}selected{% endif %}>
+    {{ parent.name }}{% if parent.mgmt_ip %} ({{ parent.mgmt_ip }}){% endif %}
+</option>
+{% endfor %}

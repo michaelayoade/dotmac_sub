@@ -42,6 +42,55 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+PLAN_KIND_STANDARD = "standard"
+PLAN_KIND_IP_ADDRESS = "ip_address"
+PLAN_KIND_DEVICE_REPLACEMENT = "device_replacement"
+PLAN_KINDS = [PLAN_KIND_STANDARD, PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT]
+IP_BLOCK_SIZES = ["/32", "/30", "/29", "/28", "/27", "/26", "/25", "/24"]
+
+
+def parse_offer_description_metadata(description: str | None) -> tuple[dict[str, str | None], str | None]:
+    text = str(description or "").strip()
+    metadata = {"plan_kind": None, "ip_block_size": None}
+    if not text:
+        return metadata, None
+
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("[plan_kind:") and lowered.endswith("]"):
+            metadata["plan_kind"] = stripped[11:-1].strip() or None
+            continue
+        if lowered.startswith("[ip_block_size:") and lowered.endswith("]"):
+            metadata["ip_block_size"] = stripped[15:-1].strip() or None
+            continue
+        cleaned_lines.append(stripped)
+    cleaned_text = "\n".join(line for line in cleaned_lines if line).strip() or None
+    return metadata, cleaned_text
+
+
+def normalize_offer_description(
+    *,
+    description: str | None,
+    plan_kind: str | None,
+    ip_block_size: str | None,
+) -> str | None:
+    metadata, cleaned = parse_offer_description_metadata(description)
+    resolved_plan_kind = str(plan_kind or metadata.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
+    if resolved_plan_kind not in PLAN_KINDS:
+        resolved_plan_kind = PLAN_KIND_STANDARD
+
+    resolved_ip_block = str(ip_block_size or metadata.get("ip_block_size") or "").strip() or None
+    lines: list[str] = []
+    if resolved_plan_kind != PLAN_KIND_STANDARD:
+        lines.append(f"[plan_kind:{resolved_plan_kind}]")
+    if resolved_plan_kind == PLAN_KIND_IP_ADDRESS and resolved_ip_block:
+        lines.append(f"[ip_block_size:{resolved_ip_block}]")
+    if cleaned:
+        lines.append(cleaned)
+    return "\n".join(lines).strip() or None
+
 
 def default_offer_form() -> dict[str, object]:
     """Return default values for offer create form."""
@@ -75,7 +124,10 @@ def default_offer_form() -> dict[str, object]:
         "status": "active",
         "description": "",
         "is_active": True,
+        "plan_kind": PLAN_KIND_STANDARD,
+        "ip_block_size": "",
         "price_id": "",
+        "price_type": "recurring",
         "price_amount": "",
         "price_currency": "NGN",
         "price_billing_cycle": BillingCycle.monthly.value,
@@ -121,7 +173,10 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "status": _form_str(form, "status").strip(),
         "description": _form_str(form, "description").strip(),
         "is_active": form.get("is_active") == "true",
+        "plan_kind": _form_str(form, "plan_kind").strip() or PLAN_KIND_STANDARD,
+        "ip_block_size": _form_str(form, "ip_block_size").strip(),
         "price_id": _form_str(form, "price_id").strip(),
+        "price_type": _form_str(form, "price_type").strip() or "recurring",
         "price_amount": _form_str(form, "price_amount").strip(),
         "price_currency": _form_str(form, "price_currency", "NGN").strip(),
         "price_billing_cycle": _form_str(form, "price_billing_cycle").strip(),
@@ -132,10 +187,19 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
 
 def validate_offer_form(offer: dict[str, object]) -> str | None:
     """Validate required offer form fields."""
-    if not offer.get("radius_profile_id"):
+    plan_kind = str(offer.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
+    if plan_kind not in PLAN_KINDS:
+        return "Plan kind is invalid."
+    if plan_kind == PLAN_KIND_IP_ADDRESS and not str(offer.get("ip_block_size") or "").strip():
+        return "IP block size is required for IP address plans."
+
+    if plan_kind == PLAN_KIND_STANDARD and not offer.get("radius_profile_id"):
         return "RADIUS profile is required."
+    price_type = str(offer.get("price_type") or "recurring").strip().lower()
+    if price_type not in {"recurring", "one_time", "usage"}:
+        return "Price type is invalid."
     if not offer.get("price_amount"):
-        return "Recurring price is required."
+        return "Price amount is required."
     return None
 
 
@@ -150,6 +214,11 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "with_vat": offer["with_vat"],
         "available_for_services": offer["available_for_services"],
         "show_on_customer_portal": offer["show_on_customer_portal"],
+        "description": normalize_offer_description(
+            description=str(offer.get("description") or "").strip() or None,
+            plan_kind=str(offer.get("plan_kind") or PLAN_KIND_STANDARD),
+            ip_block_size=str(offer.get("ip_block_size") or "").strip() or None,
+        ),
     }
     optional_fields = [
         "code",
@@ -171,7 +240,6 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "aggregation",
         "priority",
         "status",
-        "description",
     ]
     for key in optional_fields:
         value = offer.get(key)
@@ -213,6 +281,7 @@ def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
         return None
     price_payload = {
         "offer_id": offer_id,
+        "price_type": str(offer.get("price_type") or "recurring"),
         "amount": offer["price_amount"],
         "currency": offer["price_currency"],
     }
@@ -232,6 +301,7 @@ def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
     if not offer.get("price_amount"):
         return None, None
     price_payload = {
+        "price_type": str(offer.get("price_type") or "recurring"),
         "amount": offer["price_amount"],
         "currency": offer["price_currency"],
     }
@@ -310,13 +380,23 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         "status": offer.status,
         "description": offer.description or "",
         "is_active": offer.is_active,
+        "plan_kind": PLAN_KIND_STANDARD,
+        "ip_block_size": "",
         "price_id": str(price.id) if price else "",
+        "price_type": price.price_type.value if price and price.price_type else "recurring",
         "price_amount": price.amount if price else "",
         "price_currency": price.currency if price else "NGN",
         "price_billing_cycle": price.billing_cycle.value if price and price.billing_cycle else "",
         "price_unit": price.unit.value if price and price.unit else "",
         "price_description": price.description if price and price.description else "",
     }
+    metadata, cleaned_description = parse_offer_description_metadata(offer.description)
+    plan_kind = str(metadata.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
+    if plan_kind not in PLAN_KINDS:
+        plan_kind = PLAN_KIND_STANDARD
+    offer_data["plan_kind"] = plan_kind
+    offer_data["ip_block_size"] = metadata.get("ip_block_size") or ""
+    offer_data["description"] = cleaned_description or ""
     return offer_data, offer_addon_links
 
 
@@ -423,7 +503,10 @@ def offer_form_context(
         "contract_terms": [item.value for item in ContractTerm],
         "offer_statuses": [item.value for item in OfferStatus],
         "price_units": [item.value for item in PriceUnit],
+        "price_types": ["recurring", "one_time"],
         "guaranteed_speed_types": [item.value for item in GuaranteedSpeedType],
+        "plan_kinds": PLAN_KINDS,
+        "ip_block_sizes": IP_BLOCK_SIZES,
         "action_url": "/admin/catalog/offers",
     }
     if error:
@@ -440,6 +523,7 @@ def overview_page_data(
     db: Session,
     *,
     status: str | None = None,
+    plan_kind: str | None = None,
     search: str | None = None,
     page: int = 1,
     per_page: int = 25,
@@ -455,6 +539,17 @@ def overview_page_data(
         )
     if status:
         stmt = stmt.where(CatalogOffer.status == OfferStatus(status))
+    normalized_plan_kind = str(plan_kind or "").strip().lower()
+    if normalized_plan_kind in {PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT}:
+        stmt = stmt.where(CatalogOffer.description.ilike(f"%[plan_kind:{normalized_plan_kind}]%"))
+    elif normalized_plan_kind == PLAN_KIND_STANDARD:
+        stmt = stmt.where(
+            (CatalogOffer.description.is_(None))
+            | (
+                (~CatalogOffer.description.ilike("%[plan_kind:ip_address]%"))
+                & (~CatalogOffer.description.ilike("%[plan_kind:device_replacement]%"))
+            )
+        )
 
     total: int = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     total_pages = (total + per_page - 1) // per_page if total else 1
@@ -463,6 +558,16 @@ def overview_page_data(
     offers = db.scalars(
         stmt.order_by(CatalogOffer.created_at.desc()).limit(per_page).offset(offset)
     ).all()
+    offer_plan_metadata = {}
+    for offer in offers:
+        metadata, _ = parse_offer_description_metadata(offer.description)
+        plan = str(metadata.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
+        if plan not in PLAN_KINDS:
+            plan = PLAN_KIND_STANDARD
+        offer_plan_metadata[str(offer.id)] = {
+            "plan_kind": plan,
+            "ip_block_size": metadata.get("ip_block_size"),
+        }
 
     offer_ids = [offer.id for offer in offers]
     offer_subscription_counts: dict[str, int] = {}
@@ -492,6 +597,7 @@ def overview_page_data(
         "offer_subscription_counts": offer_subscription_counts,
         "offer_active_subscription_counts": offer_active_subscription_counts,
         "status": status,
+        "plan_kind": normalized_plan_kind or "",
         "search": search,
         "page": page,
         "per_page": per_page,
@@ -504,6 +610,7 @@ def overview_page_data(
         "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
         "contract_terms": [item.value for item in ContractTerm],
         "offer_statuses": [item.value for item in OfferStatus],
+        "offer_plan_metadata": offer_plan_metadata,
     }
 
 

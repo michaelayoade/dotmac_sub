@@ -405,6 +405,22 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.fiber_segments }}</span>
                     </div>
                     <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Network Devices</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.network_devices }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-green-600 dark:text-green-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span>Device Online</span>
+                        <span class="font-medium text-green-600 dark:text-green-400">{{ stats.network_devices_online }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>Device Offline</span>
+                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.network_devices_offline }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Device Degraded</span>
+                        <span class="font-medium text-amber-600 dark:text-amber-400">{{ stats.network_devices_degraded }}</span>
+                    </div>
+                    <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">Survey Points</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.survey_points }}</span>
                     </div>
@@ -458,6 +474,24 @@
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Access Point</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-green-600">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Online)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-red-600">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Offline)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-amber-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Degraded)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color bg-fuchsia-500">
@@ -527,6 +561,10 @@
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-access-points" checked class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Access Points</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-network-devices" checked class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Network Devices</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-surveys" checked class="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500">
@@ -635,6 +673,7 @@
         fdh: L.layerGroup().addTo(map),
         closures: L.layerGroup().addTo(map),
         accessPoints: L.layerGroup().addTo(map),
+        networkDevices: L.layerGroup().addTo(map),
         surveys: L.layerGroup().addTo(map),
         customers: L.layerGroup().addTo(map),
         feeder: L.layerGroup().addTo(map),
@@ -667,6 +706,27 @@
         }),
         access_point: L.divIcon({
             html: '<div style="background:#8b5cf6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        network_device_online: L.divIcon({
+            html: '<div style="background:#16a34a;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        network_device_offline: L.divIcon({
+            html: '<div style="background:#dc2626;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        network_device_degraded: L.divIcon({
+            html: '<div style="background:#f59e0b;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
@@ -776,6 +836,21 @@
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
                 typeLabel = 'Access Point';
                 break;
+            case 'network_device':
+                if (p.status === 'online') {
+                    iconBg = '#16a34a';
+                    typeLabel = 'Network Device (Online)';
+                } else if (p.status === 'offline') {
+                    iconBg = '#dc2626';
+                    typeLabel = 'Network Device (Offline)';
+                } else {
+                    iconBg = '#f59e0b';
+                    typeLabel = 'Network Device (Degraded)';
+                }
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>';
+                detailUrl = `/admin/network/core-devices/${p.id}`;
+                editUrl = `/admin/network/core-devices/${p.id}/edit`;
+                break;
             case 'customer':
                 iconBg = p.is_online ? '#22c55e' : '#ef4444';
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
@@ -821,6 +896,11 @@
         if (p.address) html += `<div class="asset-detail-row"><span class="asset-detail-label">Address</span><span class="asset-detail-value">${escapeHtml(p.address)}</span></div>`;
         if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
         if (p.status) html += `<div class="asset-detail-row"><span class="asset-detail-label">Status</span><span class="asset-detail-value">${escapeHtml(p.status)}</span></div>`;
+        if (p.role) html += `<div class="asset-detail-row"><span class="asset-detail-label">Role</span><span class="asset-detail-value">${escapeHtml(p.role)}</span></div>`;
+        if (p.device_type) html += `<div class="asset-detail-row"><span class="asset-detail-label">Device Type</span><span class="asset-detail-value">${escapeHtml(p.device_type)}</span></div>`;
+        if (p.vendor || p.model) html += `<div class="asset-detail-row"><span class="asset-detail-label">Vendor/Model</span><span class="asset-detail-value">${escapeHtml([p.vendor || '', p.model || ''].filter(Boolean).join(' / '))}</span></div>`;
+        if (p.mgmt_ip) html += `<div class="asset-detail-row"><span class="asset-detail-label">Management IP</span><span class="asset-detail-value">${escapeHtml(p.mgmt_ip)}</span></div>`;
+        if (p.pop_site_name) html += `<div class="asset-detail-row"><span class="asset-detail-label">POP Site</span><span class="asset-detail-value">${escapeHtml(p.pop_site_name)}</span></div>`;
         if (p.splitter_count !== undefined) html += `<div class="asset-detail-row"><span class="asset-detail-label">Splitters</span><span class="asset-detail-value">${p.splitter_count}</span></div>`;
         if (p.device_count !== undefined) html += `<div class="asset-detail-row"><span class="asset-detail-label">Devices</span><span class="asset-detail-value">${p.device_count}</span></div>`;
 
@@ -899,6 +979,14 @@
                 let icon;
                 if (p.type === 'customer') {
                     icon = p.is_online ? icons.customer_online : icons.customer_offline;
+                } else if (p.type === 'network_device') {
+                    if (p.status === 'online') {
+                        icon = icons.network_device_online;
+                    } else if (p.status === 'offline') {
+                        icon = icons.network_device_offline;
+                    } else {
+                        icon = icons.network_device_degraded;
+                    }
                 } else {
                     icon = icons[p.type] || icons.customer_online;
                 }
@@ -934,6 +1022,7 @@
                     case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
                     case 'splice_closure': layers.closures.addLayer(marker); break;
                     case 'access_point': layers.accessPoints.addLayer(marker); break;
+                    case 'network_device': layers.networkDevices.addLayer(marker); break;
                     case 'survey_point': layers.surveys.addLayer(marker); break;
                     case 'customer': layers.customers.addLayer(marker); break;
                 }
@@ -984,6 +1073,7 @@
         'layer-fdh': 'fdh',
         'layer-closures': 'closures',
         'layer-access-points': 'accessPoints',
+        'layer-network-devices': 'networkDevices',
         'layer-surveys': 'surveys',
         'layer-customers': 'customers',
         'layer-feeder': 'feeder',
@@ -1025,6 +1115,7 @@
         fdh_cabinet: { label: 'FDH Cabinet', color: '#f97316' },
         splice_closure: { label: 'Splice Closure', color: '#14b8a6' },
         access_point: { label: 'Access Point', color: '#8b5cf6' },
+        network_device: { label: 'Network Device', color: '#16a34a' },
         survey_point: { label: 'Survey', color: '#d946ef' },
         customer: { label: 'Customer', color: '#22c55e' },
         fiber_segment: { label: 'Fiber', color: '#3b82f6' },

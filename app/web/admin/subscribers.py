@@ -22,7 +22,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.subscriber import Subscriber
 from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import audit as audit_service
@@ -92,11 +91,8 @@ def _notify_tagged_subscribers(
         return 0, []
 
     actor_subscriber_id = _actor_id(request)
-    recipients = (
-        db.query(Subscriber)
-        .filter(Subscriber.id.in_(mentioned_subscriber_ids))
-        .filter(Subscriber.is_active.is_(True))
-        .all()
+    recipients = subscriber_service.subscribers.list_active_by_ids(
+        db, mentioned_subscriber_ids
     )
 
     notified = 0

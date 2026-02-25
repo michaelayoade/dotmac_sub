@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.network import FdhCabinet, Splitter
+from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services import catalog as catalog_service
 from app.services.common import coerce_uuid
 
@@ -129,6 +130,30 @@ def create_cabinet(db: Session, values: dict[str, object]) -> FdhCabinet:
     return cabinet
 
 
+def create_cabinet_submission(
+    db: Session,
+    form: FormData,
+    *,
+    action_url: str,
+) -> dict[str, object]:
+    """Handle FDH cabinet create form parsing/validation/create."""
+    values = parse_form_values(form)
+    error = validate_name(str(values["name"]))
+    if error:
+        return {
+            "cabinet": None,
+            "error": error,
+            "form_context": build_form_context(
+                db,
+                cabinet=None,
+                action_url=action_url,
+                error=error,
+            ),
+        }
+    cabinet = create_cabinet(db, values)
+    return {"cabinet": cabinet, "error": None, "form_context": None}
+
+
 def update_cabinet(cabinet: FdhCabinet, values: dict[str, object]) -> None:
     """Apply parsed form values to an existing cabinet."""
     latitude, longitude = parse_coordinates(
@@ -150,6 +175,34 @@ def commit_cabinet_update(db: Session, cabinet: FdhCabinet, values: dict[str, ob
     """Apply form values and flush the cabinet update."""
     update_cabinet(cabinet, values)
     db.flush()
+
+
+def update_cabinet_submission(
+    db: Session,
+    cabinet: FdhCabinet,
+    form: FormData,
+    *,
+    action_url: str,
+) -> dict[str, object]:
+    """Handle FDH cabinet update form parsing/validation/update."""
+    before_snapshot = model_to_dict(cabinet)
+    values = parse_form_values(form)
+    error = validate_name(str(values["name"]))
+    if error:
+        return {
+            "error": error,
+            "form_context": build_form_context(
+                db,
+                cabinet=cabinet,
+                action_url=action_url,
+                error=error,
+            ),
+        }
+    commit_cabinet_update(db, cabinet, values)
+    after_snapshot = model_to_dict(cabinet)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+    metadata = {"changes": changes} if changes else None
+    return {"error": None, "form_context": None, "metadata": metadata}
 
 
 def detail_page_data(db: Session, cabinet_id: str) -> dict[str, object] | None:
@@ -279,6 +332,31 @@ def create_splitter(db: Session, values: dict[str, object]) -> Splitter:
     return splitter
 
 
+def create_splitter_submission(
+    db: Session,
+    form: FormData,
+    *,
+    action_url: str,
+) -> dict[str, object]:
+    """Handle splitter create form parsing/validation/create."""
+    values = parse_splitter_form_values(form)
+    error = validate_splitter_form(db, values)
+    if error:
+        return {
+            "splitter": None,
+            "error": error,
+            "form_context": build_splitter_form_context(
+                db,
+                splitter=None,
+                action_url=action_url,
+                selected_fdh_id=str(values.get("fdh_id") or "") or None,
+                error=error,
+            ),
+        }
+    splitter = create_splitter(db, values)
+    return {"splitter": splitter, "error": None, "form_context": None}
+
+
 def update_splitter(splitter: Splitter, values: dict[str, object]) -> None:
     """Apply parsed form values to existing splitter."""
     input_ports, output_ports = parse_splitter_port_counts(
@@ -301,6 +379,35 @@ def commit_splitter_update(db: Session, splitter: Splitter, values: dict[str, ob
     """Apply form values and flush the splitter update."""
     update_splitter(splitter, values)
     db.flush()
+
+
+def update_splitter_submission(
+    db: Session,
+    splitter: Splitter,
+    form: FormData,
+    *,
+    action_url: str,
+) -> dict[str, object]:
+    """Handle splitter update form parsing/validation/update."""
+    before_snapshot = model_to_dict(splitter)
+    values = parse_splitter_form_values(form)
+    error = validate_splitter_form(db, values)
+    if error:
+        return {
+            "error": error,
+            "form_context": build_splitter_form_context(
+                db,
+                splitter=splitter,
+                action_url=action_url,
+                selected_fdh_id=str(values.get("fdh_id") or "") or None,
+                error=error,
+            ),
+        }
+    commit_splitter_update(db, splitter, values)
+    after_snapshot = model_to_dict(splitter)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+    metadata = {"changes": changes} if changes else None
+    return {"error": None, "form_context": None, "metadata": metadata}
 
 
 def splitter_detail_page_data(db: Session, splitter_id: str) -> dict[str, object] | None:

@@ -228,6 +228,49 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         )
         return apply_pagination(query, limit, offset).all()
 
+    @staticmethod
+    def resolve_subscriber_id(subscriber_id: str | None, account_id: str | None) -> str | None:
+        """Backwards-compat alias resolution for API callers."""
+        return subscriber_id or account_id
+
+    @classmethod
+    def list_response_with_filters(
+        cls,
+        db: Session,
+        splitter_port_id: str | None,
+        subscriber_id: str | None,
+        subscription_id: str | None,
+        is_active: bool | None,
+        order_by: str,
+        order_dir: str,
+        limit: int,
+        offset: int,
+    ) -> dict[str, object]:
+        query = db.query(SplitterPortAssignment)
+        query = apply_optional_equals(
+            query,
+            {
+                SplitterPortAssignment.splitter_port_id: coerce_uuid(splitter_port_id),
+                SplitterPortAssignment.subscriber_id: coerce_uuid(subscriber_id),
+                SplitterPortAssignment.subscription_id: coerce_uuid(subscription_id),
+            },
+        )
+        query = apply_active_state(query, SplitterPortAssignment.active, is_active)
+        query = apply_ordering(
+            query,
+            order_by,
+            order_dir,
+            {"created_at": SplitterPortAssignment.created_at},
+        )
+        total = query.count()
+        items = apply_pagination(query, limit, offset).all()
+        return {
+            "items": items,
+            "count": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
     @classmethod
     def get(cls, db: Session, assignment_id: str):
         return super().get(db, assignment_id)

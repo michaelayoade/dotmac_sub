@@ -22,6 +22,11 @@ from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
 from app.api.deps import require_role, require_user_auth
 from app.api.domains import router as domains_router
+from app.api.domains_provisioning import router as domains_provisioning_router
+from app.api.domains_monitoring import router as domains_monitoring_router
+from app.api.domains_network_access import router as domains_network_access_router
+from app.api.domains_network_fiber import router as domains_network_fiber_router
+from app.api.domains_usage import router as domains_usage_router
 from app.api.external import router as external_router
 from app.api.fiber_plant import router as fiber_plant_router
 from app.api.files import router as files_router
@@ -357,6 +362,11 @@ _include_api_router(search_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(domains_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(domains_provisioning_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(domains_monitoring_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(domains_network_access_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(domains_network_fiber_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(domains_usage_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(imports_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(audit_router)
 _include_api_router(gis_router, dependencies=[Depends(require_user_auth)])

@@ -1,0 +1,125 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, empty_state %}
+
+{% block title %}CPE Management - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="CPE Management",
+        subtitle="Manage customer premises equipment and MikroTik integrations",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>',
+        color="emerald",
+        color2="teal"
+    ) %}
+        <a href="/admin/network/cpes/new" class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Add CPE
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Total Devices</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Active</p>
+            <p class="mt-1 text-3xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.active }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">MikroTik</p>
+            <p class="mt-1 text-3xl font-bold text-sky-600 dark:text-sky-400">{{ stats.mikrotik }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/cpes" class="grid gap-3 md:grid-cols-5">
+            <div class="md:col-span-2">
+                <label for="search" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <input id="search" name="search" value="{{ filters.search }}" placeholder="Serial, vendor, MAC, subscriber"
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="status" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Status</label>
+                <select id="status" name="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    <option value="active" {% if filters.status == 'active' %}selected{% endif %}>Active</option>
+                    <option value="inactive" {% if filters.status == 'inactive' %}selected{% endif %}>Inactive</option>
+                    <option value="suspended" {% if filters.status == 'suspended' %}selected{% endif %}>Suspended</option>
+                </select>
+            </div>
+            <div>
+                <label for="vendor" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Vendor</label>
+                <input id="vendor" name="vendor" value="{{ filters.vendor }}" placeholder="MikroTik"
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Subscriber</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Vendor/Model</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">MAC</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% if cpes %}
+                {% for cpe in cpes %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ cpe.serial_number or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                        {% if cpe.subscriber %}
+                        <a href="/admin/subscribers/{{ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.full_name }}</a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                        {{ cpe.vendor or '-' }}{% if cpe.model %} / {{ cpe.model }}{% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-600 dark:text-slate-300">{{ cpe.mac_address or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ cpe.device_type.value | upper }}</td>
+                    <td class="px-4 py-3">
+                        {{ status_badge(cpe.status.value | title, "active" if cpe.status.value == "active" else "inactive") }}
+                    </td>
+                    <td class="px-4 py-3 text-right text-sm">
+                        <a href="/admin/network/cpes/{{ cpe.id }}" class="text-emerald-600 hover:text-emerald-700">View</a>
+                        <span class="mx-1 text-slate-300">|</span>
+                        <a href="/admin/network/cpes/{{ cpe.id }}/edit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">Edit</a>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="7" class="px-6 py-10">
+                        {{ empty_state(
+                            title="No CPE devices",
+                            message="Create a CPE record to track device ownership and provisioning.",
+                            icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>',
+                            color="emerald",
+                            color2="teal",
+                            action_label="Add CPE",
+                            action_href="/admin/network/cpes/new",
+                            colspan=6
+                        ) }}
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

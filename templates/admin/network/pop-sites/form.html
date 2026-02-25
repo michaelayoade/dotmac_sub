@@ -30,6 +30,9 @@
                 {% endif %}
 
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {% set selected_organization_id = (pop_site.organization_id|string) if pop_site and pop_site.organization_id else '' %}
+                    {% set selected_reseller_id = (pop_site.reseller_id|string) if pop_site and pop_site.reseller_id else '' %}
+                    {% set selected_zone_id = (pop_site.zone_id|string) if pop_site and pop_site.zone_id else '' %}
                     <div class="sm:col-span-2">
                         <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Site Name <span class="text-red-500">*</span></label>
                         <input type="text" name="name" id="name" required maxlength="160"
@@ -45,6 +48,40 @@
                             placeholder="POP-DC-01"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Unique identifier for this site</p>
+                    </div>
+
+                    <div>
+                        <label for="organization_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Organization</label>
+                        <select name="organization_id" id="organization_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Unassigned</option>
+                            {% for org in organizations or [] %}
+                            <option value="{{ org.id }}" {% if selected_organization_id == org.id|string %}selected{% endif %}>{{ org.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="reseller_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Partner</label>
+                        <select name="reseller_id" id="reseller_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Unassigned</option>
+                            {% for reseller in resellers or [] %}
+                            <option value="{{ reseller.id }}" {% if selected_reseller_id == reseller.id|string %}selected{% endif %}>{{ reseller.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="zone_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Location Reference</label>
+                        <select name="zone_id" id="zone_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for zone in zones or [] %}
+                            <option value="{{ zone.id }}" {% if selected_zone_id == zone.id|string %}selected{% endif %}>{{ zone.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Assign this site to a network zone/location hierarchy.</p>
                     </div>
 
                     <div>

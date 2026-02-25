@@ -14,6 +14,7 @@ from pathlib import Path
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
+from app.services import backup_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,14 @@ def backup_all_olts() -> dict[str, int]:
             config_text = _fetch_running_config(olt)
             if config_text is None:
                 skipped += 1
+                backup_alerts.queue_backup_failure_notification(
+                    db,
+                    device_kind="olt",
+                    device_name=olt.name,
+                    device_ip=olt.mgmt_ip,
+                    error_message="Could not fetch running configuration",
+                    run_type="scheduled",
+                )
                 continue
 
             try:
@@ -128,6 +137,14 @@ def backup_all_olts() -> dict[str, int]:
             except Exception as e:
                 logger.error("Failed to save backup for OLT %s: %s", olt.name, e)
                 errors += 1
+                backup_alerts.queue_backup_failure_notification(
+                    db,
+                    device_kind="olt",
+                    device_name=olt.name,
+                    device_ip=olt.mgmt_ip,
+                    error_message=str(e),
+                    run_type="scheduled",
+                )
 
         db.commit()
     except Exception:

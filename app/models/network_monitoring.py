@@ -66,6 +66,12 @@ class MetricType(enum.Enum):
     custom = "custom"
 
 
+class SpeedTestSource(enum.Enum):
+    manual = "manual"
+    scheduled = "scheduled"
+    api = "api"
+
+
 class AlertSeverity(enum.Enum):
     info = "info"
     warning = "warning"
@@ -84,6 +90,19 @@ class AlertOperator(enum.Enum):
     lt = "lt"
     lte = "lte"
     eq = "eq"
+
+
+class DnsThreatSeverity(enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class DnsThreatAction(enum.Enum):
+    blocked = "blocked"
+    allowed = "allowed"
+    monitored = "monitored"
 
 
 class PopSite(Base):
@@ -106,6 +125,12 @@ class PopSite(Base):
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_zones.id")
     )
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id")
+    )
+    reseller_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id")
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -125,6 +150,8 @@ class PopSite(Base):
         order_by="PopSiteContact.created_at.desc()",
     )
     zone = relationship("NetworkZone")
+    organization = relationship("Organization")
+    reseller = relationship("Reseller")
 
 
 class PopSiteContact(Base):
@@ -169,6 +196,9 @@ class NetworkDevice(Base):
     pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id")
     )
+    parent_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="SET NULL")
+    )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     hostname: Mapped[str | None] = mapped_column(String(160))
     mgmt_ip: Mapped[str | None] = mapped_column(String(64))
@@ -182,6 +212,8 @@ class NetworkDevice(Base):
     )
     ping_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     snmp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    send_notifications: Mapped[bool] = mapped_column(Boolean, default=True)
+    notification_delay_minutes: Mapped[int] = mapped_column(Integer, default=0)
     snmp_port: Mapped[int | None] = mapped_column(Integer)
     snmp_version: Mapped[str | None] = mapped_column(String(10))
     snmp_community: Mapped[str | None] = mapped_column(String(255))
@@ -192,8 +224,10 @@ class NetworkDevice(Base):
     snmp_priv_secret: Mapped[str | None] = mapped_column(String(255))
     last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_ping_ok: Mapped[bool | None] = mapped_column(Boolean)
+    ping_down_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_snmp_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_snmp_ok: Mapped[bool | None] = mapped_column(Boolean)
+    snmp_down_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
     splynx_monitoring_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -217,6 +251,15 @@ class NetworkDevice(Base):
     )
 
     pop_site = relationship("PopSite", back_populates="devices")
+    parent_device = relationship(
+        "NetworkDevice",
+        remote_side="NetworkDevice.id",
+        back_populates="child_devices",
+    )
+    child_devices = relationship(
+        "NetworkDevice",
+        back_populates="parent_device",
+    )
     interfaces = relationship("DeviceInterface", back_populates="device")
     metrics = relationship("DeviceMetric", back_populates="device")
     alerts = relationship("Alert", back_populates="device")
@@ -279,6 +322,95 @@ class DeviceMetric(Base):
 
     device = relationship("NetworkDevice", back_populates="metrics")
     interface = relationship("DeviceInterface", back_populates="metrics")
+
+
+class SpeedTestResult(Base):
+    __tablename__ = "speed_test_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id")
+    )
+    network_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id")
+    )
+    pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    source: Mapped[SpeedTestSource] = mapped_column(
+        Enum(SpeedTestSource), default=SpeedTestSource.manual
+    )
+    target_label: Mapped[str | None] = mapped_column(String(160))
+    provider: Mapped[str | None] = mapped_column(String(120))
+    server_name: Mapped[str | None] = mapped_column(String(160))
+    external_ip: Mapped[str | None] = mapped_column(String(64))
+    download_mbps: Mapped[float] = mapped_column(Float, default=0)
+    upload_mbps: Mapped[float] = mapped_column(Float, default=0)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    jitter_ms: Mapped[float | None] = mapped_column(Float)
+    packet_loss_pct: Mapped[float | None] = mapped_column(Float)
+    tested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    subscriber = relationship("Subscriber")
+    subscription = relationship("Subscription")
+    network_device = relationship("NetworkDevice")
+    pop_site = relationship("PopSite")
+
+
+class DnsThreatEvent(Base):
+    __tablename__ = "dns_threat_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    network_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id")
+    )
+    pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id")
+    )
+    queried_domain: Mapped[str] = mapped_column(String(255), nullable=False)
+    query_type: Mapped[str | None] = mapped_column(String(16))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    destination_ip: Mapped[str | None] = mapped_column(String(64))
+    threat_category: Mapped[str | None] = mapped_column(String(80))
+    threat_feed: Mapped[str | None] = mapped_column(String(120))
+    severity: Mapped[DnsThreatSeverity] = mapped_column(
+        Enum(DnsThreatSeverity), default=DnsThreatSeverity.medium
+    )
+    action: Mapped[DnsThreatAction] = mapped_column(
+        Enum(DnsThreatAction), default=DnsThreatAction.blocked
+    )
+    confidence_score: Mapped[float | None] = mapped_column(Float)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    subscriber = relationship("Subscriber")
+    network_device = relationship("NetworkDevice")
+    pop_site = relationship("PopSite")
 
 
 class AlertRule(Base):

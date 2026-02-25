@@ -1,0 +1,137 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Network Backups - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Network Backups</h1>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                Global backup status across NAS and OLT devices.
+            </p>
+        </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Total</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/30 dark:bg-emerald-900/20">
+            <p class="text-xs uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Success</p>
+            <p class="mt-2 text-2xl font-semibold text-emerald-800 dark:text-emerald-200">{{ stats.success }}</p>
+        </div>
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/30 dark:bg-amber-900/20">
+            <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Stale</p>
+            <p class="mt-2 text-2xl font-semibold text-amber-800 dark:text-amber-200">{{ stats.stale }}</p>
+        </div>
+        <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-900/30 dark:bg-rose-900/20">
+            <p class="text-xs uppercase tracking-wide text-rose-700 dark:text-rose-300">Failed</p>
+            <p class="mt-2 text-2xl font-semibold text-rose-800 dark:text-rose-200">{{ stats.failed }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">NAS</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ stats.nas }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">OLT</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ stats.olt }}</p>
+        </div>
+    </div>
+
+    <form method="GET" action="/admin/network/backups" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <input type="search" name="search" value="{{ search_filter }}"
+                   placeholder="Search device, IP, vendor..."
+                   class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+            <select name="status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="all" {% if status_filter == "all" %}selected{% endif %}>All statuses</option>
+                <option value="success" {% if status_filter == "success" %}selected{% endif %}>Success</option>
+                <option value="stale" {% if status_filter == "stale" %}selected{% endif %}>Stale</option>
+                <option value="failed" {% if status_filter == "failed" %}selected{% endif %}>Failed</option>
+            </select>
+            <select name="device_type" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="all" {% if device_type_filter == "all" %}selected{% endif %}>All types</option>
+                <option value="nas" {% if device_type_filter == "nas" %}selected{% endif %}>NAS</option>
+                <option value="olt" {% if device_type_filter == "olt" %}selected{% endif %}>OLT</option>
+            </select>
+            <input type="number" min="1" max="720" name="stale_hours" value="{{ stale_hours }}"
+                   class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200"
+                   placeholder="Stale threshold (hours)">
+            <select name="sort" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                <option value="last_backup_asc" {% if sort_filter == "last_backup_asc" %}selected{% endif %}>Oldest first</option>
+                <option value="last_backup_desc" {% if sort_filter == "last_backup_desc" %}selected{% endif %}>Newest first</option>
+            </select>
+            <button type="submit" class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Apply
+            </button>
+        </div>
+    </form>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Device</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Group / Site</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor / Model</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">IP / Port</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Backup</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Message</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in rows %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <td class="px-4 py-3">
+                            <a href="{{ row.device_url }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ row.device_name }}</a>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.device_type | upper }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.group }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.vendor or "-" }} / {{ row.model or "-" }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                            <span class="font-mono">{{ row.ip_address }}</span>
+                            <span class="text-slate-400">:</span>
+                            <span>{{ row.port }}</span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                            {{ row.last_backup_at.strftime('%Y-%m-%d %H:%M:%S') if row.last_backup_at else "-" }}
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">{{ row.last_message }}</td>
+                        <td class="px-4 py-3">
+                            {% if row.backup_status == "success" %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Success</span>
+                            {% elif row.backup_status == "failed" %}
+                            <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Failed</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Stale</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right text-sm">
+                            <div class="inline-flex items-center gap-3">
+                                <a href="{{ row.device_url }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Device</a>
+                                <a href="{{ row.history_url }}" class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">History</a>
+                                {% if row.backup_url %}
+                                <a href="{{ row.backup_url }}" class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">Latest</a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" class="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                            No devices matched the current filter.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

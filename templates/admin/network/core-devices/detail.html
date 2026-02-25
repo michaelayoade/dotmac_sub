@@ -107,6 +107,14 @@
                             </dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Parent Device</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if device.parent_device %}
+                                <a href="/admin/network/core-devices/{{ device.parent_device.id }}" class="text-primary-600 hover:text-primary-700">{{ device.parent_device.name }}</a>
+                                {% else %}-{% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.vendor or '-' }}</dd>
                         </div>
@@ -117,6 +125,15 @@
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ device.serial_number or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notifications</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {{ "Enabled" if device.send_notifications else "Disabled" }}
+                                {% if device.send_notifications %}
+                                <span class="text-slate-400">(delay: {{ device.notification_delay_minutes or 0 }}m)</span>
+                                {% endif %}
+                            </dd>
                         </div>
                         {% if device.notes %}
                         <div class="sm:col-span-2">
@@ -209,6 +226,69 @@
 
         <!-- Sidebar -->
         <div class="space-y-6">
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Hierarchy</h2>
+                </div>
+                <div class="p-6 space-y-4 text-sm">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Lineage</p>
+                        {% if device_lineage %}
+                        <div class="mt-1 text-slate-700 dark:text-slate-300">
+                            {% for node in device_lineage %}
+                                <a href="/admin/network/core-devices/{{ node.id }}" class="text-primary-600 hover:text-primary-700">{{ node.name }}</a>
+                                <span class="text-slate-400">/</span>
+                            {% endfor %}
+                            <span class="font-semibold text-slate-900 dark:text-white">{{ device.name }}</span>
+                        </div>
+                        {% else %}
+                        <p class="mt-1 text-slate-700 dark:text-slate-300">Top-level device</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Child Devices</p>
+                        {% if child_devices %}
+                        {% if child_status_summary.impacted %}
+                        <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                            Impact detected: {{ child_status_summary.offline }} offline, {{ child_status_summary.degraded }} degraded.
+                        </p>
+                        {% endif %}
+                        <ul class="mt-2 space-y-1">
+                            {% for child in child_devices %}
+                            <li>
+                                <a href="/admin/network/core-devices/{{ child.id }}" class="text-primary-600 hover:text-primary-700">{{ child.name }}</a>
+                                <span class="text-slate-400">({{ child.status.value | title }})</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="mt-1 text-slate-700 dark:text-slate-300">No child devices.</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Topology Tree</p>
+                        {% if descendant_tree %}
+                        <ul class="mt-2 space-y-1">
+                            {% for node in descendant_tree recursive %}
+                            <li>
+                                <div class="flex items-center gap-1 text-xs" style="margin-left: {{ node.depth * 14 }}px;">
+                                    <span class="text-slate-400">└─</span>
+                                    <a href="/admin/network/core-devices/{{ node.device.id }}" class="text-primary-600 hover:text-primary-700">{{ node.device.name }}</a>
+                                    <span class="text-slate-400">({{ node.device.status.value | title }})</span>
+                                </div>
+                                {% if node.children %}
+                                <ul class="space-y-1">{{ loop(node.children) }}</ul>
+                                {% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="mt-1 text-slate-700 dark:text-slate-300">No descendants.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
             <div id="device-health-card" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                     <div class="flex items-center justify-between gap-2">

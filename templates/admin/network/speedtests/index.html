@@ -1,0 +1,120 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}Speed Test Results - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "sky") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Speed Test Results",
+        subtitle="Track link and subscriber speed verification for SLA compliance",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>',
+        color="cyan",
+        color2="sky"
+    ) %}
+        <a href="/admin/network/speedtests/new" class="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Add Result
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Results</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Avg Download</p>
+            <p class="mt-1 text-3xl font-bold text-cyan-600 dark:text-cyan-400">{{ stats.avg_download }} Mbps</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Avg Upload</p>
+            <p class="mt-1 text-3xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.avg_upload }} Mbps</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Avg Latency</p>
+            <p class="mt-1 text-3xl font-bold text-amber-600 dark:text-amber-400">{{ stats.avg_latency }} ms</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/speedtests" class="grid gap-3 md:grid-cols-7">
+            <div class="md:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <input name="search" value="{{ filters.search }}" placeholder="target, provider, server" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</label>
+                <select name="subscriber_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for subscriber in subscribers %}
+                    <option value="{{ subscriber.id }}" {% if filters.subscriber_id == subscriber.id|string %}selected{% endif %}>{{ subscriber.full_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Device</label>
+                <select name="network_device_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for device in devices %}
+                    <option value="{{ device.id }}" {% if filters.network_device_id == device.id|string %}selected{% endif %}>{{ device.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Source</label>
+                <select name="source" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for item in sources %}
+                    <option value="{{ item }}" {% if filters.source == item %}selected{% endif %}>{{ item | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">From</label>
+                <input type="date" name="date_from" value="{{ filters.date_from }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-cyan-600 px-3 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Test Time</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Target</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Path</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Download</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Upload</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Latency</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Source</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% for item in results %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.tested_at.strftime('%Y-%m-%d %H:%M') if item.tested_at else '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.target_label or item.server_name or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                        {% if item.subscriber %}{{ item.subscriber.full_name }}{% endif %}
+                        {% if item.network_device %}{% if item.subscriber %} / {% endif %}{{ item.network_device.name }}{% endif %}
+                        {% if not item.subscriber and not item.network_device %}-{% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ '%.2f'|format(item.download_mbps or 0) }} Mbps</td>
+                    <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ '%.2f'|format(item.upload_mbps or 0) }} Mbps</td>
+                    <td class="px-4 py-3 text-sm text-amber-600 dark:text-amber-400">{{ '%.2f'|format(item.latency_ms or 0) }} ms</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ item.source.value | title }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="px-6 py-8 text-center text-sm text-slate-500">No speed test results recorded.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

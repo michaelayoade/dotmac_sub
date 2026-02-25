@@ -1,8 +1,8 @@
 """Tests for network monitoring service."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from app.models.network_monitoring import AlertSeverity, AlertStatus, MetricType
+from app.models.network_monitoring import AlertOperator, AlertSeverity, AlertStatus, MetricType
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,
@@ -392,6 +392,123 @@ def test_delete_network_device(db_session, pop_site):
     monitoring_service.network_devices.delete(db_session, str(device.id))
     db_session.refresh(device)
     assert device.is_active is False
+
+
+def test_uptime_alert_respects_device_notification_delay(db_session, pop_site):
+    device = monitoring_service.network_devices.create(
+        db_session,
+        NetworkDeviceCreate(
+            name="Delay Device",
+            hostname="delay-device",
+            pop_site_id=pop_site.id,
+            send_notifications=True,
+            notification_delay_minutes=5,
+        ),
+    )
+    rule = monitoring_service.alert_rules.create(
+        db_session,
+        AlertRuleCreate(
+            name="Delay Uptime Rule",
+            metric_type=MetricType.uptime,
+            operator=AlertOperator.lt,
+            threshold=1.0,
+            severity=AlertSeverity.warning,
+            device_id=device.id,
+        ),
+    )
+    t0 = datetime.now(UTC)
+    monitoring_service.device_metrics.create(
+        db_session,
+        DeviceMetricCreate(
+            device_id=device.id,
+            metric_type=MetricType.uptime,
+            value=0,
+            recorded_at=t0,
+        ),
+    )
+    alerts_initial = monitoring_service.alerts.list(
+        db_session,
+        rule_id=str(rule.id),
+        device_id=str(device.id),
+        interface_id=None,
+        status=None,
+        severity=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=10,
+        offset=0,
+    )
+    assert alerts_initial == []
+
+    monitoring_service.device_metrics.create(
+        db_session,
+        DeviceMetricCreate(
+            device_id=device.id,
+            metric_type=MetricType.uptime,
+            value=0,
+            recorded_at=t0 + timedelta(minutes=6),
+        ),
+    )
+    alerts_after_delay = monitoring_service.alerts.list(
+        db_session,
+        rule_id=str(rule.id),
+        device_id=str(device.id),
+        interface_id=None,
+        status=None,
+        severity=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=10,
+        offset=0,
+    )
+    assert len(alerts_after_delay) >= 1
+    assert alerts_after_delay[0].status == AlertStatus.open
+
+
+def test_alert_suppressed_when_device_notifications_disabled(db_session, pop_site):
+    device = monitoring_service.network_devices.create(
+        db_session,
+        NetworkDeviceCreate(
+            name="Muted Device",
+            hostname="muted-device",
+            pop_site_id=pop_site.id,
+            send_notifications=False,
+            notification_delay_minutes=0,
+        ),
+    )
+    rule = monitoring_service.alert_rules.create(
+        db_session,
+        AlertRuleCreate(
+            name="Muted CPU Rule",
+            metric_type=MetricType.cpu,
+            operator=AlertOperator.gt,
+            threshold=10.0,
+            severity=AlertSeverity.warning,
+            device_id=device.id,
+        ),
+    )
+    monitoring_service.device_metrics.create(
+        db_session,
+        DeviceMetricCreate(
+            device_id=device.id,
+            metric_type=MetricType.cpu,
+            value=80,
+            recorded_at=datetime.now(UTC),
+        ),
+    )
+    alerts = monitoring_service.alerts.list(
+        db_session,
+        rule_id=str(rule.id),
+        device_id=str(device.id),
+        interface_id=None,
+        status=None,
+        severity=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=10,
+        offset=0,
+    )
+    assert alerts == []
 
 
 def test_delete_pop_site(db_session):

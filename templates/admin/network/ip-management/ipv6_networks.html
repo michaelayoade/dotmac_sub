@@ -1,0 +1,154 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, empty_state %}
+
+{% block title %}IPv6 Networks - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("purple", "violet") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="IPv6 Networks",
+        subtitle="Prefix inventory, utilization, and metadata",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+        color="purple",
+        color2="violet"
+    ) %}
+        <a href="/admin/network/ip-management/pools/new"
+           class="inline-flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
+            Add IPv6 Network
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Networks</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_networks }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Allocated</p>
+            <p class="mt-1 text-3xl font-bold text-purple-600 dark:text-purple-400">{{ stats.total_used }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Total Capacity</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_capacity }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/ip-management/ipv6-networks" class="grid gap-3 md:grid-cols-5">
+            <div>
+                <label for="location" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Location</label>
+                <select id="location" name="location" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for item in locations %}
+                    <option value="{{ item }}" {% if active_location == item|lower %}selected{% endif %}>{{ item }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="category" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Category</label>
+                <select id="category" name="category" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    {% for item in categories %}
+                    <option value="{{ item }}" {% if active_category == item|lower %}selected{% endif %}>{{ item }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="sort_by" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Sort By</label>
+                <select id="sort_by" name="sort_by" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="cidr" {% if sort_by == 'cidr' %}selected{% endif %}>Network</option>
+                    <option value="prefix" {% if sort_by == 'prefix' %}selected{% endif %}>Prefix</option>
+                    <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Title</option>
+                    <option value="location" {% if sort_by == 'location' %}selected{% endif %}>Location</option>
+                    <option value="category" {% if sort_by == 'category' %}selected{% endif %}>Category</option>
+                    <option value="utilization" {% if sort_by == 'utilization' %}selected{% endif %}>Utilization</option>
+                </select>
+            </div>
+            <div>
+                <label for="sort_dir" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Direction</label>
+                <select id="sort_dir" name="sort_dir" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Ascending</option>
+                    <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Descending</option>
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-700">Apply</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Network</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Prefix</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Router</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Utilization</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Title</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Location</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Type</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Category</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% if networks %}
+                {% for item in networks %}
+                {% set util = item.utilization %}
+                <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                    <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ item.pool.id }}</td>
+                    <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ item.pool.cidr }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">/{{ item.prefix_length if item.prefix_length is not none else '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ item.router or '-' }}</td>
+                    <td class="px-4 py-3">
+                        {% if util.total > 0 %}
+                        <div class="w-40">
+                            <div class="mb-1 flex items-center justify-between text-xs text-slate-500">
+                                <span>{{ util.used }}/{{ util.total }}</span>
+                                <span>{{ util.percent }}%</span>
+                            </div>
+                            <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
+                                <div class="h-2 rounded-full bg-purple-500" style="width: {{ util.percent }}%"></div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <span class="text-xs text-slate-400">N/A</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ item.pool.name }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ item.location or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ item.network_type or '-' }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ item.category or '-' }}</td>
+                    <td class="px-4 py-3 text-right text-sm">
+                        <a href="/admin/network/ip-management/pools/{{ item.pool.id }}" class="text-purple-600 hover:text-purple-700">Info</a>
+                        <span class="mx-1 text-slate-300">|</span>
+                        <a href="/admin/network/ip-management/pools/{{ item.pool.id }}/edit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">Edit</a>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="10" class="px-6 py-10">
+                        {{ empty_state(
+                            title="No IPv6 networks",
+                            message="Create IPv6 pools and set metadata to manage them here.",
+                            icon='<svg class="h-8 w-8 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+                            color="purple",
+                            color2="violet",
+                            action_label="Add IPv6 Network",
+                            action_href="/admin/network/ip-management/pools/new",
+                            colspan=9
+                        ) }}
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

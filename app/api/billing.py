@@ -1,7 +1,4 @@
-import logging
-
 from fastapi import APIRouter, Depends, Query, Request, status
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -60,6 +57,7 @@ from app.schemas.billing import (
     TaxRateUpdate,
 )
 from app.schemas.common import ListResponse
+from app.services import api_billing_webhooks as api_billing_webhooks_service
 from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services.auth_dependencies import require_permission
@@ -938,141 +936,32 @@ def list_payment_events(
     )
 
 
-# --- Paystack Webhook ---
-
-_paystack_logger = logging.getLogger(__name__)
-
-
 @router.post(
     "/payment-events/paystack",
     tags=["payment-events"],
 )
-def paystack_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receive Paystack webhook events.
-
-    Verifies the HMAC-SHA512 signature and delegates processing to
-    the PaymentProviderEvents ingest pipeline.
-    """
-    import asyncio
-    import json
-
-    from app.models.billing import PaymentProvider, PaymentProviderType
-    from app.services.paystack import verify_webhook_signature
-
-    body = asyncio.get_event_loop().run_until_complete(request.body())
+async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
+    body = await request.body()
     signature = request.headers.get("X-Paystack-Signature", "")
-
-    if not verify_webhook_signature(body, signature, db):
-        _paystack_logger.warning("Invalid Paystack webhook signature")
-        return JSONResponse({"status": "invalid signature"}, status_code=400)
-
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        return JSONResponse({"status": "invalid JSON"}, status_code=400)
-
-    event_type = payload.get("event", "unknown")
-    data = payload.get("data", {})
-
-    _paystack_logger.info("Paystack webhook: %s", event_type)
-
-    # Look up the Paystack provider for audit linkage
-    provider = (
-        db.query(PaymentProvider)
-        .filter(PaymentProvider.provider_type == PaymentProviderType.paystack)
-        .first()
+    return api_billing_webhooks_service.process_paystack_webhook(
+        db=db,
+        body=body,
+        signature=signature,
     )
-    if not provider:
-        _paystack_logger.warning(
-            "No Paystack payment provider configured, skipping ingest"
-        )
-        return JSONResponse({"status": "ok"}, status_code=200)
-
-    # Ingest as a payment provider event for audit and processing
-    try:
-        billing_service.payment_provider_events.ingest(
-            db,
-            PaymentProviderEventIngest(
-                provider_id=provider.id,
-                event_type=event_type,
-                external_id=str(data.get("id", "")),
-                idempotency_key=f"paystack-{data.get('reference', data.get('id', ''))}",
-                payload=payload,
-            ),
-        )
-    except Exception as exc:
-        _paystack_logger.error("Paystack webhook processing error: %s", exc)
-
-    return JSONResponse({"status": "ok"}, status_code=200)
-
-
-# --- Flutterwave Webhook ---
-
-_flutterwave_logger = logging.getLogger(__name__)
 
 
 @router.post(
     "/payment-events/flutterwave",
     tags=["payment-events"],
 )
-def flutterwave_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receive Flutterwave webhook events.
-
-    Verifies the ``verif-hash`` header against the configured secret hash
-    and delegates processing to the PaymentProviderEvents ingest pipeline.
-    """
-    import asyncio
-    import json
-
-    from app.models.billing import PaymentProvider, PaymentProviderType
-    from app.schemas.billing import PaymentProviderEventIngest
-    from app.services.flutterwave import verify_webhook_signature
-
-    body = asyncio.get_event_loop().run_until_complete(request.body())
+async def flutterwave_webhook(request: Request, db: Session = Depends(get_db)):
+    body = await request.body()
     signature = request.headers.get("verif-hash", "")
-
-    if not verify_webhook_signature(body, signature, db):
-        _flutterwave_logger.warning("Invalid Flutterwave webhook signature")
-        return JSONResponse({"status": "invalid signature"}, status_code=400)
-
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        return JSONResponse({"status": "invalid JSON"}, status_code=400)
-
-    event_type = payload.get("event", "unknown")
-    data = payload.get("data", {})
-
-    _flutterwave_logger.info("Flutterwave webhook: %s", event_type)
-
-    # Look up the Flutterwave provider for audit linkage
-    provider = (
-        db.query(PaymentProvider)
-        .filter(PaymentProvider.provider_type == PaymentProviderType.flutterwave)
-        .first()
+    return api_billing_webhooks_service.process_flutterwave_webhook(
+        db=db,
+        body=body,
+        signature=signature,
     )
-    if not provider:
-        _flutterwave_logger.warning(
-            "No Flutterwave payment provider configured, skipping ingest"
-        )
-        return JSONResponse({"status": "ok"}, status_code=200)
-
-    # Ingest as a payment provider event for audit and processing
-    try:
-        billing_service.payment_provider_events.ingest(
-            db,
-            PaymentProviderEventIngest(
-                provider_id=provider.id,
-                event_type=event_type,
-                external_id=str(data.get("id", "")),
-                idempotency_key=f"flutterwave-{data.get('tx_ref', data.get('id', ''))}",
-                payload=payload,
-            ),
-        )
-    except Exception as exc:
-        _flutterwave_logger.error("Flutterwave webhook processing error: %s", exc)
-
-    return JSONResponse({"status": "ok"}, status_code=200)
 
 
 # --- Bank Accounts ---
