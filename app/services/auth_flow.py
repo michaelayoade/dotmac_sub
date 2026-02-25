@@ -26,8 +26,16 @@ from app.models.auth import (
     Session as AuthSession,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    SubscriberRole,
+    SystemUserPermission,
+    SystemUserRole,
+)
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import radius_auth as radius_auth_service
 from app.services.common import coerce_uuid
@@ -204,15 +212,27 @@ def hash_session_token(token: str) -> str:
 
 def _issue_access_token(
     db: Session | None,
-    subscriber_id: str,
-    session_id: str,
+    principal_id: str,
+    principal_type_or_session_id: str,
+    session_id: str | None = None,
     roles: list[str] | None = None,
     permissions: list[str] | None = None,
 ) -> str:
+    # Backward compatibility: older callers passed (db, principal_id, session_id, ...)
+    # and implicitly targeted subscriber principals.
+    if session_id is None:
+        principal_type = "subscriber"
+        resolved_session_id = principal_type_or_session_id
+    else:
+        principal_type = principal_type_or_session_id
+        resolved_session_id = session_id
+
     now = _now()
     payload = {
-        "sub": subscriber_id,
-        "session_id": session_id,
+        "sub": principal_id,
+        "principal_id": principal_id,
+        "principal_type": principal_type,
+        "session_id": resolved_session_id,
         "typ": "access",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=_access_ttl_minutes(db))).timestamp()),
@@ -224,10 +244,16 @@ def _issue_access_token(
     return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
 
 
-def _issue_mfa_token(db: Session | None, subscriber_id: str) -> str:
+def _issue_mfa_token(
+    db: Session | None,
+    principal_id: str,
+    principal_type: str = "subscriber",
+) -> str:
     now = _now()
     payload = {
-        "sub": subscriber_id,
+        "sub": principal_id,
+        "principal_id": principal_id,
+        "principal_type": principal_type,
         "typ": "mfa",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
@@ -248,11 +274,27 @@ def _password_reset_ttl_minutes(db: Session | None) -> int:
     return 60
 
 
-def _issue_password_reset_token(db: Session | None, subscriber_id: str, email: str) -> str:
+def _issue_password_reset_token(
+    db: Session | None,
+    principal_id: str,
+    principal_type_or_email: str,
+    email: str | None = None,
+) -> str:
+    # Backward compatibility: older callers passed (db, principal_id, email)
+    # and implicitly targeted subscriber principals.
+    if email is None:
+        principal_type = "subscriber"
+        resolved_email = principal_type_or_email
+    else:
+        principal_type = principal_type_or_email
+        resolved_email = email
+
     now = _now()
     payload = {
-        "sub": subscriber_id,
-        "email": email,
+        "sub": principal_id,
+        "principal_id": principal_id,
+        "principal_type": principal_type,
+        "email": resolved_email,
         "typ": "password_reset",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()),
@@ -293,29 +335,66 @@ def _person_or_404(db: Session, person_id: str) -> Subscriber:
     return _subscriber_or_404(db, person_id)
 
 
-def _load_rbac_claims(db: Session, subscriber_id: str):
+def _load_rbac_claims(
+    db: Session,
+    principal_type_or_principal_id: str,
+    principal_id: str | None = None,
+):
     if db is None:
         return [], []
-    subscriber_uuid = coerce_uuid(subscriber_id)
-    roles = (
-        db.query(Role)
-        .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-        .filter(SubscriberRole.subscriber_id == subscriber_uuid)
-        .filter(Role.is_active.is_(True))
-        .all()
-    )
-    permissions = (
-        db.query(Permission)
-        .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .join(Role, RolePermission.role_id == Role.id)
-        .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-        .filter(SubscriberRole.subscriber_id == subscriber_uuid)
-        .filter(Role.is_active.is_(True))
-        .filter(Permission.is_active.is_(True))
-        .all()
-    )
+    if principal_id is None:
+        principal_type = "subscriber"
+        resolved_principal_id = principal_type_or_principal_id
+    else:
+        principal_type = principal_type_or_principal_id
+        resolved_principal_id = principal_id
+    principal_uuid = coerce_uuid(resolved_principal_id)
+    if principal_type == "system_user":
+        roles = (
+            db.query(Role)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .filter(SystemUserRole.system_user_id == principal_uuid)
+            .filter(Role.is_active.is_(True))
+            .all()
+        )
+        permissions = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, RolePermission.role_id == Role.id)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .filter(SystemUserRole.system_user_id == principal_uuid)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+            .all()
+        )
+        direct_permissions = (
+            db.query(Permission)
+            .join(SystemUserPermission, SystemUserPermission.permission_id == Permission.id)
+            .filter(SystemUserPermission.system_user_id == principal_uuid)
+            .filter(Permission.is_active.is_(True))
+            .all()
+        )
+    else:
+        roles = (
+            db.query(Role)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == principal_uuid)
+            .filter(Role.is_active.is_(True))
+            .all()
+        )
+        permissions = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, RolePermission.role_id == Role.id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == principal_uuid)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+            .all()
+        )
+        direct_permissions = []
     role_names = [role.name for role in roles]
-    permission_keys = list({perm.key for perm in permissions})
+    permission_keys = list({perm.key for perm in [*permissions, *direct_permissions]})
     return role_names, permission_keys
 
 
@@ -333,25 +412,37 @@ def _resolve_login_credential(
     return cast(
         UserCredential | None,
         db.query(UserCredential)
-        .join(Subscriber, Subscriber.id == UserCredential.subscriber_id)
+        .outerjoin(Subscriber, Subscriber.id == UserCredential.subscriber_id)
+        .outerjoin(SystemUser, SystemUser.id == UserCredential.system_user_id)
         .filter(UserCredential.provider == provider)
         .filter(UserCredential.is_active.is_(True))
         .filter(
             (UserCredential.username == normalized_identifier)
             | (func.lower(Subscriber.email) == normalized_identifier.lower())
+            | (func.lower(SystemUser.email) == normalized_identifier.lower())
         )
         .order_by(UserCredential.created_at.desc())
         .first(),
     )
 
 
-def _primary_totp_method(db: Session, subscriber_id: str) -> MFAMethod | None:
+def _principal_for_credential(db: Session, credential: UserCredential) -> tuple[str, str, object | None]:
+    if credential.system_user_id:
+        return "system_user", str(credential.system_user_id), db.get(SystemUser, credential.system_user_id)
+    if credential.subscriber_id:
+        return "subscriber", str(credential.subscriber_id), db.get(Subscriber, credential.subscriber_id)
+    return "subscriber", "", None
+
+
+def _primary_totp_method(db: Session, principal_type: str, principal_id: str) -> MFAMethod | None:
+    query = db.query(MFAMethod).filter(MFAMethod.method_type == MFAMethodType.totp)
+    if principal_type == "system_user":
+        query = query.filter(MFAMethod.system_user_id == coerce_uuid(principal_id))
+    else:
+        query = query.filter(MFAMethod.subscriber_id == coerce_uuid(principal_id))
     return cast(
         MFAMethod | None,
-        db.query(MFAMethod)
-        .filter(MFAMethod.subscriber_id == coerce_uuid(subscriber_id))
-        .filter(MFAMethod.method_type == MFAMethodType.totp)
-        .filter(MFAMethod.is_active.is_(True))
+        query.filter(MFAMethod.is_active.is_(True))
         .filter(MFAMethod.enabled.is_(True))
         .filter(MFAMethod.is_primary.is_(True))
         .first(),
@@ -502,13 +593,16 @@ class AuthFlow(ListResponseMixin):
         credential.last_login_at = now
         db.commit()
 
-        if _primary_totp_method(db, str(credential.subscriber_id)):
+        principal_type, principal_id, principal = _principal_for_credential(db, credential)
+        if not principal or not getattr(principal, "is_active", False):
+            raise HTTPException(status_code=403, detail="Account disabled")
+        if _primary_totp_method(db, principal_type, principal_id):
             return {
                 "mfa_required": True,
-                "mfa_token": _issue_mfa_token(db, str(credential.subscriber_id)),
+                "mfa_token": _issue_mfa_token(db, principal_id, principal_type),
             }
 
-        return AuthFlow._issue_tokens(db, str(credential.subscriber_id), request)
+        return AuthFlow._issue_tokens(db, principal_type, principal_id, request)
 
     @staticmethod
     def mfa_setup(db: Session, subscriber_id: str, label: str | None):
@@ -582,11 +676,12 @@ class AuthFlow(ListResponseMixin):
     @staticmethod
     def mfa_verify(db: Session, mfa_token: str, code: str, request: Request):
         payload = _decode_jwt(db, mfa_token, "mfa")
-        subscriber_id = payload.get("sub")
-        if not subscriber_id:
+        principal_id = payload.get("principal_id") or payload.get("sub")
+        principal_type = payload.get("principal_type") or "subscriber"
+        if not principal_id:
             raise HTTPException(status_code=401, detail="Invalid MFA token")
 
-        method = _primary_totp_method(db, str(subscriber_id))
+        method = _primary_totp_method(db, principal_type, str(principal_id))
         if not method:
             raise HTTPException(status_code=404, detail="MFA method not found")
 
@@ -597,7 +692,7 @@ class AuthFlow(ListResponseMixin):
 
         method.last_used_at = _now()
         db.commit()
-        return AuthFlow._issue_tokens(db, subscriber_id, request)
+        return AuthFlow._issue_tokens(db, principal_type, str(principal_id), request)
 
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
@@ -649,9 +744,11 @@ class AuthFlow(ListResponseMixin):
         session.user_agent = _truncate_user_agent(request.headers.get("user-agent"))
         db.commit()
 
-        roles, permissions = _load_rbac_claims(db, str(session.subscriber_id))
+        principal_type = "system_user" if session.system_user_id else "subscriber"
+        principal_id = str(session.system_user_id or session.subscriber_id)
+        roles, permissions = _load_rbac_claims(db, principal_type, principal_id)
         access_token = _issue_access_token(
-            db, str(session.subscriber_id), str(session.id), roles, permissions
+            db, principal_id, principal_type, str(session.id), roles, permissions
         )
         return {"access_token": access_token, "refresh_token": new_refresh}
 
@@ -709,26 +806,56 @@ class AuthFlow(ListResponseMixin):
         }
 
     @staticmethod
-    def _issue_tokens(db: Session, subscriber_id: str, request: Request):
-        subscriber_uuid = coerce_uuid(subscriber_id)
+    def _issue_tokens(
+        db: Session,
+        principal_type_or_principal_id: str,
+        principal_id_or_request: str | Request,
+        request: Request | None = None,
+    ):
+        # Backward compatibility: older callers passed (db, principal_id, request)
+        # and implicitly targeted subscriber principals.
+        if request is None:
+            principal_type = "subscriber"
+            principal_id = principal_type_or_principal_id
+            active_request = cast(Request, principal_id_or_request)
+        else:
+            principal_type = principal_type_or_principal_id
+            principal_id = cast(str, principal_id_or_request)
+            active_request = request
+
+        principal_uuid = coerce_uuid(principal_id)
         refresh_token = secrets.token_urlsafe(48)
         now = _now()
         expires_at = now + timedelta(days=_refresh_ttl_days(db))
-        session = AuthSession(
-            subscriber_id=subscriber_uuid,
-            status=SessionStatus.active,
-            token_hash=_hash_token(refresh_token),
-            ip_address=request.client.host if request.client else None,
-            user_agent=_truncate_user_agent(request.headers.get("user-agent")),
-            created_at=now,
-            last_seen_at=now,
-            expires_at=expires_at,
-        )
+        if principal_type == "system_user":
+            session = AuthSession(
+                system_user_id=principal_uuid,
+                status=SessionStatus.active,
+                token_hash=_hash_token(refresh_token),
+                ip_address=active_request.client.host if active_request.client else None,
+                user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+                created_at=now,
+                last_seen_at=now,
+                expires_at=expires_at,
+            )
+        else:
+            session = AuthSession(
+                subscriber_id=principal_uuid,
+                status=SessionStatus.active,
+                token_hash=_hash_token(refresh_token),
+                ip_address=active_request.client.host if active_request.client else None,
+                user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+                created_at=now,
+                last_seen_at=now,
+                expires_at=expires_at,
+            )
         db.add(session)
         db.commit()
         db.refresh(session)
-        roles, permissions = _load_rbac_claims(db, str(subscriber_uuid))
-        access_token = _issue_access_token(db, str(subscriber_uuid), str(session.id), roles, permissions)
+        roles, permissions = _load_rbac_claims(db, principal_type, str(principal_uuid))
+        access_token = _issue_access_token(
+            db, str(principal_uuid), principal_type, str(session.id), roles, permissions
+        )
         return {"access_token": access_token, "refresh_token": refresh_token}
 
 
@@ -745,9 +872,13 @@ def change_password(
     Change a user's password after verifying the current password.
     Returns the timestamp when the password was changed.
     """
+    principal_uuid = coerce_uuid(subscriber_id)
     stmt = (
         sa_select(UserCredential)
-        .where(UserCredential.subscriber_id == coerce_uuid(subscriber_id))
+        .where(
+            (UserCredential.subscriber_id == principal_uuid)
+            | (UserCredential.system_user_id == principal_uuid)
+        )
         .where(UserCredential.is_active.is_(True))
     )
     credential = db.scalars(stmt).first()
@@ -793,24 +924,47 @@ def request_password_reset(db: Session, email: str) -> dict | None:
     Returns dict with token and person info if successful, None if email not found.
     Does not raise an error if email doesn't exist (security best practice).
     """
-    subscriber = db.query(Subscriber).filter(Subscriber.email == email).first()
-    if not subscriber:
-        return None
+    normalized_email = email.strip().lower()
+    subscriber = (
+        db.query(Subscriber).filter(func.lower(Subscriber.email) == normalized_email).first()
+    )
+    if subscriber:
+        credential = (
+            db.query(UserCredential)
+            .filter(UserCredential.subscriber_id == subscriber.id)
+            .filter(UserCredential.is_active.is_(True))
+            .first()
+        )
+        if credential:
+            token = _issue_password_reset_token(
+                db, str(subscriber.id), "subscriber", subscriber.email
+            )
+            return {
+                "token": token,
+                "email": subscriber.email,
+                "subscriber_name": subscriber.display_name or subscriber.first_name,
+            }
 
+    system_user = (
+        db.query(SystemUser).filter(func.lower(SystemUser.email) == normalized_email).first()
+    )
+    if not system_user:
+        return None
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.subscriber_id == subscriber.id)
+        .filter(UserCredential.system_user_id == system_user.id)
         .filter(UserCredential.is_active.is_(True))
         .first()
     )
     if not credential:
         return None
-
-    token = _issue_password_reset_token(db, str(subscriber.id), email)
+    token = _issue_password_reset_token(
+        db, str(system_user.id), "system_user", system_user.email
+    )
     return {
         "token": token,
-        "email": email,
-        "subscriber_name": subscriber.display_name or subscriber.first_name,
+        "email": system_user.email,
+        "subscriber_name": system_user.display_name or system_user.first_name,
     }
 
 
@@ -820,22 +974,27 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     Returns the timestamp when password was reset.
     """
     payload = _decode_password_reset_token(db, token)
-    subscriber_id = payload.get("sub")
+    principal_id = payload.get("principal_id") or payload.get("sub")
+    principal_type = payload.get("principal_type") or "subscriber"
     email = payload.get("email")
 
-    if not subscriber_id or not email:
+    if not principal_id or not email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
-    if not subscriber or subscriber.email != email:
+    if principal_type == "system_user":
+        principal = db.get(SystemUser, coerce_uuid(principal_id))
+        credential_query = db.query(UserCredential).filter(
+            UserCredential.system_user_id == coerce_uuid(principal_id)
+        )
+    else:
+        principal = db.get(Subscriber, coerce_uuid(principal_id))
+        credential_query = db.query(UserCredential).filter(
+            UserCredential.subscriber_id == coerce_uuid(principal_id)
+        )
+    if not principal or principal.email != email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
-    credential = (
-        db.query(UserCredential)
-        .filter(UserCredential.subscriber_id == subscriber.id)
-        .filter(UserCredential.is_active.is_(True))
-        .first()
-    )
+    credential = credential_query.filter(UserCredential.is_active.is_(True)).first()
     if not credential:
         raise HTTPException(status_code=404, detail="No credentials found")
 
@@ -853,8 +1012,8 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
 def validate_active_session(
     db: Session,
     session_id: str,
-    subscriber_id: str,
-) -> tuple[AuthSession, Subscriber] | None:
+    principal_id: str,
+) -> tuple[AuthSession, object, str] | None:
     """Validate that an active, non-expired session exists for the subscriber.
 
     Returns (session, subscriber) tuple if valid, else None.
@@ -863,7 +1022,6 @@ def validate_active_session(
     session = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)
-        .filter(AuthSession.subscriber_id == subscriber_id)
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .filter(AuthSession.expires_at > now)
@@ -871,9 +1029,16 @@ def validate_active_session(
     )
     if not session:
         return None
-
-    subscriber = db.get(Subscriber, subscriber_id)
-    if not subscriber:
+    principal_type = "system_user" if session.system_user_id else "subscriber"
+    active_id = str(session.system_user_id or session.subscriber_id)
+    if active_id != str(principal_id):
         return None
 
-    return session, subscriber
+    if principal_type == "system_user":
+        principal = db.get(SystemUser, active_id)
+    else:
+        principal = db.get(Subscriber, active_id)
+    if not principal:
+        return None
+
+    return session, principal, principal_type

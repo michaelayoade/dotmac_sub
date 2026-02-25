@@ -109,6 +109,39 @@ class TestSeedImportsSettings:
         assert setting is not None
         assert int(setting.value_text) == 5 * 1024 * 1024
 
+    def test_seeds_import_rollback_window_hours(self, db_session):
+        """Test import rollback window setting is seeded."""
+        settings_seed.seed_imports_settings(db_session)
+
+        setting = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.imports,
+            DomainSetting.key == "import_rollback_window_hours",
+        ).first()
+        assert setting is not None
+        assert int(setting.value_text) == 24
+
+    def test_seeds_import_background_threshold_rows(self, db_session):
+        """Test import background threshold setting is seeded."""
+        settings_seed.seed_imports_settings(db_session)
+
+        setting = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.imports,
+            DomainSetting.key == "import_background_threshold_rows",
+        ).first()
+        assert setting is not None
+        assert int(setting.value_text) == 1000
+
+    def test_seeds_import_jobs_log(self, db_session):
+        """Test import jobs log setting is seeded."""
+        settings_seed.seed_imports_settings(db_session)
+
+        setting = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.imports,
+            DomainSetting.key == "import_jobs_log",
+        ).first()
+        assert setting is not None
+        assert setting.value_json == []
+
 
 # =============================================================================
 # GIS Settings Tests

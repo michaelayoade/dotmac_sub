@@ -110,6 +110,13 @@ class AddOnType(enum.Enum):
     custom = "custom"
 
 
+class PlanCategory(enum.Enum):
+    internet = "internet"
+    recurring = "recurring"
+    one_time = "one_time"
+    bundle = "bundle"
+
+
 class OfferStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
@@ -401,6 +408,16 @@ class CatalogOffer(Base):
     priority: Mapped[str | None] = mapped_column(String(40))
     available_for_services: Mapped[bool] = mapped_column(Boolean, default=True)
     show_on_customer_portal: Mapped[bool] = mapped_column(Boolean, default=True)
+    plan_category: Mapped[PlanCategory] = mapped_column(
+        Enum(PlanCategory, name="plancategory", create_constraint=False),
+        default=PlanCategory.internet,
+        server_default="internet",
+    )
+    hide_on_admin_portal: Mapped[bool] = mapped_column(Boolean, default=False)
+    service_description: Mapped[str | None] = mapped_column(Text)
+    burst_profile: Mapped[str | None] = mapped_column(String(120))
+    prepaid_period: Mapped[str | None] = mapped_column(String(40))
+    allowed_change_plan_ids: Mapped[str | None] = mapped_column(Text)
     status: Mapped[OfferStatus] = mapped_column(
         Enum(OfferStatus), default=OfferStatus.active
     )

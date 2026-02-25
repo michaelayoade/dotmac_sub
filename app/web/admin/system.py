@@ -1,9 +1,11 @@
 """Admin system management web routes."""
 
 import json
+from base64 import b64encode
 from datetime import UTC, datetime
 from typing import cast
-from uuid import UUID
+from urllib.parse import quote_plus
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -21,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
@@ -30,6 +33,7 @@ from app.services import (
 from app.services import branding_storage as branding_storage_service
 from app.services import email as email_service
 from app.services import file_upload as file_upload_service
+from app.services import module_manager as module_manager_service
 from app.services import (
     rbac as rbac_service,
 )
@@ -45,8 +49,10 @@ from app.services import web_system_api_keys as web_system_api_keys_service
 from app.services import web_system_audit as web_system_audit_service
 from app.services import web_system_billing_forms as web_system_billing_forms_service
 from app.services import web_system_common as web_system_common_service
+from app.services import web_system_export_tool as web_system_export_tool_service
 from app.services import web_system_form_views as web_system_form_views_service
 from app.services import web_system_health as web_system_health_service
+from app.services import web_system_import_wizard as web_system_import_wizard_service
 from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
@@ -63,7 +69,13 @@ from app.services import web_system_users as web_system_users_service
 from app.services import web_system_webhook_forms as web_system_webhook_forms_service
 from app.services import web_system_webhooks as web_system_webhooks_service
 from app.services.auth_dependencies import require_permission
-from app.web.request_parsing import parse_form_data, parse_json_body
+from app.tasks.imports import run_import_job
+from app.tasks.exports import run_export_job
+from app.web.request_parsing import (
+    parse_form_data,
+    parse_form_data_sync,
+    parse_json_body,
+)
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/system", tags=["web-admin-system"])
@@ -132,6 +144,671 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
             **dashboard,
         },
     )
+
+
+@router.get("/modules", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+def modules_manager_page(request: Request, db: Session = Depends(get_db)):
+    """Main module manager with module and feature toggles."""
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = module_manager_service.module_manager_page_state(db)
+    return templates.TemplateResponse(
+        "admin/system/modules.html",
+        {
+            "request": request,
+            "active_page": "system-modules",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "save_success": request.query_params.get("saved") == "1",
+            **state,
+        },
+    )
+
+
+@router.post("/modules", dependencies=[Depends(require_permission("system:settings:write"))])
+def modules_manager_save(request: Request, db: Session = Depends(get_db)):
+    """Persist module manager toggles."""
+    form = parse_form_data_sync(request)
+    module_payload: dict[str, bool] = {}
+    feature_payload: dict[str, bool] = {}
+
+    for module_name in module_manager_service.MODULE_KEY_MAP:
+        module_payload[module_name] = str(form.get(f"module__{module_name}") or "").lower() == "true"
+
+    for feature_map in module_manager_service.MODULE_FEATURE_MAP.values():
+        for feature_name in feature_map:
+            feature_payload[feature_name] = str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+
+    module_manager_service.update_module_flags(db, payload=module_payload)
+    module_manager_service.update_feature_flags(db, payload=feature_payload)
+    return RedirectResponse("/admin/system/modules?saved=1", status_code=303)
+
+
+@router.get(
+    "/import",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_import_wizard(request: Request, db: Session = Depends(get_db)):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = web_system_import_wizard_service.build_page_state(db)
+    rollback_notice = request.query_params.get("rollback_notice")
+    rollback_error = request.query_params.get("rollback_error")
+    job_notice = request.query_params.get("job_notice")
+    active_job_id = request.query_params.get("job_id")
+    active_job = web_system_import_wizard_service.get_job(db, active_job_id) if active_job_id else None
+    return templates.TemplateResponse(
+        "admin/system/import_wizard.html",
+        {
+            "request": request,
+            "active_page": "system-import",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "rollback_notice": rollback_notice,
+            "rollback_error": rollback_error,
+            "job_notice": job_notice,
+            "active_job_id": active_job_id,
+            "active_job": active_job,
+            **state,
+        },
+    )
+
+
+@router.get(
+    "/import/template.csv",
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_import_template_csv(
+    module: str = Query(...),
+):
+    from fastapi.responses import StreamingResponse
+
+    content = web_system_import_wizard_service.csv_template(module)
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename=\"import_template_{module}.csv\"'},
+    )
+
+
+@router.post(
+    "/import/mapping-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_mapping_preview(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    data_format = str(form.get("data_format") or "csv").strip().lower()
+    payload_text = str(form.get("payload_text") or "")
+    csv_delimiter = str(form.get("csv_delimiter") or ",")
+    payload_file = cast(UploadFile | None, form.get("payload_file"))
+    file_bytes: bytes | None = None
+    if payload_file is not None and payload_file.filename:
+        file_bytes = payload_file.file.read()
+
+    state = web_system_import_wizard_service.detect_columns_and_preview(
+        data_format=data_format,
+        raw_text=payload_text,
+        csv_delimiter=csv_delimiter,
+        file_bytes=file_bytes,
+    )
+    headers = web_system_import_wizard_service.module_headers(module)
+    return templates.TemplateResponse(
+        "admin/system/_import_mapping.html",
+        {
+            "request": request,
+            "module": module,
+            "target_headers": headers,
+            "selected_delimiter": csv_delimiter,
+            **state,
+        },
+    )
+
+
+@router.post(
+    "/import",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_wizard_submit(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+    current_user = get_current_user(request)
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "").strip()
+    data_format = str(form.get("data_format") or "csv").strip().lower()
+    csv_delimiter = str(form.get("csv_delimiter") or ",")
+    payload_text = str(form.get("payload_text") or "")
+    source_name = str(form.get("source_name") or "manual")
+    payload_file = cast(UploadFile | None, form.get("payload_file"))
+    file_bytes: bytes | None = None
+    if payload_file is not None and payload_file.filename:
+        source_name = source_name if source_name.strip() != "manual" else payload_file.filename
+        file_bytes = payload_file.file.read()
+    dry_run = form.get("dry_run")
+    column_mapping: dict[str, str] = {}
+    for key, value in form.items():
+        if str(key).startswith("mapping__"):
+            source_col = str(key).split("mapping__", 1)[1]
+            target_col = str(value or "").strip()
+            if source_col:
+                column_mapping[source_col] = target_col
+
+    try:
+        parsed_preview = web_system_import_wizard_service.parse_payload(
+            data_format=data_format,
+            raw_text=payload_text,
+            source_name=source_name,
+            csv_delimiter=csv_delimiter,
+            file_bytes=file_bytes,
+        )
+        total_rows = len(parsed_preview.rows)
+        threshold = web_system_import_wizard_service.background_threshold_rows(db)
+        if total_rows >= threshold:
+            job_id = str(uuid4())
+            web_system_import_wizard_service.upsert_job(
+                db,
+                {
+                    "job_id": job_id,
+                    "module": module,
+                    "module_label": web_system_import_wizard_service.ENTITY_CONFIG.get(module, {}).get("label", module),
+                    "source_name": source_name,
+                    "status": "queued",
+                    "queued_at": datetime.now(UTC).isoformat(),
+                    "progress_percent": 0,
+                    "row_count": total_rows,
+                    "threshold_rows": threshold,
+                    "requested_by": current_user.get("email") or "",
+                    "result": None,
+                    "error": None,
+                },
+            )
+            run_import_job.delay(
+                job_id=job_id,
+                module=module,
+                data_format=data_format,
+                raw_text=payload_text,
+                source_name=source_name,
+                dry_run=dry_run is not None,
+                column_mapping=column_mapping,
+                csv_delimiter=csv_delimiter,
+                file_bytes_b64=b64encode(file_bytes).decode("ascii") if file_bytes is not None else None,
+                notify_email=(current_user.get("email") or "").strip() or None,
+            )
+            notice = quote_plus(
+                f"Large import queued in background ({total_rows} rows). Track progress below."
+            )
+            return RedirectResponse(
+                f"/admin/system/import?job_id={job_id}&job_notice={notice}",
+                status_code=303,
+            )
+
+        result = web_system_import_wizard_service.execute_import(
+            db,
+            module=module,
+            data_format=data_format,
+            raw_text=payload_text,
+            source_name=source_name,
+            dry_run=dry_run is not None,
+            column_mapping=column_mapping,
+            csv_delimiter=csv_delimiter,
+            file_bytes=file_bytes,
+        )
+        state = web_system_import_wizard_service.build_page_state(db)
+        return templates.TemplateResponse(
+            "admin/system/import_wizard.html",
+            {
+                "request": request,
+                "active_page": "system-import",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "result": result,
+                "form": {
+                    "module": module,
+                    "data_format": data_format,
+                    "csv_delimiter": csv_delimiter,
+                    "payload_text": payload_text,
+                    "source_name": source_name,
+                    "dry_run": dry_run is not None,
+                },
+                **state,
+            },
+            status_code=200 if result.get("status") in {"success", "dry_run", "partial"} else 400,
+        )
+    except Exception as exc:
+        state = web_system_import_wizard_service.build_page_state(db)
+        return templates.TemplateResponse(
+            "admin/system/import_wizard.html",
+            {
+                "request": request,
+                "active_page": "system-import",
+                "active_menu": "system",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+                "error": str(exc),
+                "form": {
+                    "module": module,
+                    "data_format": data_format,
+                    "csv_delimiter": csv_delimiter,
+                    "payload_text": payload_text,
+                    "source_name": source_name,
+                    "dry_run": dry_run is not None,
+                },
+                **state,
+            },
+            status_code=400,
+        )
+
+
+@router.get(
+    "/import/jobs/{job_id}/status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_import_job_status(
+    request: Request,
+    job_id: str,
+    db: Session = Depends(get_db),
+):
+    job = web_system_import_wizard_service.get_job(db, job_id)
+    return templates.TemplateResponse(
+        "admin/system/_import_job_status.html",
+        {
+            "request": request,
+            "job": job,
+        },
+    )
+
+
+@router.get(
+    "/export",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_export_tool(
+    request: Request,
+    module: str | None = Query(None),
+    template: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    selected_module = (module or "subscribers").strip()
+    selected_template_id = (template or "").strip() or None
+    selected_fields: list[str] | None = None
+    selected_delimiter = ","
+    selected_export_format = "csv"
+    selected_date_from: str | None = None
+    selected_date_to: str | None = None
+    selected_status: str | None = None
+    selected_include_headers = True
+
+    if selected_template_id:
+        template_data = web_system_export_tool_service.get_export_template(db, selected_template_id)
+        if template_data:
+            config = template_data.get("config") if isinstance(template_data.get("config"), dict) else {}
+            selected_module = str(config.get("module") or selected_module).strip()
+            selected_fields = [str(field) for field in config.get("selected_fields") or []]
+            selected_delimiter = str(config.get("delimiter") or ",")
+            selected_export_format = str(config.get("export_format") or "csv")
+            selected_date_from = str(config.get("date_from") or "").strip() or None
+            selected_date_to = str(config.get("date_to") or "").strip() or None
+            selected_status = str(config.get("status") or "").strip() or None
+            selected_include_headers = bool(config.get("include_headers", True))
+
+    try:
+        available_fields = web_system_export_tool_service.module_fields(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(selected_module)
+    except Exception:
+        selected_module = "subscribers"
+        available_fields = web_system_export_tool_service.module_fields(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(selected_module)
+
+    return templates.TemplateResponse(
+        "admin/system/export_tool.html",
+        {
+            "request": request,
+            "active_page": "system-export",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "module_options": web_system_export_tool_service.module_options(),
+            "delimiter_options": web_system_export_tool_service.DELIMITER_OPTIONS,
+            "export_format_options": web_system_export_tool_service.EXPORT_FORMAT_OPTIONS,
+            "export_templates": web_system_export_tool_service.list_export_templates(db),
+            "selected_template_id": selected_template_id,
+            "selected_module": selected_module,
+            "available_fields": available_fields,
+            "status_options": status_options,
+            "frequency_options": web_system_export_tool_service.SCHEDULE_FREQUENCY_OPTIONS,
+            "export_schedules": web_system_export_tool_service.list_export_schedules(db),
+            "export_jobs": web_system_export_tool_service.list_export_jobs(db, limit=20),
+            "selected_fields": selected_fields or available_fields,
+            "selected_delimiter": selected_delimiter,
+            "selected_export_format": selected_export_format,
+            "selected_date_from": selected_date_from,
+            "selected_date_to": selected_date_to,
+            "selected_status": selected_status,
+            "selected_include_headers": selected_include_headers,
+            "error": request.query_params.get("error"),
+            "notice": request.query_params.get("notice"),
+        },
+    )
+
+
+@router.post(
+    "/export/download",
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_export_download(request: Request, db: Session = Depends(get_db)):
+    from fastapi.responses import StreamingResponse
+    from app.web.admin import get_current_user
+
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    delimiter = str(form.get("delimiter") or ",")
+    export_format = str(form.get("export_format") or "csv")
+    date_from = str(form.get("date_from") or "").strip() or None
+    date_to = str(form.get("date_to") or "").strip() or None
+    status = str(form.get("status") or "").strip() or None
+    include_headers = form.get("include_headers") is not None
+    current_user = get_current_user(request)
+    requester_email = str(current_user.get("email") or "").strip() or None
+    actor_id = str(current_user.get("person_id") or "").strip() or None
+
+    try:
+        row_count = web_system_export_tool_service.count_rows(
+            db,
+            module=module,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+        )
+        if row_count > web_system_export_tool_service.EXPORT_BG_THRESHOLD_ROWS:
+            job = web_system_export_tool_service.create_export_job(
+                db,
+                module=module,
+                selected_fields=selected_fields,
+                delimiter=delimiter,
+                export_format=export_format,
+                date_from=date_from,
+                date_to=date_to,
+                status=status,
+                include_headers=include_headers,
+                recipient_email=requester_email,
+                requested_by_email=requester_email,
+                row_count=row_count,
+            )
+            run_export_job.delay(job_id=str(job["id"]))
+            web_system_export_tool_service.log_export_audit_event(
+                db,
+                action="export_job_queued",
+                module=module,
+                actor_id=actor_id,
+                actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+                entity_type="export_job",
+                entity_id=str(job["id"]),
+                metadata={
+                    "row_count": row_count,
+                    "format": export_format,
+                },
+            )
+            notice = quote_plus(
+                f"Large export queued ({row_count} rows). Download link will be emailed when ready."
+            )
+            return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+
+        content, media_type, extension, row_count = web_system_export_tool_service.export_content(
+            db,
+            module=module,
+            selected_fields=selected_fields,
+            delimiter=delimiter,
+            export_format=export_format,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            include_headers=include_headers,
+        )
+        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        filename = f"export_{module}_{row_count}_{timestamp}.{extension}"
+        web_system_export_tool_service.log_export_audit_event(
+            db,
+            action="export_download",
+            module=module,
+            actor_id=actor_id,
+            actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+            entity_type="system_export",
+            entity_id=None,
+            metadata={
+                "row_count": row_count,
+                "format": export_format,
+                "filename": filename,
+            },
+        )
+        return StreamingResponse(
+            iter([content]),
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        module_q = quote_plus(module)
+        return RedirectResponse(f"/admin/system/export?module={module_q}&error={error}", status_code=303)
+
+
+@router.get(
+    "/export/jobs/{job_id}/download",
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_export_job_download(request: Request, job_id: str, db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    from app.web.admin import get_current_user
+
+    job = web_system_export_tool_service.get_export_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if str(job.get("status") or "") != "completed":
+        raise HTTPException(status_code=409, detail="Export job is not completed")
+    file_path = str(job.get("file_path") or "").strip()
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Export file not available")
+    filename = str(job.get("filename") or f"export_{job_id}.dat")
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("person_id") or "").strip() or None
+    web_system_export_tool_service.log_export_audit_event(
+        db,
+        action="export_job_download",
+        module=str(job.get("module") or ""),
+        actor_id=actor_id,
+        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        entity_type="export_job",
+        entity_id=job_id,
+        metadata={"filename": filename},
+    )
+    return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
+
+
+@router.post(
+    "/export/templates",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_export_create_template(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    template_name = str(form.get("template_name") or "").strip()
+    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    delimiter = str(form.get("delimiter") or ",")
+    export_format = str(form.get("export_format") or "csv")
+    date_from = str(form.get("date_from") or "").strip() or None
+    date_to = str(form.get("date_to") or "").strip() or None
+    status = str(form.get("status") or "").strip() or None
+    include_headers = form.get("include_headers") is not None
+    try:
+        template_data = web_system_export_tool_service.create_export_template(
+            db,
+            name=template_name,
+            module=module,
+            selected_fields=selected_fields,
+            delimiter=delimiter,
+            export_format=export_format,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            include_headers=include_headers,
+        )
+        notice = quote_plus("Export template saved.")
+        template_id = quote_plus(str(template_data.get("id") or ""))
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&template={template_id}&notice={notice}",
+            status_code=303,
+        )
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+
+
+@router.post(
+    "/export/templates/{template_id}/delete",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_export_delete_template(
+    template_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    try:
+        web_system_export_tool_service.delete_export_template(db, template_id=template_id)
+        notice = quote_plus("Export template removed.")
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+
+
+@router.post(
+    "/export/schedules",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_export_create_schedule(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    delimiter = str(form.get("delimiter") or ",")
+    export_format = str(form.get("export_format") or "csv").strip().lower()
+    date_from = str(form.get("date_from") or "").strip() or None
+    date_to = str(form.get("date_to") or "").strip() or None
+    status = str(form.get("status") or "").strip() or None
+    include_headers = form.get("include_headers") is not None
+    name = str(form.get("schedule_name") or "").strip()
+    recipient_email = str(form.get("recipient_email") or "").strip()
+    frequency = str(form.get("frequency") or "weekly").strip().lower()
+    custom_interval_raw = str(form.get("custom_interval_hours") or "").strip()
+    custom_interval_hours = int(custom_interval_raw) if custom_interval_raw.isdigit() else None
+
+    try:
+        web_system_export_tool_service.create_export_schedule(
+            db,
+            name=name,
+            module=module,
+            selected_fields=selected_fields,
+            delimiter=delimiter,
+            export_format=export_format,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            include_headers=include_headers,
+            recipient_email=recipient_email,
+            frequency=frequency,
+            custom_interval_hours=custom_interval_hours,
+        )
+        notice = quote_plus("Scheduled export created.")
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+
+
+@router.post(
+    "/export/schedules/{schedule_id}/toggle",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_export_toggle_schedule(
+    schedule_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    enabled = str(form.get("enabled") or "").strip() == "1"
+    try:
+        web_system_export_tool_service.set_export_schedule_enabled(
+            db,
+            schedule_id=schedule_id,
+            enabled=enabled,
+        )
+        notice = quote_plus("Scheduled export updated.")
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+
+
+@router.post(
+    "/export/schedules/{schedule_id}/delete",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_export_delete_schedule(
+    schedule_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    module = str(form.get("module") or "subscribers").strip()
+    try:
+        web_system_export_tool_service.delete_export_schedule(db, schedule_id=schedule_id)
+        notice = quote_plus("Scheduled export removed.")
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+
+
+@router.post(
+    "/import/{import_id}/rollback",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_wizard_rollback(
+    import_id: str,
+    db: Session = Depends(get_db),
+):
+    try:
+        result = web_system_import_wizard_service.rollback_import(db, import_id=import_id)
+        notice = quote_plus(
+            f"Import {import_id} rolled back: {result['rolled_back_rows']} rows removed."
+        )
+        return RedirectResponse(
+            f"/admin/system/import?rollback_notice={notice}",
+            status_code=303,
+        )
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/system/import?rollback_error={error}",
+            status_code=303,
+        )
 
 
 @router.get("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
@@ -304,12 +981,12 @@ def user_profile_update(
 
     if current_user and current_user.get("person_id"):
         person_id = current_user["person_id"]
-        subscriber = web_system_profiles_service.get_subscriber(db, person_id)
-        if subscriber:
+        system_user = web_system_profiles_service.get_subscriber(db, person_id)
+        if system_user:
             try:
                 person = web_system_profiles_service.update_profile(
                     db,
-                    person=subscriber,
+                    person=system_user,
                     first_name=first_name,
                     last_name=last_name,
                     email=email,
@@ -470,8 +1147,8 @@ def user_edit_submit(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    subscriber = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
-    if not subscriber:
+    system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
+    if not system_user:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "User not found"},
@@ -491,7 +1168,7 @@ def user_edit_submit(
     try:
         web_system_user_edit_service.apply_user_edit(
             db,
-            subscriber=subscriber,
+            subscriber=system_user,
             first_name=str(parsed["first_name"]),
             last_name=str(parsed["last_name"]),
             display_name=display_name,
@@ -509,7 +1186,7 @@ def user_edit_submit(
         )
     except Exception as exc:
         db.rollback()
-        edit_data = web_system_user_edit_service.build_edit_state(db, subscriber=subscriber)
+        edit_data = web_system_user_edit_service.build_edit_state(db, subscriber=system_user)
         return templates.TemplateResponse(
             "admin/system/users/edit.html",
             {
@@ -623,25 +1300,25 @@ def user_create(
     send_invite: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    subscriber = None
+    system_user = None
     try:
-        subscriber, _ = web_system_user_mutations_service.create_user_with_role_and_password(
+        system_user, _ = web_system_user_mutations_service.create_user_with_role_and_password(
             db,
             first_name=first_name,
             last_name=last_name,
             email=email,
             role_id=role_id,
-            user_type=user_type,
+            user_type="system_user",
         )
     except IntegrityError as exc:
         db.rollback()
         return web_system_common_service.error_banner(web_system_common_service.humanize_integrity_error(exc))
 
     note = "User created. Ask the user to reset their password."
-    if send_invite and subscriber is not None:
+    if send_invite and system_user is not None:
         note = web_system_user_mutations_service.send_user_invite_for_user(
             db,
-            user_id=str(subscriber.id),
+            user_id=str(system_user.id),
         )
     return HTMLResponse(
         '<div class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">'
@@ -652,20 +1329,16 @@ def user_create(
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
-    subscriber = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
-    if not subscriber:
+    system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
+    if not system_user:
         raise HTTPException(status_code=404, detail="User not found")
-    if subscriber.is_active:
+    if system_user.is_active:
         return web_system_common_service.blocked_delete_response(request, [], detail="Deactivate user before deleting.")
-    linked = web_system_common_service.linked_user_labels(db, subscriber.id)
-    if linked:
-        return web_system_common_service.blocked_delete_response(request, linked)
     try:
         web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
     except IntegrityError:
         db.rollback()
-        linked = web_system_common_service.linked_user_labels(db, subscriber.id)
-        return web_system_common_service.blocked_delete_response(request, linked)
+        return web_system_common_service.blocked_delete_response(request, [], detail="User cannot be deleted due to linked records.")
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
     return RedirectResponse(url="/admin/system/users", status_code=303)

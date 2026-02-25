@@ -50,25 +50,28 @@ def validate_session_token(
     except Exception:
         return None
 
-    subscriber_id = payload.get("sub")
+    principal_id = payload.get("principal_id") or payload.get("sub")
+    principal_type = payload.get("principal_type") or "subscriber"
     session_id = payload.get("session_id")
-    if not subscriber_id or not session_id:
+    if not principal_id or not session_id:
         return None
 
-    result = validate_active_session(db, session_id, subscriber_id)
+    result = validate_active_session(db, session_id, principal_id)
     if not result:
         return None
-    _session, subscriber = result
+    _session, principal, resolved_type = result
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])
 
     return {
-        "subscriber_id": str(subscriber_id),
+        "subscriber_id": str(principal_id),
+        "principal_id": str(principal_id),
+        "principal_type": resolved_type or principal_type,
         "session_id": str(session_id),
         "roles": roles if isinstance(roles, list) else [],
         "scopes": scopes if isinstance(scopes, list) else [],
-        "subscriber": subscriber,
+        "subscriber": principal,
     }
 
 

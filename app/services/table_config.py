@@ -195,10 +195,20 @@ class TableConfigurationService:
                         config["display_order"] = base_order + config["display_order"]
                         config["is_visible"] = False
             if table_key == "subscribers" and "subscriber_name" in state:
-                for key, value in state.items():
-                    if key != "subscriber_name":
-                        value["display_order"] += 1
-                state["subscriber_name"]["display_order"] = 0
+                preferred_order = [
+                    "subscriber_number",
+                    "subscriber_name",
+                    "status",
+                    "reseller_id",
+                ]
+                base_order = len(preferred_order)
+                for key, config in state.items():
+                    if key in preferred_order:
+                        config["display_order"] = preferred_order.index(key)
+                        config["is_visible"] = True
+                    else:
+                        config["display_order"] = base_order + config["display_order"]
+                        config["is_visible"] = False
 
         registry_order = {field.key: i for i, field in enumerate(definition.fields)}
         resolved = [

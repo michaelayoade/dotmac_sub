@@ -22,7 +22,10 @@
         {% set fallback_from_field = pool and pool.is_fallback is defined and pool.is_fallback %}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Pool Configuration</h2>
+                <div class="flex items-center justify-between gap-2">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Pool Configuration</h2>
+                    <a href="/admin/network/ip-management/calculator" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Subnet Calculator</a>
+                </div>
             </div>
             <div class="p-6 space-y-6">
                 {% if error %}
@@ -55,6 +58,19 @@
                             value="{{ pool.cidr if pool else '' }}"
                             placeholder="10.0.0.0/24"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="bm_prefix" class="block text-sm font-medium text-slate-700 dark:text-slate-300">BM/Subnet Mask</label>
+                        <select id="bm_prefix"
+                            onchange="if (document.getElementById('ip_version').value === 'ipv4') { const cidr = document.getElementById('cidr'); const base = (cidr.value || '10.0.0.0').split('/')[0]; cidr.value = base + '/' + this.value; }"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="24">/24 - 255.255.255.0 (254 hosts)</option>
+                            <option value="25">/25 - 255.255.255.128 (126 hosts)</option>
+                            <option value="26">/26 - 255.255.255.192 (62 hosts)</option>
+                            <option value="27">/27 - 255.255.255.224 (30 hosts)</option>
+                            <option value="28">/28 - 255.255.255.240 (14 hosts)</option>
+                        </select>
                     </div>
 
                     <div>
@@ -91,18 +107,25 @@
 
                     <div>
                         <label for="category" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Category</label>
-                        <input type="text" name="category" id="category" maxlength="120"
-                            value="{{ pool.category if pool else '' }}"
-                            placeholder="Production"
+                        <select name="category" id="category"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select category</option>
+                            <option value="Dev" {% if pool and pool.category == 'Dev' %}selected{% endif %}>Dev</option>
+                            <option value="Production" {% if pool and pool.category == 'Production' %}selected{% endif %}>Production</option>
+                        </select>
                     </div>
 
                     <div>
                         <label for="network_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Network Type</label>
-                        <input type="text" name="network_type" id="network_type" maxlength="120"
-                            value="{{ pool.network_type if pool else '' }}"
-                            placeholder="EndNet"
+                        <select name="network_type" id="network_type"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select type</option>
+                            <option value="EndNet" {% if pool and pool.network_type == 'EndNet' %}selected{% endif %}>EndNet</option>
+                            <option value="PoolNet" {% if pool and pool.network_type == 'PoolNet' %}selected{% endif %}>PoolNet</option>
+                            <option value="Management" {% if pool and pool.network_type == 'Management' %}selected{% endif %}>Management</option>
+                            <option value="Point-to-Point" {% if pool and pool.network_type == 'Point-to-Point' %}selected{% endif %}>Point-to-Point</option>
+                            <option value="Infrastructure" {% if pool and pool.network_type == 'Infrastructure' %}selected{% endif %}>Infrastructure</option>
+                        </select>
                     </div>
 
                     <div>
@@ -111,6 +134,24 @@
                             value="{{ pool.router if pool else '' }}"
                             placeholder="Core-RTR-1"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="usage_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Type of Usage</label>
+                        <select name="usage_type" id="usage_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select usage</option>
+                            <option value="Static" {% if pool and pool.usage_type == 'Static' %}selected{% endif %}>Static</option>
+                            <option value="Dynamic/DHCP" {% if pool and pool.usage_type == 'Dynamic/DHCP' %}selected{% endif %}>Dynamic/DHCP</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="allow_network_broadcast" value="true" {% if pool and pool.allow_network_broadcast %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow network/broadcast IP usage</span>
+                        </label>
                     </div>
 
                     <div>

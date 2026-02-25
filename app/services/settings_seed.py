@@ -166,6 +166,30 @@ def seed_imports_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text="5000",
     )
+    imports_settings.ensure_by_key(
+        db,
+        key="import_history_log",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
+    imports_settings.ensure_by_key(
+        db,
+        key="import_rollback_window_hours",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("IMPORT_ROLLBACK_WINDOW_HOURS", "24"),
+    )
+    imports_settings.ensure_by_key(
+        db,
+        key="import_background_threshold_rows",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("IMPORT_BACKGROUND_THRESHOLD_ROWS", "1000"),
+    )
+    imports_settings.ensure_by_key(
+        db,
+        key="import_jobs_log",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
 
 
 def seed_gis_settings(db: Session) -> None:
@@ -615,7 +639,27 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="default_payment_provider_type",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "custom"),
+        value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "paystack"),
+    )
+    payment_failover_enabled_raw = os.getenv("BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true")
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_failover_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=payment_failover_enabled_raw,
+        value_json=payment_failover_enabled_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_primary_provider",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_PRIMARY_PROVIDER", "paystack"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="payment_gateway_secondary_provider",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1270,6 +1314,51 @@ def seed_comms_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("META_ACCESS_TOKEN_OVERRIDE", ""),
         is_secret=True,
+    )
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_provider",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("WHATSAPP_PROVIDER", "meta_cloud_api"),
+    )
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_api_key",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("WHATSAPP_API_KEY", ""),
+        is_secret=True,
+    )
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_api_secret",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("WHATSAPP_API_SECRET", ""),
+        is_secret=True,
+    )
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_phone_number",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("WHATSAPP_PHONE_NUMBER", ""),
+    )
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_webhook_url",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("WHATSAPP_WEBHOOK_URL", ""),
+    )
+    templates_json_raw = os.getenv("WHATSAPP_MESSAGE_TEMPLATES_JSON", "[]")
+    try:
+        templates_json_value = json.loads(templates_json_raw)
+        if not isinstance(templates_json_value, list):
+            templates_json_value = []
+    except json.JSONDecodeError:
+        templates_json_value = []
+    comms_settings.ensure_by_key(
+        db,
+        key="whatsapp_message_templates",
+        value_type=SettingValueType.json,
+        value_json=templates_json_value,
     )
 
 

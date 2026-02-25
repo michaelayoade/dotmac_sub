@@ -1,0 +1,226 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Import Wizard - System{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/system" class="hover:text-primary-600">System</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">Import Wizard</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Data Import Wizard</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Import Subscribers, Subscriptions, Invoices, Payments, NAS devices, IP pools, and Network equipment.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if rollback_error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ rollback_error }}</div>
+    {% endif %}
+    {% if rollback_notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ rollback_notice }}</div>
+    {% endif %}
+    {% if job_notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ job_notice }}</div>
+    {% endif %}
+
+    {% if result %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if result.status in ['success', 'dry_run'] %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400{% elif result.status == 'partial' %}border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-400{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400{% endif %}">
+        <p class="font-semibold">Import {{ result.status | replace('_', ' ') | title }}</p>
+        <p class="mt-1">{{ result.module_label }}: {{ result.imported_rows }} imported, {{ result.failed_rows }} failed out of {{ result.total_rows }} rows.</p>
+        {% if result.errors %}
+        <details class="mt-2">
+            <summary class="cursor-pointer font-medium">Show first {{ result.errors | length }} errors</summary>
+            <ul class="mt-2 list-disc pl-5">
+                {% for err in result.errors %}
+                <li>Row {{ err.row }}: {{ err.detail }}</li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <form method="post" action="/admin/system/import" enctype="multipart/form-data" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <div class="grid gap-4 md:grid-cols-5">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Module</label>
+                    <select name="module" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% set selected_module = form.module if form else 'subscribers' %}
+                        {% for item in module_options %}
+                        <option value="{{ item.id }}" {% if selected_module == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Format</label>
+                    {% set selected_format = form.data_format if form else 'csv' %}
+                    <select name="data_format" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for fmt in format_options %}
+                        <option value="{{ fmt }}" {% if selected_format == fmt %}selected{% endif %}>{{ fmt | upper }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Source Name</label>
+                    <input name="source_name" value="{{ form.source_name if form else 'manual' }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">CSV Delimiter</label>
+                    {% set selected_delimiter = form.csv_delimiter if form else ',' %}
+                    <select name="csv_delimiter" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in csv_delimiter_options %}
+                        <option value="{{ item.id }}" {% if selected_delimiter == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-end gap-2">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="dry_run" {% if not form or form.dry_run %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Dry run
+                    </label>
+                </div>
+            </div>
+
+            <div>
+                <div class="mb-2 flex items-center justify-between">
+                    <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Payload (CSV or JSON)</label>
+                    <a href="/admin/system/import/template.csv?module={{ selected_module }}" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Download CSV Template</a>
+                </div>
+                <textarea name="payload_text" rows="12" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form.payload_text if form else '' }}</textarea>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Or Upload File (CSV/JSON/XLSX)</label>
+                <input type="file" name="payload_file" accept=".csv,.json,.xlsx"
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <button
+                        type="button"
+                        hx-post="/admin/system/import/mapping-preview"
+                        hx-target="#import-mapping-panel"
+                        hx-swap="innerHTML"
+                        hx-encoding="multipart/form-data"
+                        hx-include="[name='module'], [name='data_format'], [name='csv_delimiter'], [name='payload_text'], [name='payload_file'], [name='csrf_token']"
+                        class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                    >
+                        Analyze Columns
+                    </button>
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Run Import</button>
+                </div>
+                <div id="import-mapping-panel">
+                    {% if mapping_preview %}
+                    {% include "admin/system/_import_mapping.html" %}
+                    {% endif %}
+                </div>
+            </div>
+
+        </form>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Background Import Jobs</h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Auto-background threshold: {{ background_threshold_rows }} rows</p>
+        </div>
+        <div id="import-job-live-panel">
+            {% if active_job_id %}
+            <div
+                hx-get="/admin/system/import/jobs/{{ active_job_id }}/status"
+                hx-trigger="load, every 5s"
+                hx-swap="innerHTML"
+            >
+                {% if active_job %}
+                {% set job = active_job %}
+                {% include "admin/system/_import_job_status.html" %}
+                {% endif %}
+            </div>
+            {% else %}
+            <p class="text-xs text-slate-500 dark:text-slate-400">No active background job selected.</p>
+            {% endif %}
+        </div>
+        {% if import_jobs %}
+        <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Job ID</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Module</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Rows</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Status</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Progress</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for job_row in import_jobs %}
+                    <tr>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                            <a href="/admin/system/import?job_id={{ job_row.job_id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ job_row.job_id }}</a>
+                        </td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ job_row.module_label or job_row.module }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ job_row.row_count or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ job_row.status }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ job_row.progress_percent or 0 }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Import History</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rollback window: {{ rollback_window_hours }} hour(s).</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Timestamp</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Module</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">File</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Rows</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Status</th>
+                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in history %}
+                    <tr>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.timestamp }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.module_label }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.imported_rows }}/{{ row.total_rows }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.status }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">
+                            {% if row.import_id and row.status in ['success', 'partial'] and not row.rolled_back_at %}
+                            <form method="post" action="/admin/system/import/{{ row.import_id }}/rollback" onsubmit="return confirm('Rollback this import? This will delete imported records.');">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="inline-flex items-center rounded-md border border-amber-300 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20">Undo Import</button>
+                            </form>
+                            {% elif row.status == 'rolled_back' %}
+                            <span class="text-xs font-medium text-emerald-600 dark:text-emerald-400">Rolled back</span>
+                            {% else %}
+                            <span class="text-xs text-slate-400 dark:text-slate-500">-</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No imports yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

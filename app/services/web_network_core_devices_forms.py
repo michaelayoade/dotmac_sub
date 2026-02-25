@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import difflib
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
+import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 from starlette.datastructures import FormData
 
 from app.models.network_monitoring import (
@@ -27,10 +31,15 @@ from app.models.network_monitoring import (
     DeviceStatus,
     DeviceType,
     MetricType,
+    NetworkDeviceBandwidthGraph,
+    NetworkDeviceBandwidthGraphSource,
+    NetworkDeviceSnmpOid,
     NetworkDevice,
     PopSite,
 )
-from app.models.catalog import NasConfigBackup, NasDevice
+from app.models.catalog import ConfigBackupMethod, NasConfigBackup, NasDevice
+from app.schemas.catalog import NasDeviceUpdate
+from app.services import nas as nas_service
 from app.services import network as network_service
 
 logger = logging.getLogger(__name__)
@@ -536,6 +545,7 @@ def list_page_data(
     db: Session,
     role: str | None,
     status: str | None,
+    device_type: str | None = None,
     pop_site_id: str | None = None,
     search: str | None = None,
 ) -> dict[str, object]:
@@ -547,6 +557,13 @@ def list_page_data(
             stmt = stmt.where(NetworkDevice.role == role_enum)
         except ValueError:
             pass
+    device_type_filter = (device_type or "").strip().lower()
+    if device_type_filter:
+        try:
+            type_enum = DeviceType(device_type_filter)
+            stmt = stmt.where(NetworkDevice.device_type == type_enum)
+        except ValueError:
+            device_type_filter = ""
 
     status_filter = (status or "all").strip().lower()
     if status_filter == "active":
@@ -711,6 +728,8 @@ def list_page_data(
         "pop_sites": pop_sites,
         "pop_site_filter": pop_site_filter or "all",
         "search_filter": search_filter,
+        "device_type_filter": device_type_filter,
+        "device_type_options": [item.value for item in DeviceType],
         "child_impacts": child_impacts,
         "uptime_map": uptime_map,
         "ping_history_map": ping_history_map,
@@ -912,6 +931,717 @@ def detail_page_data(
             "last_seen": device.last_ping_at or device.last_snmp_at,
         },
         "ping_history": ping_history,
+    }
+
+
+def snmp_oids_page_data(
+    db: Session,
+    device_id: str,
+    *,
+    walk_lines: list[str] | None = None,
+    message: str | None = None,
+    error: str | None = None,
+) -> dict[str, object] | None:
+    device = get_device(db, device_id)
+    if not device:
+        return None
+    oids = list(
+        db.scalars(
+            select(NetworkDeviceSnmpOid)
+            .where(NetworkDeviceSnmpOid.device_id == device.id)
+            .order_by(NetworkDeviceSnmpOid.created_at.desc())
+        ).all()
+    )
+    return {
+        "device": device,
+        "snmp_oids": oids,
+        "walk_lines": walk_lines or [],
+        "message": message,
+        "error": error,
+    }
+
+
+def create_snmp_oid_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    title: str,
+    oid: str,
+    check_interval_seconds: int,
+    rrd_data_source_type: str,
+    is_enabled: bool,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    if not title.strip():
+        return False, "Title is required."
+    if not oid.strip():
+        return False, "OID is required."
+    ds_type = rrd_data_source_type.strip().lower()
+    if ds_type not in {"gauge", "counter", "derive"}:
+        return False, "RRD data source type must be gauge, counter, or derive."
+    item = NetworkDeviceSnmpOid(
+        device_id=device.id,
+        title=title.strip(),
+        oid=oid.strip(),
+        check_interval_seconds=max(10, int(check_interval_seconds or 60)),
+        rrd_data_source_type=ds_type,
+        is_enabled=is_enabled,
+    )
+    db.add(item)
+    db.commit()
+    return True, "SNMP OID added."
+
+
+def poll_snmp_oid_for_device(db: Session, *, device_id: str, snmp_oid_id: str) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
+    if not item or str(item.device_id) != str(device.id):
+        return False, "SNMP OID not found."
+    if not device.snmp_enabled:
+        item.last_poll_status = "error"
+        item.last_error = "SNMP is disabled."
+        item.last_polled_at = datetime.now(UTC)
+        db.commit()
+        return False, "SNMP is disabled."
+    try:
+        from app.services.snmp_discovery import _run_snmpwalk
+
+        lines = _run_snmpwalk(device, item.oid, timeout=8)
+        if not lines:
+            raise ValueError("No SNMP response for OID.")
+        item.last_poll_status = "ok"
+        item.last_error = None
+        item.last_polled_at = datetime.now(UTC)
+        db.commit()
+        return True, "OID poll succeeded."
+    except Exception as exc:
+        item.last_poll_status = "error"
+        item.last_error = str(exc)
+        item.last_polled_at = datetime.now(UTC)
+        db.commit()
+        return False, f"OID poll failed: {exc!s}"
+
+
+def toggle_snmp_oid_for_device(
+    db: Session, *, device_id: str, snmp_oid_id: str, is_enabled: bool
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
+    if not item or str(item.device_id) != str(device.id):
+        return False, "SNMP OID not found."
+    item.is_enabled = is_enabled
+    db.commit()
+    return True, "SNMP OID updated."
+
+
+def delete_snmp_oid_for_device(db: Session, *, device_id: str, snmp_oid_id: str) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
+    if not item or str(item.device_id) != str(device.id):
+        return False, "SNMP OID not found."
+    db.delete(item)
+    db.commit()
+    return True, "SNMP OID deleted."
+
+
+def run_snmp_walk_preview(
+    db: Session, *, device_id: str, base_oid: str = ".1.3.6.1.2.1"
+) -> tuple[list[str], str | None]:
+    device = get_device(db, device_id)
+    if not device:
+        return [], "Device not found."
+    if not device.snmp_enabled:
+        return [], "SNMP is disabled for this device."
+    try:
+        from app.services.snmp_discovery import _run_snmpbulkwalk
+
+        lines = _run_snmpbulkwalk(device, base_oid.strip() or ".1.3.6.1.2.1", timeout=10)
+        return lines[:200], None
+    except Exception as exc:
+        return [], f"SNMP walk failed: {exc!s}"
+
+
+def _graph_view_url(graph: NetworkDeviceBandwidthGraph) -> str | None:
+    if not graph.public_token:
+        return None
+    return f"/network/graphs/{graph.public_token}"
+
+
+def _parse_numeric_value(lines: list[str]) -> float | None:
+    for line in lines:
+        match = re.search(r"(-?\d+(?:\.\d+)?)\s*$", line)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def _graph_preview_snapshot(
+    db: Session,
+    graph: NetworkDeviceBandwidthGraph,
+) -> tuple[list[dict[str, object]], str | None]:
+    if not graph.sources:
+        return [], "Add at least one OID source to preview this graph."
+    if not graph.device.snmp_enabled:
+        return [], "SNMP is disabled on this graph device."
+
+    rows: list[dict[str, object]] = []
+    try:
+        from app.services.snmp_discovery import _run_snmpwalk
+
+        for source in graph.sources:
+            oid_ref = source.snmp_oid
+            if not oid_ref:
+                continue
+            lines = _run_snmpwalk(graph.device, oid_ref.oid, timeout=8)
+            numeric = _parse_numeric_value(lines)
+            scaled_value = None if numeric is None else numeric * float(source.factor or 1.0)
+            rows.append(
+                {
+                    "source_id": str(source.id),
+                    "title": oid_ref.title,
+                    "oid": oid_ref.oid,
+                    "value": scaled_value,
+                    "unit": source.value_unit,
+                    "draw_type": source.draw_type,
+                    "color_hex": source.color_hex,
+                    "stack_enabled": source.stack_enabled,
+                    "max": scaled_value,
+                    "avg": scaled_value,
+                    "last": scaled_value,
+                }
+            )
+    except Exception as exc:
+        return [], f"Preview failed: {exc!s}"
+
+    if not rows:
+        return [], "No preview rows returned."
+    return rows, None
+
+
+def bandwidth_graphs_page_data(
+    db: Session,
+    device_id: str,
+    *,
+    message: str | None = None,
+    error: str | None = None,
+    preview_graph_id: str | None = None,
+) -> dict[str, object] | None:
+    device = get_device(db, device_id)
+    if not device:
+        return None
+
+    graphs = list(
+        db.scalars(
+            select(NetworkDeviceBandwidthGraph)
+            .where(NetworkDeviceBandwidthGraph.device_id == device.id)
+            .options(
+                joinedload(NetworkDeviceBandwidthGraph.sources).joinedload(
+                    NetworkDeviceBandwidthGraphSource.source_device
+                ),
+                joinedload(NetworkDeviceBandwidthGraph.sources).joinedload(
+                    NetworkDeviceBandwidthGraphSource.snmp_oid
+                ),
+            )
+            .order_by(NetworkDeviceBandwidthGraph.created_at.desc())
+        ).unique().all()
+    )
+    all_devices = list(
+        db.scalars(
+            select(NetworkDevice).where(NetworkDevice.is_active.is_(True)).order_by(NetworkDevice.name)
+        ).all()
+    )
+    all_oids = list(
+        db.scalars(
+            select(NetworkDeviceSnmpOid)
+            .where(NetworkDeviceSnmpOid.is_enabled.is_(True))
+            .order_by(NetworkDeviceSnmpOid.title)
+        ).all()
+    )
+    preview_rows: list[dict[str, object]] = []
+    preview_for_graph: str | None = None
+    if preview_graph_id:
+        graph = next((item for item in graphs if str(item.id) == str(preview_graph_id)), None)
+        if graph:
+            preview_rows, preview_error = _graph_preview_snapshot(db, graph)
+            preview_for_graph = str(graph.id)
+            if preview_error:
+                error = preview_error
+
+    return {
+        "device": device,
+        "graphs": graphs,
+        "graph_view_urls": {str(graph.id): _graph_view_url(graph) for graph in graphs},
+        "all_devices": all_devices,
+        "all_oids": all_oids,
+        "preview_rows": preview_rows,
+        "preview_for_graph": preview_for_graph,
+        "message": message,
+        "error": error,
+    }
+
+
+def create_bandwidth_graph_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    title: str,
+    vertical_axis_title: str,
+    height_px: int,
+    is_public: bool,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    if not title.strip():
+        return False, "Title is required."
+
+    graph = NetworkDeviceBandwidthGraph(
+        device_id=device.id,
+        title=title.strip(),
+        vertical_axis_title=(vertical_axis_title.strip() or "Bandwidth"),
+        height_px=max(80, min(480, int(height_px or 150))),
+        is_public=is_public,
+        public_token=uuid.uuid4().hex if is_public else None,
+    )
+    db.add(graph)
+    db.commit()
+    return True, "Graph created."
+
+
+def add_bandwidth_graph_source(
+    db: Session,
+    *,
+    device_id: str,
+    graph_id: str,
+    source_device_id: str,
+    snmp_oid_id: str,
+    factor: float,
+    color_hex: str,
+    draw_type: str,
+    stack_enabled: bool,
+    value_unit: str,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    graph = db.get(NetworkDeviceBandwidthGraph, graph_id)
+    if not graph or str(graph.device_id) != str(device.id):
+        return False, "Graph not found."
+    source_device = db.get(NetworkDevice, source_device_id)
+    snmp_oid = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
+    if not source_device or not snmp_oid:
+        return False, "Source device or OID not found."
+    if str(snmp_oid.device_id) != str(source_device.id):
+        return False, "Selected OID does not belong to selected source device."
+
+    normalized_draw = draw_type.strip().upper()
+    if normalized_draw not in {"LINE1", "AREA"}:
+        return False, "Draw type must be LINE1 or AREA."
+    normalized_unit = value_unit.strip()
+    if normalized_unit not in {"Bps", "bps", "pps"}:
+        return False, "Value unit must be Bps, bps, or pps."
+    normalized_color = color_hex.strip() or "#22c55e"
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", normalized_color):
+        return False, "Color must be a hex value like #22c55e."
+
+    next_order = (
+        db.scalar(
+            select(func.coalesce(func.max(NetworkDeviceBandwidthGraphSource.sort_order), 0))
+            .where(NetworkDeviceBandwidthGraphSource.graph_id == graph.id)
+        )
+        or 0
+    )
+    row = NetworkDeviceBandwidthGraphSource(
+        graph_id=graph.id,
+        source_device_id=source_device.id,
+        snmp_oid_id=snmp_oid.id,
+        factor=float(factor or 1.0),
+        color_hex=normalized_color,
+        draw_type=normalized_draw,
+        stack_enabled=stack_enabled,
+        value_unit=normalized_unit,
+        sort_order=int(next_order) + 1,
+    )
+    db.add(row)
+    db.commit()
+    return True, "Graph data source added."
+
+
+def toggle_bandwidth_graph_public(
+    db: Session,
+    *,
+    device_id: str,
+    graph_id: str,
+    is_public: bool,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    graph = db.get(NetworkDeviceBandwidthGraph, graph_id)
+    if not graph or str(graph.device_id) != str(device.id):
+        return False, "Graph not found."
+    graph.is_public = is_public
+    if is_public and not graph.public_token:
+        graph.public_token = uuid.uuid4().hex
+    if not is_public:
+        graph.public_token = None
+    db.commit()
+    return True, "Graph visibility updated."
+
+
+def clone_bandwidth_graph_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    graph_id: str,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    graph = db.scalars(
+        select(NetworkDeviceBandwidthGraph)
+        .where(NetworkDeviceBandwidthGraph.id == graph_id)
+        .options(joinedload(NetworkDeviceBandwidthGraph.sources))
+    ).first()
+    if not graph or str(graph.device_id) != str(device.id):
+        return False, "Graph not found."
+
+    cloned = NetworkDeviceBandwidthGraph(
+        device_id=device.id,
+        title=f"{graph.title} (Copy)",
+        vertical_axis_title=graph.vertical_axis_title,
+        height_px=graph.height_px,
+        is_public=False,
+        public_token=None,
+    )
+    db.add(cloned)
+    db.flush()
+
+    for source in graph.sources:
+        db.add(
+            NetworkDeviceBandwidthGraphSource(
+                graph_id=cloned.id,
+                source_device_id=source.source_device_id,
+                snmp_oid_id=source.snmp_oid_id,
+                factor=source.factor,
+                color_hex=source.color_hex,
+                draw_type=source.draw_type,
+                stack_enabled=source.stack_enabled,
+                value_unit=source.value_unit,
+                sort_order=source.sort_order,
+            )
+        )
+    db.commit()
+    return True, "Graph cloned."
+
+
+def bandwidth_dashboard_page_data(
+    db: Session,
+    *,
+    search: str | None = None,
+) -> dict[str, object]:
+    stmt = (
+        select(NetworkDeviceBandwidthGraph)
+        .options(joinedload(NetworkDeviceBandwidthGraph.device))
+        .order_by(NetworkDeviceBandwidthGraph.created_at.desc())
+    )
+    graphs = list(db.scalars(stmt).all())
+    if search:
+        needle = search.strip().lower()
+        graphs = [
+            item
+            for item in graphs
+            if needle in item.title.lower()
+            or (item.device and needle in (item.device.name or "").lower())
+        ]
+    return {
+        "graphs": graphs,
+        "search": search or "",
+    }
+
+
+def get_public_bandwidth_graph(
+    db: Session,
+    *,
+    token: str,
+) -> NetworkDeviceBandwidthGraph | None:
+    if not token:
+        return None
+    return db.scalars(
+        select(NetworkDeviceBandwidthGraph)
+        .where(NetworkDeviceBandwidthGraph.public_token == token)
+        .where(NetworkDeviceBandwidthGraph.is_public.is_(True))
+        .options(
+            joinedload(NetworkDeviceBandwidthGraph.device),
+            joinedload(NetworkDeviceBandwidthGraph.sources).joinedload(
+                NetworkDeviceBandwidthGraphSource.snmp_oid
+            ),
+        )
+    ).first()
+
+
+def _core_mapped_nas_device(db: Session, device: NetworkDevice) -> NasDevice | None:
+    return db.scalars(select(NasDevice).where(NasDevice.network_device_id == device.id)).first()
+
+
+def _tag_get(tags: list[str] | None, prefix: str) -> str | None:
+    for tag in tags or []:
+        if tag.startswith(prefix):
+            return tag[len(prefix) :]
+    return None
+
+
+def _tag_set(tags: list[str] | None, prefix: str, value: str | None) -> list[str]:
+    base = [tag for tag in (tags or []) if not tag.startswith(prefix)]
+    if value is not None and str(value).strip():
+        base.append(f"{prefix}{value}")
+    return base
+
+
+def _ensure_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def backup_page_data(
+    db: Session,
+    device_id: str,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    message: str | None = None,
+    error: str | None = None,
+) -> dict[str, object] | None:
+    device = get_device(db, device_id)
+    if not device:
+        return None
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return {
+            "device": device,
+            "nas_device": None,
+            "backups": [],
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+            "backup_config": {},
+            "message": message,
+            "error": error or "No linked NAS device found for this core device.",
+        }
+
+    backups = list(
+        db.scalars(
+            select(NasConfigBackup)
+            .where(NasConfigBackup.nas_device_id == nas_device.id)
+            .order_by(NasConfigBackup.created_at.desc())
+        ).all()
+    )
+
+    from_d: date | None = None
+    to_d: date | None = None
+    try:
+        if date_from:
+            from_d = date.fromisoformat(date_from)
+    except ValueError:
+        error = "Invalid from date format."
+    try:
+        if date_to:
+            to_d = date.fromisoformat(date_to)
+    except ValueError:
+        error = "Invalid to date format."
+
+    if from_d:
+        backups = [
+            item
+            for item in backups
+            if _ensure_utc(item.created_at)
+            and _ensure_utc(item.created_at) >= datetime.combine(from_d, time.min).replace(tzinfo=UTC)
+        ]
+    if to_d:
+        backups = [
+            item
+            for item in backups
+            if _ensure_utc(item.created_at)
+            and _ensure_utc(item.created_at) <= datetime.combine(to_d, time.max).replace(tzinfo=UTC)
+        ]
+
+    tags = nas_device.tags or []
+    backup_config = {
+        "enabled": bool(nas_device.backup_enabled),
+        "ssh_username": nas_device.ssh_username or "",
+        "ssh_port": nas_device.management_port or 22,
+        "backup_type": _tag_get(tags, "backup_type:") or "commands",
+        "backup_commands": _tag_get(tags, "backup_commands:") or "export",
+        "hours_csv": _tag_get(tags, "backup_hours:") or "",
+        "schedule": nas_device.backup_schedule or "",
+    }
+    return {
+        "device": device,
+        "nas_device": nas_device,
+        "backups": backups,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "backup_config": backup_config,
+        "message": message,
+        "error": error,
+    }
+
+
+def update_backup_settings_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    enabled: bool,
+    ssh_username: str,
+    ssh_password: str | None,
+    ssh_port: int,
+    backup_type: str,
+    backup_commands: str | None,
+    hours_csv: str | None,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return False, "No linked NAS device for this core device."
+
+    normalized_type = (backup_type or "").strip().lower()
+    if normalized_type not in {"commands", "scp", "tftp"}:
+        return False, "Backup type must be Commands, SCP, or TFTP."
+
+    hours_values: list[str] = []
+    if hours_csv and hours_csv.strip():
+        for part in hours_csv.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            if not item.isdigit():
+                return False, "Backup hours must be comma-separated numbers (0-23)."
+            hour = int(item)
+            if hour < 0 or hour > 23:
+                return False, "Backup hours must be between 0 and 23."
+            hours_values.append(str(hour))
+    hours_values = sorted(set(hours_values), key=int)
+    schedule = f"0 {','.join(hours_values)} * * *" if hours_values else None
+
+    tags = nas_device.tags or []
+    tags = _tag_set(tags, "backup_type:", normalized_type)
+    tags = _tag_set(tags, "backup_commands:", (backup_commands or "").strip())
+    tags = _tag_set(tags, "backup_hours:", ",".join(hours_values))
+
+    nas_service.NasDevices.update(
+        db,
+        str(nas_device.id),
+        NasDeviceUpdate(
+            backup_enabled=enabled,
+            backup_method=ConfigBackupMethod.ssh,
+            backup_schedule=schedule,
+            ssh_username=(ssh_username or "").strip() or None,
+            ssh_password=(ssh_password or "").strip() or None,
+            management_port=max(1, int(ssh_port or 22)),
+            tags=tags,
+        ),
+    )
+    return True, "Backup configuration saved."
+
+
+def trigger_backup_for_core_device(db: Session, *, device_id: str, triggered_by: str = "web") -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return False, "No linked NAS device for this core device."
+    result = nas_service.trigger_backup_for_device(db, device_id=str(nas_device.id), triggered_by=triggered_by)
+    if result["ok"]:
+        return True, "Backup triggered successfully."
+    return False, str(result["error"] or "Backup trigger failed.")
+
+
+def backup_detail_page_data(
+    db: Session,
+    *,
+    device_id: str,
+    backup_id: str,
+) -> dict[str, object] | None:
+    device = get_device(db, device_id)
+    if not device:
+        return None
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return None
+    backup = db.get(NasConfigBackup, backup_id)
+    if not backup or str(backup.nas_device_id) != str(nas_device.id):
+        return None
+    return {
+        "device": device,
+        "nas_device": nas_device,
+        "backup": backup,
+    }
+
+
+def backup_compare_page_data(
+    db: Session,
+    *,
+    device_id: str,
+    backup_id_1: str,
+    backup_id_2: str,
+) -> dict[str, object] | None:
+    device = get_device(db, device_id)
+    if not device:
+        return None
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return None
+
+    backup1 = db.get(NasConfigBackup, backup_id_1)
+    backup2 = db.get(NasConfigBackup, backup_id_2)
+    if (
+        not backup1
+        or not backup2
+        or str(backup1.nas_device_id) != str(nas_device.id)
+        or str(backup2.nas_device_id) != str(nas_device.id)
+    ):
+        return None
+
+    lines_1 = (backup1.config_content or "").splitlines()
+    lines_2 = (backup2.config_content or "").splitlines()
+    diff_lines = list(
+        difflib.unified_diff(
+            lines_1,
+            lines_2,
+            fromfile=f"{backup1.created_at}",
+            tofile=f"{backup2.created_at}",
+            lineterm="",
+        )
+    )
+    added_lines = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+    removed_lines = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+
+    return {
+        "device": device,
+        "nas_device": nas_device,
+        "backup1": backup1,
+        "backup2": backup2,
+        "diff": {
+            "unified_diff": "\n".join(diff_lines),
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+        },
     }
 
 

@@ -64,9 +64,27 @@
     {# Tariffs Table #}
     <div class="animate-fade-in-up" style="animation-delay: 150ms;">
     {% call card("Tariffs", color="violet") %}
+        {# Category Tabs #}
+        {% set category_tab_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundles"} %}
+        <div class="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3 dark:border-slate-700">
+            <a href="/admin/catalog{% if status %}?status={{ status }}{% endif %}{% if search %}{% if status %}&{% else %}?{% endif %}search={{ search }}{% endif %}{% if plan_kind %}{% if status or search %}&{% else %}?{% endif %}plan_kind={{ plan_kind }}{% endif %}"
+               class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if not plan_category %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+                All
+            </a>
+            {% for cat in plan_categories %}
+            <a href="/admin/catalog?plan_category={{ cat }}{% if status %}&status={{ status }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
+               class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if plan_category == cat %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+                {{ category_tab_labels.get(cat, cat | replace("_", " ") | title) }}
+            </a>
+            {% endfor %}
+        </div>
+
         {# Filter Bar #}
         <div class="mb-4">
             <form method="get" action="/admin/catalog" class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                {% if plan_category %}
+                <input type="hidden" name="plan_category" value="{{ plan_category }}">
+                {% endif %}
                 <div class="relative flex-1">
                     <input type="text" name="search" value="{{ search or '' }}" placeholder="Search tariffs..."
                            class="block h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
@@ -90,7 +108,7 @@
 
         {% if offers %}
         {% call data_table() %}
-            {{ table_head(["Tariff", "Type", "Plan", "Bandwidth", "Subscriptions", "Status", ""]) }}
+            {{ table_head(["Tariff", "Category", "Type", "Plan", "Bandwidth", "Subscriptions", "Status", ""]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for offer in offers %}
                 {% set offer_status = offer.status.value if offer.status is not string and offer.status else (offer.status | default('active')) %}
@@ -102,6 +120,19 @@
                         {% if offer.code %}
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ offer.code }}</p>
                         {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        {% set cat_val = offer.plan_category.value if offer.plan_category is not string and offer.plan_category else (offer.plan_category | default('internet')) %}
+                        {% set cat_colors = {
+                            "internet": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+                            "recurring": "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+                            "one_time": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+                            "bundle": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                        } %}
+                        {% set cat_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundle"} %}
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ cat_colors.get(cat_val, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300') }}">
+                            {{ cat_labels.get(cat_val, cat_val | replace('_', ' ') | title) }}
+                        </span>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
                         {{ offer.service_type.value if offer.service_type is not string and offer.service_type else offer.service_type }}
@@ -160,11 +191,11 @@
             <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
             <div class="flex items-center gap-2">
                 {% if page > 1 %}
-                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
+                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}{% if plan_category %}&plan_category={{ plan_category }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
                 {% if page < total_pages %}
-                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
+                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}{% if plan_category %}&plan_category={{ plan_category }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>

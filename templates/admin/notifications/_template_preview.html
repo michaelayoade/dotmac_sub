@@ -1,0 +1,9 @@
+<div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-700 dark:bg-slate-900/30">
+    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Preview ({{ channel | upper }})</p>
+    {% if rendered_subject %}
+    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Subject</p>
+    <p class="rounded bg-white px-2 py-1 text-sm text-slate-800 dark:bg-slate-800 dark:text-slate-200">{{ rendered_subject }}</p>
+    {% endif %}
+    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Body</p>
+    <div class="whitespace-pre-wrap rounded bg-white px-2 py-2 text-sm text-slate-800 dark:bg-slate-800 dark:text-slate-200">{{ rendered_body }}</div>
+</div>

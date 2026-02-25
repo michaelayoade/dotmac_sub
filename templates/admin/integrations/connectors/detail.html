@@ -17,6 +17,16 @@
             </div>
         </div>
         <div class="flex items-center gap-2">
+        {% if connector.base_url %}
+            <a href="/admin/integrations/connectors/{{ connector.id }}/embed" class="inline-flex items-center gap-2 rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300 dark:hover:bg-primary-900/40">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L4.5 12l5.25-5M14.25 17l5.25-5-5.25-5"/></svg>
+                Open Embedded
+            </a>
+            <a href="{{ connector.base_url }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 3h7m0 0v7m0-7L10 14"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5h5M5 5v14h14v-5"/></svg>
+                Open External
+            </a>
+        {% endif %}
         {% if connector.is_active %}
             {{ status_badge("Active", "active") }}
         {% else %}

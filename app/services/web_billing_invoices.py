@@ -16,10 +16,17 @@ from sqlalchemy.orm import Session
 from app.models.billing import CreditNote, CreditNoteStatus, Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
-from app.schemas.billing import InvoiceLineCreate, InvoiceLineUpdate, InvoiceUpdate
+from app.schemas.billing import (
+    CreditNoteApplyRequest,
+    InvoiceCreate,
+    InvoiceLineCreate,
+    InvoiceLineUpdate,
+    InvoiceUpdate,
+)
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
+from app.services import web_billing_customers as web_billing_customers_service
 from app.services import numbering
 from app.services.audit_helpers import extract_changes, format_changes
 from app.services.audit_helpers import build_changes_metadata

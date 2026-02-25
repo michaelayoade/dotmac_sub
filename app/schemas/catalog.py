@@ -21,6 +21,7 @@ from app.models.catalog import (
     NasDeviceStatus,
     NasVendor,
     OfferStatus,
+    PlanCategory,
     PriceBasis,
     PriceType,
     PriceUnit,
@@ -292,6 +293,12 @@ class CatalogOfferBase(BaseModel):
     priority: str | None = Field(default=None, max_length=40)
     available_for_services: bool = True
     show_on_customer_portal: bool = True
+    plan_category: PlanCategory = PlanCategory.internet
+    hide_on_admin_portal: bool = False
+    service_description: str | None = None
+    burst_profile: str | None = Field(default=None, max_length=120)
+    prepaid_period: str | None = Field(default=None, max_length=40)
+    allowed_change_plan_ids: str | None = None
     status: OfferStatus = OfferStatus.active
     description: str | None = None
     is_active: bool = True
@@ -327,6 +334,12 @@ class CatalogOfferUpdate(BaseModel):
     priority: str | None = Field(default=None, max_length=40)
     available_for_services: bool | None = None
     show_on_customer_portal: bool | None = None
+    plan_category: PlanCategory | None = None
+    hide_on_admin_portal: bool | None = None
+    service_description: str | None = None
+    burst_profile: str | None = Field(default=None, max_length=120)
+    prepaid_period: str | None = Field(default=None, max_length=40)
+    allowed_change_plan_ids: str | None = None
     status: OfferStatus | None = None
     description: str | None = None
     is_active: bool | None = None

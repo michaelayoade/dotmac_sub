@@ -262,6 +262,9 @@ class NetworkDevice(Base):
     )
     interfaces = relationship("DeviceInterface", back_populates="device")
     metrics = relationship("DeviceMetric", back_populates="device")
+    snmp_oids = relationship("NetworkDeviceSnmpOid", back_populates="device")
+    bandwidth_graphs = relationship("NetworkDeviceBandwidthGraph", back_populates="device")
+    graph_sources = relationship("NetworkDeviceBandwidthGraphSource", back_populates="source_device")
     alerts = relationship("Alert", back_populates="device")
     alert_rules = relationship("AlertRule", back_populates="device")
     nas_device = relationship("NasDevice", back_populates="network_device", uselist=False)
@@ -322,6 +325,99 @@ class DeviceMetric(Base):
 
     device = relationship("NetworkDevice", back_populates="metrics")
     interface = relationship("DeviceInterface", back_populates="metrics")
+
+
+class NetworkDeviceSnmpOid(Base):
+    __tablename__ = "network_device_snmp_oids"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    oid: Mapped[str] = mapped_column(String(160), nullable=False)
+    check_interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    rrd_data_source_type: Mapped[str] = mapped_column(String(16), default="gauge")
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_poll_status: Mapped[str | None] = mapped_column(String(16))
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    device = relationship("NetworkDevice", back_populates="snmp_oids")
+    graph_sources = relationship("NetworkDeviceBandwidthGraphSource", back_populates="snmp_oid")
+
+
+class NetworkDeviceBandwidthGraph(Base):
+    __tablename__ = "network_device_bandwidth_graphs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    vertical_axis_title: Mapped[str] = mapped_column(String(80), default="Bandwidth")
+    height_px: Mapped[int] = mapped_column(Integer, default=150)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    public_token: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    device = relationship("NetworkDevice", back_populates="bandwidth_graphs")
+    sources = relationship(
+        "NetworkDeviceBandwidthGraphSource",
+        back_populates="graph",
+        order_by="NetworkDeviceBandwidthGraphSource.sort_order.asc()",
+    )
+
+
+class NetworkDeviceBandwidthGraphSource(Base):
+    __tablename__ = "network_device_bandwidth_graph_sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    graph_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_device_bandwidth_graphs.id"), nullable=False
+    )
+    source_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
+    )
+    snmp_oid_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_device_snmp_oids.id"), nullable=False
+    )
+    factor: Mapped[float] = mapped_column(Float, default=1.0)
+    color_hex: Mapped[str] = mapped_column(String(7), default="#22c55e")
+    draw_type: Mapped[str] = mapped_column(String(16), default="LINE1")
+    stack_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    value_unit: Mapped[str] = mapped_column(String(12), default="Bps")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    graph = relationship("NetworkDeviceBandwidthGraph", back_populates="sources")
+    source_device = relationship("NetworkDevice", back_populates="graph_sources")
+    snmp_oid = relationship("NetworkDeviceSnmpOid", back_populates="graph_sources")
 
 
 class SpeedTestResult(Base):

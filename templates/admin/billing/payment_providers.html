@@ -67,6 +67,22 @@
         {{ error }}
     </div>
     {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">
+        {{ notice }}
+    </div>
+    {% endif %}
+    {% if test_result %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if test_result.ok %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400{% else %}border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-400{% endif %}">
+        <p class="font-semibold">{{ test_result.message }}</p>
+        {% if test_result.errors %}
+        <p class="mt-1">Errors: {{ test_result.errors | join('; ') }}</p>
+        {% endif %}
+        {% if test_result.warnings %}
+        <p class="mt-1">Warnings: {{ test_result.warnings | join('; ') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
 
     {# Data table #}
     <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
@@ -75,7 +91,9 @@
                 {{ table_head([
                     {"label": "Provider"},
                     {"label": "Type"},
+                    {"label": "Health"},
                     {"label": "Status"},
+                    {"label": "Test Mode"},
                     {"label": "Created"},
                     {"label": "Actions", "align": "right"}
                 ]) }}
@@ -105,11 +123,37 @@
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
+                            {% set health = gateway_health | selectattr('provider_type', 'equalto', ptype) | first %}
+                            {% if health %}
+                                {% if health.health == 'healthy' %}
+                                {{ status_badge(health.health_label, variant="active") }}
+                                {% elif health.health in ['misconfigured', 'not_configured'] %}
+                                {{ status_badge(health.health_label, variant="warning") }}
+                                {% else %}
+                                {{ status_badge(health.health_label, variant="neutral") }}
+                                {% endif %}
+                            {% else %}
+                            {{ status_badge("Unknown", variant="neutral") }}
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
                             {% if provider.is_active %}
                                 {{ status_badge("Active", variant="active") }}
                             {% else %}
                                 {{ status_badge("Inactive", variant="neutral") }}
                             {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            <form method="post" action="/admin/billing/payment-providers/test" class="flex items-center gap-2">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="provider_type" value="{{ ptype }}">
+                                <input type="hidden" name="show_inactive" value="{{ 'true' if show_inactive else 'false' }}">
+                                <select name="mode" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="test">Test</option>
+                                    <option value="live">Live</option>
+                                </select>
+                                <button type="submit" class="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700">Run</button>
+                            </form>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {{ provider.created_at.strftime('%Y-%m-%d') if provider.created_at else 'N/A' }}
@@ -134,16 +178,88 @@
                     {% else %}
                     {{ empty_state(
                         title="No payment providers configured",
-                        message="Add a payment gateway to start accepting online payments",
+                        message="Add Paystack and Flutterwave providers to start accepting online payments",
                         icon='<svg class="h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
                         color="emerald",
                         action_label="New Provider",
                         action_href="#create-form",
-                        colspan=5
+                        colspan=7
                     ) }}
                     {% endif %}
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Gateway Health and Failover</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure automatic fallback between Paystack and Flutterwave.</p>
+            <form method="post" action="/admin/billing/payment-providers/failover-config" class="mt-4 space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="failover_enabled" {% if failover.enabled %}checked{% endif %}
+                           class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+                    Enable automatic failover
+                </label>
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Primary Provider</label>
+                        <select name="primary_provider" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for pt in failover.options %}
+                            <option value="{{ pt }}" {% if failover.primary == pt %}selected{% endif %}>{{ pt | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Secondary Provider</label>
+                        <select name="secondary_provider" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for pt in failover.options %}
+                            <option value="{{ pt }}" {% if failover.secondary == pt %}selected{% endif %}>{{ pt | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">Save Failover</button>
+                </div>
+            </form>
+            <form method="post" action="/admin/billing/payment-providers/failover-trigger" class="mt-3">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600">
+                    Trigger Failover Check
+                </button>
+            </form>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Gateway Reconciliation Summary</h3>
+            <div class="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p>Missing in gateway: <span class="font-semibold">{{ gateway_reconciliation.summary.missing_in_gateway }}</span></p>
+                <p>Missing in DotMac: <span class="font-semibold">{{ gateway_reconciliation.summary.missing_in_dotmac }}</span></p>
+                <p>Payments without reference: <span class="font-semibold">{{ gateway_reconciliation.summary.payments_missing_reference }}</span></p>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Provider</th>
+                            <th class="px-3 py-2 text-left">Payments</th>
+                            <th class="px-3 py-2 text-left">Events</th>
+                            <th class="px-3 py-2 text-left">Matched</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                        {% for row in gateway_reconciliation.rows %}
+                        <tr>
+                            <td class="px-3 py-2">{{ row.provider_name }}</td>
+                            <td class="px-3 py-2">{{ row.payment_count }}</td>
+                            <td class="px-3 py-2">{{ row.event_count }}</td>
+                            <td class="px-3 py-2">{{ row.matched_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 

@@ -1,0 +1,167 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if item else 'New' }} ONU Type - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/onu-types" class="hover:text-blue-600">ONU Types</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit ONU Type' if item else 'New ONU Type' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit ONU Type' if item else 'Add ONU Type' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update ONU type configuration' if item else 'Add a new ONU/ONT device type to the hardware catalog' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        {# -- ONU Type Information -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">ONU Type Information</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="120"
+                            value="{{ item.name if item else '' }}"
+                            placeholder="e.g. Huawei HG8245H"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">PON Type <span class="text-red-500">*</span></label>
+                        <div class="flex items-center gap-6">
+                            {% for pt in pon_types %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="pon_type" value="{{ pt.value }}" required
+                                    {% if item and item.pon_type.value == pt.value %}checked{% elif not item and loop.first %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ pt.value|upper }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">GPON Channel <span class="text-red-500">*</span></label>
+                        <div class="flex items-center gap-6">
+                            {% for gc in gpon_channels %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="gpon_channel" value="{{ gc.value }}" required
+                                    {% if item and item.gpon_channel.value == gc.value %}checked{% elif not item and loop.first %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ gc.value|replace('_', '-')|upper }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="capability" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Capability <span class="text-red-500">*</span></label>
+                        <select name="capability" id="capability" required
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for cap in capabilities %}
+                            <option value="{{ cap.value }}" {% if item and item.capability.value == cap.value %}selected{% endif %}>
+                                {% if cap.value == 'bridging' %}Bridging{% elif cap.value == 'routing' %}Routing{% elif cap.value == 'bridging_routing' %}Bridging & Routing{% else %}{{ cap.value|replace('_', ' ')|title }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# -- Port Configuration -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Port Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                        <label for="ethernet_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Ethernet Ports</label>
+                        <input type="number" name="ethernet_ports" id="ethernet_ports" min="0"
+                            value="{{ item.ethernet_ports if item else 0 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="wifi_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WiFi Ports</label>
+                        <input type="number" name="wifi_ports" id="wifi_ports" min="0"
+                            value="{{ item.wifi_ports if item else 0 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="voip_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">VoIP Ports</label>
+                        <input type="number" name="voip_ports" id="voip_ports" min="0"
+                            value="{{ item.voip_ports if item else 0 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="catv_ports" class="block text-sm font-medium text-slate-700 dark:text-slate-300">CATV Ports</label>
+                        <input type="number" name="catv_ports" id="catv_ports" min="0"
+                            value="{{ item.catv_ports if item else 0 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="allow_custom_profiles" value="true"
+                                {% if item and item.allow_custom_profiles %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow Custom Profiles</span>
+                        </label>
+                        <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Enable custom RADIUS or provisioning profiles for this ONU type</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not item or item.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# -- Notes -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Notes</h2>
+            </div>
+            <div class="p-6">
+                <div>
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" id="notes" rows="3" maxlength="500"
+                        placeholder="Additional notes about this ONU type..."
+                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ item.notes or '' if item else '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        {# -- Form Actions -- #}
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/onu-types" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                Cancel
+            </a>
+            <button type="submit" class="rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:from-blue-600 hover:to-indigo-700">
+                {{ 'Update ONU Type' if item else 'Create ONU Type' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

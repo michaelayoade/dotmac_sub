@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Organization, Subscriber, SubscriberStatus
+from app.models.subscriber import Organization, Subscriber, SubscriberStatus, UserType
 from app.services import subscriber as subscriber_service
 
 
@@ -25,7 +25,7 @@ def build_contacts_index_context(
     if entity_type == "organization" and status:
         status = None
 
-    people_query = db.query(Subscriber)
+    people_query = db.query(Subscriber).filter(Subscriber.user_type != UserType.system_user)
     if status:
         normalized_status = status.strip().lower()
         if normalized_status in {"active", "customer", "subscriber", "lead", "contact"}:
@@ -47,24 +47,28 @@ def build_contacts_index_context(
     active_people_count = (
         db.query(func.count(Subscriber.id))
         .filter(Subscriber.status == SubscriberStatus.active)
+        .filter(Subscriber.user_type != UserType.system_user)
         .scalar()
         or 0
     )
     suspended_people_count = (
         db.query(func.count(Subscriber.id))
         .filter(Subscriber.status == SubscriberStatus.suspended)
+        .filter(Subscriber.user_type != UserType.system_user)
         .scalar()
         or 0
     )
     delinquent_people_count = (
         db.query(func.count(Subscriber.id))
         .filter(Subscriber.status == SubscriberStatus.delinquent)
+        .filter(Subscriber.user_type != UserType.system_user)
         .scalar()
         or 0
     )
     canceled_people_count = (
         db.query(func.count(Subscriber.id))
         .filter(Subscriber.status == SubscriberStatus.canceled)
+        .filter(Subscriber.user_type != UserType.system_user)
         .scalar()
         or 0
     )
@@ -175,7 +179,11 @@ def build_customers_index_context(
     customers: list[dict[str, Any]] = []
 
     if customer_type != "organization":
-        people_query = db.query(Subscriber).filter(Subscriber.organization_id.is_(None))
+        people_query = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id.is_(None))
+            .filter(Subscriber.user_type != UserType.system_user)
+        )
         if search:
             people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
         people = (
@@ -227,6 +235,7 @@ def build_customers_index_context(
             db.query(func.count(Subscriber.id))
             .select_from(Subscriber)
             .filter(Subscriber.organization_id.is_(None))
+            .filter(Subscriber.user_type != UserType.system_user)
         )
         if search:
             people_count_query = people_count_query.filter(Subscriber.email.ilike(f"%{search}%"))

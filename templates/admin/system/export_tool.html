@@ -1,0 +1,352 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Export Tool - System{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/system" class="hover:text-primary-600">System</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">Export Tool</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Data Export Tool</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Export module data with selected fields and filters.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ notice }}</div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+            <form method="get" action="/admin/system/export" class="grid gap-3 md:grid-cols-4">
+                <input type="hidden" name="module" value="{{ selected_module }}">
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Template</label>
+                    <select name="template" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">No template</option>
+                        {% for tpl in export_templates %}
+                        <option value="{{ tpl.id }}" {% if selected_template_id == tpl.id %}selected{% endif %}>{{ tpl.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500">
+                        Apply Template
+                    </button>
+                </div>
+            </form>
+            {% if selected_template_id %}
+            <form method="post" action="/admin/system/export/templates/{{ selected_template_id }}/delete" class="mt-3">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="module" value="{{ selected_module }}">
+                <button type="submit" class="inline-flex items-center rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/20">
+                    Delete Template
+                </button>
+            </form>
+            {% endif %}
+        </div>
+
+        <form method="post" action="/admin/system/export/download" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <div class="grid gap-4 md:grid-cols-5">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Module</label>
+                    <select name="module" onchange="window.location.href='/admin/system/export?module=' + encodeURIComponent(this.value)" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in module_options %}
+                        <option value="{{ item.id }}" {% if selected_module == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Delimiter</label>
+                    <select name="delimiter" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in delimiter_options %}
+                        <option value="{{ item.id }}" {% if selected_delimiter == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Format</label>
+                    <select name="export_format" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in export_format_options %}
+                        <option value="{{ item.id }}" {% if selected_export_format == item.id %}selected{% endif %}>{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date From</label>
+                    <input type="date" name="date_from" value="{{ selected_date_from or '' }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date To</label>
+                    <input type="date" name="date_to" value="{{ selected_date_to or '' }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Status Filter</label>
+                    <select name="status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All statuses</option>
+                        {% for status in status_options %}
+                        <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>{{ status }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="include_headers" {% if selected_include_headers %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Include column headers
+                    </label>
+                </div>
+            </div>
+
+            <div>
+                <div class="mb-2 flex items-center justify-between">
+                    <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Fields</label>
+                    <label class="inline-flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <input type="checkbox" id="select-all-fields"
+                               class="h-3.5 w-3.5 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Select all
+                    </label>
+                </div>
+                <div class="grid max-h-64 grid-cols-2 gap-2 overflow-auto rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                    {% for field in available_fields %}
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="fields" value="{{ field }}" {% if field in selected_fields %}checked{% endif %}
+                               class="field-checkbox h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        {{ field }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-3">
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Template Name</label>
+                    <input type="text" name="template_name" placeholder="e.g. Weekly Active Subscribers" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <button type="submit" formaction="/admin/system/export/templates" class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Save As Template</button>
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Export Now</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-4">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Recurring Exports</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create recurring export schedules and deliver files by email.</p>
+        </div>
+        <form method="post" action="/admin/system/export/schedules" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="module" value="{{ selected_module }}">
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Schedule Name</label>
+                    <input type="text" name="schedule_name" placeholder="Weekly subscriber export" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" required>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Recipient Email</label>
+                    <input type="email" name="recipient_email" placeholder="ops@example.com" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" required>
+                </div>
+            </div>
+            <div class="grid gap-4 md:grid-cols-4">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Format</label>
+                    <select name="export_format" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in export_format_options %}
+                        <option value="{{ item.id }}">{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Delimiter</label>
+                    <select name="delimiter" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in delimiter_options %}
+                        <option value="{{ item.id }}">{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Frequency</label>
+                    <select name="frequency" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for item in frequency_options %}
+                        <option value="{{ item.id }}">{{ item.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Custom Interval (hrs)</label>
+                    <input type="number" name="custom_interval_hours" min="1" placeholder="24" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Status Filter</label>
+                    <select name="status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All statuses</option>
+                        {% for status in status_options %}
+                        <option value="{{ status }}">{{ status }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="include_headers" checked
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        Include column headers
+                    </label>
+                </div>
+            </div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date From</label>
+                    <input type="date" name="date_from" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date To</label>
+                    <input type="date" name="date_to" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+            <div>
+                <div class="mb-2 flex items-center justify-between">
+                    <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Fields</label>
+                </div>
+                <div class="grid max-h-56 grid-cols-2 gap-2 overflow-auto rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                    {% for field in available_fields %}
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="fields" value="{{ field }}" checked
+                               class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        {{ field }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex justify-end">
+                <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Create Schedule</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 text-lg font-semibold text-slate-900 dark:text-white">Existing Schedules</h2>
+        {% if export_schedules %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Name</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Module</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Recipient</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Interval</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% for schedule in export_schedules %}
+                    {% set cfg = schedule.kwargs_json or {} %}
+                    <tr>
+                        <td class="px-3 py-2 text-slate-900 dark:text-white">{{ schedule.name }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ cfg.get("module", "-") }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ cfg.get("recipient_email", "-") }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ schedule.interval_seconds }}s</td>
+                        <td class="px-3 py-2">
+                            {% if schedule.enabled %}
+                            <span class="inline-flex rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Enabled</span>
+                            {% else %}
+                            <span class="inline-flex rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-2">
+                            <div class="flex gap-2">
+                                <form method="post" action="/admin/system/export/schedules/{{ schedule.id }}/toggle">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="module" value="{{ selected_module }}">
+                                    <input type="hidden" name="enabled" value="{{ 0 if schedule.enabled else 1 }}">
+                                    <button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                                        {{ "Disable" if schedule.enabled else "Enable" }}
+                                    </button>
+                                </form>
+                                <form method="post" action="/admin/system/export/schedules/{{ schedule.id }}/delete">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="module" value="{{ selected_module }}">
+                                    <button type="submit" class="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/20">
+                                        Delete
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">No recurring exports configured yet.</p>
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 text-lg font-semibold text-slate-900 dark:text-white">Background Export Jobs</h2>
+        {% if export_jobs %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">ID</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Module</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Rows</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Queued</th>
+                        <th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% for job in export_jobs %}
+                    <tr>
+                        <td class="px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-300">{{ job.id }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ job.module }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ job.row_count }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ job.status }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ job.queued_at or "-" }}</td>
+                        <td class="px-3 py-2">
+                            {% if job.status == "completed" %}
+                            <a href="/admin/system/export/jobs/{{ job.id }}/download" class="text-primary-600 hover:text-primary-700">Download</a>
+                            {% elif job.status == "failed" %}
+                            <span class="text-red-600">{{ job.error or "Failed" }}</span>
+                            {% else %}
+                            <span class="text-slate-500 dark:text-slate-400">Pending</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">No background export jobs yet.</p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+(() => {
+  const master = document.getElementById('select-all-fields');
+  if (!master) return;
+  const boxes = Array.from(document.querySelectorAll('.field-checkbox'));
+  master.addEventListener('change', () => {
+    boxes.forEach((box) => { box.checked = master.checked; });
+  });
+})();
+</script>
+{% endblock %}

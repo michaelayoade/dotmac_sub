@@ -18,6 +18,7 @@ from app.models.network_monitoring import (
     DeviceMetric,
     DeviceStatus,
     MetricType,
+    NetworkDeviceSnmpOid,
     NetworkDevice,
 )
 
@@ -420,6 +421,7 @@ def discover_interfaces_and_health(db: Session, device: NetworkDevice) -> tuple[
 
     snapshots = collect_interface_snapshot(device)
     created, updated = apply_interface_snapshot(db, device, snapshots, create_missing=True)
+    _ensure_interface_traffic_oids(db, device, snapshots)
     health = collect_device_health(device)
     recorded_at = datetime.now(UTC)
     cpu_percent = health.get("cpu_percent")
@@ -481,6 +483,48 @@ def discover_interfaces_and_health(db: Session, device: NetworkDevice) -> tuple[
     device.last_snmp_ok = True
     db.flush()
     return created, updated
+
+
+def _ensure_interface_traffic_oids(db: Session, device: NetworkDevice, snapshots: list[object]) -> None:
+    """Ensure interface-level in/out traffic OIDs exist for discovered interfaces."""
+    if device.id is None:
+        return
+    existing = set(
+        db.scalars(
+            select(NetworkDeviceSnmpOid.oid).where(NetworkDeviceSnmpOid.device_id == device.id)
+        ).all()
+    )
+    for snapshot in snapshots:
+        idx = getattr(snapshot, "index", None)
+        name = getattr(snapshot, "name", None) or "if"
+        if not idx:
+            continue
+        in_oid = f"1.3.6.1.2.1.31.1.1.1.6.{idx}"
+        out_oid = f"1.3.6.1.2.1.31.1.1.1.10.{idx}"
+        if in_oid not in existing:
+            db.add(
+                NetworkDeviceSnmpOid(
+                    device_id=device.id,
+                    title=f"{name} in",
+                    oid=in_oid,
+                    check_interval_seconds=60,
+                    rrd_data_source_type="counter",
+                    is_enabled=True,
+                )
+            )
+            existing.add(in_oid)
+        if out_oid not in existing:
+            db.add(
+                NetworkDeviceSnmpOid(
+                    device_id=device.id,
+                    title=f"{name} out",
+                    oid=out_oid,
+                    check_interval_seconds=60,
+                    rrd_data_source_type="counter",
+                    is_enabled=True,
+                )
+            )
+            existing.add(out_oid)
 
 
 def render_device_status_badge(status_value: str) -> str:

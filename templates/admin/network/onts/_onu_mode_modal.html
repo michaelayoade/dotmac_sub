@@ -1,0 +1,136 @@
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     x-data='{ open: true, wanMode: "{{ ont.wan_mode.value if ont.wan_mode else "dhcp" }}" }'
+     x-show="open" x-transition>
+    <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
+         @click.outside="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-slate-900 dark:text-white">ONU Mode Configuration</h3>
+            <button @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <form method="POST" action="/admin/network/onts/{{ ont.id }}/onu-mode"
+              hx-post="/admin/network/onts/{{ ont.id }}/onu-mode"
+              hx-swap="none">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="space-y-5">
+                {# WAN VLAN-ID #}
+                <div>
+                    <label for="wan_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WAN VLAN-ID</label>
+                    <select name="wan_vlan_id" id="wan_vlan_id"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">-- None --</option>
+                        {% for vlan in vlans %}
+                        <option value="{{ vlan.id }}" {% if ont.wan_vlan_id and (ont.wan_vlan_id | string) == (vlan.id | string) %}selected{% endif %}>
+                            VLAN {{ vlan.tag }}{% if vlan.name %} - {{ vlan.name }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                {# ONU Mode #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ONU Mode</label>
+                    <div class="flex gap-4">
+                        {% for mode in onu_modes %}
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="onu_mode" value="{{ mode }}"
+                                   {% if ont.onu_mode and ont.onu_mode.value == mode %}checked{% endif %}
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            {{ mode | replace("_", " ") | title }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# WAN Mode #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">WAN Mode</label>
+                    <div class="flex flex-wrap gap-4">
+                        {% for mode in wan_modes %}
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="wan_mode" value="{{ mode }}"
+                                   {% if ont.wan_mode and ont.wan_mode.value == mode %}checked{% endif %}
+                                   x-model="wanMode"
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            {{ mode | replace("_", " ") | title }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# Config Method #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Config Method</label>
+                    <div class="flex gap-4">
+                        {% for method in config_methods %}
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="config_method" value="{{ method }}"
+                                   {% if ont.config_method and ont.config_method.value == method %}checked{% endif %}
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            {{ method | upper }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# IP Protocol #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">IP Protocol</label>
+                    <div class="flex gap-4">
+                        {% for proto in ip_protocols %}
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="ip_protocol" value="{{ proto }}"
+                                   {% if ont.ip_protocol and ont.ip_protocol.value == proto %}checked{% endif %}
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            {% if proto == "ipv4" %}IPv4{% elif proto == "dual_stack" %}Dual Stack IPv4/IPv6{% else %}{{ proto | replace("_", " ") | title }}{% endif %}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# PPPoE Username — conditional on WAN mode #}
+                <div x-show="wanMode === 'pppoe'" x-transition x-cloak>
+                    <label for="pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Username</label>
+                    <input type="text" name="pppoe_username" id="pppoe_username"
+                           value="{{ ont.pppoe_username or '' }}"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="PPPoE username">
+                </div>
+
+                {# PPPoE Password — conditional on WAN mode #}
+                <div x-show="wanMode === 'pppoe'" x-transition x-cloak>
+                    <label for="pppoe_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Password</label>
+                    <input type="text" name="pppoe_password" id="pppoe_password"
+                           value="{{ ont.pppoe_password or '' }}"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="PPPoE password">
+                </div>
+
+                {# WAN Remote Access #}
+                <div>
+                    <label for="wan_remote_access" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WAN Remote Access</label>
+                    <select name="wan_remote_access" id="wan_remote_access"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="false" {% if not ont.wan_remote_access %}selected{% endif %}>Disabled</option>
+                        <option value="true" {% if ont.wan_remote_access %}selected{% endif %}>Enabled</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-end gap-3">
+                <button type="button"
+                        @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
+                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Close
+                </button>
+                <button type="submit"
+                        class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
+                    Update
+                </button>
+            </div>
+        </form>
+    </div>
+</div>

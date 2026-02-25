@@ -1,0 +1,409 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Bulk Tariff Change - Services - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="bulkTariffWizard()">
+    {# Breadcrumbs #}
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/catalog" class="hover:text-primary-600">Tariff Plans</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">Bulk Change</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Bulk Tariff Change</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Mass-migrate subscribers from one plan to another.</p>
+    </div>
+
+    {# ============================
+       Step 1: Select New Tariff
+       ============================ #}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button"
+                @click="step1Open = !step1Open"
+                class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700 text-left">
+            <div class="flex items-center gap-3">
+                <span class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold
+                    {% if step == 'select' %}
+                        bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300
+                    {% elif step == 'preview' or step == 'result' %}
+                        bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300
+                    {% else %}
+                        bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400
+                    {% endif %}">1</span>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Select New Tariff</h2>
+            </div>
+            <svg class="h-5 w-5 text-slate-400 transition-transform" :class="step1Open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        <div x-show="step1Open" x-collapse x-cloak>
+            <form method="POST" action="/admin/catalog/bulk-tariff-change/preview" class="p-6 space-y-6">
+                {% include "components/forms/csrf_input.html" %}
+
+                {% if form_errors is defined and form_errors %}
+                <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-medium text-rose-800 dark:text-rose-200">Please correct the following:</p>
+                            <ul class="mt-1 list-disc list-inside text-sm text-rose-700 dark:text-rose-300">
+                                {% for err in form_errors %}
+                                <li>{{ err }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="grid gap-6 sm:grid-cols-2">
+                    {# Start Date #}
+                    <div>
+                        <label for="start_date" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New plan start date</label>
+                        <input type="date" id="start_date" name="start_date"
+                               value="{{ form_start_date|default(today, true) }}"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Date from which the new tariff takes effect.</p>
+                    </div>
+
+                    {# Ignore Balance #}
+                    <div class="flex items-end pb-1">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" name="ignore_balance" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700"
+                                   {% if form_ignore_balance|default(false) %}checked{% endif %}>
+                            <div>
+                                <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">Ignore balance</span>
+                                <span class="block text-xs text-slate-500 dark:text-slate-400">Change plan even if subscriber has outstanding balance.</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="grid gap-6 sm:grid-cols-2">
+                    {# Source Plan (migrate FROM) #}
+                    <div>
+                        <label for="source_offer_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Current plan (migrate FROM)</label>
+                        <select id="source_offer_id" name="source_offer_id"
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select source plan --</option>
+                            {% for offer in offers %}
+                            <option value="{{ offer.id }}"
+                                    {% if form_source_offer_id|default('') == offer.id|string %}selected{% endif %}>
+                                {{ offer.name }}{% if offer.code %} ({{ offer.code }}){% endif %}
+                                - {{ offer_counts.get(offer.id|string, 0) }} subscribers
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">All active subscriptions on this plan will be moved.</p>
+                    </div>
+
+                    {# Target Plan (migrate TO) #}
+                    <div>
+                        <label for="target_offer_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New plan (migrate TO)</label>
+                        <select id="target_offer_id" name="target_offer_id"
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select target plan --</option>
+                            {% for offer in offers %}
+                            <option value="{{ offer.id }}"
+                                    {% if form_target_offer_id|default('') == offer.id|string %}selected{% endif %}>
+                                {{ offer.name }}{% if offer.code %} ({{ offer.code }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscribers will be migrated to this plan.</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                        </svg>
+                        Preview
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {# ============================
+       Step 2: Preview
+       ============================ #}
+    {% if step == 'preview' or step == 'result' %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button"
+                @click="step2Open = !step2Open"
+                class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700 text-left">
+            <div class="flex items-center gap-3">
+                <span class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold
+                    {% if step == 'preview' %}
+                        bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300
+                    {% elif step == 'result' %}
+                        bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300
+                    {% else %}
+                        bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400
+                    {% endif %}">2</span>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Preview</h2>
+            </div>
+            <svg class="h-5 w-5 text-slate-400 transition-transform" :class="step2Open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        <div x-show="step2Open" x-collapse x-cloak>
+            <div class="p-6 space-y-6">
+                {% if preview is defined and preview %}
+                {# Summary banner #}
+                <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-blue-600 dark:text-blue-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div class="text-sm">
+                            <p class="font-medium text-blue-800 dark:text-blue-200">
+                                {{ preview.total_count }} active subscription{{ 's' if preview.total_count != 1 else '' }} will be changed
+                            </p>
+                            <p class="mt-1 text-blue-700 dark:text-blue-300">
+                                From <span class="font-semibold">{{ preview.source_offer.name }}</span>
+                                to <span class="font-semibold">{{ preview.target_offer.name }}</span>,
+                                effective <span class="font-semibold">{{ preview.start_date }}</span>.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                {# Affected subscriptions table #}
+                {% if preview.affected_subscriptions %}
+                <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-800">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Plan</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">New Plan</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Start Date</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                            {% for sub in preview.affected_subscriptions %}
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-900 dark:text-white">
+                                    {% if sub.subscriber %}
+                                        <a href="/admin/subscribers/{{ sub.subscriber.id }}" class="text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300">
+                                            {{ sub.subscriber.first_name }} {{ sub.subscriber.last_name }}
+                                        </a>
+                                    {% else %}
+                                        <span class="text-slate-400">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                                    {{ preview.source_offer.name }}
+                                </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-violet-600 dark:text-violet-400">
+                                    {{ preview.target_offer.name }}
+                                </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                                    {{ preview.start_date }}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-8">
+                    <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+                    </svg>
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No active subscriptions found for the selected source plan.</p>
+                </div>
+                {% endif %}
+
+                {# Process button #}
+                {% if preview.total_count > 0 and step == 'preview' %}
+                <form method="POST" action="/admin/catalog/bulk-tariff-change/execute" class="flex justify-end">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="source_offer_id" value="{{ form_source_offer_id }}">
+                    <input type="hidden" name="target_offer_id" value="{{ form_target_offer_id }}">
+                    <input type="hidden" name="start_date" value="{{ form_start_date }}">
+                    {% if form_ignore_balance %}
+                    <input type="hidden" name="ignore_balance" value="on">
+                    {% endif %}
+                    <button type="submit"
+                            onclick="return confirm('Are you sure you want to change {{ preview.total_count }} subscription{{ 's' if preview.total_count != 1 else '' }}? This action cannot be undone.')"
+                            class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                        Process {{ preview.total_count }} Change{{ 's' if preview.total_count != 1 else '' }}
+                    </button>
+                </form>
+                {% endif %}
+
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Preview data will appear here after selecting plans and clicking Preview.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ============================
+       Step 3: Result
+       ============================ #}
+    {% if step == 'result' %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button"
+                @click="step3Open = !step3Open"
+                class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700 text-left">
+            <div class="flex items-center gap-3">
+                <span class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold
+                    {% if result is defined and result and result.errors == 0 %}
+                        bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300
+                    {% elif result is defined and result and result.errors > 0 and result.changed > 0 %}
+                        bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300
+                    {% elif result is defined and result and result.errors > 0 %}
+                        bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-300
+                    {% else %}
+                        bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400
+                    {% endif %}">3</span>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Result</h2>
+            </div>
+            <svg class="h-5 w-5 text-slate-400 transition-transform" :class="step3Open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        <div x-show="step3Open" x-collapse x-cloak>
+            <div class="p-6 space-y-6">
+                {% if result is defined and result %}
+
+                {# Execution error #}
+                {% if execution_error is defined and execution_error %}
+                <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-medium text-rose-800 dark:text-rose-200">Execution failed</p>
+                            <p class="mt-1 text-sm text-rose-700 dark:text-rose-300">{{ execution_error }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {# Result summary cards #}
+                <div class="grid gap-4 sm:grid-cols-3">
+                    {# Changed #}
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/30">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900">
+                                <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <p class="text-2xl font-bold text-emerald-800 dark:text-emerald-200 tabular-nums">{{ result.changed }}</p>
+                                <p class="text-sm text-emerald-600 dark:text-emerald-400">Changed</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Skipped #}
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900">
+                                <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <p class="text-2xl font-bold text-amber-800 dark:text-amber-200 tabular-nums">{{ result.skipped }}</p>
+                                <p class="text-sm text-amber-600 dark:text-amber-400">Skipped</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# Errors #}
+                    <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/30">
+                        <div class="flex items-center gap-3">
+                            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-rose-100 dark:bg-rose-900">
+                                <svg class="h-5 w-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <p class="text-2xl font-bold text-rose-800 dark:text-rose-200 tabular-nums">{{ result.errors }}</p>
+                                <p class="text-sm text-rose-600 dark:text-rose-400">Errors</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {# Success or partial success message #}
+                {% if result.changed > 0 and result.errors == 0 %}
+                <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-emerald-800 dark:text-emerald-200">
+                            All {{ result.changed }} subscription{{ 's' if result.changed != 1 else '' }} successfully changed.
+                        </p>
+                    </div>
+                </div>
+                {% elif result.changed > 0 and result.errors > 0 %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                        <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
+                            Partially completed: {{ result.changed }} changed, {{ result.errors }} failed. Check the logs for details.
+                        </p>
+                    </div>
+                </div>
+                {% endif %}
+
+                {# Action buttons #}
+                <div class="flex items-center gap-3">
+                    <a href="/admin/catalog/bulk-tariff-change"
+                       class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        Start New Change
+                    </a>
+                    <a href="/admin/catalog/subscriptions"
+                       class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                        </svg>
+                        View Subscriptions
+                    </a>
+                </div>
+
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Results will appear here after processing the change.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function bulkTariffWizard() {
+    const step = '{{ step|default("select") }}';
+    return {
+        step1Open: step === 'select',
+        step2Open: step === 'preview' || step === 'result',
+        step3Open: step === 'result',
+    };
+}
+</script>
+{% endblock %}

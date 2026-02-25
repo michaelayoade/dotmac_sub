@@ -353,6 +353,97 @@
                     </div>
                 </div>
 
+                <!-- User Access -->
+                <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                        <h3 class="font-semibold text-slate-900 dark:text-white">User Access</h3>
+                        <span class="text-xs text-slate-500 dark:text-slate-400">Customer Portal</span>
+                    </div>
+                    <div class="p-5 space-y-4">
+                        {% if customer_user_access.error %}
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+                            {{ customer_user_access.error }}
+                        </div>
+                        {% else %}
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Login Email</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ customer_user_access.email }}</p>
+                            </div>
+                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Credential Status</p>
+                                {% if customer_user_access.has_credential %}
+                                <p class="mt-1 text-sm font-semibold {% if customer_user_access.login_active %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">
+                                    {{ "Active" if customer_user_access.login_active else "Deactivated" }}
+                                </p>
+                                {% else %}
+                                <p class="mt-1 text-sm font-semibold text-slate-500 dark:text-slate-400">Not Created</p>
+                                {% endif %}
+                            </div>
+                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Password Reset Required</p>
+                                <p class="mt-1 text-sm font-semibold {% if customer_user_access.must_change_password %}text-amber-600 dark:text-amber-400{% else %}text-slate-700 dark:text-slate-300{% endif %}">
+                                    {{ "Yes" if customer_user_access.must_change_password else "No" }}
+                                </p>
+                            </div>
+                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Login</p>
+                                <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                                    {{ customer_user_access.last_login_at.strftime('%b %d, %Y %H:%M') if customer_user_access.last_login_at else 'Never' }}
+                                </p>
+                            </div>
+                            <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30 sm:col-span-2">
+                                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Invite Status</p>
+                                {% if customer_user_access.invite_sent_at %}
+                                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
+                                    Invite sent {{ customer_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
+                                    {% if not customer_user_access.can_send_invite and customer_user_access.invite_available_at %}
+                                    Resend available {{ customer_user_access.invite_available_at.strftime('%b %d, %Y %H:%M') }}.
+                                    {% endif %}
+                                </p>
+                                {% else %}
+                                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">No invite sent yet.</p>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="grid gap-2 sm:grid-cols-2">
+                            <button
+                                hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/invite"
+                                {% if not customer_user_access.can_send_invite %}disabled{% endif %}
+                                class="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                Send Invite
+                            </button>
+                            <button
+                                hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/reset-link"
+                                {% if not customer_user_access.can_send_reset %}disabled{% endif %}
+                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7v2h16v-2c-4.418 0-8-3.134-8-7zM8 8a4 4 0 118 0 4 4 0 01-8 0z"/></svg>
+                                Send Reset Link
+                            </button>
+                            {% if customer_user_access.login_active %}
+                            <button
+                                hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/deactivate-login"
+                                hx-confirm="Deactivate portal login for this customer?"
+                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30">
+                                Deactivate Login
+                            </button>
+                            {% else %}
+                            <button
+                                hx-post="/admin/customers/{{ customer_type }}/{{ customer.id }}/user/activate-login"
+                                class="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                                Activate Login
+                            </button>
+                            {% endif %}
+                            <div class="flex items-center px-1 text-xs text-slate-500 dark:text-slate-400">
+                                Reset links remaining this hour: {{ customer_user_access.reset_remaining }}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
                 <!-- Location -->
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">

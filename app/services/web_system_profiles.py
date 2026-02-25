@@ -9,25 +9,23 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey, MFAMethod, UserCredential
-from app.models.rbac import Role
-from app.models.rbac import SubscriberRole as SubscriberRoleModel
-from app.models.subscriber import Subscriber
-from app.services import rbac as rbac_service
+from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
+from app.models.system_user import SystemUser
 from app.services.common import coerce_uuid
 
 
-def get_subscriber(db: Session, user_id: str | UUID | None) -> Subscriber | None:
-    """Resolve a subscriber by id."""
+def get_subscriber(db: Session, user_id: str | UUID | None) -> SystemUser | None:
+    """Resolve a system user by id."""
     if not user_id:
         return None
     try:
-        return db.get(Subscriber, coerce_uuid(user_id))
+        return db.get(SystemUser, coerce_uuid(user_id))
     except (TypeError, ValueError):
         return None
 
 
 def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any]:
-    """Return profile page data for the logged-in user."""
+    """Return profile page data for the logged-in system user."""
     person = get_subscriber(db, person_id)
     if not person:
         return {
@@ -39,7 +37,7 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
 
     credential = db.execute(
         select(UserCredential)
-        .where(UserCredential.subscriber_id == person.id)
+        .where(UserCredential.system_user_id == person.id)
         .where(UserCredential.is_active.is_(True))
         .limit(1)
     ).scalars().first()
@@ -47,7 +45,7 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
     mfa_enabled = bool(
         db.scalar(
             select(MFAMethod.id)
-            .where(MFAMethod.subscriber_id == person.id)
+            .where(MFAMethod.system_user_id == person.id)
             .where(MFAMethod.enabled.is_(True))
             .limit(1)
         )
@@ -57,7 +55,7 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
         db.scalar(
             select(func.count())
             .select_from(ApiKey)
-            .where(ApiKey.subscriber_id == person.id)
+            .where(ApiKey.system_user_id == person.id)
             .where(ApiKey.is_active.is_(True))
             .where(ApiKey.revoked_at.is_(None))
         )
@@ -75,12 +73,12 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
 def update_profile(
     db: Session,
     *,
-    person: Subscriber,
+    person: SystemUser,
     first_name: str | None,
     last_name: str | None,
     email: str | None,
     phone: str | None,
-) -> Subscriber:
+) -> SystemUser:
     """Apply profile updates and persist."""
     if first_name:
         person.first_name = first_name
@@ -103,21 +101,21 @@ def get_user_detail_data(db: Session, user_id: str | UUID | None) -> dict[str, A
 
     roles = db.execute(
         select(Role)
-        .join(SubscriberRoleModel, SubscriberRoleModel.role_id == Role.id)
-        .where(SubscriberRoleModel.subscriber_id == user.id)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .where(SystemUserRole.system_user_id == user.id)
         .where(Role.is_active.is_(True))
         .order_by(Role.name.asc())
     ).scalars().all()
 
     credential = db.execute(
         select(UserCredential)
-        .where(UserCredential.subscriber_id == user.id)
+        .where(UserCredential.system_user_id == user.id)
         .where(UserCredential.is_active.is_(True))
         .limit(1)
     ).scalars().first()
 
     mfa_methods = db.execute(
-        select(MFAMethod).where(MFAMethod.subscriber_id == user.id)
+        select(MFAMethod).where(MFAMethod.system_user_id == user.id)
     ).scalars().all()
 
     return {
@@ -134,35 +132,35 @@ def get_user_edit_data(db: Session, user_id: str | UUID | None) -> dict[str, Any
     if not user:
         return None
 
-    roles = rbac_service.roles.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=1000,
-        offset=0,
-    )
+    roles = db.execute(
+        select(Role)
+        .where(Role.is_active.is_(True))
+        .order_by(Role.name.asc())
+    ).scalars().all()
+
     current_role_ids = {
         str(role_id)
         for role_id in db.execute(
-            select(SubscriberRoleModel.role_id).where(
-                SubscriberRoleModel.subscriber_id == user.id
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == user.id
             )
         ).scalars()
     }
 
-    all_permissions = rbac_service.permissions.list(
-        db=db,
-        is_active=True,
-        order_by="key",
-        order_dir="asc",
-        limit=1000,
-        offset=0,
-    )
-    direct_permissions = rbac_service.subscriber_permissions.list_for_subscriber(
-        db, str(user.id)
-    )
-    direct_permission_ids = {str(permission.permission_id) for permission in direct_permissions}
+    all_permissions = db.execute(
+        select(Permission)
+        .where(Permission.is_active.is_(True))
+        .order_by(Permission.key.asc())
+    ).scalars().all()
+
+    direct_permission_ids = {
+        str(permission_id)
+        for permission_id in db.execute(
+            select(SystemUserPermission.permission_id).where(
+                SystemUserPermission.system_user_id == user.id
+            )
+        ).scalars()
+    }
 
     return {
         "user": user,

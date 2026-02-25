@@ -109,6 +109,61 @@ class SplitterPortType(enum.Enum):
     output = "output"
 
 
+class PonType(enum.Enum):
+    gpon = "gpon"
+    epon = "epon"
+
+
+class GponChannel(enum.Enum):
+    gpon = "gpon"
+    xg_pon = "xg_pon"
+    xgs_pon = "xgs_pon"
+
+
+class OnuCapability(enum.Enum):
+    bridging = "bridging"
+    routing = "routing"
+    bridging_routing = "bridging_routing"
+
+
+class OnuMode(enum.Enum):
+    routing = "routing"
+    bridging = "bridging"
+
+
+class WanMode(enum.Enum):
+    dhcp = "dhcp"
+    static_ip = "static_ip"
+    pppoe = "pppoe"
+    setup_via_onu = "setup_via_onu"
+
+
+class ConfigMethod(enum.Enum):
+    omci = "omci"
+    tr069 = "tr069"
+
+
+class IpProtocol(enum.Enum):
+    ipv4 = "ipv4"
+    dual_stack = "dual_stack"
+
+
+class MgmtIpMode(enum.Enum):
+    inactive = "inactive"
+    static_ip = "static_ip"
+    dhcp = "dhcp"
+
+
+class SpeedProfileDirection(enum.Enum):
+    download = "download"
+    upload = "upload"
+
+
+class SpeedProfileType(enum.Enum):
+    internet = "internet"
+    management = "management"
+
+
 class OnuOnlineStatus(enum.Enum):
     online = "online"
     offline = "offline"
@@ -748,6 +803,73 @@ class OntUnit(Base):
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_zones.id")
     )
+    onu_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("onu_types.id")
+    )
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id")
+    )
+    pon_type: Mapped[PonType | None] = mapped_column(
+        Enum(PonType, name="pontype", create_constraint=False),
+    )
+    gpon_channel: Mapped[GponChannel | None] = mapped_column(
+        Enum(GponChannel, name="gponchannel", create_constraint=False),
+    )
+    board: Mapped[str | None] = mapped_column(String(60))
+    port: Mapped[str | None] = mapped_column(String(60))
+    onu_mode: Mapped[OnuMode | None] = mapped_column(
+        Enum(OnuMode, name="onumode", create_constraint=False),
+    )
+    user_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vlans.id")
+    )
+    splitter_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("splitters.id")
+    )
+    splitter_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("splitter_ports.id")
+    )
+    download_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speed_profiles.id")
+    )
+    upload_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speed_profiles.id")
+    )
+    name: Mapped[str | None] = mapped_column(String(200))
+    address_or_comment: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(String(120))
+    use_gps: Mapped[bool] = mapped_column(Boolean, default=False)
+    gps_latitude: Mapped[float | None] = mapped_column(Float)
+    gps_longitude: Mapped[float | None] = mapped_column(Float)
+    # ONU mode configuration
+    wan_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vlans.id")
+    )
+    wan_mode: Mapped[WanMode | None] = mapped_column(
+        Enum(WanMode, name="wanmode", create_constraint=False),
+    )
+    config_method: Mapped[ConfigMethod | None] = mapped_column(
+        Enum(ConfigMethod, name="configmethod", create_constraint=False),
+    )
+    ip_protocol: Mapped[IpProtocol | None] = mapped_column(
+        Enum(IpProtocol, name="ipprotocol", create_constraint=False),
+    )
+    pppoe_username: Mapped[str | None] = mapped_column(String(120))
+    pppoe_password: Mapped[str | None] = mapped_column(String(120))
+    wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Management IP configuration
+    tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
+    )
+    mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
+        Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
+    )
+    mgmt_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vlans.id")
+    )
+    mgmt_ip_address: Mapped[str | None] = mapped_column(String(64))
+    mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
+    voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -758,6 +880,16 @@ class OntUnit(Base):
 
     assignments = relationship("OntAssignment", back_populates="ont_unit")
     zone = relationship("NetworkZone", back_populates="ont_units")
+    onu_type = relationship("OnuType", back_populates="ont_units")
+    olt_device = relationship("OLTDevice")
+    user_vlan = relationship("Vlan", foreign_keys=[user_vlan_id])
+    wan_vlan = relationship("Vlan", foreign_keys=[wan_vlan_id])
+    mgmt_vlan = relationship("Vlan", foreign_keys=[mgmt_vlan_id])
+    splitter = relationship("Splitter")
+    splitter_port_rel = relationship("SplitterPort")
+    download_speed_profile = relationship("SpeedProfile", foreign_keys=[download_speed_profile_id])
+    upload_speed_profile = relationship("SpeedProfile", foreign_keys=[upload_speed_profile_id])
+    tr069_acs_server = relationship("Tr069AcsServer")
 
 
 class OntAssignment(Base):
@@ -1271,3 +1403,83 @@ class PonPortSplitterLink(Base):
 
     pon_port = relationship("PonPort", back_populates="splitter_link")
     splitter_port = relationship("SplitterPort", back_populates="pon_links")
+
+
+class OnuType(Base):
+    """Hardware catalog entry for ONU/ONT device types."""
+
+    __tablename__ = "onu_types"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_onu_types_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    pon_type: Mapped[PonType] = mapped_column(
+        Enum(PonType, name="pontype", create_constraint=False),
+        nullable=False,
+        default=PonType.gpon,
+    )
+    gpon_channel: Mapped[GponChannel] = mapped_column(
+        Enum(GponChannel, name="gponchannel", create_constraint=False),
+        nullable=False,
+        default=GponChannel.gpon,
+    )
+    ethernet_ports: Mapped[int] = mapped_column(Integer, default=0)
+    wifi_ports: Mapped[int] = mapped_column(Integer, default=0)
+    voip_ports: Mapped[int] = mapped_column(Integer, default=0)
+    catv_ports: Mapped[int] = mapped_column(Integer, default=0)
+    allow_custom_profiles: Mapped[bool] = mapped_column(Boolean, default=True)
+    capability: Mapped[OnuCapability] = mapped_column(
+        Enum(OnuCapability, name="onucapability", create_constraint=False),
+        nullable=False,
+        default=OnuCapability.bridging_routing,
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    ont_units = relationship("OntUnit", back_populates="onu_type")
+
+
+class SpeedProfile(Base):
+    """OLT-level speed profile catalog entry (download or upload)."""
+
+    __tablename__ = "speed_profiles"
+    __table_args__ = (
+        UniqueConstraint("name", "direction", name="uq_speed_profiles_name_direction"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    direction: Mapped[SpeedProfileDirection] = mapped_column(
+        Enum(SpeedProfileDirection, name="speedprofiledirection", create_constraint=False),
+        nullable=False,
+    )
+    speed_kbps: Mapped[int] = mapped_column(Integer, nullable=False)
+    speed_type: Mapped[SpeedProfileType] = mapped_column(
+        Enum(SpeedProfileType, name="speedprofiletype", create_constraint=False),
+        nullable=False,
+        default=SpeedProfileType.internet,
+    )
+    use_prefix_suffix: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )

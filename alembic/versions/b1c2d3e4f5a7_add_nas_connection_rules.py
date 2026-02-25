@@ -1,7 +1,7 @@
 """add_nas_connection_rules
 
-Revision ID: b1c2d3e4f5a6
-Revises: a9b8c7d6e5f4
+Revision ID: b1c2d3e4f5a7
+Revises: a9b8c7d6e5f5
 Create Date: 2026-02-25 15:35:00.000000
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "b1c2d3e4f5a6"
-down_revision: str | None = "a9b8c7d6e5f4"
+revision: str = "b1c2d3e4f5a7"
+down_revision: str | None = "a9b8c7d6e5f5"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
@@ -32,7 +32,7 @@ def upgrade() -> None:
             sa.Column("name", sa.String(length=120), nullable=False),
             sa.Column(
                 "connection_type",
-                sa.Enum("pppoe", "dhcp", "ipoe", "static", "hotspot", name="connectiontype"),
+                sa.String(length=20),
                 nullable=True,
             ),
             sa.Column("ip_assignment_mode", sa.String(length=40), nullable=True),

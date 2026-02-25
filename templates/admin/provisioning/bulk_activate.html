@@ -1,0 +1,235 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Bulk Activate Services - Provisioning{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Bulk Service Activation</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Filter subscribers, map activation parameters, preview, then run as a background job.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ notice }}</div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-4 flex gap-2">
+            {% for t in tabs %}
+            <a href="/admin/provisioning/bulk-activate?tab={{ t }}" class="rounded-lg px-3 py-1.5 text-sm {% if tab == t %}bg-primary-600 text-white{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+                {{ t|replace('_', ' ')|title }}
+            </a>
+            {% endfor %}
+        </div>
+
+        <form method="post" action="/admin/provisioning/bulk-activate/execute" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="tab" value="{{ tab }}">
+
+            <div class="grid gap-4 md:grid-cols-3">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Reseller/Partner</label>
+                    <select name="reseller_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Any</option>
+                        {% for reseller in resellers %}
+                        <option value="{{ reseller.id }}">{{ reseller.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Status</label>
+                    <select name="subscriber_status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Any</option>
+                        {% for status in subscriber_statuses %}
+                        <option value="{{ status }}">{{ status }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">POP Site</label>
+                    <select name="pop_site_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Any</option>
+                        {% for pop in pop_sites %}
+                        <option value="{{ pop.id }}">{{ pop.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-4">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date From</label>
+                    <input type="date" name="date_from" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Date To</label>
+                    <input type="date" name="date_to" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Custom Attr Key</label>
+                    <input type="text" name="custom_attr_key" placeholder="metadata key" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Custom Attr Value</label>
+                    <input type="text" name="custom_attr_value" placeholder="value" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-3">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Plan Assignment</label>
+                    <select name="offer_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select plan</option>
+                        {% for offer in offers %}
+                        <option value="{{ offer.id }}">{{ offer.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Activation Date</label>
+                    <input type="datetime-local" name="activation_date" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Router/NAS</label>
+                    <select name="nas_device_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Not selected</option>
+                        {% for nas in nas_devices %}
+                        <option value="{{ nas.id }}">{{ nas.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-4">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">IPv4 Assignment</label>
+                    <select name="ipv4_assignment" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="dynamic">Dynamic/DHCP</option>
+                        <option value="static">Static</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Static IPv4</label>
+                    <input type="text" name="static_ipv4" placeholder="192.0.2.10" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
+                    <input type="text" name="mac_address" placeholder="AA:BB:CC:DD:EE:FF" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Password Mode</label>
+                    <select name="service_password_mode" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="auto">Auto-generate</option>
+                        <option value="manual">Manual</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-3">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Login Prefix</label>
+                    <input type="text" name="login_prefix" placeholder="cust-" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Login Suffix</label>
+                    <input type="text" name="login_suffix" placeholder="-net" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Manual Password</label>
+                    <input type="text" name="service_password_manual" placeholder="optional" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-2">
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="skip_active_service_check" class="h-4 w-4 rounded border-slate-300 text-primary-600">
+                    Skip active service check
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="set_subscribers_active" class="h-4 w-4 rounded border-slate-300 text-primary-600">
+                    Set subscribers as Active on submit
+                </label>
+            </div>
+
+            <div class="flex justify-between">
+                <button type="button"
+                        hx-post="/admin/provisioning/bulk-activate/preview"
+                        hx-target="#bulk-preview-panel"
+                        hx-swap="innerHTML"
+                        hx-include="closest form"
+                        class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Preview Matches
+                </button>
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Run Bulk Activation
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div id="bulk-preview-panel">
+        {% if preview %}
+        {% include "admin/provisioning/_bulk_activate_preview.html" %}
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Activation Job Status</h2>
+        </div>
+        {% if active_job_id %}
+        <div
+            hx-get="/admin/provisioning/bulk-activate/jobs/{{ active_job_id }}/status"
+            hx-trigger="load, every 5s"
+            hx-swap="innerHTML"
+        >
+            {% if active_job %}
+            {% set job = active_job %}
+            {% include "admin/provisioning/_bulk_activate_job_status.html" %}
+            {% endif %}
+        </div>
+        {% else %}
+        <p class="text-xs text-slate-500 dark:text-slate-400">No active bulk activation job selected.</p>
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Recent Jobs</h2>
+        {% if jobs %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Job</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Tab</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Status</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Progress</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Counts</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in jobs %}
+                    <tr>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                            <a href="/admin/provisioning/bulk-activate?tab={{ row.filters.tab if row.filters else tab }}&job_id={{ row.job_id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ row.job_id }}</a>
+                        </td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.filters.tab if row.filters else '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.status }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.progress_percent or 0 }}%</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                            A: {{ row.counts.activated if row.counts else 0 }}, F: {{ row.counts.failed if row.counts else 0 }}, S: {{ row.counts.skipped if row.counts else 0 }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-xs text-slate-500 dark:text-slate-400">No jobs yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

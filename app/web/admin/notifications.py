@@ -23,6 +23,7 @@ from app.schemas.notification import (
     OnCallRotationUpdate,
 )
 from app.services import notification as notification_service
+from app.services import notification_template_renderer as template_renderer
 from app.services import web_admin_notifications as web_admin_notifications_service
 from app.services import (
     web_notifications_alert_policies as web_alert_policies_service,
@@ -254,21 +255,35 @@ def notification_template_test(
     request: Request,
     template_id: UUID,
     test_recipient: str = Form(...),
+    test_variables_json: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Send a test notification using this template."""
     from app.services import email as email_service
+    from app.services.integrations.connectors import whatsapp as whatsapp_service
     from app.services import sms as sms_service
 
     try:
         template = notification_service.templates.get(db=db, template_id=str(template_id))
+        variables = template_renderer.default_preview_variables()
+        if test_variables_json and test_variables_json.strip():
+            parsed = json.loads(test_variables_json)
+            if not isinstance(parsed, dict):
+                raise ValueError("test_variables_json must be a JSON object")
+            for key, value in parsed.items():
+                variables[str(key)] = "" if value is None else str(value)
+        rendered_subject = template_renderer.render_template_text(
+            template.subject or "Test Notification",
+            variables,
+        )
+        rendered_body = template_renderer.render_template_text(template.body, variables)
 
         # Send test notification based on channel
         if template.channel == NotificationChannel.sms:
             sms_service.send_sms(
                 db=db,
                 to_phone=test_recipient.strip(),
-                body=template.body,
+                body=rendered_body,
                 track=True,
             )
             message = f"Test SMS sent to {test_recipient}"
@@ -276,11 +291,21 @@ def notification_template_test(
             email_service.send_email(
                 db=db,
                 to_email=test_recipient.strip(),
-                subject=template.subject or "Test Notification",
-                body_html=template.body,
+                subject=rendered_subject,
+                body_html=rendered_body,
                 activity="notification_test",
             )
             message = f"Test email sent to {test_recipient}"
+        elif template.channel == NotificationChannel.whatsapp:
+            result = whatsapp_service.send_text_message(
+                db=db,
+                recipient=test_recipient.strip(),
+                body=rendered_body,
+                dry_run=False,
+            )
+            if not result.get("ok"):
+                raise RuntimeError(str(result.get("response") or "Failed to send WhatsApp test"))
+            message = f"Test WhatsApp message sent to {test_recipient}"
         else:
             message = f"Test notification queued for {template.channel.value}"
 
@@ -298,6 +323,44 @@ def notification_template_test(
         if request.headers.get("HX-Request"):
             return _htmx_error_response(str(exc), status_code=200, reswap="none")
         return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
+
+
+@router.post(
+    "/templates/{template_id}/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+def notification_template_preview(
+    request: Request,
+    template_id: UUID,
+    test_variables_json: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Render template preview with variable substitution."""
+    template = notification_service.templates.get(db=db, template_id=str(template_id))
+    variables = template_renderer.default_preview_variables()
+    if test_variables_json and test_variables_json.strip():
+        parsed = json.loads(test_variables_json)
+        if not isinstance(parsed, dict):
+            raise ValueError("test_variables_json must be a JSON object")
+        for key, value in parsed.items():
+            variables[str(key)] = "" if value is None else str(value)
+
+    rendered_subject = template_renderer.render_template_text(
+        template.subject or "",
+        variables,
+    )
+    rendered_body = template_renderer.render_template_text(template.body, variables)
+    return templates.TemplateResponse(
+        "admin/notifications/_template_preview.html",
+        {
+            "request": request,
+            "rendered_subject": rendered_subject,
+            "rendered_body": rendered_body,
+            "variables": variables,
+            "channel": template.channel.value,
+        },
+    )
 
 
 @router.delete("/templates/{template_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])

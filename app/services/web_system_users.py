@@ -9,9 +9,9 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.auth import MFAMethod, UserCredential
-from app.models.rbac import Role
-from app.models.rbac import SubscriberRole as SubscriberRoleModel
-from app.models.subscriber import Subscriber, UserType
+from app.models.rbac import Role, SystemUserRole
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     OPERATOR_LABELS,
@@ -25,25 +25,20 @@ from app.services.dynamic_filters import (
 )
 
 
-USER_TYPE_OPTIONS = [
-    ("system_user", "System User"),
-    ("customer", "Customer"),
-    ("reseller", "Reseller"),
-]
+USER_TYPE_OPTIONS = [("system_user", "System User")]
 USER_TYPE_LABELS = {key: label for key, label in USER_TYPE_OPTIONS}
-
 USER_DOCTYPE = "User"
 
 
 def _pending_credential_expression():
     active_credential = exists(
         select(UserCredential.id)
-        .where(UserCredential.subscriber_id == Subscriber.id)
+        .where(UserCredential.system_user_id == SystemUser.id)
         .where(UserCredential.is_active.is_(True))
     )
     pending_credential = exists(
         select(UserCredential.id)
-        .where(UserCredential.subscriber_id == Subscriber.id)
+        .where(UserCredential.system_user_id == SystemUser.id)
         .where(UserCredential.is_active.is_(True))
         .where(UserCredential.must_change_password.is_(True))
     )
@@ -76,8 +71,8 @@ def _role_filter_expression(operator: str, value: object):
         token = str(value).strip().lower() if value is not None else ""
         if token in {"", "null", "none", "nil"}:
             return ~exists(
-                select(SubscriberRoleModel.id).where(
-                    SubscriberRoleModel.subscriber_id == Subscriber.id
+                select(SystemUserRole.id).where(
+                    SystemUserRole.system_user_id == SystemUser.id
                 )
             )
         raise FilterValidationError("Role field supports only 'is null'")
@@ -86,8 +81,8 @@ def _role_filter_expression(operator: str, value: object):
         token = str(value).strip().lower() if value is not None else ""
         if token in {"", "null", "none", "nil"}:
             return exists(
-                select(SubscriberRoleModel.id).where(
-                    SubscriberRoleModel.subscriber_id == Subscriber.id
+                select(SystemUserRole.id).where(
+                    SystemUserRole.system_user_id == SystemUser.id
                 )
             )
         raise FilterValidationError("Role field supports only 'is not null'")
@@ -95,33 +90,33 @@ def _role_filter_expression(operator: str, value: object):
     if operator == "=":
         role_id = _parse_uuid_value(value)
         return exists(
-            select(SubscriberRoleModel.id)
-            .where(SubscriberRoleModel.subscriber_id == Subscriber.id)
-            .where(SubscriberRoleModel.role_id == role_id)
+            select(SystemUserRole.id)
+            .where(SystemUserRole.system_user_id == SystemUser.id)
+            .where(SystemUserRole.role_id == role_id)
         )
 
     if operator == "!=":
         role_id = _parse_uuid_value(value)
         return ~exists(
-            select(SubscriberRoleModel.id)
-            .where(SubscriberRoleModel.subscriber_id == Subscriber.id)
-            .where(SubscriberRoleModel.role_id == role_id)
+            select(SystemUserRole.id)
+            .where(SystemUserRole.system_user_id == SystemUser.id)
+            .where(SystemUserRole.role_id == role_id)
         )
 
     if operator == "in":
         role_ids = _parse_uuid_list(value)
         return exists(
-            select(SubscriberRoleModel.id)
-            .where(SubscriberRoleModel.subscriber_id == Subscriber.id)
-            .where(SubscriberRoleModel.role_id.in_(role_ids))
+            select(SystemUserRole.id)
+            .where(SystemUserRole.system_user_id == SystemUser.id)
+            .where(SystemUserRole.role_id.in_(role_ids))
         )
 
     if operator == "not in":
         role_ids = _parse_uuid_list(value)
         return ~exists(
-            select(SubscriberRoleModel.id)
-            .where(SubscriberRoleModel.subscriber_id == Subscriber.id)
-            .where(SubscriberRoleModel.role_id.in_(role_ids))
+            select(SystemUserRole.id)
+            .where(SystemUserRole.system_user_id == SystemUser.id)
+            .where(SystemUserRole.role_id.in_(role_ids))
         )
 
     raise FilterValidationError(f"Operator '{operator}' is not allowed for role_id")
@@ -133,9 +128,9 @@ def _status_filter_expression(operator: str, value: object):
         raise FilterValidationError("Status must be one of: active, inactive, pending")
 
     if status_value == "active":
-        expr = Subscriber.is_active.is_(True)
+        expr = SystemUser.is_active.is_(True)
     elif status_value == "inactive":
-        expr = Subscriber.is_active.is_(False)
+        expr = SystemUser.is_active.is_(False)
     else:
         expr = _pending_credential_expression()
 
@@ -149,7 +144,7 @@ def _status_filter_expression(operator: str, value: object):
 def _mfa_filter_expression(operator: str, value: object):
     mfa_exists = exists(
         select(MFAMethod.id)
-        .where(MFAMethod.subscriber_id == Subscriber.id)
+        .where(MFAMethod.system_user_id == SystemUser.id)
         .where(MFAMethod.enabled.is_(True))
         .where(MFAMethod.is_active.is_(True))
     )
@@ -162,38 +157,33 @@ def _mfa_filter_expression(operator: str, value: object):
     else:
         raise FilterValidationError("mfa_enabled expects a boolean value")
 
-    if operator == "=":
+    if operator in {"=", "is"}:
         return target
-    if operator == "!=":
+    if operator in {"!=", "is not"}:
         return ~target
-    if operator == "is":
-        return target
-    if operator == "is not":
-        return ~target
-
     raise FilterValidationError("mfa_enabled supports '=', '!=', 'is', and 'is not'")
 
 
 def _last_login_expression():
     return (
         select(func.max(UserCredential.last_login_at))
-        .where(UserCredential.subscriber_id == Subscriber.id)
+        .where(UserCredential.system_user_id == SystemUser.id)
         .scalar_subquery()
     )
 
 
 USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
-    "first_name": FilterFieldSpec(field="first_name", expression=Subscriber.first_name, field_type="text"),
-    "last_name": FilterFieldSpec(field="last_name", expression=Subscriber.last_name, field_type="text"),
-    "display_name": FilterFieldSpec(field="display_name", expression=Subscriber.display_name, field_type="text"),
-    "email": FilterFieldSpec(field="email", expression=Subscriber.email, field_type="text"),
+    "first_name": FilterFieldSpec(field="first_name", expression=SystemUser.first_name, field_type="text"),
+    "last_name": FilterFieldSpec(field="last_name", expression=SystemUser.last_name, field_type="text"),
+    "display_name": FilterFieldSpec(field="display_name", expression=SystemUser.display_name, field_type="text"),
+    "email": FilterFieldSpec(field="email", expression=SystemUser.email, field_type="text"),
     "user_type": FilterFieldSpec(
         field="user_type",
-        expression=Subscriber.user_type,
+        expression=SystemUser.user_type,
         field_type="select",
         options={item[0] for item in USER_TYPE_OPTIONS},
     ),
-    "is_active": FilterFieldSpec(field="is_active", expression=Subscriber.is_active, field_type="boolean"),
+    "is_active": FilterFieldSpec(field="is_active", expression=SystemUser.is_active, field_type="boolean"),
     "status": FilterFieldSpec(
         field="status",
         field_type="select",
@@ -213,18 +203,18 @@ USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
         operators={"=", "!=", "is", "is not"},
         builder=_mfa_filter_expression,
     ),
-    "created_at": FilterFieldSpec(field="created_at", expression=Subscriber.created_at, field_type="datetime"),
-    "updated_at": FilterFieldSpec(field="updated_at", expression=Subscriber.updated_at, field_type="datetime"),
+    "created_at": FilterFieldSpec(field="created_at", expression=SystemUser.created_at, field_type="datetime"),
+    "updated_at": FilterFieldSpec(field="updated_at", expression=SystemUser.updated_at, field_type="datetime"),
     "last_login": FilterFieldSpec(field="last_login", expression=_last_login_expression(), field_type="datetime"),
 }
 
 
 USER_SORT_FIELDS = {
-    "first_name": Subscriber.first_name,
-    "last_name": Subscriber.last_name,
-    "email": Subscriber.email,
-    "created_at": Subscriber.created_at,
-    "updated_at": Subscriber.updated_at,
+    "first_name": SystemUser.first_name,
+    "last_name": SystemUser.last_name,
+    "email": SystemUser.email,
+    "created_at": SystemUser.created_at,
+    "updated_at": SystemUser.updated_at,
 }
 
 
@@ -245,13 +235,12 @@ def user_type_label(value: UserType | str | None) -> str:
 
 
 def get_user_stats(db: Session) -> dict[str, int]:
-    """Return summary statistics for system users page."""
-    total = db.scalar(select(func.count()).select_from(Subscriber)) or 0
+    total = db.scalar(select(func.count()).select_from(SystemUser)) or 0
     active = (
         db.scalar(
             select(func.count())
-            .select_from(Subscriber)
-            .where(Subscriber.is_active.is_(True))
+            .select_from(SystemUser)
+            .where(SystemUser.is_active.is_(True))
         )
         or 0
     )
@@ -266,27 +255,26 @@ def get_user_stats(db: Session) -> dict[str, int]:
     if admin_role_id:
         admins = (
             db.scalar(
-                select(func.count(func.distinct(SubscriberRoleModel.subscriber_id))).where(
-                    SubscriberRoleModel.role_id == admin_role_id
-                )
+                select(func.count(func.distinct(SystemUserRole.system_user_id)))
+                .select_from(SystemUserRole)
+                .where(SystemUserRole.role_id == admin_role_id)
             )
             or 0
         )
 
     pending = (
-        db.scalar(select(func.count()).select_from(Subscriber).where(_pending_credential_expression()))
+        db.scalar(
+            select(func.count())
+            .select_from(SystemUser)
+            .where(_pending_credential_expression())
+        )
         or 0
     )
 
     return {"total": total, "active": active, "admins": admins, "pending": pending}
 
 
-def _legacy_filters(
-    *,
-    search: str | None,
-    role_id: str | None,
-    status: str | None,
-) -> FilterQuery:
+def _legacy_filters(*, search: str | None, role_id: str | None, status: str | None) -> FilterQuery:
     and_rows: list[FilterCondition] = []
     or_rows: list[FilterCondition] = []
 
@@ -392,8 +380,7 @@ def list_users(
     offset: int,
     limit: int,
 ) -> tuple[list[dict], int]:
-    """Return paginated users list with role and auth metadata."""
-    stmt = select(Subscriber)
+    stmt = select(SystemUser)
 
     try:
         dynamic_query = parse_filter_payload(filters, default_doctype=USER_DOCTYPE)
@@ -419,24 +406,24 @@ def list_users(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
-    people = db.execute(
-        stmt.order_by(sort_clause, Subscriber.first_name.asc())
+    users_rows = db.execute(
+        stmt.order_by(sort_clause, SystemUser.first_name.asc())
         .offset(offset)
         .limit(limit)
     ).scalars().all()
 
-    person_ids = [person.id for person in people]
-    if not person_ids:
+    user_ids = [row.id for row in users_rows]
+    if not user_ids:
         return [], total
 
     credentials = db.execute(
-        select(UserCredential).where(UserCredential.subscriber_id.in_(person_ids))
+        select(UserCredential).where(UserCredential.system_user_id.in_(user_ids))
     ).scalars().all()
 
     credential_info: dict = {}
     for credential in credentials:
         info = credential_info.setdefault(
-            credential.subscriber_id,
+            credential.system_user_id,
             {"last_login": None, "has_active": False, "must_change_password": False},
         )
         if credential.is_active:
@@ -450,8 +437,8 @@ def list_users(
 
     mfa_enabled = set(
         db.execute(
-            select(MFAMethod.subscriber_id)
-            .where(MFAMethod.subscriber_id.in_(person_ids))
+            select(MFAMethod.system_user_id)
+            .where(MFAMethod.system_user_id.in_(user_ids))
             .where(MFAMethod.enabled.is_(True))
             .where(MFAMethod.is_active.is_(True))
         )
@@ -460,14 +447,14 @@ def list_users(
     )
 
     roles_rows = db.execute(
-        select(SubscriberRoleModel, Role)
-        .join(Role, Role.id == SubscriberRoleModel.role_id)
-        .where(SubscriberRoleModel.subscriber_id.in_(person_ids))
-        .order_by(SubscriberRoleModel.assigned_at.desc())
+        select(SystemUserRole, Role)
+        .join(Role, Role.id == SystemUserRole.role_id)
+        .where(SystemUserRole.system_user_id.in_(user_ids))
+        .order_by(SystemUserRole.assigned_at.desc())
     ).all()
     role_map: dict = {}
-    for person_role, role in roles_rows:
-        role_map.setdefault(person_role.subscriber_id, []).append(
+    for user_role, role in roles_rows:
+        role_map.setdefault(user_role.system_user_id, []).append(
             {
                 "id": str(role.id),
                 "name": role.name,
@@ -476,19 +463,19 @@ def list_users(
         )
 
     users: list[dict] = []
-    for person in people:
-        name = person.display_name or f"{person.first_name} {person.last_name}".strip()
-        info = credential_info.get(person.id, {})
+    for row in users_rows:
+        name = row.display_name or f"{row.first_name} {row.last_name}".strip()
+        info = credential_info.get(row.id, {})
         users.append(
             {
-                "id": str(person.id),
+                "id": str(row.id),
                 "name": name,
-                "email": person.email,
-                "roles": role_map.get(person.id, []),
-                "user_type": person.user_type.value if person.user_type else UserType.system_user.value,
-                "user_type_label": user_type_label(person.user_type),
-                "is_active": bool(person.is_active),
-                "mfa_enabled": person.id in mfa_enabled,
+                "email": row.email,
+                "roles": role_map.get(row.id, []),
+                "user_type": row.user_type.value if row.user_type else UserType.system_user.value,
+                "user_type_label": user_type_label(row.user_type),
+                "is_active": bool(row.is_active),
+                "mfa_enabled": row.id in mfa_enabled,
                 "last_login": info.get("last_login"),
             }
         )

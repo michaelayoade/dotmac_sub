@@ -15,6 +15,7 @@ from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
     SubscriberCustomField,
+    UserType,
 )
 from app.schemas.subscriber import (
     AddressCreate,
@@ -281,6 +282,7 @@ class Subscribers(ListResponseMixin):
         query = db.query(Subscriber).options(
             selectinload(Subscriber.addresses),
         )
+        query = query.filter(Subscriber.user_type != UserType.system_user)
         # Backwards-compat: allow filtering by legacy "person_id" keyword.
         if person_id:
             query = query.filter(Subscriber.id == coerce_uuid(person_id))
@@ -376,22 +378,30 @@ class Subscribers(ListResponseMixin):
     @staticmethod
     def count_stats(db: Session) -> dict:
         """Return subscriber counts for dashboard stats."""
-        total = db.query(func.count(Subscriber.id)).scalar() or 0
+        total = (
+            db.query(func.count(Subscriber.id))
+            .filter(Subscriber.user_type != UserType.system_user)
+            .scalar()
+            or 0
+        )
         active = (
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.is_active.is_(True))
+            .filter(Subscriber.user_type != UserType.system_user)
             .scalar() or 0
         )
         # Count individuals (subscribers without organization)
         persons = (
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.organization_id.is_(None))
+            .filter(Subscriber.user_type != UserType.system_user)
             .scalar() or 0
         )
         # Count organizations (subscribers with organization)
         organizations = (
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.organization_id.is_not(None))
+            .filter(Subscriber.user_type != UserType.system_user)
             .scalar() or 0
         )
         return {
@@ -408,7 +418,9 @@ class Subscribers(ListResponseMixin):
         organization_id: str | None = None,
     ) -> int:
         """Return total count of subscribers matching filters."""
-        query = db.query(func.count(Subscriber.id))
+        query = db.query(func.count(Subscriber.id)).filter(
+            Subscriber.user_type != UserType.system_user
+        )
         if organization_id:
             query = query.filter(
                 Subscriber.organization_id == coerce_uuid(organization_id)
@@ -436,7 +448,11 @@ class Subscribers(ListResponseMixin):
         now = datetime.now(UTC)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        all_subs = db.query(Subscriber).all()
+        all_subs = (
+            db.query(Subscriber)
+            .filter(Subscriber.user_type != UserType.system_user)
+            .all()
+        )
         total = len(all_subs)
         active_count = sum(1 for s in all_subs if s.is_active)
         inactive_count = total - active_count

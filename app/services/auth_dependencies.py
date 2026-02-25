@@ -12,6 +12,8 @@ from app.models.rbac import (
     RolePermission,
     SubscriberPermission,
     SubscriberRole,
+    SystemUserPermission,
+    SystemUserRole,
 )
 from app.services.auth import hash_api_key
 from app.services.auth_flow import decode_access_token, hash_session_token
@@ -99,10 +101,11 @@ def require_audit_auth(
             .first()
         )
         if session:
+            session_actor_id = str(session.system_user_id or session.subscriber_id)
             if request is not None:
-                request.state.actor_id = str(session.subscriber_id)
+                request.state.actor_id = session_actor_id
                 request.state.actor_type = "user"
-            return {"actor_type": "user", "actor_id": str(session.subscriber_id)}
+            return {"actor_type": "user", "actor_id": session_actor_id}
     if x_api_key:
         api_key = (
             db.query(ApiKey)
@@ -131,34 +134,40 @@ def require_user_auth(
     if not token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_access_token(db, token)
-    subscriber_id = payload.get("sub")
+    principal_id = payload.get("principal_id") or payload.get("sub")
+    principal_type = payload.get("principal_type") or "subscriber"
     session_id = payload.get("session_id")
-    if not subscriber_id or not session_id:
+    if not principal_id or not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     now = datetime.now(UTC)
-    session = (
+    query = (
         db.query(AuthSession)
         .filter(AuthSession.id == session_id)
-        .filter(AuthSession.subscriber_id == subscriber_id)
         .filter(AuthSession.status == SessionStatus.active)
         .filter(AuthSession.revoked_at.is_(None))
         .filter(AuthSession.expires_at > now)
-        .first()
     )
+    if principal_type == "system_user":
+        query = query.filter(AuthSession.system_user_id == principal_id)
+    else:
+        query = query.filter(AuthSession.subscriber_id == principal_id)
+    session = query.first()
     if not session:
         raise HTTPException(status_code=401, detail="Unauthorized")
     roles_value = payload.get("roles")
     scopes_value = payload.get("scopes")
     roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
     scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
-    actor_id = str(subscriber_id)
+    actor_id = str(principal_id)
     if request is not None:
         request.state.actor_id = actor_id
         request.state.actor_type = "user"
     return {
-        "subscriber_id": str(subscriber_id),
-        "person_id": str(subscriber_id),
+        "subscriber_id": str(principal_id),
+        "person_id": str(principal_id),
+        "principal_id": str(principal_id),
+        "principal_type": str(principal_type),
         "session_id": str(session_id),
         "roles": roles,
         "scopes": scopes,
@@ -170,7 +179,8 @@ def require_role(role_name: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        subscriber_id = auth["subscriber_id"]
+        principal_id = auth["principal_id"]
+        principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if role_name in roles:
             return auth
@@ -182,12 +192,20 @@ def require_role(role_name: str):
         )
         if not role:
             raise HTTPException(status_code=403, detail="Role not found")
-        link = (
-            db.query(SubscriberRole)
-            .filter(SubscriberRole.subscriber_id == subscriber_id)
-            .filter(SubscriberRole.role_id == role.id)
-            .first()
-        )
+        if principal_type == "system_user":
+            link = (
+                db.query(SystemUserRole)
+                .filter(SystemUserRole.system_user_id == principal_id)
+                .filter(SystemUserRole.role_id == role.id)
+                .first()
+            )
+        else:
+            link = (
+                db.query(SubscriberRole)
+                .filter(SubscriberRole.subscriber_id == principal_id)
+                .filter(SubscriberRole.role_id == role.id)
+                .first()
+            )
         if not link:
             raise HTTPException(status_code=403, detail="Forbidden")
         return auth
@@ -195,7 +213,17 @@ def require_role(role_name: str):
     return _require_role
 
 
-def _expand_permission_keys(permission_key: str) -> list[str]:
+def _permission_domain_aliases(permission_key: str) -> list[str]:
+    """Return permission aliases used during customer->subscriber transition."""
+    aliases = [permission_key]
+    if permission_key.startswith("customer:"):
+        aliases.append(permission_key.replace("customer:", "subscriber:", 1))
+    elif permission_key.startswith("subscriber:"):
+        aliases.append(permission_key.replace("subscriber:", "customer:", 1))
+    return aliases
+
+
+def _expand_permission_key_single(permission_key: str) -> list[str]:
     """
     Expand a permission key to include hierarchical matches.
 
@@ -231,12 +259,25 @@ def _expand_permission_keys(permission_key: str) -> list[str]:
     return keys
 
 
+def _expand_permission_keys(permission_key: str) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for alias in _permission_domain_aliases(permission_key):
+        for key in _expand_permission_key_single(alias):
+            if key in seen:
+                continue
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
 def require_permission(permission_key: str):
     def _require_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        subscriber_id = auth["subscriber_id"]
+        principal_id = auth["principal_id"]
+        principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             return auth
@@ -262,23 +303,38 @@ def require_permission(permission_key: str):
         permission_ids = [p.id for p in permissions]
 
         # Check if user has any of the matching permissions via roles
-        has_role_permission = (
-            db.query(RolePermission)
-            .join(Role, RolePermission.role_id == Role.id)
-            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-            .filter(SubscriberRole.subscriber_id == subscriber_id)
-            .filter(RolePermission.permission_id.in_(permission_ids))
-            .filter(Role.is_active.is_(True))
-            .first()
-        )
-
-        # Check if user has any direct permission grants
-        has_direct_permission = (
-            db.query(SubscriberPermission)
-            .filter(SubscriberPermission.subscriber_id == subscriber_id)
-            .filter(SubscriberPermission.permission_id.in_(permission_ids))
-            .first()
-        )
+        if principal_type == "system_user":
+            has_role_permission = (
+                db.query(RolePermission)
+                .join(Role, RolePermission.role_id == Role.id)
+                .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+                .filter(SystemUserRole.system_user_id == principal_id)
+                .filter(RolePermission.permission_id.in_(permission_ids))
+                .filter(Role.is_active.is_(True))
+                .first()
+            )
+            has_direct_permission = (
+                db.query(SystemUserPermission)
+                .filter(SystemUserPermission.system_user_id == principal_id)
+                .filter(SystemUserPermission.permission_id.in_(permission_ids))
+                .first()
+            )
+        else:
+            has_role_permission = (
+                db.query(RolePermission)
+                .join(Role, RolePermission.role_id == Role.id)
+                .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+                .filter(SubscriberRole.subscriber_id == principal_id)
+                .filter(RolePermission.permission_id.in_(permission_ids))
+                .filter(Role.is_active.is_(True))
+                .first()
+            )
+            has_direct_permission = (
+                db.query(SubscriberPermission)
+                .filter(SubscriberPermission.subscriber_id == principal_id)
+                .filter(SubscriberPermission.permission_id.in_(permission_ids))
+                .first()
+            )
 
         if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -293,7 +349,8 @@ def require_any_permission(*permission_keys: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        subscriber_id = auth["subscriber_id"]
+        principal_id = auth["principal_id"]
+        principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             return auth
@@ -315,23 +372,38 @@ def require_any_permission(*permission_keys: str):
         permission_ids = [p.id for p in permissions]
 
         # Check if user has any of the matching permissions via roles
-        has_role_permission = (
-            db.query(RolePermission)
-            .join(Role, RolePermission.role_id == Role.id)
-            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-            .filter(SubscriberRole.subscriber_id == subscriber_id)
-            .filter(RolePermission.permission_id.in_(permission_ids))
-            .filter(Role.is_active.is_(True))
-            .first()
-        )
-
-        # Check if user has any direct permission grants
-        has_direct_permission = (
-            db.query(SubscriberPermission)
-            .filter(SubscriberPermission.subscriber_id == subscriber_id)
-            .filter(SubscriberPermission.permission_id.in_(permission_ids))
-            .first()
-        )
+        if principal_type == "system_user":
+            has_role_permission = (
+                db.query(RolePermission)
+                .join(Role, RolePermission.role_id == Role.id)
+                .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+                .filter(SystemUserRole.system_user_id == principal_id)
+                .filter(RolePermission.permission_id.in_(permission_ids))
+                .filter(Role.is_active.is_(True))
+                .first()
+            )
+            has_direct_permission = (
+                db.query(SystemUserPermission)
+                .filter(SystemUserPermission.system_user_id == principal_id)
+                .filter(SystemUserPermission.permission_id.in_(permission_ids))
+                .first()
+            )
+        else:
+            has_role_permission = (
+                db.query(RolePermission)
+                .join(Role, RolePermission.role_id == Role.id)
+                .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+                .filter(SubscriberRole.subscriber_id == principal_id)
+                .filter(RolePermission.permission_id.in_(permission_ids))
+                .filter(Role.is_active.is_(True))
+                .first()
+            )
+            has_direct_permission = (
+                db.query(SubscriberPermission)
+                .filter(SubscriberPermission.subscriber_id == principal_id)
+                .filter(SubscriberPermission.permission_id.in_(permission_ids))
+                .first()
+            )
 
         if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")

@@ -38,7 +38,7 @@
     <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-emerald-400/5 to-cyan-500/5 blur-3xl"></div>
 </div>
 
-<div class="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6 animate-fade-in-up">
+<div class="relative z-30 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6 animate-fade-in-up">
     <div class="flex items-start gap-4">
         <!-- Enhanced Avatar -->
         <div class="relative group">
@@ -106,7 +106,7 @@
             <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             New Service
         </a>
-        <div x-data="{ open: false }" class="relative">
+        <div x-data="{ open: false }" class="relative z-40">
             <button x-on:click="open = !open" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
             </button>
@@ -117,11 +117,17 @@
                  x-transition:leave="transition ease-in duration-150"
                  x-transition:leave-start="opacity-100 scale-100"
                  x-transition:leave-end="opacity-0 scale-95"
-                 class="absolute right-0 mt-2 w-52 rounded-2xl border border-slate-200 bg-white/95 py-2 shadow-xl backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/95 z-10">
+                 class="absolute right-0 mt-2 w-52 rounded-2xl border border-slate-200 bg-white/95 py-2 shadow-xl backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/95 z-50">
                 <a href="/admin/subscribers/{{ subscriber.id }}/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     Edit Details
                 </a>
+                {% if subscriber.organization_id %}
+                <a href="/admin/subscribers/{{ subscriber.id }}/organization/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>
+                    Edit Organization
+                </a>
+                {% endif %}
                 <a href="/admin/billing/invoices/create?subscriber={{ subscriber.id }}" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                     Create Invoice
@@ -182,7 +188,7 @@
             <p class="font-semibold">Email missing for this subscriber.</p>
             <p class="mt-1">Add an email to send invoices, notifications, and recovery messages.</p>
             {% if subscriber.person %}
-            <a href="/admin/customers/person/{{ subscriber.person.id }}/edit" class="mt-2 inline-flex text-sm font-semibold text-amber-700 hover:text-amber-800 dark:text-amber-300">
+            <a href="/admin/subscribers/{{ subscriber.id }}/edit" class="mt-2 inline-flex text-sm font-semibold text-amber-700 hover:text-amber-800 dark:text-amber-300">
                 Add email now
                 <svg class="ml-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             </a>
@@ -527,7 +533,7 @@
                         <svg class="h-4.5 w-4.5 text-slate-400 group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                     </div>
                     <div class="flex-1 min-w-0">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ subscriber.person.email if subscriber.person else 'contact@company.com' }}</p>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ subscriber.email or 'Not provided' }}</p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Primary Email</p>
                     </div>
                 </div>
@@ -536,7 +542,7 @@
                         <svg class="h-4.5 w-4.5 text-slate-400 group-hover:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
                     </div>
                     <div class="flex-1 min-w-0">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ subscriber.person.phone if subscriber.person else '(555) 123-4567' }}</p>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ subscriber.phone or 'Not provided' }}</p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Primary Phone</p>
                     </div>
                 </div>
@@ -554,6 +560,264 @@
                         {% endif %}
                     </div>
                 </div>
+
+                {% if organization_members and organization_members|length > 1 %}
+                <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Organization Subscribers</p>
+                    <div class="mt-2 space-y-1">
+                        {% for member in organization_members %}
+                        <a href="/admin/subscribers/{{ member.id }}" class="flex items-center justify-between rounded-md px-2 py-1.5 text-xs {% if member.is_current %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300{% else %}text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700{% endif %}">
+                            <span>{{ member.name }}</span>
+                            {% if member.is_current %}<span>Current</span>{% endif %}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="rounded-xl border border-slate-200/80 px-3 py-3 dark:border-slate-700">
+                    <p class="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">Addresses</p>
+                    {% if addresses %}
+                    <div class="space-y-1.5 mb-3">
+                        {% for address in addresses %}
+                        <div class="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1.5 text-xs dark:bg-slate-900/30">
+                            <span class="truncate">{{ address.address_line1 }}{% if address.city %}, {{ address.city }}{% endif %}</span>
+                            <button hx-delete="/admin/subscribers/addresses/{{ address.id }}" hx-confirm="Delete this address?" hx-swap="none" class="text-red-600 hover:text-red-700">Delete</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    <details>
+                        <summary class="cursor-pointer text-xs font-semibold text-blue-600 dark:text-blue-400">Add Address</summary>
+                        <form method="POST" action="/admin/subscribers/addresses" class="mt-2 grid gap-2">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="hidden" name="subscriber_id" value="{{ subscriber.id }}">
+                            <select name="address_type" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <option value="service">Service</option>
+                                <option value="billing">Billing</option>
+                                <option value="mailing">Mailing</option>
+                            </select>
+                            <input type="text" name="address_line1" required placeholder="Address line 1" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="address_line2" placeholder="Address line 2" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="city" placeholder="City" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="region" placeholder="Region/State" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="postal_code" placeholder="Postal code" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="country_code" placeholder="Country code (e.g. NG)" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs uppercase dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                                <input type="checkbox" name="is_primary" value="true" class="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 dark:border-slate-600">
+                                Set as primary address
+                            </label>
+                            <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">Save Address</button>
+                        </form>
+                    </details>
+                </div>
+
+                <div class="rounded-xl border border-slate-200/80 px-3 py-3 dark:border-slate-700">
+                    <p class="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">Contacts</p>
+                    {% if contacts %}
+                    <div class="space-y-1.5 mb-3">
+                        {% for contact in contacts %}
+                        <div class="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1.5 text-xs dark:bg-slate-900/30">
+                            <span class="truncate">
+                                {{ contact.type | upper }}: {{ contact.value }}
+                                {% if contact.label %}<span class="text-slate-500 dark:text-slate-400">({{ contact.label }})</span>{% endif %}
+                                {% if contact.is_primary %}<span class="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Primary</span>{% endif %}
+                            </span>
+                            <button hx-delete="/admin/subscribers/contacts/{{ contact.id }}" hx-confirm="Delete this contact?" hx-swap="none" class="text-red-600 hover:text-red-700">Delete</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    <details>
+                        <summary class="cursor-pointer text-xs font-semibold text-blue-600 dark:text-blue-400">Add Contact</summary>
+                        <form method="POST" action="/admin/subscribers/contacts" class="mt-2 grid gap-2">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="hidden" name="account_id" value="{{ subscriber.id }}">
+                            <input type="text" name="first_name" required placeholder="First name" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="last_name" required placeholder="Last name" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="title" placeholder="Title (e.g. Manager)" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <select name="role" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                <option value="primary">Primary</option>
+                                <option value="billing">Billing</option>
+                                <option value="technical">Technical</option>
+                                <option value="other">Other</option>
+                            </select>
+                            <input type="email" name="email" placeholder="Email" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <input type="text" name="phone" placeholder="Phone" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                            <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                                <input type="checkbox" name="is_primary" value="true" class="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 dark:border-slate-600">
+                                Set as primary contact
+                            </label>
+                            <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">Save Contact</button>
+                        </form>
+                    </details>
+                </div>
+            </div>
+        </div>
+
+        <!-- Customer Portal -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-gradient-to-br from-slate-50 to-white shadow-sm dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800 animate-fade-in-up" style="animation-delay: 205ms;">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <div class="flex items-center gap-2">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m-7-7l7 7-7 7"/></svg>
+                    </div>
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Customer Portal</h3>
+                </div>
+            </div>
+            <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/impersonate" class="p-5 space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+
+                <div class="rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900/30">
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Billing Account Connection</p>
+                    {% if accounts and accounts|length > 0 %}
+                    <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
+                        {{ accounts[0].account_number or ('Account ' ~ (accounts[0].id | string)[:8]) }}
+                    </p>
+                    {% if accounts|length > 1 %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ accounts|length }} linked accounts</p>
+                    {% endif %}
+                    {% else %}
+                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">No billing account linked.</p>
+                    {% endif %}
+                </div>
+
+                {% if subscriptions and subscriptions|length > 0 %}
+                <div>
+                    <label class="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-400">Open with Subscription (Optional)</label>
+                    <select name="subscription_id" class="block w-full rounded-xl border-0 bg-slate-100 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                        <option value="">Default portal view</option>
+                        {% for sub in subscriptions %}
+                        <option value="{{ sub.id }}">
+                            {{ sub.offer.name if sub.offer else ('Subscription ' ~ (sub.id | string)[:8]) }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+
+                <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:from-amber-600 hover:to-amber-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/></svg>
+                    Login as Customer
+                </button>
+            </form>
+        </div>
+
+        <!-- User Access -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 210ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7v2h16v-2c-4.418 0-8-3.134-8-7zM8 8a4 4 0 118 0 4 4 0 01-8 0z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">User Access</h2>
+                </div>
+                <span class="text-xs text-slate-500 dark:text-slate-400">Customer Portal</span>
+            </div>
+            <div class="p-5 space-y-4">
+                {% if subscriber_user_access.error %}
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+                    {{ subscriber_user_access.error }}
+                </div>
+                {% else %}
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Login Email</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">{{ subscriber_user_access.email }}</p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Credential Status</p>
+                        {% if subscriber_user_access.has_credential %}
+                        <p class="mt-1 text-sm font-semibold {% if subscriber_user_access.login_active %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">
+                            {{ "Active" if subscriber_user_access.login_active else "Deactivated" }}
+                        </p>
+                        {% else %}
+                        <p class="mt-1 text-sm font-semibold text-slate-500 dark:text-slate-400">Not Created</p>
+                        {% endif %}
+                    </div>
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Password Reset Required</p>
+                        <p class="mt-1 text-sm font-semibold {% if subscriber_user_access.must_change_password %}text-amber-600 dark:text-amber-400{% else %}text-slate-700 dark:text-slate-300{% endif %}">
+                            {{ "Yes" if subscriber_user_access.must_change_password else "No" }}
+                        </p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Login</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                            {{ subscriber_user_access.last_login_at.strftime('%b %d, %Y %H:%M') if subscriber_user_access.last_login_at else 'Never' }}
+                        </p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30 sm:col-span-2">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Invite Status</p>
+                        {% if subscriber_user_access.invite_sent_at %}
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
+                            Invite sent {{ subscriber_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
+                            {% if not subscriber_user_access.can_send_invite and subscriber_user_access.invite_available_at %}
+                            Resend available {{ subscriber_user_access.invite_available_at.strftime('%b %d, %Y %H:%M') }}.
+                            {% endif %}
+                        </p>
+                        {% else %}
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">No invite sent yet.</p>
+                        {% endif %}
+                    </div>
+                    {% if subscriber_user_access.organization_id %}
+                    <div class="rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30 sm:col-span-2">
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Organization Login Owner</p>
+                        {% if subscriber_user_access.primary_login_subscriber_name %}
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
+                            {{ subscriber_user_access.primary_login_subscriber_name }}
+                            {% if subscriber_user_access.is_primary_login_subscriber %}
+                            <span class="ml-2 inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Primary</span>
+                            {% endif %}
+                        </p>
+                        {% else %}
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">No primary login owner configured.</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="grid gap-2 sm:grid-cols-2">
+                    <button
+                        hx-post="/admin/subscribers/{{ subscriber.id }}/user/invite"
+                        {% if not subscriber_user_access.can_send_invite %}disabled{% endif %}
+                        class="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        Send Invite
+                    </button>
+                    <button
+                        hx-post="/admin/subscribers/{{ subscriber.id }}/user/reset-link"
+                        {% if not subscriber_user_access.can_send_reset %}disabled{% endif %}
+                        class="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        Send Reset Link
+                    </button>
+                    {% if subscriber_user_access.login_active %}
+                    <button
+                        hx-post="/admin/subscribers/{{ subscriber.id }}/user/deactivate-login"
+                        hx-confirm="Deactivate portal login for this subscriber?"
+                        class="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm transition hover:bg-amber-100 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30">
+                        Deactivate Login
+                    </button>
+                    {% else %}
+                    <button
+                        hx-post="/admin/subscribers/{{ subscriber.id }}/user/activate-login"
+                        class="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                        Activate Login
+                    </button>
+                    {% endif %}
+                    {% if subscriber_user_access.organization_id and not subscriber_user_access.is_primary_login_subscriber %}
+                    <button
+                        hx-post="/admin/subscribers/{{ subscriber.id }}/user/set-primary-login"
+                        {% if not subscriber_user_access.can_set_primary_login %}disabled{% endif %}
+                        class="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 shadow-sm transition hover:bg-violet-100 dark:border-violet-800/60 dark:bg-violet-900/20 dark:text-violet-300 dark:hover:bg-violet-900/30 disabled:cursor-not-allowed disabled:opacity-50">
+                        Set as Primary Login
+                    </button>
+                    {% endif %}
+                    <div class="flex items-center px-1 text-xs text-slate-500 dark:text-slate-400">
+                        Reset links remaining this hour: {{ subscriber_user_access.reset_remaining }}
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
 

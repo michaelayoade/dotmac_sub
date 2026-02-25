@@ -44,6 +44,10 @@ class UserCredential(Base):
             "(provider != 'local') OR (username IS NOT NULL AND password_hash IS NOT NULL)",
             name="ck_user_credentials_local_requires_username_password",
         ),
+        CheckConstraint(
+            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            name="ck_user_credentials_exactly_one_principal",
+        ),
         Index(
             "ix_user_credentials_local_username_unique",
             "username",
@@ -56,8 +60,11 @@ class UserCredential(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
+    system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
@@ -87,6 +94,7 @@ class UserCredential(Base):
     )
 
     subscriber = relationship("Subscriber")
+    system_user = relationship("SystemUser")
     radius_server = relationship("RadiusServer")
 
 
@@ -100,13 +108,27 @@ class MFAMethod(Base):
             postgresql_where=text("is_primary"),
             sqlite_where=text("is_primary"),
         ),
+        Index(
+            "ix_mfa_methods_primary_per_system_user",
+            "system_user_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+            sqlite_where=text("is_primary"),
+        ),
+        CheckConstraint(
+            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            name="ck_mfa_methods_exactly_one_principal",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
+    system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
@@ -133,11 +155,16 @@ class MFAMethod(Base):
     )
 
     subscriber = relationship("Subscriber")
+    system_user = relationship("SystemUser")
 
 
 class Session(Base):
     __tablename__ = "sessions"
     __table_args__ = (
+        CheckConstraint(
+            "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
+            name="ck_sessions_exactly_one_principal",
+        ),
         Index("ux_sessions_token_hash", "token_hash", unique=True),
         Index(
             "ux_sessions_previous_token_hash",
@@ -149,8 +176,11 @@ class Session(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    subscriber_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
+    system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=True
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID] = synonym("subscriber_id")
@@ -170,6 +200,7 @@ class Session(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     subscriber = relationship("Subscriber")
+    system_user = relationship("SystemUser")
 
 
 class ApiKey(Base):
@@ -180,6 +211,9 @@ class ApiKey(Base):
     )
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id")
     )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
@@ -194,3 +228,4 @@ class ApiKey(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     subscriber = relationship("Subscriber")
+    system_user = relationship("SystemUser")

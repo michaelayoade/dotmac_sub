@@ -101,6 +101,9 @@ class Organization(Base):
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
     notes: Mapped[str | None] = mapped_column(Text)
+    primary_login_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -109,7 +112,17 @@ class Organization(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
 
-    subscribers = relationship("Subscriber", back_populates="organization")
+    subscribers = relationship(
+        "Subscriber",
+        back_populates="organization",
+        primaryjoin="Organization.id == Subscriber.organization_id",
+        foreign_keys="[Subscriber.organization_id]",
+    )
+    primary_login_subscriber = relationship(
+        "Subscriber",
+        foreign_keys=[primary_login_subscriber_id],
+        uselist=False,
+    )
 
 
 class Reseller(Base):
@@ -241,7 +254,11 @@ class Subscriber(Base):
     )
 
     # === Relationships ===
-    organization = relationship("Organization", back_populates="subscribers")
+    organization = relationship(
+        "Organization",
+        back_populates="subscribers",
+        foreign_keys=[organization_id],
+    )
     reseller = relationship("Reseller", back_populates="subscribers")
     tax_rate = relationship("TaxRate")
 

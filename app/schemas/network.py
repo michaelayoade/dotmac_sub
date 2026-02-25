@@ -427,6 +427,26 @@ class OntUnitBase(BaseModel):
     firmware_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool = True
+    # SmartOLT fields
+    onu_type_id: UUID | None = None
+    olt_device_id: UUID | None = None
+    pon_type: str | None = None
+    gpon_channel: str | None = None
+    board: str | None = Field(default=None, max_length=60)
+    port: str | None = Field(default=None, max_length=60)
+    onu_mode: str | None = None
+    user_vlan_id: UUID | None = None
+    zone_id: UUID | None = None
+    splitter_id: UUID | None = None
+    splitter_port_id: UUID | None = None
+    download_speed_profile_id: UUID | None = None
+    upload_speed_profile_id: UUID | None = None
+    name: str | None = Field(default=None, max_length=200)
+    address_or_comment: str | None = None
+    external_id: str | None = Field(default=None, max_length=120)
+    use_gps: bool = False
+    gps_latitude: float | None = None
+    gps_longitude: float | None = None
 
 
 class OntUnitCreate(OntUnitBase):
@@ -440,6 +460,41 @@ class OntUnitUpdate(BaseModel):
     firmware_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool | None = None
+    # SmartOLT fields
+    onu_type_id: UUID | None = None
+    olt_device_id: UUID | None = None
+    pon_type: str | None = None
+    gpon_channel: str | None = None
+    board: str | None = Field(default=None, max_length=60)
+    port: str | None = Field(default=None, max_length=60)
+    onu_mode: str | None = None
+    user_vlan_id: UUID | None = None
+    zone_id: UUID | None = None
+    splitter_id: UUID | None = None
+    splitter_port_id: UUID | None = None
+    download_speed_profile_id: UUID | None = None
+    upload_speed_profile_id: UUID | None = None
+    name: str | None = Field(default=None, max_length=200)
+    address_or_comment: str | None = None
+    external_id: str | None = Field(default=None, max_length=120)
+    use_gps: bool | None = None
+    gps_latitude: float | None = None
+    gps_longitude: float | None = None
+    # ONU mode configuration fields
+    wan_vlan_id: UUID | None = None
+    wan_mode: str | None = None
+    config_method: str | None = None
+    ip_protocol: str | None = None
+    pppoe_username: str | None = Field(default=None, max_length=120)
+    pppoe_password: str | None = Field(default=None, max_length=120)
+    wan_remote_access: bool | None = None
+    # Management IP configuration fields
+    tr069_acs_server_id: UUID | None = None
+    mgmt_ip_mode: str | None = None
+    mgmt_vlan_id: UUID | None = None
+    mgmt_ip_address: str | None = Field(default=None, max_length=64)
+    mgmt_remote_access: bool | None = None
+    voip_enabled: bool | None = None
 
 
 class OntUnitRead(OntUnitBase):

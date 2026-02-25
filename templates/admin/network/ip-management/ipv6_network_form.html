@@ -1,0 +1,105 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}New IPv6 Network - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <a href="/admin/network/ip-management/ipv6-networks" class="text-sm text-primary-600 hover:text-primary-700">Back to IPv6 Networks</a>
+        <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">Create IPv6 Network</h1>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Add an IPv6 prefix with location, category, network type, and usage metadata.</p>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">IPv6 Network Configuration</h2>
+        </div>
+        <div class="p-6">
+            {% if error %}
+            <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" action="/admin/network/ip-management/ipv6-networks/new" class="grid gap-4 md:grid-cols-2">
+                {% include "components/forms/csrf_input.html" %}
+
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Title</label>
+                    <input type="text" name="title" value="{{ form_values.title }}" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Abuja IPv6 Range">
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Network address</label>
+                    <input type="text" name="network" value="{{ form_values.network }}" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="2001:db8::">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Prefix length</label>
+                    <select name="prefix_length" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="32" {% if form_values.prefix_length == '32' %}selected{% endif %}>/32 = 4,294,967,296 x /64</option>
+                        <option value="48" {% if form_values.prefix_length == '48' %}selected{% endif %}>/48 = 65,536 x /64</option>
+                        <option value="56" {% if form_values.prefix_length == '56' %}selected{% endif %}>/56 = 256 x /64</option>
+                        <option value="64" {% if form_values.prefix_length == '64' %}selected{% endif %}>/64 = 1 x /64</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Location</label>
+                    <input type="text" name="location" value="{{ form_values.location }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Abuja">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Category</label>
+                    <select name="category" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="Dev" {% if form_values.category == 'Dev' %}selected{% endif %}>Dev</option>
+                        <option value="Production" {% if form_values.category == 'Production' %}selected{% endif %}>Production</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Network type</label>
+                    <select name="network_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="EndNet" {% if form_values.network_type == 'EndNet' %}selected{% endif %}>EndNet</option>
+                        <option value="Infrastructure" {% if form_values.network_type == 'Infrastructure' %}selected{% endif %}>Infrastructure</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Type of usage</label>
+                    <select name="usage_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="Static" {% if form_values.usage_type == 'Static' %}selected{% endif %}>Static</option>
+                        <option value="Dynamic/DHCP" {% if form_values.usage_type == 'Dynamic/DHCP' %}selected{% endif %}>Dynamic/DHCP</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Router assignment</label>
+                    <input type="text" name="router" value="{{ form_values.router }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Core-v6-1">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Gateway</label>
+                    <input type="text" name="gateway" value="{{ form_values.gateway }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="2001:db8::1">
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Primary DNS</label>
+                    <input type="text" name="dns_primary" value="{{ form_values.dns_primary }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="2001:4860:4860::8888">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Secondary DNS</label>
+                    <input type="text" name="dns_secondary" value="{{ form_values.dns_secondary }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="2001:4860:4860::8844">
+                </div>
+
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Comment</label>
+                    <textarea name="comment" rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form_values.comment }}</textarea>
+                </div>
+
+                <div class="md:col-span-2 flex items-center justify-between">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="is_active" value="true" {% if form_values.is_active %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        Active
+                    </label>
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Create IPv6 Network</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

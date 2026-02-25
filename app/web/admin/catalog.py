@@ -11,12 +11,14 @@ from starlette.datastructures import FormData
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
 from app.services import catalog as catalog_service
+from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
 from app.services import web_catalog_offers as web_catalog_offers_service
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
+from app.services import web_fup as web_fup_service
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
-from app.web.request_parsing import parse_form_data
+from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
@@ -44,13 +46,20 @@ def catalog_overview(
     request: Request,
     status: str | None = None,
     plan_kind: str | None = None,
+    plan_category: str | None = None,
     search: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     page_data = web_catalog_offers_service.overview_page_data(
-        db, status=status, plan_kind=plan_kind, search=search, page=page, per_page=per_page
+        db,
+        status=status,
+        plan_kind=plan_kind,
+        plan_category=plan_category,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
     catalog_stats = web_catalog_offers_service.dashboard_stats(db)
     context = _base_context(request, db, active_page="catalog")
@@ -252,6 +261,159 @@ def catalog_offer_edit_post(
     )
     context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
+
+
+# ---------------------------------------------------------------------------
+# FUP (Fair Usage Policy) routes
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/offers/{offer_id}/fup",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_fup(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """FUP configuration page for a catalog offer."""
+    context = _base_context(request, db, active_page="catalog")
+    context.update(web_fup_service.fup_context(request, db, offer_id))
+    return templates.TemplateResponse("admin/catalog/fup.html", context)
+
+
+@router.post(
+    "/offers/{offer_id}/fup/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def offer_fup_settings_update(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Update FUP policy accounting settings."""
+    form = parse_form_data_sync(request)
+    web_fup_service.handle_policy_update(db, offer_id, form)
+    return RedirectResponse(
+        url=f"/admin/catalog/offers/{offer_id}/fup", status_code=303
+    )
+
+
+@router.post(
+    "/offers/{offer_id}/fup/rules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def offer_fup_add_rule(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Add a new FUP rule."""
+    form = parse_form_data_sync(request)
+    web_fup_service.handle_add_rule(db, offer_id, form)
+    return RedirectResponse(
+        url=f"/admin/catalog/offers/{offer_id}/fup", status_code=303
+    )
+
+
+@router.post(
+    "/offers/{offer_id}/fup/rules/{rule_id}/update",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def offer_fup_update_rule(
+    offer_id: str, rule_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Update an existing FUP rule."""
+    form = parse_form_data_sync(request)
+    web_fup_service.handle_update_rule(db, rule_id, form)
+    return RedirectResponse(
+        url=f"/admin/catalog/offers/{offer_id}/fup", status_code=303
+    )
+
+
+@router.post(
+    "/offers/{offer_id}/fup/rules/{rule_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def offer_fup_delete_rule(
+    offer_id: str, rule_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Delete an FUP rule."""
+    web_fup_service.handle_delete_rule(db, rule_id)
+    return RedirectResponse(
+        url=f"/admin/catalog/offers/{offer_id}/fup", status_code=303
+    )
+
+
+@router.post(
+    "/offers/{offer_id}/fup/clone",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def offer_fup_clone_rules(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Clone FUP rules from another offer."""
+    form = parse_form_data_sync(request)
+    source_offer_id = str(form.get("source_offer_id", ""))
+    web_fup_service.handle_clone_rules(db, source_offer_id, offer_id)
+    return RedirectResponse(
+        url=f"/admin/catalog/offers/{offer_id}/fup", status_code=303
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tariff Plan Usage Graph
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/offers/{offer_id}/usage-graph",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_usage_graph_modal(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Render the usage graph modal partial for HTMX."""
+    period = request.query_params.get("period", "monthly")
+    if period not in {"daily", "weekly", "monthly"}:
+        period = "monthly"
+    graph_data = web_catalog_offers_service.plan_usage_graph_data(
+        db, offer_id, period=period
+    )
+    try:
+        offer = catalog_service.offers.get(db=db, offer_id=offer_id)
+    except Exception:
+        offer = None
+    context = {
+        "request": request,
+        "offer": offer,
+        "offer_id": offer_id,
+        "graph": graph_data,
+    }
+    return templates.TemplateResponse(
+        "admin/catalog/_plan_graph_modal.html", context
+    )
+
+
+@router.get(
+    "/offers/{offer_id}/usage-graph/data",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_usage_graph_data(
+    offer_id: str,
+    period: str = "monthly",
+    months: int = 12,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return JSON data for the plan usage graph."""
+    if period not in {"daily", "weekly", "monthly"}:
+        period = "monthly"
+    data = web_catalog_offers_service.plan_usage_graph_data(
+        db, offer_id, period=period, months=months
+    )
+    return JSONResponse(data)
 
 
 @router.get("/subscriptions", response_class=HTMLResponse)
@@ -491,3 +653,64 @@ def pricing_calculator(request: Request, db: Session = Depends(get_db)) -> HTMLR
     context = _base_context(request, db, active_page="calculator")
     context.update(page_data)
     return templates.TemplateResponse("admin/catalog/calculator.html", context)
+
+
+# ---------------------------------------------------------------------------
+# Bulk Tariff Change routes
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/bulk-tariff-change",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def bulk_tariff_change_page(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Bulk tariff change wizard."""
+    context = _base_context(request, db, active_page="catalog")
+    context.update(web_bulk_tariff_change_service.page_context(request, db))
+    return templates.TemplateResponse(
+        "admin/catalog/bulk_tariff_change.html", context
+    )
+
+
+@router.post(
+    "/bulk-tariff-change/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def bulk_tariff_change_preview(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Preview bulk tariff change results."""
+    context = _base_context(request, db, active_page="catalog")
+    context.update(
+        web_bulk_tariff_change_service.preview_context(request, db, form)
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/bulk_tariff_change.html", context
+    )
+
+
+@router.post(
+    "/bulk-tariff-change/execute",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def bulk_tariff_change_execute(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Execute the bulk tariff change."""
+    context = _base_context(request, db, active_page="catalog")
+    context.update(
+        web_bulk_tariff_change_service.execute_context(request, db, form)
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/bulk_tariff_change.html", context
+    )

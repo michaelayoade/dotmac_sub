@@ -37,6 +37,7 @@ from app.schemas.provisioning import (
 from app.services import notification as notification_service
 from app.services import provisioning as provisioning_service
 from app.services import subscriber as subscriber_service
+from app.services import web_provisioning_bulk_activate as bulk_activate_service
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -44,6 +45,7 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.auth_dependencies import require_permission
+from app.tasks.provisioning import run_bulk_activation_job
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +189,112 @@ def provisioning_dashboard(
         }
     )
     return templates.TemplateResponse("admin/provisioning/index.html", ctx)
+
+
+# ---------------------------------------------------------------------------
+# Bulk Service Activation
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/bulk-activate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def bulk_activate_page(
+    request: Request,
+    tab: str | None = Query(default="internet"),
+    job_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    ctx = _ctx(request, db, "provisioning")
+    options = bulk_activate_service.page_options(db, tab=tab or "internet")
+    active_job = bulk_activate_service.get_job(db, job_id) if job_id else None
+    ctx.update(
+        {
+            **options,
+            "active_job_id": job_id,
+            "active_job": active_job,
+            "preview": None,
+            "notice": request.query_params.get("notice"),
+            "error": request.query_params.get("error"),
+        }
+    )
+    return templates.TemplateResponse("admin/provisioning/bulk_activate.html", ctx)
+
+
+@router.post(
+    "/bulk-activate/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+async def bulk_activate_preview(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    form = await request.form()
+    filters = bulk_activate_service.parse_filters(dict(form))
+    mapping = bulk_activate_service.parse_mapping(dict(form))
+    preview = bulk_activate_service.build_preview(db, filters=filters, mapping=mapping)
+    return templates.TemplateResponse(
+        "admin/provisioning/_bulk_activate_preview.html",
+        {"request": request, "preview": preview},
+    )
+
+
+@router.post(
+    "/bulk-activate/execute",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:write"))],
+)
+async def bulk_activate_execute(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    from app.web.admin import get_current_user
+    from urllib.parse import quote_plus
+
+    form = await request.form()
+    filters = bulk_activate_service.parse_filters(dict(form))
+    mapping = bulk_activate_service.parse_mapping(dict(form))
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id") or "").strip() or None
+    try:
+        job = bulk_activate_service.create_job(
+            db,
+            filters=filters,
+            mapping=mapping,
+            actor_id=actor_id,
+        )
+        run_bulk_activation_job.delay(job_id=str(job["job_id"]))
+        notice = quote_plus("Bulk activation job queued.")
+        return RedirectResponse(
+            url=f"/admin/provisioning/bulk-activate?tab={quote_plus(filters.tab)}&job_id={job['job_id']}&notice={notice}",
+            status_code=303,
+        )
+    except Exception as exc:
+        error = quote_plus(str(exc))
+        return RedirectResponse(
+            url=f"/admin/provisioning/bulk-activate?tab={quote_plus(filters.tab)}&error={error}",
+            status_code=303,
+        )
+
+
+@router.get(
+    "/bulk-activate/jobs/{job_id}/status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def bulk_activate_job_status(
+    request: Request,
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    job = bulk_activate_service.get_job(db, job_id)
+    return templates.TemplateResponse(
+        "admin/provisioning/_bulk_activate_job_status.html",
+        {"request": request, "job": job},
+    )
 
 
 # ---------------------------------------------------------------------------

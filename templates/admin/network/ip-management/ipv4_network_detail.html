@@ -1,0 +1,74 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ pool.name }} - IPv4 Network - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <a href="/admin/network/ip-management/ipv4-networks" class="text-sm text-primary-600 hover:text-primary-700">Back to IPv4 Networks</a>
+        <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ pool.name }} ({{ pool.cidr }})</h1>
+        <p class="text-sm text-slate-500 dark:text-slate-400">IP Address assignment view for subnet.</p>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Usage Type</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ usage_type or 'Static' }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Allow Net/Broadcast</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ 'Yes' if allow_network_broadcast else 'No' }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Shown Rows</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ row_count }} / {{ limit_applied }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Router</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ (ip_rows[0].device if ip_rows else None) or '-' }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">IP Addresses</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">IP Address</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Status</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Subscriber</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Service</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Device</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Notes</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in ip_rows %}
+                    <tr>
+                        <td class="px-4 py-3 font-mono text-slate-800 dark:text-slate-200">{{ row.ip_address }}</td>
+                        <td class="px-4 py-3">
+                            {% if row.status == 'assigned' %}
+                            <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Assigned</span>
+                            {% elif row.status == 'reserved' %}
+                            <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Reserved</span>
+                            {% else %}
+                            <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Available</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.subscriber_name or '-' }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.service_ref or '-' }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.device or '-' }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.notes or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">No address rows to display.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

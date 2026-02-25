@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -16,6 +17,7 @@ from app.models.catalog import (
     ContractTerm,
     GuaranteedSpeedType,
     OfferStatus,
+    PlanCategory,
     PriceBasis,
     PriceUnit,
     ServiceType,
@@ -121,6 +123,12 @@ def default_offer_form() -> dict[str, object]:
         "priority": "",
         "available_for_services": True,
         "show_on_customer_portal": True,
+        "plan_category": PlanCategory.internet.value,
+        "hide_on_admin_portal": False,
+        "service_description": "",
+        "burst_profile": "",
+        "prepaid_period": "",
+        "allowed_change_plan_ids": "",
         "status": "active",
         "description": "",
         "is_active": True,
@@ -170,6 +178,12 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "priority": _form_str(form, "priority").strip(),
         "available_for_services": form.get("available_for_services") == "true",
         "show_on_customer_portal": form.get("show_on_customer_portal") == "true",
+        "plan_category": _form_str(form, "plan_category").strip() or PlanCategory.internet.value,
+        "hide_on_admin_portal": form.get("hide_on_admin_portal") == "true",
+        "service_description": _form_str(form, "service_description").strip(),
+        "burst_profile": _form_str(form, "burst_profile").strip(),
+        "prepaid_period": _form_str(form, "prepaid_period").strip(),
+        "allowed_change_plan_ids": _form_str(form, "allowed_change_plan_ids").strip(),
         "status": _form_str(form, "status").strip(),
         "description": _form_str(form, "description").strip(),
         "is_active": form.get("is_active") == "true",
@@ -214,6 +228,8 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "with_vat": offer["with_vat"],
         "available_for_services": offer["available_for_services"],
         "show_on_customer_portal": offer["show_on_customer_portal"],
+        "plan_category": offer.get("plan_category") or PlanCategory.internet.value,
+        "hide_on_admin_portal": offer.get("hide_on_admin_portal", False),
         "description": normalize_offer_description(
             description=str(offer.get("description") or "").strip() or None,
             plan_kind=str(offer.get("plan_kind") or PLAN_KIND_STANDARD),
@@ -239,6 +255,10 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "guaranteed_speed",
         "aggregation",
         "priority",
+        "service_description",
+        "burst_profile",
+        "prepaid_period",
+        "allowed_change_plan_ids",
         "status",
     ]
     for key in optional_fields:
@@ -377,6 +397,12 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         "priority": offer.priority or "",
         "available_for_services": offer.available_for_services,
         "show_on_customer_portal": offer.show_on_customer_portal,
+        "plan_category": offer.plan_category.value if offer.plan_category else PlanCategory.internet.value,
+        "hide_on_admin_portal": offer.hide_on_admin_portal if offer.hide_on_admin_portal is not None else False,
+        "service_description": offer.service_description or "",
+        "burst_profile": offer.burst_profile or "",
+        "prepaid_period": offer.prepaid_period or "",
+        "allowed_change_plan_ids": offer.allowed_change_plan_ids or "",
         "status": offer.status,
         "description": offer.description or "",
         "is_active": offer.is_active,
@@ -486,9 +512,15 @@ def offer_form_context(
 
     addon_links_map = build_addon_links_map(offer_addon_links)
 
+    all_offers = catalog_service.offers.list(
+        db=db, status=None, is_active=True,
+        order_by="name", order_dir="asc", limit=500, offset=0,
+    )
+
     context: dict[str, object] = {
         "offer": offer,
         "region_zones": region_zones,
+        "all_offers": all_offers,
         "usage_allowances": usage_allowances,
         "sla_profiles": sla_profiles,
         "radius_profiles": radius_profiles,
@@ -505,6 +537,7 @@ def offer_form_context(
         "price_units": [item.value for item in PriceUnit],
         "price_types": ["recurring", "one_time"],
         "guaranteed_speed_types": [item.value for item in GuaranteedSpeedType],
+        "plan_categories": [item.value for item in PlanCategory],
         "plan_kinds": PLAN_KINDS,
         "ip_block_sizes": IP_BLOCK_SIZES,
         "action_url": "/admin/catalog/offers",
@@ -524,6 +557,7 @@ def overview_page_data(
     *,
     status: str | None = None,
     plan_kind: str | None = None,
+    plan_category: str | None = None,
     search: str | None = None,
     page: int = 1,
     per_page: int = 25,
@@ -539,6 +573,9 @@ def overview_page_data(
         )
     if status:
         stmt = stmt.where(CatalogOffer.status == OfferStatus(status))
+    normalized_plan_category = str(plan_category or "").strip().lower()
+    if normalized_plan_category and normalized_plan_category in {pc.value for pc in PlanCategory}:
+        stmt = stmt.where(CatalogOffer.plan_category == PlanCategory(normalized_plan_category))
     normalized_plan_kind = str(plan_kind or "").strip().lower()
     if normalized_plan_kind in {PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT}:
         stmt = stmt.where(CatalogOffer.description.ilike(f"%[plan_kind:{normalized_plan_kind}]%"))
@@ -598,6 +635,8 @@ def overview_page_data(
         "offer_active_subscription_counts": offer_active_subscription_counts,
         "status": status,
         "plan_kind": normalized_plan_kind or "",
+        "plan_category": normalized_plan_category or "",
+        "plan_categories": [item.value for item in PlanCategory],
         "search": search,
         "page": page,
         "per_page": per_page,
@@ -726,3 +765,92 @@ def update_offer_with_audit(
         )
 
     return updated_offer
+
+
+def plan_usage_graph_data(
+    db: Session,
+    offer_id: str,
+    *,
+    period: str = "monthly",
+    months: int = 12,
+) -> dict[str, object]:
+    """Return subscription count data for a plan over time.
+
+    Groups subscriptions by created_at date bucket and returns labels + datasets
+    suitable for Chart.js rendering.
+
+    Args:
+        db: Database session.
+        offer_id: The catalog offer UUID.
+        period: Grouping period — "daily", "weekly", or "monthly".
+        months: How many months of history to include.
+
+    Returns:
+        Dict with labels, total_counts, active_counts, and summary stats.
+    """
+    end_date = date.today()
+    start_date = end_date - timedelta(days=months * 30)
+
+    # Count total subscriptions created per period
+    if period == "daily":
+        date_trunc = func.date_trunc("day", Subscription.created_at)
+    elif period == "weekly":
+        date_trunc = func.date_trunc("week", Subscription.created_at)
+    else:
+        date_trunc = func.date_trunc("month", Subscription.created_at)
+
+    stmt = (
+        select(
+            date_trunc.label("period"),
+            func.count(Subscription.id).label("total"),
+            func.count(
+                case(
+                    (Subscription.status == SubscriptionStatus.active, Subscription.id),
+                )
+            ).label("active"),
+        )
+        .where(Subscription.offer_id == offer_id)
+        .where(Subscription.created_at >= start_date)
+        .group_by("period")
+        .order_by("period")
+    )
+
+    rows = db.execute(stmt).all()
+
+    labels: list[str] = []
+    total_counts: list[int] = []
+    active_counts: list[int] = []
+
+    for row in rows:
+        period_date = row.period
+        if period == "daily":
+            labels.append(period_date.strftime("%b %d"))
+        elif period == "weekly":
+            labels.append(f"W{period_date.strftime('%U')} {period_date.strftime('%b')}")
+        else:
+            labels.append(period_date.strftime("%b %Y"))
+        total_counts.append(row.total)
+        active_counts.append(row.active)
+
+    # Summary stats
+    total_now = db.scalar(
+        select(func.count(Subscription.id)).where(Subscription.offer_id == offer_id)
+    ) or 0
+    active_now = db.scalar(
+        select(func.count(Subscription.id))
+        .where(Subscription.offer_id == offer_id)
+        .where(Subscription.status == SubscriptionStatus.active)
+    ) or 0
+    max_total = max(total_counts) if total_counts else 0
+    avg_total = round(sum(total_counts) / len(total_counts), 1) if total_counts else 0
+
+    return {
+        "labels": labels,
+        "total_counts": total_counts,
+        "active_counts": active_counts,
+        "total_now": total_now,
+        "active_now": active_now,
+        "max_total": max_total,
+        "avg_total": avg_total,
+        "period": period,
+    }

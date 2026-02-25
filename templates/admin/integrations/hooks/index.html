@@ -1,0 +1,119 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Hooks - Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Hooks</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">CLI, Web, and Internal event hooks</p>
+        </div>
+        <a href="/admin/integrations/hooks/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add Hook
+        </a>
+    </div>
+
+    {% if request.query_params.get("saved") == "1" %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Hook saved.
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Enabled</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.enabled }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Web</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.web }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">CLI</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.cli }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Internal</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.internal }}</p>
+        </div>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">ID / Title</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Enabled</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Triggered</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Success Rate</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for hook in hooks %}
+                    {% set m = hook_metrics.get(hook.id|string, {}) %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-4">
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ hook.title }}</p>
+                            <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ hook.id }}</p>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ hook.hook_type.value|upper }}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if hook.is_enabled %}
+                            {{ status_badge("Enabled", "active", size="sm") }}
+                            {% else %}
+                            {{ status_badge("Disabled", "inactive", size="sm") }}
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ m.last_triggered_at.strftime('%Y-%m-%d %H:%M') if m.last_triggered_at else '-' }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                            {{ "%.1f"|format(m.success_rate or 0.0) }}%
+                            <span class="text-xs text-slate-400">({{ m.success_total or 0 }}/{{ m.total or 0 }})</span>
+                        </td>
+                        <td class="px-6 py-4 text-right text-sm">
+                            <div class="inline-flex items-center gap-2">
+                                <a href="/admin/integrations/hooks/{{ hook.id }}/edit" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">Edit</a>
+                                <form method="post" action="/admin/integrations/hooks/{{ hook.id }}/duplicate" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">Duplicate</button>
+                                </form>
+                                <form method="post" action="/admin/integrations/hooks/{{ hook.id }}/toggle" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="enabled" value="{{ 'false' if hook.is_enabled else 'true' }}">
+                                    <button type="submit" class="text-slate-600 hover:text-slate-800 dark:text-slate-300">
+                                        {{ "Disable" if hook.is_enabled else "Enable" }}
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center">
+                            <p class="text-sm text-slate-500 dark:text-slate-400">No hooks configured yet.</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% set activity_title = "Hook Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

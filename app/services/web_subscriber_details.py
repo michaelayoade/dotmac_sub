@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 from app.models.billing import CreditNoteStatus, InvoiceStatus
 from app.models.catalog import ContractTerm, OfferStatus, SubscriptionStatus
 from app.models.network import FdhCabinet, FiberSpliceClosure
-from app.models.subscriber import Address, Subscriber
+from app.models.subscriber import Address, Subscriber, SubscriberChannel
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
 
 
@@ -307,6 +308,46 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     }
 
     addresses, primary_address = _resolve_subscriber_addresses(db, subscriber_id)
+    channels = (
+        db.query(SubscriberChannel)
+        .filter(SubscriberChannel.subscriber_id == subscriber_id)
+        .order_by(SubscriberChannel.is_primary.desc(), SubscriberChannel.created_at.asc())
+        .all()
+    )
+    contacts: list[dict[str, object]] = []
+    for channel in channels:
+        contacts.append(
+            {
+                "id": str(channel.id),
+                "type": channel.channel_type.value if channel.channel_type else "email",
+                "label": channel.label or "",
+                "value": channel.address,
+                "is_primary": bool(channel.is_primary),
+            }
+        )
+
+    organization_members = []
+    if subscriber.organization_id:
+        members = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id == subscriber.organization_id)
+            .order_by(Subscriber.is_active.desc(), Subscriber.created_at.asc())
+            .limit(25)
+            .all()
+        )
+        for member in members:
+            organization_members.append(
+                {
+                    "id": str(member.id),
+                    "name": member.display_name
+                    or f"{member.first_name} {member.last_name}".strip()
+                    or member.email,
+                    "email": member.email,
+                    "is_active": bool(member.is_active),
+                    "is_current": str(member.id) == str(subscriber.id),
+                }
+            )
+
     map_data = build_subscriber_map_data(db, subscriber, primary_address)
     geocode_target = build_subscriber_geocode_target(primary_address)
 
@@ -318,7 +359,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         "notifications": notifications,
         "stats": stats,
         "addresses": addresses,
+        "contacts": contacts,
         "primary_address": primary_address,
+        "organization_members": organization_members,
         "map_data": map_data,
         "geocode_target": geocode_target,
     }
@@ -407,10 +450,21 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         limit=500,
         offset=0,
     )
+    try:
+        subscriber_user_access = (
+            web_customer_user_access_service.build_subscriber_user_access_state(
+                db,
+                subscriber_id=str(subscriber_id),
+            )
+        )
+    except Exception as exc:
+        subscriber_user_access = {"error": str(exc)}
+
     return {
         "subscriber": subscriber,
         **detail_snapshot,
         "billing_config": _build_billing_config(subscriber, detail_snapshot.get("stats") or {}),
+        "subscriber_user_access": subscriber_user_access,
         "timeline": timeline,
         "offers": offers,
         "subscription_statuses": [s.value for s in SubscriptionStatus],

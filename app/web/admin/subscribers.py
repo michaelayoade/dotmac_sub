@@ -23,12 +23,17 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.schemas.notification import NotificationCreate
-from app.schemas.subscriber import SubscriberUpdate
+from app.schemas.subscriber import AddressUpdate, SubscriberUpdate
 from app.services import audit as audit_service
+from app.services import customer_portal
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services import web_customer_actions as web_customer_actions_service
+from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services import web_subscriber_actions as web_subscriber_actions_service
+from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.auth_dependencies import require_permission
 from app.services.web_subscriber_details import (
     build_subscriber_detail_page_context,
 )
@@ -163,6 +168,28 @@ def _htmx_error_response(
     if reswap:
         headers["HX-Reswap"] = reswap
     return Response(status_code=status_code, headers=headers)
+
+
+def _toast_response(
+    *,
+    request: Request,
+    redirect_url: str,
+    ok: bool,
+    title: str,
+    message: str,
+) -> Response:
+    trigger = {
+        "showToast": {
+            "type": "success" if ok else "error",
+            "title": title,
+            "message": message,
+            "duration": 8000,
+        }
+    }
+    if request.headers.get("HX-Request"):
+        headers = {"HX-Trigger": json.dumps(trigger), "HX-Refresh": "true"}
+        return Response(status_code=204, headers=headers)
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -389,6 +416,405 @@ def subscriber_detail(
     )
 
 
+@router.post(
+    "/{subscriber_id}/impersonate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:impersonate"))],
+)
+def subscriber_impersonate(
+    request: Request,
+    subscriber_id: UUID,
+    subscription_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+    auth=Depends(require_permission("subscriber:impersonate")),
+):
+    """Impersonate subscriber and open customer portal."""
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    customer_type = "organization" if subscriber.organization_id else "person"
+    customer_id = str(subscriber.organization_id) if subscriber.organization_id else str(subscriber_id)
+
+    try:
+        session_token = web_customer_actions_service.create_impersonation_session(
+            db=db,
+            request=request,
+            customer_type=customer_type,
+            customer_id=customer_id,
+            account_id=str(subscriber_id),
+            subscription_id=subscription_id,
+            auth=auth,
+        )
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
+
+    response = RedirectResponse(url="/portal/dashboard", status_code=303)
+    response.set_cookie(
+        key=customer_portal.SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=customer_portal.get_session_max_age(db),
+    )
+    return response
+
+
+@router.post(
+    "/{subscriber_id}/user/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def subscriber_user_send_invite(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        state = web_customer_user_access_service.build_subscriber_user_access_state(
+            db,
+            subscriber_id=str(subscriber_id),
+        )
+        if not state.get("can_send_invite"):
+            retry_at = state.get("invite_available_at")
+            when = retry_at.strftime("%Y-%m-%d %H:%M UTC") if retry_at else "later"
+            message = f"Invite already sent recently. You can resend after {when}."
+            log_audit_event(
+                db=db,
+                request=request,
+                action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+                entity_type="subscriber",
+                entity_id=str(state.get("target_subscriber_id") or subscriber_id),
+                actor_id=actor_id,
+                metadata={"reason": "rate_limited", "source": "subscriber_detail"},
+                status_code=429,
+                is_success=False,
+            )
+            return _toast_response(
+                request=request,
+                redirect_url=redirect_url,
+                ok=False,
+                title="Invite blocked",
+                message=message,
+            )
+
+        note = web_system_user_mutations_service.send_user_invite_for_user(
+            db,
+            user_id=str(state["target_subscriber_id"]),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state["target_subscriber_id"]),
+            actor_id=actor_id,
+            metadata={
+                "email": state.get("email"),
+                "email_source": state.get("email_source"),
+                "source": "subscriber_detail",
+                "result": note,
+            },
+            status_code=200,
+            is_success="sent" in note.lower(),
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok="sent" in note.lower(),
+            title="User invite",
+            message=note,
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor_id=actor_id,
+            metadata={"source": "subscriber_detail", "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="User invite",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{subscriber_id}/user/reset-link",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def subscriber_user_send_reset_link(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        state = web_customer_user_access_service.build_subscriber_user_access_state(
+            db,
+            subscriber_id=str(subscriber_id),
+        )
+        if not state.get("can_send_reset"):
+            message = "Reset limit reached: max 3 reset links per hour."
+            log_audit_event(
+                db=db,
+                request=request,
+                action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+                entity_type="subscriber",
+                entity_id=str(state.get("target_subscriber_id") or subscriber_id),
+                actor_id=actor_id,
+                metadata={"reason": "rate_limited", "source": "subscriber_detail"},
+                status_code=429,
+                is_success=False,
+            )
+            return _toast_response(
+                request=request,
+                redirect_url=redirect_url,
+                ok=False,
+                title="Reset link blocked",
+                message=message,
+            )
+
+        note = web_system_user_mutations_service.send_password_reset_link_for_user(
+            db,
+            user_id=str(state["target_subscriber_id"]),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state["target_subscriber_id"]),
+            actor_id=actor_id,
+            metadata={
+                "email": state.get("email"),
+                "email_source": state.get("email_source"),
+                "source": "subscriber_detail",
+                "result": note,
+            },
+            status_code=200,
+            is_success="sent" in note.lower(),
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok="sent" in note.lower(),
+            title="Password reset",
+            message=note,
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor_id=actor_id,
+            metadata={"source": "subscriber_detail", "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Password reset",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{subscriber_id}/user/activate-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def subscriber_user_activate_login(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        target = web_customer_user_access_service.activate_subscriber_login(
+            db,
+            subscriber_id=str(subscriber_id),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(target.subscriber.id),
+            actor_id=actor_id,
+            metadata={"login_active": True, "source": "subscriber_detail"},
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=True,
+            title="Login activated",
+            message="Customer portal login has been activated.",
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor_id=actor_id,
+            metadata={"login_active": True, "source": "subscriber_detail", "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Login activation",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{subscriber_id}/user/deactivate-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def subscriber_user_deactivate_login(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        target = web_customer_user_access_service.deactivate_subscriber_login(
+            db,
+            subscriber_id=str(subscriber_id),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(target.subscriber.id),
+            actor_id=actor_id,
+            metadata={"login_active": False, "source": "subscriber_detail"},
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=True,
+            title="Login deactivated",
+            message="Customer portal login has been deactivated.",
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor_id=actor_id,
+            metadata={"login_active": False, "source": "subscriber_detail", "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Login deactivation",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{subscriber_id}/user/set-primary-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_user_set_primary_login(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        target = web_customer_user_access_service.set_org_primary_login_subscriber(
+            db,
+            subscriber_id=str(subscriber_id),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.PRIMARY_LOGIN_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(target.subscriber.id),
+            actor_id=actor_id,
+            metadata={"source": "subscriber_detail"},
+            status_code=200,
+            is_success=True,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=True,
+            title="Primary login updated",
+            message="Subscriber is now the primary organization login contact.",
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.PRIMARY_LOGIN_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor_id=actor_id,
+            metadata={"source": "subscriber_detail", "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Primary login update",
+            message=str(exc),
+        )
+
+
 @router.post("/{subscriber_id}/comments", response_class=HTMLResponse)
 def subscriber_add_comment(
     request: Request,
@@ -477,6 +903,191 @@ def subscriber_toggle_comment_todo(
     return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
 
 
+@router.get(
+    "/{subscriber_id}/organization/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_organization_edit(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    if not subscriber.organization_id:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Organization not found for this subscriber"},
+            status_code=404,
+        )
+    organization = subscriber_service.organizations.get(
+        db=db,
+        organization_id=str(subscriber.organization_id),
+    )
+
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/customers/form.html",
+        {
+            "request": request,
+            "customer": organization,
+            "customer_type": "organization",
+            "action": "edit",
+            "return_url": f"/admin/subscribers/{subscriber_id}",
+            "return_label": "Subscriber",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/{subscriber_id}/organization/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_organization_update(
+    request: Request,
+    subscriber_id: UUID,
+    name: str = Form(...),
+    legal_name: str | None = Form(None),
+    tax_id: str | None = Form(None),
+    domain: str | None = Form(None),
+    website: str | None = Form(None),
+    org_notes: str | None = Form(None),
+    org_account_start_date: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    if not subscriber.organization_id:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    before, after = web_customer_actions_service.update_organization_customer(
+        db=db,
+        customer_id=str(subscriber.organization_id),
+        name=name,
+        legal_name=legal_name,
+        tax_id=tax_id,
+        domain=domain,
+        website=website,
+        org_notes=org_notes,
+        org_account_start_date=org_account_start_date,
+    )
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="organization",
+        entity_id=str(subscriber.organization_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata=build_changes_metadata(before, after),
+    )
+    return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
+
+
+@router.post(
+    "/addresses",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_create_address(
+    request: Request,
+    subscriber_id: str = Form(...),
+    address_type: str = Form("service"),
+    label: str | None = Form(None),
+    address_line1: str = Form(...),
+    address_line2: str | None = Form(None),
+    city: str | None = Form(None),
+    region: str | None = Form(None),
+    postal_code: str | None = Form(None),
+    country_code: str | None = Form(None),
+    is_primary: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    web_customer_actions_service.create_customer_address(
+        db=db,
+        subscriber_id=subscriber_id,
+        address_type=address_type,
+        label=label,
+        address_line1=address_line1,
+        address_line2=address_line2,
+        city=city,
+        region=region,
+        postal_code=postal_code,
+        country_code=country_code,
+        is_primary=is_primary,
+    )
+    redirect_url = f"/admin/subscribers/{subscriber_id}"
+    if request.headers.get("HX-Request"):
+        return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+
+@router.delete(
+    "/addresses/{address_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_delete_address(
+    address_id: str,
+    db: Session = Depends(get_db),
+):
+    web_customer_actions_service.delete_customer_address(db=db, address_id=address_id)
+    return HTMLResponse(content="")
+
+
+@router.post(
+    "/contacts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_create_contact(
+    request: Request,
+    account_id: str = Form(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    role: str = Form("primary"),
+    title: str | None = Form(None),
+    email: str | None = Form(None),
+    phone: str | None = Form(None),
+    is_primary: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    web_customer_actions_service.create_customer_contact(
+        db=db,
+        account_id=account_id,
+        first_name=first_name,
+        last_name=last_name,
+        role=role,
+        title=title,
+        email=email,
+        phone=phone,
+        is_primary=is_primary,
+    )
+    redirect_url = f"/admin/subscribers/{account_id}"
+    if request.headers.get("HX-Request"):
+        return HTMLResponse(content="", headers={"HX-Redirect": redirect_url})
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+
+@router.delete(
+    "/contacts/{contact_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+def subscriber_delete_contact(
+    contact_id: str,
+    db: Session = Depends(get_db),
+):
+    web_customer_actions_service.delete_customer_contact(db=db, contact_id=contact_id)
+    return HTMLResponse(content="")
+
+
 @router.post(
     "/addresses/{address_id}/geocode",
     response_class=JSONResponse,
@@ -488,8 +1099,6 @@ def geocode_address(
     db: Session = Depends(get_db),
 ):
     """Update subscriber address coordinates from geocoding/manual selection."""
-    from app.schemas.subscriber import AddressUpdate
-
     try:
         parsed_address_id = UUID(address_id)
     except ValueError as exc:

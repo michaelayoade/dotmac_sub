@@ -14,6 +14,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber
 from app.services import customer_portal, radius_auth
+from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
 from app.services.settings_spec import resolve_value
 
@@ -39,7 +40,17 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
 
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
-    return customer_portal.get_current_customer(session_token, db)
+    customer = customer_portal.get_current_customer(session_token, db)
+    if not customer:
+        return None
+    enriched = dict(customer)
+    try:
+        enriched["module_states"] = module_manager_service.load_module_states(db)
+        enriched["feature_states"] = module_manager_service.load_feature_states(db)
+    except Exception:
+        enriched["module_states"] = {}
+        enriched["feature_states"] = {}
+    return enriched
 
 
 def customer_login_page(request: Request, error: str | None = None, next_url: str | None = None):

@@ -10,6 +10,15 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.models.network import (
+    ConfigMethod,
+    GponChannel,
+    IpProtocol,
+    MgmtIpMode,
+    OnuMode,
+    PonType,
+    WanMode,
+)
 from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_olts as web_network_olts_service
@@ -47,6 +56,116 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _get_onu_types(db: Session) -> list:
+    """Fetch active ONU types for form dropdowns."""
+    from app.services.network.onu_types import onu_types
+
+    return onu_types.list(db, is_active=True)
+
+
+def _get_olt_devices(db: Session) -> list:
+    """Fetch active OLT devices for form dropdowns."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.network import OLTDevice
+
+    stmt = (
+        sa_select(OLTDevice)
+        .where(OLTDevice.is_active.is_(True))
+        .order_by(OLTDevice.name)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def _get_vlans(db: Session) -> list:
+    """Fetch VLANs for form dropdowns."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.network import Vlan
+
+    stmt = sa_select(Vlan).order_by(Vlan.tag)
+    return list(db.scalars(stmt).all())
+
+
+def _get_zones(db: Session) -> list:
+    """Fetch active network zones for form dropdowns."""
+    from app.services.network.zones import network_zones
+
+    return network_zones.list(db, is_active=True)
+
+
+def _get_splitters(db: Session) -> list:
+    """Fetch splitters for form dropdowns."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.network import Splitter
+
+    stmt = (
+        sa_select(Splitter)
+        .where(Splitter.is_active.is_(True))
+        .order_by(Splitter.name)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def _get_speed_profiles(db: Session, direction: str) -> list:
+    """Fetch speed profiles for a given direction (download/upload)."""
+    from app.services.network.speed_profiles import speed_profiles
+
+    return speed_profiles.list(db, direction=direction, is_active=True)
+
+
+def _get_tr069_servers(db: Session) -> list:
+    """Fetch active TR069 ACS servers for form dropdowns."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.tr069 import Tr069AcsServer
+
+    stmt = (
+        sa_select(Tr069AcsServer)
+        .where(Tr069AcsServer.is_active.is_(True))
+        .order_by(Tr069AcsServer.name)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def _ont_form_dependencies(db: Session) -> dict:
+    """Build all dropdown data needed by the ONT provisioning form."""
+    return {
+        "onu_types": _get_onu_types(db),
+        "olt_devices": _get_olt_devices(db),
+        "vlans": _get_vlans(db),
+        "zones": _get_zones(db),
+        "splitters": _get_splitters(db),
+        "speed_profiles_download": _get_speed_profiles(db, "download"),
+        "speed_profiles_upload": _get_speed_profiles(db, "upload"),
+        "pon_types": [e.value for e in PonType],
+        "gpon_channels": [e.value for e in GponChannel],
+        "onu_modes": [e.value for e in OnuMode],
+    }
+
+
+def _form_uuid_or_none(form: FormData, key: str) -> str | None:
+    """Extract a UUID string from form data, returning None if empty."""
+    value = form.get(key, "")
+    raw = value if isinstance(value, str) else ""
+    return raw.strip() or None
+
+
+def _form_float_or_none(form: FormData, key: str) -> float | None:
+    """Extract a float from form data, returning None if empty or invalid."""
+    value = form.get(key, "")
+    raw = value if isinstance(value, str) else ""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
 
 @router.get("/olts", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def olts_list(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
@@ -312,6 +431,7 @@ def ont_new(request: Request, db: Session = Depends(get_db)):
     context.update({
         "ont": None,
         "action_url": "/admin/network/onts",
+        **_ont_form_dependencies(db),
     })
     return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -340,6 +460,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
             "ont": None,
             "action_url": "/admin/network/onts",
             "error": "Serial number is required",
+            **_ont_form_dependencies(db),
         })
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -350,6 +471,26 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
+        # SmartOLT fields
+        onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
+        olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
+        pon_type=_form_str(form, "pon_type").strip() or None,
+        gpon_channel=_form_str(form, "gpon_channel").strip() or None,
+        board=_form_str(form, "board").strip() or None,
+        port=_form_str(form, "port").strip() or None,
+        onu_mode=_form_str(form, "onu_mode").strip() or None,
+        user_vlan_id=_form_uuid_or_none(form, "user_vlan_id"),
+        zone_id=_form_uuid_or_none(form, "zone_id"),
+        splitter_id=_form_uuid_or_none(form, "splitter_id"),
+        splitter_port_id=_form_uuid_or_none(form, "splitter_port_id"),
+        download_speed_profile_id=_form_uuid_or_none(form, "download_speed_profile_id"),
+        upload_speed_profile_id=_form_uuid_or_none(form, "upload_speed_profile_id"),
+        name=_form_str(form, "name").strip() or None,
+        address_or_comment=_form_str(form, "address_or_comment").strip() or None,
+        external_id=_form_str(form, "external_id").strip() or None,
+        use_gps=_form_str(form, "use_gps") == "true",
+        gps_latitude=_form_float_or_none(form, "gps_latitude"),
+        gps_longitude=_form_float_or_none(form, "gps_longitude"),
     )
 
     if payload.is_active:
@@ -358,6 +499,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
             "ont": payload,
             "action_url": "/admin/network/onts",
             "error": "New ONTs must be inactive until assigned to a customer.",
+            **_ont_form_dependencies(db),
         })
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -383,6 +525,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
             "ont": ont_snapshot,
             "action_url": "/admin/network/onts",
             "error": error,
+            **_ont_form_dependencies(db),
         })
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -404,6 +547,7 @@ def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
     context.update({
         "ont": ont,
         "action_url": f"/admin/network/onts/{ont.id}",
+        **_ont_form_dependencies(db),
     })
     return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -503,6 +647,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
             "ont": ont,
             "action_url": f"/admin/network/onts/{ont.id}",
             "error": "Serial number is required",
+            **_ont_form_dependencies(db),
         })
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
@@ -513,6 +658,26 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
+        # SmartOLT fields
+        onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
+        olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
+        pon_type=_form_str(form, "pon_type").strip() or None,
+        gpon_channel=_form_str(form, "gpon_channel").strip() or None,
+        board=_form_str(form, "board").strip() or None,
+        port=_form_str(form, "port").strip() or None,
+        onu_mode=_form_str(form, "onu_mode").strip() or None,
+        user_vlan_id=_form_uuid_or_none(form, "user_vlan_id"),
+        zone_id=_form_uuid_or_none(form, "zone_id"),
+        splitter_id=_form_uuid_or_none(form, "splitter_id"),
+        splitter_port_id=_form_uuid_or_none(form, "splitter_port_id"),
+        download_speed_profile_id=_form_uuid_or_none(form, "download_speed_profile_id"),
+        upload_speed_profile_id=_form_uuid_or_none(form, "upload_speed_profile_id"),
+        name=_form_str(form, "name").strip() or None,
+        address_or_comment=_form_str(form, "address_or_comment").strip() or None,
+        external_id=_form_str(form, "external_id").strip() or None,
+        use_gps=_form_str(form, "use_gps") == "true",
+        gps_latitude=_form_float_or_none(form, "gps_latitude"),
+        gps_longitude=_form_float_or_none(form, "gps_longitude"),
     )
 
     try:
@@ -542,10 +707,167 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
             "ont": ont_snapshot,
             "action_url": f"/admin/network/onts/{ont_id}",
             "error": error,
+            **_ont_form_dependencies(db),
         })
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
     return RedirectResponse(f"/admin/network/onts/{ont.id}", status_code=303)
+
+
+# ── ONU Mode / Mgmt IP Modals ──────────────────────────────────────
+
+
+@router.get(
+    "/onts/{ont_id}/onu-mode",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_onu_mode_modal(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Serve ONU mode configuration modal partial."""
+    try:
+        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    vlans = _get_vlans(db)
+    context = {
+        "request": request,
+        "ont": ont,
+        "vlans": vlans,
+        "wan_modes": [e.value for e in WanMode],
+        "config_methods": [e.value for e in ConfigMethod],
+        "ip_protocols": [e.value for e in IpProtocol],
+        "onu_modes": [e.value for e in OnuMode],
+    }
+    return templates.TemplateResponse(
+        "admin/network/onts/_onu_mode_modal.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/onu-mode",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_onu_mode_update(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Update ONU mode configuration."""
+    from app.schemas.network import OntUnitUpdate
+
+    form = parse_form_data_sync(request)
+    payload = OntUnitUpdate(
+        onu_mode=_form_str(form, "onu_mode").strip() or None,
+        wan_vlan_id=_form_uuid_or_none(form, "wan_vlan_id"),
+        wan_mode=_form_str(form, "wan_mode").strip() or None,
+        config_method=_form_str(form, "config_method").strip() or None,
+        ip_protocol=_form_str(form, "ip_protocol").strip() or None,
+        pppoe_username=_form_str(form, "pppoe_username").strip() or None,
+        pppoe_password=_form_str(form, "pppoe_password").strip() or None,
+        wan_remote_access=_form_str(form, "wan_remote_access") == "true",
+    )
+
+    try:
+        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    before_snapshot = model_to_dict(ont)
+    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    after = network_service.ont_units.get(db=db, unit_id=ont_id)
+    after_snapshot = model_to_dict(after)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update_onu_mode",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
+
+
+@router.get(
+    "/onts/{ont_id}/mgmt-ip",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_mgmt_ip_modal(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Serve management/VoIP IP modal partial."""
+    try:
+        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    vlans = _get_vlans(db)
+    tr069_servers = _get_tr069_servers(db)
+    context = {
+        "request": request,
+        "ont": ont,
+        "vlans": vlans,
+        "tr069_servers": tr069_servers,
+        "mgmt_ip_modes": [e.value for e in MgmtIpMode],
+    }
+    return templates.TemplateResponse(
+        "admin/network/onts/_mgmt_ip_modal.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/mgmt-ip",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_mgmt_ip_update(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Update management/VoIP IP configuration."""
+    from app.schemas.network import OntUnitUpdate
+
+    form = parse_form_data_sync(request)
+    payload = OntUnitUpdate(
+        tr069_acs_server_id=_form_uuid_or_none(form, "tr069_acs_server_id"),
+        mgmt_ip_mode=_form_str(form, "mgmt_ip_mode").strip() or None,
+        mgmt_vlan_id=_form_uuid_or_none(form, "mgmt_vlan_id"),
+        mgmt_ip_address=_form_str(form, "mgmt_ip_address").strip() or None,
+        mgmt_remote_access=_form_str(form, "mgmt_remote_access") == "true",
+        voip_enabled=_form_str(form, "voip_enabled") == "true",
+    )
+
+    try:
+        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    before_snapshot = model_to_dict(ont)
+    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    after = network_service.ont_units.get(db=db, unit_id=ont_id)
+    after_snapshot = model_to_dict(after)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update_mgmt_ip",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
 
 
 # ── ONT Remote Actions ─────────────────────────────────────────────

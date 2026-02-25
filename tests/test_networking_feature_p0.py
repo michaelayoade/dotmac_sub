@@ -17,7 +17,7 @@ from app.services import web_network_speedtests as web_network_speedtests_servic
 from app.services import web_network_weathermap as web_network_weathermap_service
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services import network_map as network_map_service
-from app.models.catalog import ConnectionType, NasVendor
+from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
 from app.models.network import OLTDevice, OltConfigBackup, OltConfigBackupType
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.notification import Notification, NotificationChannel, NotificationStatus
@@ -25,6 +25,9 @@ from app.models.network_monitoring import (
     DeviceRole,
     DeviceStatus,
     NetworkDevice,
+    NetworkDeviceBandwidthGraph,
+    NetworkDeviceBandwidthGraphSource,
+    NetworkDeviceSnmpOid,
     PopSite,
     SpeedTestResult,
     SpeedTestSource,
@@ -267,6 +270,312 @@ def test_core_devices_list_page_data_filters_site_status_and_search(db_session):
     assert filtered["stats"]["total"] == 1
     assert len(filtered["devices"]) == 1
     assert filtered["devices"][0].name == "Core Alpha Router"
+
+
+def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(db_session):
+    pop = PopSite(name="Gamma Site", is_active=True)
+    db_session.add(pop)
+    db_session.flush()
+    device = NetworkDevice(
+        name="Gamma Router",
+        pop_site_id=pop.id,
+        mgmt_ip="10.210.0.1",
+        is_active=True,
+        ping_enabled=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+
+    db_session.add(
+        DeviceMetric(
+            device_id=device.id,
+            metric_type=MetricType.uptime,
+            value=3661,
+            unit="seconds",
+            recorded_at=datetime.now(UTC),
+        )
+    )
+    db_session.add(
+        DeviceMetric(
+            device_id=device.id,
+            metric_type=MetricType.custom,
+            value=12,
+            unit="ping_ms",
+            recorded_at=datetime.now(UTC),
+        )
+    )
+    nas = NasDevice(
+        name="Gamma NAS",
+        vendor=NasVendor.mikrotik,
+        ip_address="10.210.0.1",
+        management_ip="10.210.0.1",
+        network_device_id=device.id,
+    )
+    db_session.add(nas)
+    db_session.flush()
+    db_session.add(
+        NasConfigBackup(
+            nas_device_id=nas.id,
+            config_content="export compact",
+            config_hash="abc",
+            created_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
+    key = str(device.id)
+    assert payload["uptime_map"][key] is not None
+    assert payload["ping_history_map"][key][0]["ok"] is True
+    assert payload["backup_map"][key]["status"] == "success"
+
+
+def test_create_snmp_oid_for_device_and_poll_success(db_session):
+    device = NetworkDevice(name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True)
+    db_session.add(device)
+    db_session.commit()
+
+    ok, msg = core_devices_forms.create_snmp_oid_for_device(
+        db_session,
+        device_id=str(device.id),
+        title="ifIn",
+        oid="1.3.6.1.2.1.31.1.1.1.6.1",
+        check_interval_seconds=60,
+        rrd_data_source_type="counter",
+        is_enabled=True,
+    )
+    assert ok is True
+    assert "added" in msg.lower()
+
+    oid = db_session.query(NetworkDeviceSnmpOid).filter_by(device_id=device.id).first()
+    assert oid is not None
+
+    def _fake_walk(*_args, **_kwargs):
+        return ["SNMPv2-SMI::mib-2.2.2.1.10.1 = Counter32: 100"]
+
+    from app.services import snmp_discovery as snmp_discovery_service
+
+    original = snmp_discovery_service._run_snmpwalk
+    snmp_discovery_service._run_snmpwalk = _fake_walk
+    try:
+        ok, msg = core_devices_forms.poll_snmp_oid_for_device(
+            db_session, device_id=str(device.id), snmp_oid_id=str(oid.id)
+        )
+    finally:
+        snmp_discovery_service._run_snmpwalk = original
+    assert ok is True
+    assert "succeeded" in msg.lower()
+
+
+def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
+    device = NetworkDevice(name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True)
+    db_session.add(device)
+    db_session.flush()
+
+    oid = NetworkDeviceSnmpOid(
+        device_id=device.id,
+        title="ifOutOctets",
+        oid="1.3.6.1.2.1.31.1.1.1.10.5",
+        is_enabled=True,
+    )
+    db_session.add(oid)
+    db_session.commit()
+
+    ok, msg = core_devices_forms.create_bandwidth_graph_for_device(
+        db_session,
+        device_id=str(device.id),
+        title="Uplink",
+        vertical_axis_title="Bandwidth",
+        height_px=160,
+        is_public=False,
+    )
+    assert ok is True
+    assert "created" in msg.lower()
+
+    graph = db_session.query(NetworkDeviceBandwidthGraph).filter_by(device_id=device.id).first()
+    assert graph is not None
+    assert graph.is_public is False
+
+    ok, msg = core_devices_forms.add_bandwidth_graph_source(
+        db_session,
+        device_id=str(device.id),
+        graph_id=str(graph.id),
+        source_device_id=str(device.id),
+        snmp_oid_id=str(oid.id),
+        factor=1.0,
+        color_hex="#22c55e",
+        draw_type="LINE1",
+        stack_enabled=False,
+        value_unit="Bps",
+    )
+    assert ok is True
+    assert "added" in msg.lower()
+    assert (
+        db_session.query(NetworkDeviceBandwidthGraphSource)
+        .filter_by(graph_id=graph.id)
+        .count()
+        == 1
+    )
+
+    ok, _ = core_devices_forms.clone_bandwidth_graph_for_device(
+        db_session,
+        device_id=str(device.id),
+        graph_id=str(graph.id),
+    )
+    assert ok is True
+    cloned = (
+        db_session.query(NetworkDeviceBandwidthGraph)
+        .filter(NetworkDeviceBandwidthGraph.title.like("Uplink (Copy)%"))
+        .first()
+    )
+    assert cloned is not None
+
+    ok, _ = core_devices_forms.toggle_bandwidth_graph_public(
+        db_session,
+        device_id=str(device.id),
+        graph_id=str(graph.id),
+        is_public=True,
+    )
+    assert ok is True
+    db_session.refresh(graph)
+    assert graph.public_token is not None
+    public_graph = core_devices_forms.get_public_bandwidth_graph(db_session, token=graph.public_token)
+    assert public_graph is not None
+
+
+def test_bandwidth_graph_preview_snapshot_uses_snmp_values(db_session):
+    device = NetworkDevice(name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True)
+    db_session.add(device)
+    db_session.flush()
+
+    oid = NetworkDeviceSnmpOid(
+        device_id=device.id,
+        title="ifInOctets",
+        oid="1.3.6.1.2.1.31.1.1.1.6.7",
+        is_enabled=True,
+    )
+    graph = NetworkDeviceBandwidthGraph(
+        device_id=device.id,
+        title="Preview Graph",
+        vertical_axis_title="Bandwidth",
+        height_px=150,
+    )
+    db_session.add_all([oid, graph])
+    db_session.flush()
+    db_session.add(
+        NetworkDeviceBandwidthGraphSource(
+            graph_id=graph.id,
+            source_device_id=device.id,
+            snmp_oid_id=oid.id,
+            factor=2.0,
+            color_hex="#ef4444",
+            draw_type="LINE1",
+            value_unit="Bps",
+            sort_order=1,
+        )
+    )
+    db_session.commit()
+
+    from app.services import snmp_discovery as snmp_discovery_service
+
+    def _fake_walk(*_args, **_kwargs):
+        return ["SNMPv2-SMI::mib-2.2.2.1.10.7 = Counter32: 123"]
+
+    original = snmp_discovery_service._run_snmpwalk
+    snmp_discovery_service._run_snmpwalk = _fake_walk
+    try:
+        payload = core_devices_forms.bandwidth_graphs_page_data(
+            db_session,
+            str(device.id),
+            preview_graph_id=str(graph.id),
+        )
+    finally:
+        snmp_discovery_service._run_snmpwalk = original
+
+    assert payload is not None
+    assert payload["preview_rows"]
+    assert payload["preview_rows"][0]["last"] == 246.0
+
+
+def test_core_backup_settings_history_filter_and_compare(db_session):
+    core = NetworkDevice(name="Backup Core", mgmt_ip="192.0.2.130", is_active=True)
+    db_session.add(core)
+    db_session.flush()
+    nas = NasDevice(
+        name="Backup NAS",
+        vendor=NasVendor.mikrotik,
+        ip_address="192.0.2.130",
+        management_ip="192.0.2.130",
+        network_device_id=core.id,
+    )
+    db_session.add(nas)
+    db_session.flush()
+
+    old_backup = NasConfigBackup(
+        nas_device_id=nas.id,
+        config_content="line_a\nline_b",
+        config_hash="h1",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    new_backup = NasConfigBackup(
+        nas_device_id=nas.id,
+        config_content="line_a\nline_c",
+        config_hash="h2",
+        created_at=datetime(2026, 2, 20, tzinfo=UTC),
+    )
+    db_session.add_all([old_backup, new_backup])
+    db_session.commit()
+
+    ok, msg = core_devices_forms.update_backup_settings_for_device(
+        db_session,
+        device_id=str(core.id),
+        enabled=True,
+        ssh_username="backup-user",
+        ssh_password="secret",
+        ssh_port=2222,
+        backup_type="commands",
+        backup_commands="export",
+        hours_csv="2,8,14,20",
+    )
+    assert ok is True
+    assert "saved" in msg.lower()
+
+    payload = core_devices_forms.backup_page_data(
+        db_session,
+        str(core.id),
+        date_from="2026-02-10",
+        date_to="2026-02-28",
+    )
+    assert payload is not None
+    assert payload["nas_device"] is not None
+    assert len(payload["backups"]) == 1
+    assert payload["backups"][0].id == new_backup.id
+    assert payload["backup_config"]["ssh_port"] == 2222
+    assert payload["backup_config"]["hours_csv"] == "2,8,14,20"
+
+    cmp_payload = core_devices_forms.backup_compare_page_data(
+        db_session,
+        device_id=str(core.id),
+        backup_id_1=str(old_backup.id),
+        backup_id_2=str(new_backup.id),
+    )
+    assert cmp_payload is not None
+    assert cmp_payload["diff"]["added_lines"] >= 1
+    assert cmp_payload["diff"]["removed_lines"] >= 1
+    assert "@@" in cmp_payload["diff"]["unified_diff"]
+
+
+def test_trigger_backup_for_core_device_without_nas_mapping_returns_error(db_session):
+    core = NetworkDevice(name="Orphan Core", mgmt_ip="192.0.2.131", is_active=True)
+    db_session.add(core)
+    db_session.commit()
+
+    ok, msg = core_devices_forms.trigger_backup_for_core_device(
+        db_session,
+        device_id=str(core.id),
+    )
+    assert ok is False
+    assert "no linked nas device" in msg.lower()
 
 
 def test_cpe_notes_metadata_round_trip():
@@ -1573,6 +1882,193 @@ def test_build_ipv6_networks_data_filters_and_sorts(db_session):
     )
     names = [item["pool"].name for item in sorted_state["networks"]]
     assert names == sorted(names, reverse=True)
+
+
+def test_build_ipv4_networks_data_filters_sorts_and_utilization(db_session):
+    pool_a, err_a = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "IPv4 Abuja",
+            "ip_version": "ipv4",
+            "cidr": "10.70.0.0/24",
+            "gateway": "10.70.0.1",
+            "dns_primary": None,
+            "dns_secondary": None,
+            "notes": None,
+            "location": "Abuja",
+            "category": "Production",
+            "network_type": "EndNet",
+            "router": "RTR-A",
+            "usage_type": "Static",
+            "allow_network_broadcast": False,
+            "is_fallback": False,
+            "is_active": True,
+        },
+    )
+    pool_b, err_b = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "IPv4 Kano",
+            "ip_version": "ipv4",
+            "cidr": "10.71.0.0/24",
+            "gateway": "10.71.0.1",
+            "dns_primary": None,
+            "dns_secondary": None,
+            "notes": None,
+            "location": "Kano",
+            "category": "Dev",
+            "network_type": "Infrastructure",
+            "router": "RTR-B",
+            "usage_type": "Dynamic/DHCP",
+            "allow_network_broadcast": True,
+            "is_fallback": False,
+            "is_active": True,
+        },
+    )
+    assert err_a is None and err_b is None
+    assert pool_a is not None and pool_b is not None
+
+    network_service.ipv4_addresses.create(
+        db_session,
+        IPv4AddressCreate(address="10.70.0.10", pool_id=pool_a.id, is_reserved=False),
+    )
+    network_service.ipv4_addresses.create(
+        db_session,
+        IPv4AddressCreate(address="10.70.0.11", pool_id=pool_a.id, is_reserved=False),
+    )
+
+    filtered = web_network_ip_service.build_ipv4_networks_data(
+        db_session,
+        location="Abuja",
+        category="Production",
+        network_type="EndNet",
+        sort_by="title",
+        sort_dir="asc",
+    )
+    assert len(filtered["networks"]) == 1
+    net = filtered["networks"][0]
+    assert net["pool"].name == "IPv4 Abuja"
+    assert net["subnet_mask"] == "255.255.255.0"
+    assert net["utilization"]["used"] == 2
+    assert net["usage_type"] == "Static"
+
+    sorted_state = web_network_ip_service.build_ipv4_networks_data(
+        db_session,
+        sort_by="title",
+        sort_dir="desc",
+    )
+    names = [item["pool"].name for item in sorted_state["networks"]]
+    assert names == sorted(names, reverse=True)
+
+
+def test_build_ipv4_network_detail_data_exposes_assignment_rows(db_session, subscriber):
+    pool, err = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "IPv4 Detail",
+            "ip_version": "ipv4",
+            "cidr": "10.72.0.0/29",
+            "gateway": "10.72.0.1",
+            "dns_primary": None,
+            "dns_secondary": None,
+            "notes": None,
+            "location": "Abuja",
+            "category": "Production",
+            "network_type": "EndNet",
+            "router": "RTR-D",
+            "usage_type": "Static",
+            "allow_network_broadcast": False,
+            "is_fallback": False,
+            "is_active": True,
+        },
+    )
+    assert err is None
+    assert pool is not None
+
+    ip_record = network_service.ipv4_addresses.create(
+        db_session,
+        IPv4AddressCreate(address="10.72.0.2", pool_id=pool.id, is_reserved=False),
+    )
+    reserved = network_service.ipv4_addresses.create(
+        db_session,
+        IPv4AddressCreate(address="10.72.0.3", pool_id=pool.id, is_reserved=True),
+    )
+    network_service.ip_assignments.create(
+        db_session,
+        IPAssignmentCreate(
+            account_id=subscriber.id,
+            ip_version="ipv4",
+            ipv4_address_id=ip_record.id,
+            prefix_length=29,
+            gateway="10.72.0.1",
+            dns_primary="8.8.8.8",
+            dns_secondary="8.8.4.4",
+        ),
+    )
+
+    data = web_network_ip_service.build_ipv4_network_detail_data(
+        db_session,
+        pool_id=str(pool.id),
+        limit=16,
+    )
+    assert data is not None
+    statuses = {row["ip_address"]: row["status"] for row in data["ip_rows"]}
+    assert statuses["10.72.0.2"] == "assigned"
+    assert statuses["10.72.0.3"] == "reserved"
+    assert "10.72.0.4" in statuses and statuses["10.72.0.4"] == "available"
+    assert data["usage_type"] == "Static"
+    assert data["allow_network_broadcast"] is False
+    assert reserved is not None
+
+
+def test_parse_ipv6_network_form_maps_to_pool_payload():
+    values = web_network_ip_service.parse_ipv6_network_form(
+        {
+            "title": "Abuja IPv6",
+            "network": "2001:db8:1::",
+            "prefix_length": "48",
+            "comment": "Core aggregation",
+            "location": "Abuja",
+            "category": "Production",
+            "network_type": "EndNet",
+            "usage_type": "Static",
+            "router": "RTR-v6",
+            "gateway": "2001:db8:1::1",
+            "dns_primary": "2001:4860:4860::8888",
+            "dns_secondary": "2001:4860:4860::8844",
+            "is_active": "true",
+        }
+    )
+    assert values["name"] == "Abuja IPv6"
+    assert values["ip_version"] == "ipv6"
+    assert values["cidr"] == "2001:db8:1::/48"
+    assert values["usage_type"] == "Static"
+    assert values["is_active"] is True
+
+
+def test_create_ipv6_network_from_dedicated_form_values(db_session):
+    values = web_network_ip_service.parse_ipv6_network_form(
+        {
+            "title": "Kano IPv6",
+            "network": "2001:db8:2::",
+            "prefix_length": "56",
+            "comment": "Distribution",
+            "location": "Kano",
+            "category": "Dev",
+            "network_type": "EndNet",
+            "usage_type": "Dynamic/DHCP",
+            "router": "RTR-v6-kano",
+            "is_active": "true",
+        }
+    )
+    pool, err = web_network_ip_service.create_ip_pool(db_session, values)
+    assert err is None
+    assert pool is not None
+    snapshot = web_network_ip_service.pool_form_snapshot_from_model(pool)
+    assert snapshot["ip_version"]["value"] == "ipv6"
+    assert snapshot["cidr"] == "2001:db8:2::/56"
+    assert snapshot["usage_type"] == "Dynamic/DHCP"
+    assert snapshot["location"] == "Kano"
 
 
 def test_build_dual_stack_data_groups_ipv4_and_ipv6_by_subscriber_location(

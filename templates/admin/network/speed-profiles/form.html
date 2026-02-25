@@ -1,0 +1,131 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if profile else 'New' }} Speed Profile - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/speed-profiles" class="hover:text-blue-600">Speed Profiles</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Profile' if profile else 'New Profile' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Speed Profile' if profile else 'Add Speed Profile' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update speed profile configuration' if profile else 'Create a new bandwidth speed profile for OLT provisioning' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        {# Speed Profile #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Speed Profile</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {# Name #}
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="120"
+                            value="{{ profile.name if profile else '' }}"
+                            placeholder="SPL_22_70Mbps_Fiber_DOWN"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    {# Direction #}
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Direction <span class="text-red-500">*</span></label>
+                        <div class="flex items-center gap-6">
+                            {% for d in directions %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="direction" value="{{ d.value }}" required
+                                    {% if profile and profile.direction.value == d.value %}checked{% elif not profile and default_direction == d.value %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm text-slate-700 dark:text-slate-300 capitalize">{{ d.value }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    {# Speed #}
+                    <div>
+                        <label for="speed_kbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Speed <span class="text-red-500">*</span></label>
+                        <div class="mt-1 flex rounded-lg shadow-sm">
+                            <input type="number" name="speed_kbps" id="speed_kbps" required min="1"
+                                value="{{ profile.speed_kbps if profile else '' }}"
+                                placeholder="70000"
+                                class="block w-full rounded-l-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                            <span class="inline-flex items-center rounded-r-lg border border-l-0 border-slate-300 bg-slate-50 px-3 text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-600 dark:text-slate-300">kbps</span>
+                        </div>
+                    </div>
+
+                    {# Speed Type #}
+                    <div>
+                        <label for="speed_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Speed Type</label>
+                        <select name="speed_type" id="speed_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for st in speed_types %}
+                            <option value="{{ st.value }}" {% if profile and profile.speed_type.value == st.value %}selected{% endif %}>{{ st.value | capitalize }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {# Checkboxes #}
+                    <div>
+                        <label class="flex items-center gap-2 mt-7">
+                            <input type="checkbox" name="use_prefix_suffix" value="true" {% if profile and profile.use_prefix_suffix %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Use Prefix/Suffix</span>
+                        </label>
+                        <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Automatically apply naming prefix and suffix</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2 mt-7">
+                            <input type="checkbox" name="is_default" value="true" {% if profile and profile.is_default %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Is Default</span>
+                        </label>
+                        <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Set as default profile for this direction</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true" {% if not profile or profile.is_active %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                    </div>
+
+                    {# Notes #}
+                    <div class="sm:col-span-2">
+                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                        <textarea name="notes" id="notes" rows="3" maxlength="500"
+                            placeholder="Optional notes about this speed profile..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ profile.notes or '' if profile else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Form Actions #}
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/network/speed-profiles" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                Cancel
+            </a>
+            <button type="submit" class="rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md hover:from-blue-600 hover:to-cyan-700">
+                {{ 'Update Profile' if profile else 'Create Profile' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

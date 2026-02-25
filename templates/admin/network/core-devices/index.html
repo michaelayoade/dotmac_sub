@@ -46,6 +46,14 @@
                 <option value="{{ site.id }}" {% if pop_site_filter == site.id|string %}selected{% endif %}>{{ site.name }}</option>
                 {% endfor %}
             </select>
+            <label for="device_type" class="sr-only">Type</label>
+            <select id="device_type" name="device_type"
+                class="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                <option value="" {% if not device_type_filter %}selected{% endif %}>All Types</option>
+                {% for type_value in device_type_options %}
+                <option value="{{ type_value }}" {% if device_type_filter == type_value %}selected{% endif %}>{{ type_value | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
             <label for="status" class="sr-only">Status</label>
             <select id="status" name="status"
                 class="block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
@@ -97,6 +105,7 @@
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Device"},
+                    {"label": "Type"},
                     {"label": "Role"},
                     {"label": "Site"},
                     {"label": "Vendor / Model"},
@@ -104,6 +113,9 @@
                     {"label": "Ping"},
                     {"label": "SNMP"},
                     {"label": "Status"},
+                    {"label": "Uptime"},
+                    {"label": "Backup"},
+                    {"label": "Last Backup"},
                     {"label": "Actions", "align": "right"}
                 ]) }}
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
@@ -121,6 +133,11 @@
                                     {% endif %}
                                 </div>
                             </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                {{ (device.device_type.value | replace('_', ' ') | title) if device.device_type else 'Unknown' }}
+                            </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% set role_badge_classes = {
@@ -155,6 +172,16 @@
                             {% else %}
                             <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Unknown</span>
                             {% endif %}
+                            {% set ping_history = ping_history_map.get(device.id|string, []) if ping_history_map else [] %}
+                            {% if ping_history %}
+                            <div class="mt-1 flex items-center gap-1">
+                                {% for sample in ping_history %}
+                                <span class="inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium {% if sample.ok %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300{% endif %}">
+                                    {{ sample.label }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if not device.snmp_enabled %}
@@ -179,6 +206,30 @@
                             </div>
                             {% endif %}
                         </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">
+                            {{ uptime_map.get(device.id|string) if uptime_map and uptime_map.get(device.id|string) else '-' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% set backup = backup_map.get(device.id|string) if backup_map else None %}
+                            {% set backup_status = backup.status if backup else 'none' %}
+                            {% if backup_status == 'success' %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Success</span>
+                            {% elif backup_status == 'failed' %}
+                            <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">Failed</span>
+                            {% elif backup_status == 'stale' %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Stale</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">
+                            {% set backup = backup_map.get(device.id|string) if backup_map else None %}
+                            {% if backup and backup.last_backup_at %}
+                            {{ backup.last_backup_at.strftime('%Y-%m-%d %H:%M') }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
                             <a href="/admin/network/core-devices/{{ device.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">View</a>
                         </td>
@@ -191,7 +242,7 @@
                         color="blue",
                         action_label="Add Device",
                         action_href="/admin/network/core-devices/new",
-                        colspan=9
+                        colspan=13
                     ) }}
                     {% endfor %}
                 </tbody>

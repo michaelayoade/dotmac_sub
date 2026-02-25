@@ -1,0 +1,417 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}FUP Configuration - {{ offer.name }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header with breadcrumbs -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/catalog" class="hover:text-primary-600">Tariff Plans</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <a href="/admin/catalog/offers/{{ offer.id }}" class="hover:text-primary-600">{{ offer.name }}</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">FUP</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fair Usage Policy</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure traffic shaping rules for {{ offer.name }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/catalog/offers/{{ offer.id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Back to Offer
+            </a>
+        </div>
+    </div>
+
+    <!-- Tab navigation -->
+    <div class="border-b border-slate-200 dark:border-slate-700">
+        <nav class="-mb-px flex gap-6" aria-label="Tabs">
+            <a href="/admin/catalog/offers/{{ offer.id }}/fup" class="border-b-2 border-violet-500 px-1 pb-3 text-sm font-medium text-violet-600 dark:text-violet-400">
+                FUP Configuration
+            </a>
+            <span class="border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400 cursor-not-allowed dark:text-slate-500" title="Coming soon">
+                FUP Preview &amp; Test
+            </span>
+            <span class="border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400 cursor-not-allowed dark:text-slate-500" title="Coming soon">
+                CAP
+            </span>
+        </nav>
+    </div>
+
+    <!-- Section 1: Accounting Settings -->
+    <div x-data="{ open: true }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button @click="open = !open" type="button" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 text-left dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Accounting of Traffic &amp; Online Time</h2>
+            <svg :class="open ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" x-transition class="p-6">
+            <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/settings">
+                {% include "components/forms/csrf_input.html" %}
+
+                <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    <!-- Traffic Accounting -->
+                    <div class="space-y-4">
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Traffic Accounting</h3>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="traffic_accounting_start" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">From</label>
+                                <input type="time" id="traffic_accounting_start" name="traffic_accounting_start"
+                                    value="{{ fup_policy.traffic_accounting_start.strftime('%H:%M') if fup_policy.traffic_accounting_start else '' }}"
+                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="traffic_accounting_end" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">To</label>
+                                <input type="time" id="traffic_accounting_end" name="traffic_accounting_end"
+                                    value="{{ fup_policy.traffic_accounting_end.strftime('%H:%M') if fup_policy.traffic_accounting_end else '' }}"
+                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="traffic_inverse_interval" {% if fup_policy.traffic_inverse_interval %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                            Inverse interval (count traffic outside the specified time range)
+                        </label>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Days of the Week</label>
+                            <div class="flex flex-wrap gap-3">
+                                {% for day_num, day_name in day_names %}
+                                <label class="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="traffic_days_of_week" value="{{ day_num }}"
+                                        {% if fup_policy.traffic_days_of_week and day_num in fup_policy.traffic_days_of_week %}checked{% endif %}
+                                        class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                                    {{ day_name }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Online Time Accounting -->
+                    <div class="space-y-4">
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Online Time Accounting</h3>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label for="online_accounting_start" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">From</label>
+                                <input type="time" id="online_accounting_start" name="online_accounting_start"
+                                    value="{{ fup_policy.online_accounting_start.strftime('%H:%M') if fup_policy.online_accounting_start else '' }}"
+                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="online_accounting_end" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">To</label>
+                                <input type="time" id="online_accounting_end" name="online_accounting_end"
+                                    value="{{ fup_policy.online_accounting_end.strftime('%H:%M') if fup_policy.online_accounting_end else '' }}"
+                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="online_inverse_interval" {% if fup_policy.online_inverse_interval %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                            Inverse interval (count online time outside the specified time range)
+                        </label>
+
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Days of the Week</label>
+                            <div class="flex flex-wrap gap-3">
+                                {% for day_num, day_name in day_names %}
+                                <label class="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="online_days_of_week" value="{{ day_num }}"
+                                        {% if fup_policy.online_days_of_week and day_num in fup_policy.online_days_of_week %}checked{% endif %}
+                                        class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                                    {{ day_name }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end">
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors">
+                        <svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Save Accounting Settings
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Section 2: FUP Rules -->
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">FUP Rules</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Define threshold-based actions for traffic consumption.</p>
+        </div>
+
+        <div class="p-6">
+            {% if fup_policy.rules %}
+            <!-- Rules Table -->
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Rule Name</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Period</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Direction</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Threshold</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Action</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Speed %</th>
+                            <th class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Active</th>
+                            <th class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for rule in fup_policy.rules %}
+                        <tr x-data="{ editing: false }" class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <!-- Read mode -->
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm text-slate-900 dark:text-white font-medium">{{ rule.name }}</td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300">{{ consumption_period_labels.get(rule.consumption_period.value, rule.consumption_period.value) }}</td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300">{{ direction_labels.get(rule.direction.value, rule.direction.value) }}</td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300 font-mono">{{ rule.threshold_amount }} {{ data_unit_labels.get(rule.threshold_unit.value, rule.threshold_unit.value) }}</td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm">
+                                    {% if rule.action.value == 'reduce_speed' %}
+                                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Reduce Speed</span>
+                                    {% elif rule.action.value == 'block' %}
+                                    <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Block</span>
+                                    {% else %}
+                                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">Notify</span>
+                                    {% endif %}
+                                </td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300 font-mono">{{ rule.speed_reduction_percent if rule.speed_reduction_percent is not none else '-' }}{% if rule.speed_reduction_percent is not none %}%{% endif %}</td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-center">
+                                    {% if rule.is_active %}
+                                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Yes</span>
+                                    {% else %}
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">No</span>
+                                    {% endif %}
+                                </td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-right">
+                                    <div class="flex items-center justify-end gap-2">
+                                        <button @click="editing = true" type="button" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300" title="Edit">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                        </button>
+                                        <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/rules/{{ rule.id }}/delete" onsubmit="return confirm('Delete this rule?');" class="inline">
+                                            {% include "components/forms/csrf_input.html" %}
+                                            <button type="submit" class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/30 dark:hover:text-rose-400" title="Delete">
+                                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </template>
+
+                            <!-- Edit mode -->
+                            <template x-if="editing">
+                                <td colspan="8" class="px-3 py-3">
+                                    <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/rules/{{ rule.id }}/update" class="space-y-4">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Rule Name</label>
+                                                <input type="text" name="name" value="{{ rule.name }}" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Period</label>
+                                                <select name="consumption_period" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                    {% for opt in consumption_periods %}
+                                                    <option value="{{ opt.value }}" {% if rule.consumption_period.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Direction</label>
+                                                <select name="direction" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                    {% for opt in directions %}
+                                                    <option value="{{ opt.value }}" {% if rule.direction.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="grid grid-cols-2 gap-2">
+                                                <div>
+                                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Threshold</label>
+                                                    <input type="number" name="threshold_amount" value="{{ rule.threshold_amount }}" step="0.01" min="0" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                </div>
+                                                <div>
+                                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Unit</label>
+                                                    <select name="threshold_unit" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                        {% for opt in data_units %}
+                                                        <option value="{{ opt.value }}" {% if rule.threshold_unit.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Action</label>
+                                                <select name="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                    {% for opt in actions %}
+                                                    <option value="{{ opt.value }}" {% if rule.action.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Speed Reduction %</label>
+                                                <input type="number" name="speed_reduction_percent" value="{{ rule.speed_reduction_percent if rule.speed_reduction_percent is not none else '' }}" step="1" min="0" max="100" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                            </div>
+                                            <div class="flex items-end">
+                                                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 pb-2">
+                                                    <input type="checkbox" name="is_active" {% if rule.is_active %}checked{% endif %}
+                                                        class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                                                    Active
+                                                </label>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <button type="submit" class="inline-flex items-center rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 transition-colors">Save</button>
+                                            <button @click="editing = false" type="button" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+                                        </div>
+                                    </form>
+                                </td>
+                            </template>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-12">
+                <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <h3 class="mt-2 text-sm font-semibold text-slate-900 dark:text-white">No FUP rules</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add your first rule below to define traffic usage thresholds.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Section 3: Add Rule Form -->
+    <div x-data="{ showForm: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Add New Rule</h2>
+            <button @click="showForm = !showForm" type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                <svg :class="showForm ? 'rotate-45' : ''" class="h-4 w-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                <span x-text="showForm ? 'Hide' : 'Add Rule'"></span>
+            </button>
+        </div>
+        <div x-show="showForm" x-transition class="p-6">
+            <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/rules" class="space-y-4">
+                {% include "components/forms/csrf_input.html" %}
+
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                        <label for="new_rule_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Rule Name</label>
+                        <input type="text" id="new_rule_name" name="name" required placeholder="e.g. Monthly 100GB limit" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="new_rule_period" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Consumption Period</label>
+                        <select id="new_rule_period" name="consumption_period" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for opt in consumption_periods %}
+                            <option value="{{ opt.value }}">{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="new_rule_direction" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Direction</label>
+                        <select id="new_rule_direction" name="direction" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for opt in directions %}
+                            <option value="{{ opt.value }}">{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                        <label for="new_rule_threshold" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Threshold Amount</label>
+                        <input type="number" id="new_rule_threshold" name="threshold_amount" required step="0.01" min="0" placeholder="100" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="new_rule_unit" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Unit</label>
+                        <select id="new_rule_unit" name="threshold_unit" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for opt in data_units %}
+                            <option value="{{ opt.value }}" {% if opt.value == 'gb' %}selected{% endif %}>{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div x-data="{ action: 'reduce_speed' }">
+                        <label for="new_rule_action" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Action</label>
+                        <select id="new_rule_action" name="action" x-model="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for opt in actions %}
+                            <option value="{{ opt.value }}">{{ opt.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="new_rule_speed_pct" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Speed Reduction %</label>
+                        <input type="number" id="new_rule_speed_pct" name="speed_reduction_percent" step="1" min="0" max="100" placeholder="50" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Only applies when action is "Reduce Speed"</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 transition-colors">
+                        <svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Add Rule
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Section 4: Clone Rules -->
+    {% if other_offers %}
+    <div x-data="{ showClone: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Load Rules from Another Plan</h2>
+            <button @click="showClone = !showClone" type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/></svg>
+                <span x-text="showClone ? 'Hide' : 'Clone Rules'"></span>
+            </button>
+        </div>
+        <div x-show="showClone" x-transition class="p-6">
+            <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/clone" onsubmit="return confirm('This will copy all FUP rules from the selected plan. Existing rules will not be removed. Continue?');">
+                {% include "components/forms/csrf_input.html" %}
+
+                <div class="flex flex-col gap-4 sm:flex-row sm:items-end">
+                    <div class="flex-1">
+                        <label for="clone_source_offer" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Source Plan</label>
+                        <select id="clone_source_offer" name="source_offer_id" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select a plan --</option>
+                            {% for o in other_offers %}
+                            <option value="{{ o.id }}">{{ o.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                        <svg class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/></svg>
+                        Clone Rules
+                    </button>
+                </div>
+                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Rules from the selected plan will be copied into this plan. Your existing rules will be preserved.</p>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

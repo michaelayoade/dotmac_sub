@@ -1,0 +1,56 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}Embedded View - {{ connector.name }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+            <a href="/admin/integrations/connectors/{{ connector.id }}" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            </a>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ connector.name }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Embedded Integration View</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/admin/integrations/connectors/{{ connector.id }}/embed?check=1" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9M4.582 9H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Check Connection
+            </a>
+            {% if health_status == "ready" %}
+            {{ status_badge("Ready", "active") }}
+            {% elif health_status == "auth_required" %}
+            {{ status_badge("Auth Required", "warning") }}
+            {% elif health_status == "degraded" %}
+            {{ status_badge("Degraded", "warning") }}
+            {% elif health_status == "unreachable" %}
+            {{ status_badge("Unreachable", "error") }}
+            {% else %}
+            {{ status_badge("Misconfigured", "warning") }}
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="rounded-lg border px-4 py-3 text-sm {% if health_status == 'ready' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
+        {{ health_message }}
+        {% if probe_checked and health_http_status %}
+        <span class="ml-2 inline-flex items-center rounded-full bg-white/60 px-2 py-0.5 text-xs font-semibold dark:bg-slate-900/30">HTTP {{ health_http_status }}</span>
+        {% endif %}
+    </div>
+
+    {% if embed_url %}
+    {% set title = connector.name ~ " Embedded" %}
+    {% include "components/integrations/embedded_frame.html" %}
+    {% else %}
+    <div class="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <p class="text-sm text-slate-500 dark:text-slate-400">No embeddable URL is configured for this connector.</p>
+        <a href="/admin/integrations/connectors/{{ connector.id }}" class="mt-4 inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+            Back to Connector
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,9 +1,10 @@
 """Admin network core devices web routes."""
 
+from urllib.parse import quote_plus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -91,6 +92,7 @@ def network_backups_overview(
 def core_devices_list(
     request: Request,
     role: str | None = None,
+    device_type: str | None = None,
     status: str | None = None,
     pop_site_id: str | None = None,
     search: str | None = None,
@@ -101,6 +103,7 @@ def core_devices_list(
         db,
         role,
         status,
+        device_type=device_type,
         pop_site_id=pop_site_id,
         search=search,
     )
@@ -278,6 +281,425 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
     context.update(page_data)
     context["activities"] = activities
     return templates.TemplateResponse("admin/network/core-devices/detail.html", context)
+
+
+@router.get("/core-devices/{device_id}/snmp-oids", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_snmp_oids(
+    request: Request,
+    device_id: str,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.snmp_oids_page_data(
+        db,
+        device_id,
+        message=request.query_params.get("message"),
+        error=request.query_params.get("error"),
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Device not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/snmp_oids.html", context)
+
+
+@router.post("/core-devices/{device_id}/snmp-oids", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_snmp_oid_create(
+    device_id: str,
+    title: str = Form(...),
+    oid: str = Form(...),
+    check_interval_seconds: int = Form(60),
+    rrd_data_source_type: str = Form("gauge"),
+    is_enabled: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.create_snmp_oid_for_device(
+        db,
+        device_id=device_id,
+        title=title,
+        oid=oid,
+        check_interval_seconds=check_interval_seconds,
+        rrd_data_source_type=rrd_data_source_type,
+        is_enabled=is_enabled,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/snmp-oids/snmp-walk", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_snmp_oid_walk(
+    request: Request,
+    device_id: str,
+    base_oid: str = Form(".1.3.6.1.2.1"),
+    db: Session = Depends(get_db),
+):
+    lines, error = web_network_core_devices_service.run_snmp_walk_preview(
+        db,
+        device_id=device_id,
+        base_oid=base_oid,
+    )
+    page_data = web_network_core_devices_service.snmp_oids_page_data(
+        db,
+        device_id,
+        walk_lines=lines,
+        error=error,
+        message=None if error else f"SNMP walk returned {len(lines)} lines.",
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Device not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/snmp_oids.html", context)
+
+
+@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/poll", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_snmp_oid_poll(
+    device_id: str,
+    snmp_oid_id: str,
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.poll_snmp_oid_for_device(
+        db, device_id=device_id, snmp_oid_id=snmp_oid_id
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_snmp_oid_toggle(
+    device_id: str,
+    snmp_oid_id: str,
+    is_enabled: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.toggle_snmp_oid_for_device(
+        db, device_id=device_id, snmp_oid_id=snmp_oid_id, is_enabled=is_enabled
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_snmp_oid_delete(
+    device_id: str,
+    snmp_oid_id: str,
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.delete_snmp_oid_for_device(
+        db, device_id=device_id, snmp_oid_id=snmp_oid_id
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
+        status_code=303,
+    )
+
+
+@router.get("/core-devices/{device_id}/graphs", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_graphs(
+    request: Request,
+    device_id: str,
+    preview_graph_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.bandwidth_graphs_page_data(
+        db,
+        device_id,
+        message=request.query_params.get("message"),
+        error=request.query_params.get("error"),
+        preview_graph_id=preview_graph_id,
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Device not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/graphs.html", context)
+
+
+@router.post("/core-devices/{device_id}/graphs", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_graph_create(
+    device_id: str,
+    title: str = Form(...),
+    vertical_axis_title: str = Form("Bandwidth"),
+    height_px: int = Form(150),
+    is_public: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.create_bandwidth_graph_for_device(
+        db,
+        device_id=device_id,
+        title=title,
+        vertical_axis_title=vertical_axis_title,
+        height_px=height_px,
+        is_public=is_public,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/graphs?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/graphs/{graph_id}/sources", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_graph_source_add(
+    device_id: str,
+    graph_id: str,
+    source_device_id: str = Form(...),
+    snmp_oid_id: str = Form(...),
+    factor: float = Form(1.0),
+    color_hex: str = Form("#22c55e"),
+    draw_type: str = Form("LINE1"),
+    stack_enabled: bool = Form(False),
+    value_unit: str = Form("Bps"),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.add_bandwidth_graph_source(
+        db,
+        device_id=device_id,
+        graph_id=graph_id,
+        source_device_id=source_device_id,
+        snmp_oid_id=snmp_oid_id,
+        factor=factor,
+        color_hex=color_hex,
+        draw_type=draw_type,
+        stack_enabled=stack_enabled,
+        value_unit=value_unit,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/graphs?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/graphs/{graph_id}/preview", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_graph_preview(
+    device_id: str,
+    graph_id: str,
+    db: Session = Depends(get_db),
+):
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/graphs?preview_graph_id={graph_id}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/graphs/{graph_id}/toggle-public", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_graph_toggle_public(
+    device_id: str,
+    graph_id: str,
+    is_public: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.toggle_bandwidth_graph_public(
+        db,
+        device_id=device_id,
+        graph_id=graph_id,
+        is_public=is_public,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/graphs?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/graphs/{graph_id}/clone", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_graph_clone(
+    device_id: str,
+    graph_id: str,
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.clone_bandwidth_graph_for_device(
+        db,
+        device_id=device_id,
+        graph_id=graph_id,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/graphs?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.get("/core-devices/graphs/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_graphs_dashboard(
+    request: Request,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.bandwidth_dashboard_page_data(
+        db,
+        search=search,
+    )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/graphs_dashboard.html", context)
+
+
+@router.get("/core-devices/{device_id}/backups", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_backups(
+    request: Request,
+    device_id: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.backup_page_data(
+        db,
+        device_id,
+        date_from=date_from,
+        date_to=date_to,
+        message=request.query_params.get("message"),
+        error=request.query_params.get("error"),
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Device not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/backups.html", context)
+
+
+@router.post("/core-devices/{device_id}/backups/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_backup_settings_update(
+    device_id: str,
+    enabled: bool = Form(False),
+    ssh_username: str = Form(""),
+    ssh_password: str | None = Form(None),
+    ssh_port: int = Form(22),
+    backup_type: str = Form("commands"),
+    backup_commands: str | None = Form("export"),
+    hours_csv: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.update_backup_settings_for_device(
+        db,
+        device_id=device_id,
+        enabled=enabled,
+        ssh_username=ssh_username,
+        ssh_password=ssh_password,
+        ssh_port=ssh_port,
+        backup_type=backup_type,
+        backup_commands=backup_commands,
+        hours_csv=hours_csv,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/backups?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.post("/core-devices/{device_id}/backups/trigger", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_backup_trigger(
+    device_id: str,
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.trigger_backup_for_core_device(
+        db,
+        device_id=device_id,
+        triggered_by="web",
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}/backups?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
+
+
+@router.get("/core-devices/{device_id}/backups/{backup_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_backup_detail(
+    request: Request,
+    device_id: str,
+    backup_id: str,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.backup_detail_page_data(
+        db,
+        device_id=device_id,
+        backup_id=backup_id,
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Backup not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/backup_detail.html", context)
+
+
+@router.get("/core-devices/{device_id}/backups/{backup_id}/download", dependencies=[Depends(require_permission("network:read"))])
+def core_device_backup_download(
+    device_id: str,
+    backup_id: str,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.backup_detail_page_data(
+        db,
+        device_id=device_id,
+        backup_id=backup_id,
+    )
+    if not page_data:
+        return Response(status_code=404)
+    backup = page_data["backup"]
+    assert backup is not None
+    filename = f"core_device_backup_{device_id}_{backup_id}.txt"
+    return Response(
+        content=str(backup.config_content or ""),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/core-devices/{device_id}/backups/compare", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def core_device_backup_compare(
+    request: Request,
+    device_id: str,
+    backup_id_1: str,
+    backup_id_2: str,
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_core_devices_service.backup_compare_page_data(
+        db,
+        device_id=device_id,
+        backup_id_1=backup_id_1,
+        backup_id_2=backup_id_2,
+    )
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "Unable to compare selected backups"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    return templates.TemplateResponse("admin/network/core-devices/backup_compare.html", context)
 
 
 @router.post("/core-devices/{device_id}/ping", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])

@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.csrf import get_csrf_token
 from app.db import get_db
+from app.services import web_vpn_management as web_vpn_management_service
 from app.services import web_vpn_peers as web_vpn_peers_service
 from app.services import web_vpn_servers as web_vpn_servers_service
 from app.services import wireguard as wg_service
+from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vpn", tags=["web-admin-vpn"])
@@ -46,32 +48,32 @@ def _get_actor_id(request: Request) -> str | None:
 def vpn_index(
     request: Request,
     server_id: str | None = None,
+    protocol: str = "wireguard",
+    control_job_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """WireGuard management dashboard - shows all servers with peer management."""
-    data = web_vpn_servers_service.build_dashboard_data(db, server_id=server_id)
+    """Unified VPN dashboard for WireGuard and OpenVPN management."""
+    data = web_vpn_management_service.build_unified_dashboard_data(db, server_id=server_id)
 
-    if not data["all_servers"]:
-        return templates.TemplateResponse(
-            "admin/network/vpn/index.html",
-            {
-                **_base_context(request, db, "vpn"),
-                "server": None,
-                "servers": [],
-                "needs_setup": True,
-                "peers": [],
-            },
-        )
+    if web_vpn_management_service.should_schedule_health_scan(db):
+        run_vpn_health_scan.delay()
 
     return templates.TemplateResponse(
         "admin/network/vpn/index.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": data["server"],
-            "servers": data["servers_with_counts"],
-            "needs_setup": data["needs_setup"],
-            "peers": data["peers_read"],
-            "interface_status": data["interface_status"],
+            "protocol": protocol if protocol in {"wireguard", "openvpn"} else "wireguard",
+            "server": data["wireguard"]["server"],
+            "servers": data["wireguard"]["servers_with_counts"],
+            "needs_setup": data["wireguard"]["needs_setup"],
+            "peers": data["wireguard"]["peers_read"],
+            "interface_status": data["wireguard"]["interface_status"],
+            "openvpn_clients": data["openvpn_clients"],
+            "openvpn_config": data["openvpn_config"],
+            "vpn_connections": data["connections"],
+            "vpn_summary": data["summary"],
+            "vpn_alerts": data["alerts"],
+            "control_job_id": control_job_id,
             "success_message": request.query_params.get("success"),
         },
     )
@@ -586,4 +588,116 @@ def peer_regenerate_token(
     return RedirectResponse(
         url=f"/admin/network/vpn/peers/{peer_id}",
         status_code=303,
+    )
+
+
+@router.post("/controls/{protocol}/{action}")
+def vpn_control_action(
+    protocol: str,
+    action: str,
+    request: Request,
+    server_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Queue async VPN control action (restart/status/config)."""
+    job = web_vpn_management_service.queue_control_job(
+        db,
+        protocol=protocol,
+        action=action,
+        server_id=server_id,
+        actor_id=_get_actor_id(request),
+    )
+    run_vpn_control_job.delay(job_id=job["job_id"])
+    return RedirectResponse(
+        url=f"/admin/network/vpn?protocol={protocol}&server_id={server_id or ''}&control_job_id={job['job_id']}",
+        status_code=303,
+    )
+
+
+@router.get("/control-jobs/{job_id}/status", response_class=HTMLResponse)
+def vpn_control_job_status(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Render polling fragment for VPN control job status."""
+    job = web_vpn_management_service.get_control_job(db, job_id)
+    return templates.TemplateResponse(
+        "admin/network/vpn/_control_job_status.html",
+        {
+            **_base_context(request, db, "vpn"),
+            "job": job,
+            "job_id": job_id,
+        },
+    )
+
+
+@router.get("/clients/new", response_class=HTMLResponse)
+def vpn_client_wizard_form(
+    request: Request,
+    protocol: str = "wireguard",
+    server_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Render Add VPN Client wizard for WireGuard/OpenVPN."""
+    servers = wg_service.wg_servers.list(db, limit=100)
+    return templates.TemplateResponse(
+        "admin/network/vpn/client_wizard.html",
+        {
+            **_base_context(request, db, "vpn"),
+            "protocol": protocol if protocol in {"wireguard", "openvpn"} else "wireguard",
+            "servers": servers,
+            "selected_server_id": server_id or "",
+            "errors": [],
+            "result": None,
+            "openvpn_config": web_vpn_management_service.get_openvpn_server_config(db),
+        },
+    )
+
+
+@router.post("/clients/new", response_class=HTMLResponse)
+def vpn_client_wizard_submit(
+    request: Request,
+    db: Session = Depends(get_db),
+    protocol: str = Form("wireguard"),
+    name: str = Form(...),
+    server_id: str | None = Form(None),
+    peer_address: str | None = Form(None),
+    remote_host: str | None = Form(None),
+    remote_port: int | None = Form(None),
+) -> HTMLResponse:
+    """Create VPN client and generate configuration output."""
+    servers = wg_service.wg_servers.list(db, limit=100)
+    selected_protocol = protocol if protocol in {"wireguard", "openvpn"} else "wireguard"
+    errors: list[str] = []
+    result = None
+
+    try:
+        result = web_vpn_management_service.create_vpn_client(
+            db,
+            protocol=selected_protocol,
+            name=name.strip(),
+            server_id=server_id,
+            peer_address=(peer_address or "").strip() or None,
+            remote_host=(remote_host or "").strip() or None,
+            remote_port=remote_port,
+            actor_id=_get_actor_id(request),
+            request=request,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        errors.append(str(exc))
+
+    return templates.TemplateResponse(
+        "admin/network/vpn/client_wizard.html",
+        {
+            **_base_context(request, db, "vpn"),
+            "protocol": selected_protocol,
+            "servers": servers,
+            "selected_server_id": server_id or "",
+            "errors": errors,
+            "result": result,
+            "openvpn_config": web_vpn_management_service.get_openvpn_server_config(db),
+        },
     )

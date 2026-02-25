@@ -5,14 +5,15 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.auth import UserCredential
-from app.models.rbac import Role, SubscriberRole
-from app.models.subscriber import Subscriber, UserType
+from app.models.rbac import Role, SystemUserRole
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.services.dynamic_filters import FilterValidationError, build_filter_expression, parse_filter_payload
 from app.services.web_system_users import USER_DOCTYPE, USER_FILTER_SPECS, list_users
 
 
-def _subscriber(first_name: str, last_name: str, email: str, *, is_active: bool = True) -> Subscriber:
-    return Subscriber(
+def _system_user(first_name: str, last_name: str, email: str, *, is_active: bool = True) -> SystemUser:
+    return SystemUser(
         first_name=first_name,
         last_name=last_name,
         email=email,
@@ -47,21 +48,21 @@ def test_users_list_applies_dynamic_status_and_role_filters(db_session):
     admin_role = Role(name=f"Admin-{uuid.uuid4().hex}", is_active=True)
     db_session.add(admin_role)
 
-    pending_user = _subscriber("Pending", "User", f"pending-{uuid.uuid4().hex}@example.com")
-    active_user = _subscriber("Active", "User", f"active-{uuid.uuid4().hex}@example.com")
+    pending_user = _system_user("Pending", "User", f"pending-{uuid.uuid4().hex}@example.com")
+    active_user = _system_user("Active", "User", f"active-{uuid.uuid4().hex}@example.com")
     db_session.add_all([pending_user, active_user])
     db_session.flush()
 
     db_session.add(
         UserCredential(
-            subscriber_id=active_user.id,
+            system_user_id=active_user.id,
             username=f"active-{uuid.uuid4().hex}",
             password_hash="hash",
             is_active=True,
             must_change_password=False,
         )
     )
-    db_session.add(SubscriberRole(subscriber_id=pending_user.id, role_id=admin_role.id))
+    db_session.add(SystemUserRole(system_user_id=pending_user.id, role_id=admin_role.id))
     db_session.commit()
 
     payload = json.dumps(

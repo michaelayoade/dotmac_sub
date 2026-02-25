@@ -37,6 +37,7 @@ class SettingDomain(enum.Enum):
     lifecycle = "lifecycle"
     projects = "projects"
     workflow = "workflow"
+    modules = "modules"
     inventory = "inventory"
     comms = "comms"
     tr069 = "tr069"

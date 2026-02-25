@@ -25,6 +25,8 @@ from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
+from app.services import web_customer_user_access as web_customer_user_access_service
+from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
@@ -71,6 +73,28 @@ def _htmx_error_response(
 
 def _get_subscriber(db: Session, subscriber_id: str):
     return subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+
+
+def _toast_response(
+    *,
+    request: Request,
+    redirect_url: str,
+    ok: bool,
+    title: str,
+    message: str,
+) -> Response:
+    trigger = {
+        "showToast": {
+            "type": "success" if ok else "error",
+            "title": title,
+            "message": message,
+            "duration": 8000,
+        }
+    }
+    if request.headers.get("HX-Request"):
+        headers = {"HX-Trigger": json.dumps(trigger), "HX-Refresh": "true"}
+        return Response(status_code=204, headers=headers)
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 def _contacts_base_context(request: Request, db: Session, active_page: str = "contacts"):
@@ -475,6 +499,306 @@ def organization_detail(
             "sidebar_stats": sidebar_stats,
         },
     )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/user/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_user_send_invite(
+    request: Request,
+    customer_type: str,
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        state = web_customer_user_access_service.build_customer_user_access_state(
+            db,
+            customer_type=customer_type,
+            customer_id=customer_id,
+        )
+        if not state.get("can_send_invite"):
+            retry_at = state.get("invite_available_at")
+            when = retry_at.strftime("%Y-%m-%d %H:%M UTC") if retry_at else "later"
+            message = f"Invite already sent recently. You can resend after {when}."
+            log_audit_event(
+                db=db,
+                request=request,
+                action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+                entity_type="subscriber",
+                entity_id=str(state.get("target_subscriber_id") or ""),
+                actor_id=actor_id,
+                metadata={"reason": "rate_limited"},
+                status_code=429,
+                is_success=False,
+            )
+            return _toast_response(
+                request=request,
+                redirect_url=redirect_url,
+                ok=False,
+                title="Invite blocked",
+                message=message,
+            )
+        note = web_system_user_mutations_service.send_user_invite_for_user(
+            db,
+            user_id=str(state["target_subscriber_id"]),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state["target_subscriber_id"]),
+            actor_id=actor_id,
+            metadata={
+                "email": state.get("email"),
+                "email_source": state.get("email_source"),
+                "customer_type": customer_type,
+                "result": note,
+            },
+            status_code=200,
+            is_success="sent" in note.lower(),
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok="sent" in note.lower(),
+            title="User invite",
+            message=note,
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
+            entity_type="customer",
+            entity_id=str(customer_id),
+            actor_id=actor_id,
+            metadata={"customer_type": customer_type, "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="User invite",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/user/reset-link",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_user_send_reset_link(
+    request: Request,
+    customer_type: str,
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        state = web_customer_user_access_service.build_customer_user_access_state(
+            db,
+            customer_type=customer_type,
+            customer_id=customer_id,
+        )
+        if not state.get("can_send_reset"):
+            message = "Reset limit reached: max 3 reset links per hour."
+            log_audit_event(
+                db=db,
+                request=request,
+                action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+                entity_type="subscriber",
+                entity_id=str(state.get("target_subscriber_id") or ""),
+                actor_id=actor_id,
+                metadata={"reason": "rate_limited"},
+                status_code=429,
+                is_success=False,
+            )
+            return _toast_response(
+                request=request,
+                redirect_url=redirect_url,
+                ok=False,
+                title="Reset link blocked",
+                message=message,
+            )
+        note = web_system_user_mutations_service.send_password_reset_link_for_user(
+            db,
+            user_id=str(state["target_subscriber_id"]),
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state["target_subscriber_id"]),
+            actor_id=actor_id,
+            metadata={
+                "email": state.get("email"),
+                "email_source": state.get("email_source"),
+                "customer_type": customer_type,
+                "result": note,
+            },
+            status_code=200,
+            is_success="sent" in note.lower(),
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok="sent" in note.lower(),
+            title="Password reset",
+            message=note,
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.RESET_AUDIT_ACTION,
+            entity_type="customer",
+            entity_id=str(customer_id),
+            actor_id=actor_id,
+            metadata={"customer_type": customer_type, "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Password reset",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/user/activate-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_user_activate_login(
+    request: Request,
+    customer_type: str,
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        target = web_customer_user_access_service.activate_customer_login(
+            db,
+            customer_type=customer_type,
+            customer_id=customer_id,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(target.subscriber.id),
+            actor_id=actor_id,
+            metadata={"login_active": True, "customer_type": customer_type},
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=True,
+            title="Login activated",
+            message="Customer portal login has been activated.",
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="customer",
+            entity_id=str(customer_id),
+            actor_id=actor_id,
+            metadata={"customer_type": customer_type, "login_active": True, "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Login activation",
+            message=str(exc),
+        )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/user/deactivate-login",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_user_deactivate_login(
+    request: Request,
+    customer_type: str,
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request)
+    actor_id = str(actor.get("subscriber_id")) if actor else None
+    try:
+        target = web_customer_user_access_service.deactivate_customer_login(
+            db,
+            customer_type=customer_type,
+            customer_id=customer_id,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(target.subscriber.id),
+            actor_id=actor_id,
+            metadata={"login_active": False, "customer_type": customer_type},
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=True,
+            title="Login deactivated",
+            message="Customer portal login has been deactivated.",
+        )
+    except Exception as exc:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
+            entity_type="customer",
+            entity_id=str(customer_id),
+            actor_id=actor_id,
+            metadata={"customer_type": customer_type, "login_active": False, "error": str(exc)},
+            status_code=500,
+            is_success=False,
+        )
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Login deactivation",
+            message=str(exc),
+        )
 
 
 @router.post("/person/{customer_id}/impersonate", response_class=HTMLResponse)

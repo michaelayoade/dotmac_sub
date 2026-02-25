@@ -62,6 +62,7 @@ from app.models.catalog import (  # noqa: F401
     OfferStatus,
     OfferVersion,
     OfferVersionPrice,
+    PlanCategory,
     PolicyDunningStep,
     PolicySet,
     PriceBasis,
@@ -117,6 +118,14 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.fup import (  # noqa: F401
+    FupAction,
+    FupConsumptionPeriod,
+    FupDataUnit,
+    FupDirection,
+    FupPolicy,
+    FupRule,
+)
 from app.models.gis import (  # noqa: F401
     GeoArea,
     GeoAreaType,
@@ -136,6 +145,13 @@ from app.models.integration import (  # noqa: F401
     IntegrationTarget,
     IntegrationTargetType,
 )
+from app.models.integration_hook import (  # noqa: F401
+    IntegrationHook,
+    IntegrationHookAuthType,
+    IntegrationHookExecution,
+    IntegrationHookExecutionStatus,
+    IntegrationHookType,
+)
 from app.models.legal import (  # noqa: F401
     LegalDocument,
     LegalDocumentType,
@@ -145,6 +161,7 @@ from app.models.lifecycle import (  # noqa: F401
     SubscriptionLifecycleEvent,
 )
 from app.models.network import (  # noqa: F401
+    ConfigMethod,
     CPEDevice,
     DeviceStatus,
     DeviceType,
@@ -159,13 +176,16 @@ from app.models.network import (  # noqa: F401
     FiberStrand,
     FiberStrandStatus,
     FiberTerminationPoint,
+    GponChannel,
     HardwareUnitStatus,
     IPAssignment,
     IpBlock,
     IpPool,
+    IpProtocol,
     IPv4Address,
     IPv6Address,
     IPVersion,
+    MgmtIpMode,
     NetworkZone,
     ODNEndpointType,
     OltCard,
@@ -179,25 +199,30 @@ from app.models.network import (  # noqa: F401
     OltShelf,
     OntAssignment,
     OntUnit,
+    OnuCapability,
+    OnuMode,
     OnuOfflineReason,
     OnuOnlineStatus,
+    OnuType,
     PonPort,
     PonPortSplitterLink,
+    PonType,
     Port,
     PortStatus,
     PortType,
     PortVlan,
+    SpeedProfile,
+    SpeedProfileDirection,
+    SpeedProfileType,
     Splitter,
     SplitterPort,
     SplitterPortAssignment,
     SplitterPortType,
     Vlan,
+    WanMode,
 )
 from app.models.network_monitoring import (  # noqa: F401
     Alert,
-    DnsThreatAction,
-    DnsThreatEvent,
-    DnsThreatSeverity,
     AlertEvent,
     AlertOperator,
     AlertRule,
@@ -206,9 +231,15 @@ from app.models.network_monitoring import (  # noqa: F401
     DeviceInterface,
     DeviceMetric,
     DeviceRole,
+    DnsThreatAction,
+    DnsThreatEvent,
+    DnsThreatSeverity,
     InterfaceStatus,
     MetricType,
     NetworkDevice,
+    NetworkDeviceBandwidthGraph,
+    NetworkDeviceBandwidthGraphSource,
+    NetworkDeviceSnmpOid,
     PopSite,
     PopSiteContact,
     SpeedTestResult,
@@ -284,6 +315,8 @@ from app.models.rbac import (  # noqa: F401
     RolePermission,
     SubscriberPermission,
     SubscriberRole,
+    SystemUserPermission,
+    SystemUserRole,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.snmp import (  # noqa: F401
@@ -325,6 +358,7 @@ from app.models.subscription_engine import (  # noqa: F401
     SubscriptionEngine,
     SubscriptionEngineSetting,
 )
+from app.models.system_user import SystemUser  # noqa: F401
 from app.models.table_column_config import TableColumnConfig  # noqa: F401
 from app.models.table_column_default_config import (  # noqa: F401
     TableColumnDefaultConfig,

@@ -79,13 +79,6 @@ def login_submit(
         if result.get("mfa_required"):
             mfa_url = f"/auth/mfa?next={next_url}" if next_url else "/auth/mfa"
             response = RedirectResponse(url=mfa_url, status_code=303)
-            response.delete_cookie("session_token")
-            refresh_settings = AuthFlow.refresh_cookie_settings(db)
-            response.delete_cookie(
-                key=refresh_settings["key"],
-                domain=refresh_settings["domain"],
-                path=refresh_settings["path"],
-            )
             response.set_cookie(
                 key="mfa_pending",
                 value=result.get("mfa_token", ""),

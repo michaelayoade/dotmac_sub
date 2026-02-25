@@ -14,6 +14,16 @@ from the main network module for backwards compatibility.
 """
 
 # Import from submodules
+from app.services.network.cpe import (
+    CPEDevices,
+    Ports,
+    PortVlans,
+    Vlans,
+    cpe_devices,
+    port_vlans,
+    ports,
+    vlans,
+)
 from app.services.network.fiber_services import (
     FiberSegments,
     FiberSpliceClosures,
@@ -27,30 +37,6 @@ from app.services.network.fiber_services import (
     fiber_splices,
     fiber_strands,
     fiber_termination_points,
-)
-from app.services.network.splitters import (
-    # Splitter services
-    FdhCabinets,
-    PonPortSplitterLinks,
-    # PON port splitter links
-    SplitterPortAssignments,
-    SplitterPorts,
-    Splitters,
-    fdh_cabinets,
-    pon_port_splitter_links,
-    splitter_port_assignments,
-    splitter_ports,
-    splitters,
-)
-from app.services.network.cpe import (
-    CPEDevices,
-    Ports,
-    PortVlans,
-    Vlans,
-    cpe_devices,
-    port_vlans,
-    ports,
-    vlans,
 )
 from app.services.network.ip import (
     IPAssignments,
@@ -91,6 +77,28 @@ from app.services.network.ont_actions import (
 from app.services.network.ont_tr069 import (
     OntTR069,
     ont_tr069,
+)
+from app.services.network.onu_types import (
+    OnuTypes,
+    onu_types,
+)
+from app.services.network.speed_profiles import (
+    SpeedProfiles,
+    speed_profiles,
+)
+from app.services.network.splitters import (
+    # Splitter services
+    FdhCabinets,
+    PonPortSplitterLinks,
+    # PON port splitter links
+    SplitterPortAssignments,
+    SplitterPorts,
+    Splitters,
+    fdh_cabinets,
+    pon_port_splitter_links,
+    splitter_port_assignments,
+    splitter_ports,
+    splitters,
 )
 from app.services.network.zones import (
     NetworkZones,
@@ -168,6 +176,12 @@ __all__ = [
     # ONT TR-069
     "OntTR069",
     "ont_tr069",
+    # ONU type services
+    "OnuTypes",
+    "onu_types",
+    # Speed profile services
+    "SpeedProfiles",
+    "speed_profiles",
     # Zone services
     "NetworkZones",
     "network_zones",

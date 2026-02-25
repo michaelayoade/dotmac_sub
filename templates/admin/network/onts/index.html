@@ -479,7 +479,7 @@
                                 <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 shadow-md shadow-emerald-500/25">
                                     <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
                                 </div>
-                                <span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ cpe.id[:8] }}...</span>
+                                <span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ cpe.id|string|truncate(8, true, "") }}...</span>
                             </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">

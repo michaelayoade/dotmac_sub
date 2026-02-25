@@ -3,7 +3,7 @@
 {% block title %}{{ 'Edit' if ont else 'Add' }} ONT - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-6" x-data='{{ {"useGps": (ont.use_gps if ont else false) | default(false)} | tojson }}'>
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
@@ -16,19 +16,21 @@
         </div>
     </div>
 
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+        {{ error }}
+    </div>
+    {% endif %}
+
     <form method="POST" action="{{ action_url }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
+
+        {# ── Card 1: Device Information ────────────────────────────── #}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Device Information</h2>
             </div>
             <div class="p-6 space-y-6">
-                {% if error %}
-                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
-                    {{ error }}
-                </div>
-                {% endif %}
-
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <label for="serial_number" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Number <span class="text-red-500">*</span></label>
@@ -36,6 +38,18 @@
                             value="{{ ont.serial_number if ont else '' }}"
                             placeholder="HWTC12345678"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">12 alphanumeric or 16 hex characters</p>
+                    </div>
+
+                    <div>
+                        <label for="onu_type_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ONU Type</label>
+                        <select name="onu_type_id" id="onu_type_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select ONU Type --</option>
+                            {% for ot in onu_types %}
+                            <option value="{{ ot.id }}" {% if ont and ont.onu_type_id and ont.onu_type_id|string == ot.id|string %}selected{% endif %}>{{ ot.name }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
 
                     <div>
@@ -68,6 +82,196 @@
                             placeholder="V300R019C00SPC100"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
+                </div>
+            </div>
+        </div>
+
+        {# ── Card 2: OLT & PON Configuration ──────────────────────── #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">OLT &amp; PON Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT</label>
+                        <select name="olt_device_id" id="olt_device_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select OLT --</option>
+                            {% for olt in olt_devices %}
+                            <option value="{{ olt.id }}" {% if ont and ont.olt_device_id and ont.olt_device_id|string == olt.id|string %}selected{% endif %}>{{ olt.name }}{% if olt.mgmt_ip %} ({{ olt.mgmt_ip }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    {% if ont and ont.pon_type %}{% if ont.pon_type is string %}{% set current_pon_type = ont.pon_type %}{% else %}{% set current_pon_type = ont.pon_type.value %}{% endif %}{% else %}{% set current_pon_type = '' %}{% endif %}
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">PON Type</label>
+                        <div class="flex items-center gap-6">
+                            {% for pt in pon_types %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="pon_type" value="{{ pt }}"
+                                    {% if current_pon_type == pt %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ pt|upper }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    {% if ont and ont.gpon_channel %}{% if ont.gpon_channel is string %}{% set current_gpon_channel = ont.gpon_channel %}{% else %}{% set current_gpon_channel = ont.gpon_channel.value %}{% endif %}{% else %}{% set current_gpon_channel = '' %}{% endif %}
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">GPON Channel</label>
+                        <div class="flex items-center gap-4 flex-wrap">
+                            {% for gc in gpon_channels %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="gpon_channel" value="{{ gc }}"
+                                    {% if current_gpon_channel == gc %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ gc|replace('_', '-')|upper }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="board" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Board</label>
+                        <input type="text" name="board" id="board" maxlength="60"
+                            value="{{ ont.board or '' if ont else '' }}"
+                            placeholder="0"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Port</label>
+                        <input type="text" name="port" id="port" maxlength="60"
+                            value="{{ ont.port or '' if ont else '' }}"
+                            placeholder="1"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    {% if ont and ont.onu_mode %}{% if ont.onu_mode is string %}{% set current_onu_mode = ont.onu_mode %}{% else %}{% set current_onu_mode = ont.onu_mode.value %}{% endif %}{% else %}{% set current_onu_mode = '' %}{% endif %}
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ONU Mode</label>
+                        <div class="flex items-center gap-6">
+                            {% for om in onu_modes %}
+                            <label class="flex items-center gap-2">
+                                <input type="radio" name="onu_mode" value="{{ om }}"
+                                    {% if current_onu_mode == om %}checked{% endif %}
+                                    class="h-4 w-4 border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ om|replace('_', ' ')|title }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ── Card 3: Network Assignment ────────────────────────────── #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Network Assignment</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="user_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">User VLAN-ID</label>
+                        <select name="user_vlan_id" id="user_vlan_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select VLAN --</option>
+                            {% for vlan in vlans %}
+                            <option value="{{ vlan.id }}" {% if ont and ont.user_vlan_id and ont.user_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }}{% if vlan.purpose %} - {{ vlan.purpose }}{% elif vlan.name %} - {{ vlan.name }}{% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="zone_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zone</label>
+                        <select name="zone_id" id="zone_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select Zone --</option>
+                            {% for zone in zones %}
+                            <option value="{{ zone.id }}" {% if ont and ont.zone_id and ont.zone_id|string == zone.id|string %}selected{% endif %}>{{ zone.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="splitter_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ODB / Splitter</label>
+                        <select name="splitter_id" id="splitter_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select Splitter --</option>
+                            {% for sp in splitters %}
+                            <option value="{{ sp.id }}" {% if ont and ont.splitter_id and ont.splitter_id|string == sp.id|string %}selected{% endif %}>{{ sp.name }}{% if sp.splitter_ratio %} ({{ sp.splitter_ratio }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        {# splitter_port_id is kept as a hidden/manual field for now #}
+                        <label for="splitter_port_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Splitter Port ID</label>
+                        <input type="text" name="splitter_port_id" id="splitter_port_id"
+                            value="{{ ont.splitter_port_id or '' if ont else '' }}"
+                            placeholder="UUID of splitter port (optional)"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="download_speed_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed</label>
+                        <select name="download_speed_profile_id" id="download_speed_profile_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select Download Speed --</option>
+                            {% for sp in speed_profiles_download %}
+                            <option value="{{ sp.id }}" {% if ont and ont.download_speed_profile_id and ont.download_speed_profile_id|string == sp.id|string %}selected{% endif %}>{{ sp.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="upload_speed_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed</label>
+                        <select name="upload_speed_profile_id" id="upload_speed_profile_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- Select Upload Speed --</option>
+                            {% for sp in speed_profiles_upload %}
+                            <option value="{{ sp.id }}" {% if ont and ont.upload_speed_profile_id and ont.upload_speed_profile_id|string == sp.id|string %}selected{% endif %}>{{ sp.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ── Card 4: Identification ────────────────────────────────── #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Identification</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
+                        <input type="text" name="name" id="name" maxlength="200"
+                            value="{{ ont.name or '' if ont else '' }}"
+                            placeholder="Customer or location name"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="external_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ONU External ID</label>
+                        <input type="text" name="external_id" id="external_id" maxlength="120"
+                            value="{{ ont.external_id or '' if ont else '' }}"
+                            placeholder="e.g. EXT-12345"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Unique ID for billing/API integration</p>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="address_or_comment" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Address or Comment</label>
+                        <textarea name="address_or_comment" id="address_or_comment" rows="2"
+                            placeholder="Physical address or description..."
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ ont.address_or_comment or '' if ont else '' }}</textarea>
+                    </div>
 
                     <div>
                         <label class="flex items-center gap-2">
@@ -76,17 +280,63 @@
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
                         </label>
                     </div>
+                </div>
+            </div>
+        </div>
 
+        {# ── Card 5: GPS Location ──────────────────────────────────── #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 cursor-pointer" @click="useGps = !useGps">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">GPS Location</h2>
+                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="{ 'rotate-180': useGps }" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </div>
+            </div>
+            <div class="p-6 space-y-6" x-show="useGps" x-transition>
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div class="sm:col-span-2">
-                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
-                        <textarea name="notes" id="notes" rows="3"
-                            placeholder="Additional notes..."
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ ont.notes if ont else '' }}</textarea>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="use_gps" value="true" x-model="useGps"
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Use GPS Coordinates</span>
+                        </label>
+                    </div>
+
+                    <div>
+                        <label for="gps_latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latitude</label>
+                        <input type="number" name="gps_latitude" id="gps_latitude" step="any"
+                            value="{{ ont.gps_latitude if ont and ont.gps_latitude is not none else '' }}"
+                            placeholder="e.g. 6.5244"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="gps_longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Longitude</label>
+                        <input type="number" name="gps_longitude" id="gps_longitude" step="any"
+                            value="{{ ont.gps_longitude if ont and ont.gps_longitude is not none else '' }}"
+                            placeholder="e.g. 3.3792"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                 </div>
             </div>
         </div>
 
+        {# ── Card 6: Notes ─────────────────────────────────────────── #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Notes</h2>
+            </div>
+            <div class="p-6">
+                <div>
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" id="notes" rows="3"
+                        placeholder="Additional notes..."
+                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ ont.notes or '' if ont else '' }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        {# ── Form Actions ──────────────────────────────────────────── #}
         <div class="flex items-center justify-end gap-3">
             <a href="/admin/network/onts" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 Cancel

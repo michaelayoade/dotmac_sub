@@ -1,0 +1,23 @@
+<div id="vpn-control-job-status">
+    {% if not job %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+        Control job not found.
+    </div>
+    {% elif job.status == 'queued' or job.status == 'running' %}
+    <div class="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300"
+         hx-get="/admin/network/vpn/control-jobs/{{ job_id }}/status" hx-trigger="every 2s" hx-swap="outerHTML">
+        {{ job.protocol|title }} {{ job.action }} is {{ job.status }}...
+    </div>
+    {% elif job.status == 'failed' %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+        {{ job.protocol|title }} {{ job.action }} failed: {{ job.error }}
+    </div>
+    {% else %}
+    <details class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+        <summary class="cursor-pointer font-semibold">{{ job.protocol|title }} {{ job.action }} completed</summary>
+        {% if job.result %}
+        <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ job.result | tojson(indent=2) }}</pre>
+        {% endif %}
+    </details>
+    {% endif %}
+</div>

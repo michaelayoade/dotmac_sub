@@ -364,6 +364,51 @@ def ipv4_addresses_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/network/ip-management/addresses.html", context)
 
 
+@router.get("/ip-management/ipv4-networks", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ipv4_networks_list(
+    request: Request,
+    location: str | None = None,
+    category: str | None = None,
+    network_type: str | None = None,
+    sort_by: str = "cidr",
+    sort_dir: str = "asc",
+    db: Session = Depends(get_db),
+):
+    """List IPv4 networks with utilization and metadata."""
+    state = web_network_ip_service.build_ipv4_networks_data(
+        db,
+        location=location,
+        category=category,
+        network_type=network_type,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
+
+    context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
+    context.update(state)
+    return templates.TemplateResponse("admin/network/ip-management/ipv4_networks.html", context)
+
+
+@router.get("/ip-management/ipv4-networks/{pool_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ipv4_network_detail(request: Request, pool_id: str, db: Session = Depends(get_db)):
+    """Detailed IPv4 subnet assignment/status view."""
+    state = web_network_ip_service.build_ipv4_network_detail_data(
+        db,
+        pool_id=pool_id,
+        limit=256,
+    )
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "IPv4 network not found"},
+            status_code=404,
+        )
+
+    context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
+    context.update(state)
+    return templates.TemplateResponse("admin/network/ip-management/ipv4_network_detail.html", context)
+
+
 @router.get("/ip-management/ipv6", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ipv6_addresses_list(request: Request, db: Session = Depends(get_db)):
     """List all IPv6 addresses."""
@@ -404,6 +449,104 @@ def ipv6_networks_list(
     context = _base_context(request, db, active_page="ipv6-networks", active_menu="ip-address")
     context.update(state)
     return templates.TemplateResponse("admin/network/ip-management/ipv6_networks.html", context)
+
+
+@router.get("/ip-management/ipv6-networks/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ipv6_network_new(request: Request, db: Session = Depends(get_db)):
+    """Create form for IPv6 network prefix."""
+    context = _base_context(request, db, active_page="ipv6-networks", active_menu="ip-address")
+    context.update(
+        {
+            "form_values": {
+                "title": "",
+                "network": "",
+                "prefix_length": "64",
+                "comment": "",
+                "location": "",
+                "category": "Dev",
+                "network_type": "EndNet",
+                "usage_type": "Static",
+                "router": "",
+                "gateway": "",
+                "dns_primary": "",
+                "dns_secondary": "",
+                "is_active": True,
+            },
+            "error": None,
+        }
+    )
+    return templates.TemplateResponse("admin/network/ip-management/ipv6_network_form.html", context)
+
+
+@router.post("/ip-management/ipv6-networks/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def ipv6_network_create(request: Request, db: Session = Depends(get_db)):
+    """Create IPv6 network prefix from dedicated form."""
+    form = parse_form_data_sync(request)
+    pool_values = web_network_ip_service.parse_ipv6_network_form(form)
+    error = web_network_ip_service.validate_ip_pool_values(pool_values)
+
+    if error:
+        context = _base_context(request, db, active_page="ipv6-networks", active_menu="ip-address")
+        context.update(
+            {
+                "form_values": {
+                    "title": str(form.get("title") or ""),
+                    "network": str(form.get("network") or ""),
+                    "prefix_length": str(form.get("prefix_length") or "64"),
+                    "comment": str(form.get("comment") or ""),
+                    "location": str(form.get("location") or ""),
+                    "category": str(form.get("category") or "Dev"),
+                    "network_type": str(form.get("network_type") or "EndNet"),
+                    "usage_type": str(form.get("usage_type") or "Static"),
+                    "router": str(form.get("router") or ""),
+                    "gateway": str(form.get("gateway") or ""),
+                    "dns_primary": str(form.get("dns_primary") or ""),
+                    "dns_secondary": str(form.get("dns_secondary") or ""),
+                    "is_active": form.get("is_active") == "true",
+                },
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse("admin/network/ip-management/ipv6_network_form.html", context)
+
+    pool, error = web_network_ip_service.create_ip_pool(db, pool_values)
+    if not error and pool is not None:
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="create",
+            entity_type="ip_pool",
+            entity_id=str(pool.id),
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={"name": pool.name, "cidr": pool.cidr, "ip_version": "ipv6"},
+        )
+        return RedirectResponse("/admin/network/ip-management/ipv6-networks", status_code=303)
+
+    context = _base_context(request, db, active_page="ipv6-networks", active_menu="ip-address")
+    context.update(
+        {
+            "form_values": {
+                "title": str(form.get("title") or ""),
+                "network": str(form.get("network") or ""),
+                "prefix_length": str(form.get("prefix_length") or "64"),
+                "comment": str(form.get("comment") or ""),
+                "location": str(form.get("location") or ""),
+                "category": str(form.get("category") or "Dev"),
+                "network_type": str(form.get("network_type") or "EndNet"),
+                "usage_type": str(form.get("usage_type") or "Static"),
+                "router": str(form.get("router") or ""),
+                "gateway": str(form.get("gateway") or ""),
+                "dns_primary": str(form.get("dns_primary") or ""),
+                "dns_secondary": str(form.get("dns_secondary") or ""),
+                "is_active": form.get("is_active") == "true",
+            },
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
+    return templates.TemplateResponse("admin/network/ip-management/ipv6_network_form.html", context)
 
 
 @router.get("/ip-management/pools", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])

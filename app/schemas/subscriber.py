@@ -48,12 +48,14 @@ class OrganizationUpdate(BaseModel):
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
     notes: str | None = None
+    primary_login_subscriber_id: UUID | None = None
 
 
 class OrganizationRead(OrganizationBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    primary_login_subscriber_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 

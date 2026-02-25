@@ -1,0 +1,43 @@
+<div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+    <p class="text-sm font-semibold text-slate-900 dark:text-white">Column Mapping</p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Detected {{ row_count }} rows and {{ columns | length }} columns.</p>
+
+    {% if columns %}
+    <div class="mt-3 grid gap-3 md:grid-cols-2">
+        {% for col in columns %}
+        <div>
+            <label class="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ col }}</label>
+            <select name="mapping__{{ col }}" class="block w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Keep as-is</option>
+                {% for target in target_headers %}
+                <option value="{{ target }}" {% if target == col %}selected{% endif %}>{{ target }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if preview_rows %}
+    <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+            <thead class="bg-slate-100 dark:bg-slate-800">
+                <tr>
+                    {% for col in columns %}
+                    <th class="px-2 py-1 text-left font-semibold text-slate-500">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for row in preview_rows %}
+                <tr>
+                    {% for col in columns %}
+                    <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ row.get(col, '') }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>

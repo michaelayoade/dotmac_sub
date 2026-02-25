@@ -10,6 +10,8 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.services import email as email_service
+from app.services import sms as sms_service
+from app.services.integrations.connectors import whatsapp as whatsapp_service
 
 # Timeout for stuck "sending" notifications (5 minutes)
 SENDING_TIMEOUT_MINUTES = 5
@@ -23,7 +25,15 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
     notifications = (
         db.query(Notification)
         .filter(Notification.is_active.is_(True))
-        .filter(Notification.channel == NotificationChannel.email)
+        .filter(
+            Notification.channel.in_(
+                [
+                    NotificationChannel.email,
+                    NotificationChannel.sms,
+                    NotificationChannel.whatsapp,
+                ]
+            )
+        )
         .filter(
             or_(
                 # Queued notifications ready to send
@@ -53,15 +63,36 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
         subject = notification.subject or "Notification"
         body = notification.body or ""
         try:
-            success = email_service.send_email(
-                db=db,
-                to_email=notification.recipient,
-                subject=subject,
-                body_html=body,
-                body_text=None,
-                track=False,
-                activity="notification_queue",
-            )
+            if notification.channel == NotificationChannel.email:
+                success = email_service.send_email(
+                    db=db,
+                    to_email=notification.recipient,
+                    subject=subject,
+                    body_html=body,
+                    body_text=None,
+                    track=False,
+                    activity="notification_queue",
+                )
+            elif notification.channel == NotificationChannel.sms:
+                success = sms_service.send_sms(
+                    db=db,
+                    to_phone=notification.recipient,
+                    body=body,
+                    track=False,
+                )
+            elif notification.channel == NotificationChannel.whatsapp:
+                result = whatsapp_service.send_text_message(
+                    db=db,
+                    recipient=notification.recipient,
+                    body=body,
+                    dry_run=False,
+                )
+                success = bool(result.get("ok"))
+                if not success:
+                    notification.last_error = str(result.get("response") or "whatsapp_send_failed")
+            else:
+                success = False
+                notification.last_error = f"unsupported_channel:{notification.channel.value}"
         except Exception as exc:
             success = False
             notification.last_error = str(exc)

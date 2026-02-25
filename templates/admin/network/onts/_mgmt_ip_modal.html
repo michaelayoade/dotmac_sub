@@ -1,0 +1,116 @@
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     x-data='{ open: true, mgmtIpMode: "{{ ont.mgmt_ip_mode.value if ont.mgmt_ip_mode else "inactive" }}" }'
+     x-show="open" x-transition>
+    <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
+         @click.outside="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-slate-900 dark:text-white">Management / VoIP IP</h3>
+            <button @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
+                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <form method="POST" action="/admin/network/onts/{{ ont.id }}/mgmt-ip"
+              hx-post="/admin/network/onts/{{ ont.id }}/mgmt-ip"
+              hx-swap="none">
+            {% include "components/forms/csrf_input.html" %}
+
+            <div class="space-y-5">
+                {# TR069 Profile #}
+                <div>
+                    <label for="tr069_acs_server_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">TR069 Profile</label>
+                    <select name="tr069_acs_server_id" id="tr069_acs_server_id"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">-- None --</option>
+                        {% for server in tr069_servers %}
+                        <option value="{{ server.id }}" {% if ont.tr069_acs_server_id and (ont.tr069_acs_server_id | string) == (server.id | string) %}selected{% endif %}>
+                            {{ server.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                {# Mgmt IP Mode #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Mgmt IP</label>
+                    <div class="flex flex-wrap gap-4">
+                        {% for mode in mgmt_ip_modes %}
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="mgmt_ip_mode" value="{{ mode }}"
+                                   {% if ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == mode %}checked{% endif %}
+                                   {% if not ont.mgmt_ip_mode and mode == "inactive" %}checked{% endif %}
+                                   x-model="mgmtIpMode"
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            {{ mode | replace("_", " ") | title }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# Mgmt VLAN-ID #}
+                <div x-show="mgmtIpMode !== 'inactive'" x-transition x-cloak>
+                    <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Mgmt VLAN-ID</label>
+                    <select name="mgmt_vlan_id" id="mgmt_vlan_id"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">-- None --</option>
+                        {% for vlan in vlans %}
+                        <option value="{{ vlan.id }}" {% if ont.mgmt_vlan_id and (ont.mgmt_vlan_id | string) == (vlan.id | string) %}selected{% endif %}>
+                            VLAN {{ vlan.tag }}{% if vlan.name %} - {{ vlan.name }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                {# Management IP Address #}
+                <div x-show="mgmtIpMode === 'static_ip'" x-transition x-cloak>
+                    <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management IP Address</label>
+                    <input type="text" name="mgmt_ip_address" id="mgmt_ip_address"
+                           value="{{ ont.mgmt_ip_address or '' }}"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="e.g. 192.168.1.100">
+                </div>
+
+                {# Allow Remote Access #}
+                <div x-show="mgmtIpMode !== 'inactive'" x-transition x-cloak>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" name="mgmt_remote_access" value="true"
+                               {% if ont.mgmt_remote_access %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                        Allow Remote Access
+                    </label>
+                </div>
+
+                {# VoIP Service #}
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">VoIP Service</label>
+                    <div class="flex gap-4">
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="voip_enabled" value="false"
+                                   {% if not ont.voip_enabled %}checked{% endif %}
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            Disabled
+                        </label>
+                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                            <input type="radio" name="voip_enabled" value="true"
+                                   {% if ont.voip_enabled %}checked{% endif %}
+                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 flex justify-end gap-3">
+                <button type="button"
+                        @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
+                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                    Close
+                </button>
+                <button type="submit"
+                        class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
+                    Update
+                </button>
+            </div>
+        </form>
+    </div>
+</div>

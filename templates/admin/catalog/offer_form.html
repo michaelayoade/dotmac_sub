@@ -18,6 +18,131 @@
 
     <form method="POST" action="{{ action_url }}" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Plan Category &amp; Visibility</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Categorize this tariff and control where it appears.</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Plan Category</label>
+                    <div class="flex flex-wrap gap-3">
+                        {% set category_icons = {
+                            "internet": '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+                            "recurring": '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>',
+                            "one_time": '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                            "bundle": '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'
+                        } %}
+                        {% set category_labels = {
+                            "internet": "Internet",
+                            "recurring": "Recurring",
+                            "one_time": "One-time",
+                            "bundle": "Bundle"
+                        } %}
+                        {% for cat in plan_categories %}
+                        <label class="relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors
+                            {% if offer.plan_category == cat %}border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/20 dark:text-violet-300{% else %}border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500{% endif %}">
+                            <input type="radio" name="plan_category" value="{{ cat }}" {% if offer.plan_category == cat %}checked{% endif %}
+                                class="sr-only peer"
+                                onchange="this.form.querySelectorAll('[name=plan_category]').forEach(r => { r.closest('label').className = r.checked ? 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/20 dark:text-violet-300' : 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500'; })">
+                            {{ category_icons.get(cat, '') | safe }}
+                            <span class="text-sm font-medium">{{ category_labels.get(cat, cat | replace("_", " ") | title) }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="service_description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Description</label>
+                        <textarea name="service_description" id="service_description" rows="3"
+                            placeholder="Description shown to customers on portal and invoices"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ offer.service_description }}</textarea>
+                    </div>
+
+                    <div>
+                        <label for="burst_profile" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Burst Profile</label>
+                        <input type="text" name="burst_profile" id="burst_profile" maxlength="120"
+                            value="{{ offer.burst_profile }}"
+                            placeholder="e.g. 2x for 10s"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="prepaid_period" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Prepaid Period</label>
+                        <select name="prepaid_period" id="prepaid_period"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Default</option>
+                            {% for period in ["daily", "weekly", "monthly", "custom"] %}
+                            <option value="{{ period }}" {% if offer.prepaid_period == period %}selected{% endif %}>{{ period | title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex flex-col gap-3">
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="hide_on_admin_portal" value="true" {% if offer.hide_on_admin_portal %}checked{% endif %}
+                            class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Hide on admin portal</span>
+                    </label>
+                    <p class="ml-6 text-xs text-slate-500 dark:text-slate-400">When enabled, this tariff will not appear in the main admin tariff list (use for internal or deprecated plans).</p>
+                </div>
+            </div>
+        </div>
+
+        {# Plan Availability #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Plan Availability</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="show_on_customer_portal" value="true" {% if offer.show_on_customer_portal %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Show on Customer Portal</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-slate-500 dark:text-slate-400">Display this plan on the customer self-service portal.</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="available_for_services" value="true" {% if offer.available_for_services %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Available for New Services</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-slate-500 dark:text-slate-400">Allow this plan to be selected for new subscriptions.</p>
+                    </div>
+                    <div>
+                        <label for="region_zone_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Available Location (Region Zone)</label>
+                        <select name="region_zone_id" id="region_zone_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">All Locations</option>
+                            {% for rz in region_zones %}
+                            <option value="{{ rz.id }}" {% if offer.region_zone_id and offer.region_zone_id|string == rz.id|string %}selected{% endif %}>{{ rz.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Restrict this plan to a specific region zone, or leave as "All Locations".</p>
+                    </div>
+                    <div>
+                        <label for="allowed_change_plan_ids" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Plans Available for Changing Services</label>
+                        <select name="allowed_change_plan_ids" id="allowed_change_plan_ids" multiple
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                            size="4">
+                            {% for o in all_offers %}
+                            {% if o.id|string != offer.id|string %}
+                            <option value="{{ o.id }}" {% if offer.allowed_change_plan_ids and o.id|string in offer.allowed_change_plan_ids %}selected{% endif %}>{{ o.name }}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Which plans can customers switch to from this plan. Leave empty for any.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Tariff Basics</h2>

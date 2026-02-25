@@ -5,8 +5,9 @@
     'catalog': 'services',
     'catalog-usage': 'system', 'catalog-calculator': 'system',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing', 'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'payment_providers': 'billing', 'payment_arrangements': 'billing',
-    'network-map': 'network', 'network-devices': 'network', 'core-devices': 'network', 'olts': 'network', 'onts': 'network', 'cpes': 'network', 'tr069': 'network', 'speedtests': 'network', 'dns-threats': 'network', 'weathermap': 'network', 'devices': 'network', 'network-backups': 'network',
-    'pop-sites': 'system', 'configuration': 'system', 'alert-policies': 'system', 'oncall-rotations': 'system',
+    'network-map': 'network', 'network-devices': 'network', 'core-devices': 'network', 'olts': 'network', 'onts': 'network', 'cpes': 'network', 'tr069': 'network', 'speedtests': 'network', 'dns-threats': 'network', 'weathermap': 'network', 'devices': 'network', 'network-backups': 'network', 'onu-types': 'network', 'speed-profiles': 'network',
+    'gis': 'network', 'vpn': 'network',
+    'pop-sites': 'system', 'configuration': 'system', 'alert-policies': 'system', 'oncall-rotations': 'system', 'system-modules': 'system',
     'fiber-plant': 'network', 'fiber-map': 'network', 'fiber-change-requests': 'network', 'fdh-cabinets': 'network', 'splitters': 'network', 'fiber-strands': 'network', 'splice-closures': 'network', 'fiber-reports': 'network',
     'ip-management': 'network', 'vlans': 'network', 'monitoring': 'network',
     'provisioning': 'services', 'workflows': 'services', 'appointments': 'services'
@@ -18,6 +19,17 @@
 } %}
 {% set initial_section = section_for_page.get(active_page, section_for_menu.get(active_menu, '')) %}
 {% set initial_menu = active_menu | default('') %}
+{% set module_states = sidebar_stats.module_states if sidebar_stats is defined and sidebar_stats and sidebar_stats.module_states is defined else {} %}
+{% set feature_states = sidebar_stats.feature_states if sidebar_stats is defined and sidebar_stats and sidebar_stats.feature_states is defined else {} %}
+{% set show_customers_section = module_states.get('customer', True) %}
+{% set show_services_section = module_states.get('catalog', True) or module_states.get('provisioning', True) %}
+{% set show_billing_section = module_states.get('billing', True) %}
+{% set show_network_section = module_states.get('network', True) %}
+{% set show_reports_menu = module_states.get('reports', True) %}
+{% set show_notifications = module_states.get('notifications', True) %}
+{% set show_integrations = module_states.get('integrations', True) %}
+{% set show_gis = module_states.get('gis', True) %}
+{% set show_vpn = module_states.get('vpn', True) %}
 
 <div class="space-y-1" x-data="{ openMenu: '{{ initial_menu }}', openSection: '{{ initial_section }}' }">
 
@@ -32,6 +44,7 @@
     </a>
 
     <!-- 2. CUSTOMERS (Collapsible Section) -->
+    {% if show_customers_section %}
     <button x-on:click="openSection = openSection === 'customers' ? '' : 'customers'" x-show="!sidebarCollapsed"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Customers</p>
@@ -41,16 +54,6 @@
     </button>
 
     <div x-show="openSection === 'customers' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
-        <!-- Customers -->
-        <a href="/admin/customers/"
-           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'customers' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
-            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-            </svg>
-            <span>Customers</span>
-        </a>
-
         <!-- Subscribers -->
         <a href="/admin/subscribers"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -61,8 +64,10 @@
             <span>Subscribers</span>
         </a>
     </div>
+    {% endif %}
 
     <!-- 3. SERVICES & CATALOG (Collapsible Section) -->
+    {% if show_services_section %}
     <button x-on:click="openSection = openSection === 'services' ? '' : 'services'" x-show="!sidebarCollapsed"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Services</p>
@@ -72,6 +77,7 @@
     </button>
 
     <div x-show="openSection === 'services' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+        {% if module_states.get('catalog', True) %}
         <!-- Catalog -->
         <a href="/admin/catalog"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -91,7 +97,9 @@
             </svg>
             <span>Subscriptions</span>
         </a>
+        {% endif %}
 
+        {% if module_states.get('provisioning', True) %}
         <!-- Service Orders -->
         <a href="/admin/provisioning"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -112,10 +120,13 @@
             </svg>
             <span>Workflows</span>
         </a>
+        {% endif %}
 
     </div>
+    {% endif %}
 
     <!-- 4. BILLING (Collapsible Section) -->
+    {% if show_billing_section %}
     <button x-on:click="openSection = openSection === 'billing' ? '' : 'billing'" x-show="!sidebarCollapsed"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Billing</p>
@@ -145,6 +156,7 @@
             <span>Accounts</span>
         </a>
 
+        {% if feature_states.get('invoices', True) %}
         <!-- Invoices -->
         <a href="/admin/billing/invoices"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -154,7 +166,9 @@
             </svg>
             <span>Invoices</span>
         </a>
+        {% endif %}
 
+        {% if feature_states.get('payments', True) %}
         <!-- Payments -->
         <a href="/admin/billing/payments"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -164,7 +178,9 @@
             </svg>
             <span>Payments</span>
         </a>
+        {% endif %}
 
+        {% if feature_states.get('credit_notes', True) %}
         <!-- Credit Notes -->
         <a href="/admin/billing/credits"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -174,6 +190,7 @@
             </svg>
             <span>Credit Notes</span>
         </a>
+        {% endif %}
 
         <!-- Payment Providers -->
         <a href="/admin/billing/payment-providers"
@@ -195,8 +212,10 @@
             <span>Arrangements</span>
         </a>
     </div>
+    {% endif %}
 
     <!-- 5. NETWORK (Collapsible Section) -->
+    {% if show_network_section %}
     <button x-on:click="openSection = openSection === 'network' ? '' : 'network'" x-show="!sidebarCollapsed"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Network</p>
@@ -206,6 +225,7 @@
     </button>
 
     <div x-show="openSection === 'network' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+        {% if feature_states.get('network_sites', True) %}
         <!-- Network Map (Comprehensive) -->
         <a href="/admin/network/map"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -215,7 +235,9 @@
             </svg>
             <span>Network Map</span>
         </a>
+        {% endif %}
 
+        {% if feature_states.get('router_management', True) %}
         <!-- Network Devices (Core + GPON consolidated) -->
         <a href="/admin/network/network-devices"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -225,7 +247,9 @@
             </svg>
             <span>Devices</span>
         </a>
+        {% endif %}
 
+        {% if feature_states.get('cpe_management', True) %}
         <a href="/admin/network/cpes"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'cpes' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
@@ -234,7 +258,9 @@
             </svg>
             <span>CPE</span>
         </a>
+        {% endif %}
 
+        {% if feature_states.get('tr069', True) %}
         <a href="/admin/network/tr069"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'tr069' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
@@ -243,6 +269,7 @@
             </svg>
             <span>TR-069</span>
         </a>
+        {% endif %}
 
         <a href="/admin/network/speedtests"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -300,6 +327,7 @@
             <span>Fiber Map</span>
         </a>
 
+        {% if feature_states.get('ip_pools', True) %}
         <!-- IP Management -->
         <a href="/admin/network/ip-management"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -319,6 +347,27 @@
             </svg>
             <span>VLANs</span>
         </a>
+        {% endif %}
+
+        <!-- ONU Types -->
+        <a href="/admin/network/onu-types"
+           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
+                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'onu-types' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+            </svg>
+            <span>ONU Types</span>
+        </a>
+
+        <!-- Speed Profiles -->
+        <a href="/admin/network/speed-profiles"
+           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
+                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'speed-profiles' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            <span>Speed Profiles</span>
+        </a>
 
         <!-- Monitoring -->
         <a href="/admin/network/monitoring"
@@ -329,12 +378,36 @@
             </svg>
             <span>Monitoring</span>
         </a>
+
+        {% if show_vpn %}
+        <a href="/admin/network/vpn"
+           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
+                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'vpn' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 1.105-.895 2-2 2h-.01a2 2 0 01-2-2v-1a2 2 0 012-2h.01a2 2 0 012 2v1zm0 0h4a2 2 0 012 2v3a2 2 0 01-2 2H8a2 2 0 01-2-2v-3a2 2 0 012-2h4z"/>
+            </svg>
+            <span>VPN</span>
+        </a>
+        {% endif %}
+
+        {% if show_gis %}
+        <a href="/admin/gis"
+           class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
+                  {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'gis' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
+            <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+            </svg>
+            <span>GIS</span>
+        </a>
+        {% endif %}
     </div>
+    {% endif %}
 
     <!-- Divider -->
     <div class="my-4 border-t border-slate-200 dark:border-slate-700/50"></div>
 
     <!-- 7. REPORTS -->
+    {% if show_reports_menu %}
     <div>
         <button x-on:click="openMenu = openMenu === 'reports' ? '' : 'reports'"
                 class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors
@@ -357,6 +430,7 @@
             <a href="/admin/reports/network" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white">Network Usage</a>
         </div>
     </div>
+    {% endif %}
 
     <!-- 8. SYSTEM -->
     <div>
@@ -377,12 +451,18 @@
         </button>
         <div x-show="openMenu === 'system' && !sidebarCollapsed" x-collapse x-cloak class="mt-1 space-y-1 pl-11">
             <a href="/admin/system/admin-hub" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'admin-hub' else '' }}">Admin</a>
+            <a href="/admin/system/modules" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'system-modules' else '' }}">Modules</a>
             <a href="/admin/system/configuration" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'configuration' else '' }}">Configuration</a>
             <a href="/admin/system/settings" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'settings' else '' }}">Settings</a>
             <a href="/admin/system/health" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'system-health' else '' }}">Server Health</a>
             <a href="/admin/system/legal" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'legal' else '' }}">Legal Documents</a>
+            {% if show_integrations %}
+            <a href="/admin/integrations/connectors" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_menu == 'integrations' else '' }}">Integrations</a>
+            {% endif %}
+            {% if show_notifications %}
             <a href="/admin/notifications/alert-policies" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'alert-policies' else '' }}">Alert Policies</a>
             <a href="/admin/notifications/oncall-rotations" class="block rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white {{ 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white' if active_page == 'oncall-rotations' else '' }}">On-Call Rotations</a>
+            {% endif %}
         </div>
     </div>
 

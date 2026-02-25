@@ -100,10 +100,10 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a WhatsApp Business API integration connector in `app/services/integrations/connectors/whatsapp.py` supporting: template message sending, notification delivery (invoice reminders, payment confirmations, service alerts), and two-way messaging
-- [ ] Create a WhatsApp configuration page at `/admin/integrations/whatsapp/config` with fields: API provider (Meta Cloud API, Twilio, MessageBird), API credentials (encrypted via credential_crypto), phone number, webhook URL, and message templates
-- [ ] Add WhatsApp as a notification delivery channel in the existing notification system alongside email and SMS
-- [ ] Implement WhatsApp template message management allowing admins to create, preview, and test message templates with variable substitution (subscriber name, invoice amount, due date, etc.)
+- [x] Build a WhatsApp Business API integration connector in `app/services/integrations/connectors/whatsapp.py` supporting: template message sending, notification delivery (invoice reminders, payment confirmations, service alerts), and two-way messaging
+- [x] Create a WhatsApp configuration page at `/admin/integrations/whatsapp/config` with fields: API provider (Meta Cloud API, Twilio, MessageBird), API credentials (encrypted via credential_crypto), phone number, webhook URL, and message templates
+- [x] Add WhatsApp as a notification delivery channel in the existing notification system alongside email and SMS
+- [x] Implement WhatsApp template message management allowing admins to create, preview, and test message templates with variable substitution (subscriber name, invoice amount, due date, etc.)
 
 ---
 
@@ -119,10 +119,10 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 - [ ] Add a Remita integration connector (important for Nigerian ISPs) supporting: invoice generation, payment collection, direct debit mandates, and payment status webhooks
 - [ ] Add a SagePay (Opayo) integration connector for South African market ISPs
 - [ ] Add a Moneris integration connector for Canadian market ISPs
-- [ ] Build a unified payment provider configuration page at `/admin/billing/payment-providers` showing all available gateways, their connection status, and a configuration form per provider
-- [ ] Implement a payment provider test mode that allows admins to verify gateway configuration with test/sandbox credentials before going live
-- [ ] Add payment gateway health monitoring with automatic failover -- if the primary gateway is down, route payments to a configured secondary gateway
-- [ ] Create a payment reconciliation tool that compares DotMac payment records against gateway transaction reports and highlights discrepancies
+- [x] Build a unified payment provider configuration page at `/admin/billing/payment-providers` showing all available gateways, their connection status, and a configuration form per provider (implemented for Paystack + Flutterwave)
+- [x] Implement a payment provider test mode that allows admins to verify gateway configuration with test/sandbox credentials before going live
+- [x] Add payment gateway health monitoring with automatic failover -- if the primary gateway is down, route payments to a configured secondary gateway
+- [x] Create a payment reconciliation tool that compares DotMac payment records against gateway transaction reports and highlights discrepancies
 
 ---
 
@@ -133,26 +133,26 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a comprehensive data import system at `/admin/system/import` with a "New Import" wizard that supports importing: Subscribers, Subscriptions, Invoices, Payments, NAS devices, IP address pools, and Network equipment
-- [ ] Create an import history table showing all past imports with: ID, module/entity type, timestamp, uploaded filename, handler/processor, record count (total/success/failed/skipped), status badge, and actions (view details, download error report, undo import)
-- [ ] Implement CSV column mapping UI where admins upload a file, see detected columns, and drag-drop map them to DotMac fields with preview of first 5 rows
-- [ ] Support multiple import formats: CSV (with configurable delimiter), Excel (.xlsx), and JSON
-- [ ] Add import validation with a dry-run mode that reports potential errors (duplicate emails, invalid statuses, missing required fields) before committing
-- [ ] Implement import undo/rollback capability that can reverse an import within a configurable time window (e.g., 24 hours)
-- [ ] Create import templates (downloadable CSV files with correct headers) for each entity type to guide users
-- [ ] Process large imports as Celery background tasks with progress tracking and email notification on completion
+- [x] Build a comprehensive data import system at `/admin/system/import` with a "New Import" wizard that supports importing: Subscribers, Subscriptions, Invoices, Payments, NAS devices, IP address pools, and Network equipment
+- [x] Create an import history table showing all past imports with: ID, module/entity type, timestamp, uploaded filename, handler/processor, record count (total/success/failed/skipped), status badge, and actions (view details, download error report, undo import)
+- [x] Implement CSV column mapping UI where admins upload a file, see detected columns, and drag-drop map them to DotMac fields with preview of first 5 rows
+- [x] Support multiple import formats: CSV (with configurable delimiter), Excel (.xlsx), and JSON
+- [x] Add import validation with a dry-run mode that reports potential errors (duplicate emails, invalid statuses, missing required fields) before committing
+- [x] Implement import undo/rollback capability that can reverse an import within a configurable time window (e.g., 24 hours)
+- [x] Create import templates (downloadable CSV files with correct headers) for each entity type to guide users
+- [x] Process large imports as Celery background tasks with progress tracking and email notification on completion
 
 ### Screenshot: Export Tool
 **Splynx Feature:** A "Config > Tools > Export" page with a simple form containing: Module dropdown (currently set to "Partners"), Fields dropdown (set to "All selected" with multi-select capability), Delimiter dropdown (set to "Tabulator" with options for comma, semicolon, tab), a "First row contains column titles" toggle, and an Export button.
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a universal data export tool at `/admin/system/export` with fields: Module/Entity selector (Subscribers, Invoices, Payments, Subscriptions, NAS Devices, Service Orders, Audit Log, Users, etc.), Field selection (multi-select with "Select All" option), Delimiter (comma, semicolon, tab, pipe), Date range filter, Status filter, and "Include column headers" toggle
-- [ ] Support export formats: CSV, Excel (.xlsx), JSON, and PDF (for report-style exports)
-- [ ] Add scheduled/recurring exports that run automatically (e.g., weekly subscriber export sent to SFTP or email)
-- [ ] Implement export templates allowing admins to save frequently used export configurations (module + selected fields + filters) for reuse
-- [ ] Process large exports (>10,000 records) as background Celery tasks with download link emailed on completion
-- [ ] Add export audit logging to track who exported what data and when (important for POPIA/GDPR compliance)
+- [x] Build a universal data export tool at `/admin/system/export` with fields: Module/Entity selector (Subscribers, Invoices, Payments, Subscriptions, NAS Devices, Service Orders, Audit Log, Users, etc.), Field selection (multi-select with "Select All" option), Delimiter (comma, semicolon, tab, pipe), Date range filter, Status filter, and "Include column headers" toggle
+- [x] Support export formats: CSV, Excel (.xlsx), JSON, and PDF (for report-style exports)
+- [x] Add scheduled/recurring exports that run automatically (e.g., weekly subscriber export sent to SFTP or email)
+- [x] Implement export templates allowing admins to save frequently used export configurations (module + selected fields + filters) for reuse
+- [x] Process large exports (>10,000 records) as background Celery tasks with download link emailed on completion
+- [x] Add export audit logging to track who exported what data and when (important for POPIA/GDPR compliance)
 
 ---
 
@@ -163,13 +163,13 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a "Bulk Service Activation" tool at `/admin/provisioning/bulk-activate` with tabs for: Internet services, Recurring services, and Bundle services
-- [ ] Add a customer filter panel allowing filtering by: reseller/partner, subscriber status, location/POP site, date range, and custom attributes
-- [ ] Implement a field pairing/mapping interface where admins map subscriber data fields to service activation parameters: Plan assignment, Activation date, Router/NAS assignment, IPv4 assignment method (static/dynamic/DHCP), MAC address binding, Login prefix/suffix generation, and Service password (auto-generate or manual)
-- [ ] Add preview mode showing all subscribers that match the filter criteria and what services will be activated, before executing
-- [ ] Implement batch processing with progress tracking, showing activated/failed/skipped counts in real-time via HTMX polling
-- [ ] Add "Set subscribers as Active on Submit" option to automatically change subscriber status upon successful service activation
-- [ ] Log each bulk activation as an audit event with full details of what was changed
+- [x] Build a "Bulk Service Activation" tool at `/admin/provisioning/bulk-activate` with tabs for: Internet services, Recurring services, and Bundle services
+- [x] Add a customer filter panel allowing filtering by: reseller/partner, subscriber status, location/POP site, date range, and custom attributes
+- [x] Implement a field pairing/mapping interface where admins map subscriber data fields to service activation parameters: Plan assignment, Activation date, Router/NAS assignment, IPv4 assignment method (static/dynamic/DHCP), MAC address binding, Login prefix/suffix generation, and Service password (auto-generate or manual)
+- [x] Add preview mode showing all subscribers that match the filter criteria and what services will be activated, before executing
+- [x] Implement batch processing with progress tracking, showing activated/failed/skipped counts in real-time via HTMX polling
+- [x] Add "Set subscribers as Active on Submit" option to automatically change subscriber status upon successful service activation
+- [x] Log each bulk activation as an audit event with full details of what was changed
 
 ---
 
@@ -180,12 +180,12 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Enhance the existing WireGuard VPN module (`/admin/vpn`) to add a unified VPN management dashboard showing both WireGuard and OpenVPN connections
-- [ ] Add server-side VPN controls: Restart service, View configuration, Check status -- executed via Celery tasks to avoid blocking the web request
-- [ ] Add an "Add VPN Client" wizard that generates client configuration files (WireGuard .conf or OpenVPN .ovpn) with proper key pair generation
-- [ ] Implement VPN connection health monitoring with automatic alerts when a tunnel goes down
-- [ ] Add OpenVPN support alongside the existing WireGuard implementation for operators who prefer or require OpenVPN for legacy compatibility
-- [ ] Show real-time VPN tunnel statistics: uptime, bytes transferred, last handshake time, and latency
+- [x] Enhance the existing WireGuard VPN module (`/admin/vpn`) to add a unified VPN management dashboard showing both WireGuard and OpenVPN connections
+- [x] Add server-side VPN controls: Restart service, View configuration, Check status -- executed via Celery tasks to avoid blocking the web request
+- [x] Add an "Add VPN Client" wizard that generates client configuration files (WireGuard .conf or OpenVPN .ovpn) with proper key pair generation
+- [x] Implement VPN connection health monitoring with automatic alerts when a tunnel goes down
+- [x] Add OpenVPN support alongside the existing WireGuard implementation for operators who prefer or require OpenVPN for legacy compatibility
+- [x] Show real-time VPN tunnel statistics: uptime, bytes transferred, last handshake time, and latency
 
 ---
 

@@ -19,6 +19,9 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
+from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import domain_settings as domain_settings_service
 from app.services.file_storage import file_uploads
 from app.services.object_storage import (
     ObjectNotFoundError,
@@ -27,6 +30,7 @@ from app.services.object_storage import (
 )
 
 STALE_EXPORT_SECONDS = 20
+INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
 logger = logging.getLogger(__name__)
 
 
@@ -245,8 +249,44 @@ def get_latest_export(db: Session, invoice_id: str) -> InvoicePdfExport | None:
     return db.scalars(stmt).first()
 
 
-def queue_export(db: Session, invoice_id: str, requested_by_id: str | None = None) -> InvoicePdfExport:
+def _is_export_fresh(invoice: Invoice, export: InvoicePdfExport) -> bool:
+    if export.status != InvoicePdfExportStatus.completed:
+        return False
+    if not export.completed_at:
+        return False
+    invoice_updated = invoice.updated_at or invoice.created_at
+    if invoice_updated and export.completed_at < invoice_updated:
+        return False
+    return True
+
+
+def is_export_cache_valid(db: Session, invoice: Invoice, export: InvoicePdfExport | None) -> bool:
+    if not export:
+        return False
+    if not _is_export_fresh(invoice, export):
+        return False
+    return export_file_exists(db, export)
+
+
+def queue_export(
+    db: Session,
+    invoice_id: str,
+    requested_by_id: str | None = None,
+    *,
+    force_new: bool = False,
+) -> InvoicePdfExport:
     latest = get_latest_export(db, invoice_id)
+    invoice = db.get(Invoice, invoice_id)
+
+    if (
+        not force_new
+        and latest
+        and invoice
+        and latest.status == InvoicePdfExportStatus.completed
+        and is_export_cache_valid(db, invoice, latest)
+    ):
+        return latest
+
     if latest and latest.status == InvoicePdfExportStatus.processing:
         return latest
 
@@ -274,6 +314,157 @@ def queue_export(db: Session, invoice_id: str, requested_by_id: str | None = Non
     db.commit()
     db.refresh(export)
     return export
+
+
+def _get_cache_metrics(db: Session) -> dict[str, int]:
+    default = {"hits": 0, "misses": 0, "generated": 0, "regenerated": 0}
+    try:
+        setting = domain_settings_service.billing_settings.get_by_key(
+            db, INVOICE_PDF_CACHE_METRICS_KEY
+        )
+    except Exception:
+        return default
+    if isinstance(setting.value_json, dict):
+        out = default.copy()
+        for key in out:
+            try:
+                out[key] = int(setting.value_json.get(key) or 0)
+            except (TypeError, ValueError):
+                out[key] = 0
+        return out
+    return default
+
+
+def _save_cache_metrics(db: Session, metrics: dict[str, int]) -> None:
+    domain_settings_service.billing_settings.upsert_by_key(
+        db,
+        INVOICE_PDF_CACHE_METRICS_KEY,
+        DomainSettingUpdate(
+            value_type=SettingValueType.json,
+            value_json=metrics,
+            value_text=None,
+            is_secret=False,
+            is_active=True,
+        ),
+    )
+
+
+def record_cache_hit(db: Session) -> None:
+    metrics = _get_cache_metrics(db)
+    metrics["hits"] = int(metrics.get("hits", 0)) + 1
+    _save_cache_metrics(db, metrics)
+
+
+def record_cache_miss(db: Session) -> None:
+    metrics = _get_cache_metrics(db)
+    metrics["misses"] = int(metrics.get("misses", 0)) + 1
+    _save_cache_metrics(db, metrics)
+
+
+def record_generated(db: Session, *, regenerated: bool = False) -> None:
+    metrics = _get_cache_metrics(db)
+    metrics["generated"] = int(metrics.get("generated", 0)) + 1
+    if regenerated:
+        metrics["regenerated"] = int(metrics.get("regenerated", 0)) + 1
+    _save_cache_metrics(db, metrics)
+
+
+def get_cache_dashboard_stats(db: Session) -> dict[str, Any]:
+    completed = (
+        db.query(InvoicePdfExport)
+        .filter(InvoicePdfExport.status == InvoicePdfExportStatus.completed)
+        .all()
+    )
+    unique_invoice_ids = {str(row.invoice_id) for row in completed}
+    total_size_bytes = sum(int(row.file_size_bytes or 0) for row in completed)
+    oldest_cached = min((row.completed_at for row in completed if row.completed_at), default=None)
+
+    durations = [
+        (row.completed_at - row.created_at).total_seconds()
+        for row in completed
+        if row.completed_at and row.created_at and row.completed_at >= row.created_at
+    ]
+    avg_generation_seconds = (sum(durations) / len(durations)) if durations else 0.0
+
+    metrics = _get_cache_metrics(db)
+    hits = int(metrics.get("hits", 0))
+    misses = int(metrics.get("misses", 0))
+    total_lookups = hits + misses
+    hit_rate_pct = (hits / total_lookups * 100.0) if total_lookups > 0 else 0.0
+
+    return {
+        "total_cached_invoices": len(unique_invoice_ids),
+        "cache_size_bytes": total_size_bytes,
+        "oldest_cached_at": oldest_cached,
+        "avg_generation_seconds": avg_generation_seconds,
+        "hit_rate_pct": hit_rate_pct,
+        "hits": hits,
+        "misses": misses,
+    }
+
+
+def _invalidate_export_file(db: Session, export: InvoicePdfExport) -> None:
+    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    if record:
+        file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+    export.file_path = None
+    export.file_size_bytes = None
+    export.completed_at = None
+    export.status = InvoicePdfExportStatus.failed
+    export.error = "Cache invalidated"
+
+
+def regenerate_invoice_cache(
+    db: Session,
+    *,
+    invoice_id: str,
+    requested_by_id: str | None = None,
+) -> InvoicePdfExport:
+    exports = (
+        db.query(InvoicePdfExport)
+        .filter(InvoicePdfExport.invoice_id == invoice_id)
+        .order_by(InvoicePdfExport.created_at.desc())
+        .all()
+    )
+    for row in exports:
+        if row.status == InvoicePdfExportStatus.completed and row.file_path:
+            _invalidate_export_file(db, row)
+    db.commit()
+    export = queue_export(
+        db,
+        invoice_id=invoice_id,
+        requested_by_id=requested_by_id,
+        force_new=True,
+    )
+    record_generated(db, regenerated=True)
+    return export
+
+
+def clear_cache(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    account_id: str | None = None,
+) -> dict[str, int]:
+    query = db.query(InvoicePdfExport).join(Invoice, Invoice.id == InvoicePdfExport.invoice_id)
+    query = query.filter(InvoicePdfExport.status == InvoicePdfExportStatus.completed)
+    if date_from:
+        query = query.filter(InvoicePdfExport.completed_at >= date_from)
+    if date_to:
+        query = query.filter(InvoicePdfExport.completed_at < date_to)
+    if account_id:
+        query = query.filter(Invoice.account_id == account_id)
+
+    rows = query.all()
+    invalidated = 0
+    bytes_cleared = 0
+    for row in rows:
+        bytes_cleared += int(row.file_size_bytes or 0)
+        _invalidate_export_file(db, row)
+        invalidated += 1
+    db.commit()
+    return {"invalidated": invalidated, "bytes_cleared": bytes_cleared}
 
 
 def export_file_exists(db: Session, export: InvoicePdfExport | None) -> bool:
@@ -382,6 +573,7 @@ def stream_export(db: Session, export: InvoicePdfExport) -> StreamResult:
 def process_export(export_id: str) -> dict[str, Any]:
     db = SessionLocal()
     export: InvoicePdfExport | None = None
+    started_at = datetime.now(UTC)
     try:
         export = db.get(InvoicePdfExport, export_id)
         if not export:
@@ -429,11 +621,13 @@ def process_export(export_id: str) -> dict[str, Any]:
         export.completed_at = datetime.now(UTC)
         export.error = None
         db.commit()
+        record_generated(db)
         return {
             "status": "completed",
             "export_id": export_id,
             "invoice_id": str(invoice.id),
             "file_path": uploaded.storage_key_or_relative_path,
+            "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000),
         }
     except Exception as exc:
         try:

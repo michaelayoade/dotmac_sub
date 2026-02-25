@@ -15,7 +15,19 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ offer.name }}</h1>
             {% if offer.code %}<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Code: {{ offer.code }}</p>{% endif %}
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+            <button type="button"
+                    hx-get="/admin/catalog/offers/{{ offer.id }}/usage-graph"
+                    hx-target="#graph-modal-container"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-600 dark:bg-slate-800 dark:text-violet-300 dark:hover:bg-violet-900/20">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                Usage
+            </button>
+            <a href="/admin/catalog/offers/{{ offer.id }}/fup" class="inline-flex items-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-600 dark:bg-slate-800 dark:text-violet-300 dark:hover:bg-violet-900/20">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                FUP
+            </a>
             <a href="/admin/catalog/offers/{{ offer.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 Edit
@@ -243,4 +255,7 @@
         </div>
     </div>
 </div>
+
+{# Modal container for HTMX-loaded usage graph #}
+<div id="graph-modal-container"></div>
 {% endblock %}

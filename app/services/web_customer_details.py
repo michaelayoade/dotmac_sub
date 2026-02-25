@@ -21,6 +21,7 @@ from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
 
 
@@ -411,6 +412,14 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
     }
+    try:
+        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
+            db,
+            customer_type="person",
+            customer_id=customer_id,
+        )
+    except Exception as exc:
+        customer_user_access = {"error": str(exc)}
 
     return {
         "customer": customer,
@@ -433,6 +442,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "has_active_subscribers": active_subscribers > 0,
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
+        "customer_user_access": customer_user_access,
     }
 
 
@@ -541,6 +551,14 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
     }
+    try:
+        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
+            db,
+            customer_type="organization",
+            customer_id=customer_id,
+        )
+    except Exception as exc:
+        customer_user_access = {"error": str(exc)}
 
     return {
         "customer": customer,
@@ -563,4 +581,5 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "has_active_subscribers": active_subscribers > 0,
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
+        "customer_user_access": customer_user_access,
     }

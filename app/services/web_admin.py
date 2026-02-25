@@ -42,6 +42,7 @@ def get_current_user(request) -> dict:
 def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
     from app.models.domain_settings import SettingDomain
+    from app.services import module_manager as module_manager_service
     from app.services import provisioning as provisioning_service
     from app.services import settings_spec
 
@@ -78,6 +79,12 @@ def get_sidebar_stats(db: Session) -> dict:
         favicon_url = str(favicon_raw).strip() if favicon_raw else ""
     except Exception:
         favicon_url = ""
+    try:
+        module_states = module_manager_service.load_module_states(db)
+        feature_states = module_manager_service.load_feature_states(db)
+    except Exception:
+        module_states = {}
+        feature_states = {}
 
     return {
         "service_orders": service_orders_count,
@@ -85,4 +92,6 @@ def get_sidebar_stats(db: Session) -> dict:
         "sidebar_logo_url": sidebar_logo_url,
         "sidebar_logo_dark_url": sidebar_logo_dark_url,
         "favicon_url": favicon_url,
+        "module_states": module_states,
+        "feature_states": feature_states,
     }

@@ -1,0 +1,206 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ device.name }} - Bandwidth Graphs - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <a href="/admin/network/core-devices/{{ device.id }}" class="text-sm text-primary-600 hover:text-primary-700">Back to Device</a>
+            <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">Bandwidth Graphs: {{ device.name }}</h1>
+        </div>
+        <a href="/admin/network/core-devices/graphs/dashboard" class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Aggregate Dashboard</a>
+    </div>
+
+    {% if message %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">{{ error }}</div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Create Graph</h2>
+        </div>
+        <div class="p-6">
+            <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs" class="grid gap-3 md:grid-cols-2">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Title</label>
+                    <input type="text" name="title" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Vertical axis title</label>
+                    <input type="text" name="vertical_axis_title" value="Bandwidth" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Height (px)</label>
+                    <input type="number" min="80" max="480" name="height_px" value="150" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-end">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="is_public" value="true" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        Public graph URL
+                    </label>
+                </div>
+                <div class="md:col-span-2">
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Create Graph</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% for graph in graphs %}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">{{ graph.title }}</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Vertical: {{ graph.vertical_axis_title }} | Height: {{ graph.height_px }}px</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {% if graph.is_public and graph.public_token %}
+                        View URL: <a href="{{ graph_view_urls.get(graph.id|string) }}" target="_blank" class="text-primary-600 hover:text-primary-700">{{ graph_view_urls.get(graph.id|string) }}</a>
+                        {% else %}
+                        Private graph
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs/{{ graph.id }}/toggle-public">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="is_public" value="{{ 'false' if graph.is_public else 'true' }}">
+                        <button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">{{ 'Make Private' if graph.is_public else 'Make Public' }}</button>
+                    </form>
+                    <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs/{{ graph.id }}/clone">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clone</button>
+                    </form>
+                    <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs/{{ graph.id }}/preview">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="rounded border border-primary-300 px-2 py-1 text-xs text-primary-700 hover:bg-primary-50 dark:border-primary-700 dark:text-primary-300 dark:hover:bg-primary-900/20">Preview</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="p-6 space-y-4">
+            <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs/{{ graph.id }}/sources" class="grid gap-3 lg:grid-cols-4">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Source device</label>
+                    <select name="source_device_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" required>
+                        {% for source_device in all_devices %}
+                        <option value="{{ source_device.id }}">{{ source_device.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">SNMP OID</label>
+                    <select name="snmp_oid_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" required>
+                        {% for oid in all_oids %}
+                        <option value="{{ oid.id }}">{{ oid.title }} ({{ oid.oid }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Factor</label>
+                        <input type="number" step="0.01" min="0.01" name="factor" value="1.0" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Color</label>
+                        <input type="color" name="color_hex" value="#22c55e" class="h-10 w-full rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Draw type</label>
+                        <select name="draw_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="LINE1">LINE1</option>
+                            <option value="AREA">AREA</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Unit</label>
+                        <select name="value_unit" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="Bps">Bps</option>
+                            <option value="bps">bps</option>
+                            <option value="pps">pps</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="lg:col-span-4 flex items-center justify-between">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="stack_enabled" value="true" class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        Stack
+                    </label>
+                    <button type="submit" class="inline-flex items-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">Add Data Source</button>
+                </div>
+            </form>
+
+            <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/50">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">OID</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Factor</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Color</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Draw</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Stack</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Unit</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for source in graph.sources %}
+                        <tr>
+                            <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-300">{{ source.snmp_oid.title if source.snmp_oid else '-' }}<div class="font-mono text-[11px] text-slate-500">{{ source.snmp_oid.oid if source.snmp_oid else '-' }}</div></td>
+                            <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ source.factor }}</td>
+                            <td class="px-3 py-2"><span class="inline-flex items-center gap-2 text-slate-600 dark:text-slate-400"><span class="inline-block h-3 w-3 rounded" style="background-color: {{ source.color_hex }}"></span>{{ source.color_hex }}</span></td>
+                            <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ source.draw_type }}</td>
+                            <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ 'Yes' if source.stack_enabled else 'No' }}</td>
+                            <td class="px-3 py-2 text-slate-600 dark:text-slate-400">{{ source.value_unit }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="px-4 py-4 text-center text-sm text-slate-500 dark:text-slate-400">No data sources configured.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            {% if preview_for_graph == graph.id|string and preview_rows %}
+            <div class="rounded-lg border border-primary-200 bg-primary-50/40 p-4 dark:border-primary-900/40 dark:bg-primary-900/10">
+                <h3 class="font-medium text-slate-900 dark:text-white">Live Preview Snapshot</h3>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Real-time SNMP sample values with max/avg/last snapshot.</p>
+                <div class="mt-3 overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                        <thead>
+                            <tr>
+                                <th class="px-2 py-1 text-left">Source</th>
+                                <th class="px-2 py-1 text-left">Last</th>
+                                <th class="px-2 py-1 text-left">Avg</th>
+                                <th class="px-2 py-1 text-left">Max</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in preview_rows %}
+                            <tr>
+                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ row.title }}</td>
+                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.last) if row.last is not none else '-' }} {{ row.unit }}</td>
+                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.avg) if row.avg is not none else '-' }} {{ row.unit }}</td>
+                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.max) if row.max is not none else '-' }} {{ row.unit }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <div class="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">No graphs configured for this device yet.</div>
+    {% endfor %}
+</div>
+{% endblock %}

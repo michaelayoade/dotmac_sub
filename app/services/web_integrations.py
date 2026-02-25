@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlparse
 from typing import cast
 from uuid import UUID
+
+import httpx
 
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate
@@ -226,6 +229,74 @@ def create_connector(
         is_active=is_active,
     )
     return connector_service.connector_configs.create(db, payload)
+
+
+def build_embedded_connector_data(
+    db,
+    *,
+    connector_id: str,
+    perform_check: bool = False,
+) -> dict[str, object]:
+    connector = connector_service.connector_configs.get(db, connector_id)
+    base_url = (connector.base_url or "").strip()
+    parsed = urlparse(base_url) if base_url else None
+    is_http = bool(parsed and parsed.scheme in {"http", "https"} and parsed.netloc)
+    health_status = "ready" if is_http else "misconfigured"
+    health_http_status: int | None = None
+    probe_checked = False
+    if perform_check and is_http:
+        probe_checked = True
+        health_status, health_http_status, health_message = _probe_embedded_url_health(base_url)
+    else:
+        health_message = (
+            "Connector URL is not configured or invalid. Set a full http(s) base URL to embed this integration."
+            if not is_http
+            else "Connection appears configured. Use 'Check Connection' to probe reachability."
+        )
+    return {
+        "connector": connector,
+        "embed_url": base_url if is_http else "",
+        "health_status": health_status,
+        "health_http_status": health_http_status,
+        "probe_checked": probe_checked,
+        "health_message": health_message,
+    }
+
+
+def _probe_embedded_url_health(url: str) -> tuple[str, int | None, str]:
+    try:
+        response = httpx.get(url, timeout=6.0, follow_redirects=True)
+    except Exception as exc:
+        return (
+            "unreachable",
+            None,
+            f"Connection check failed: {exc}. Confirm DNS/network reachability and remote service availability.",
+        )
+
+    status = int(response.status_code)
+    if 200 <= status < 300:
+        return (
+            "ready",
+            status,
+            f"Connection check succeeded ({status}). If iframe still fails, target may block embedding with X-Frame-Options/CSP.",
+        )
+    if status in {401, 403}:
+        return (
+            "auth_required",
+            status,
+            f"Service is reachable but denied access ({status}). Configure credentials/session and verify embed permissions.",
+        )
+    if status >= 500:
+        return (
+            "unreachable",
+            status,
+            f"Service returned server error ({status}). Check upstream service health and logs.",
+        )
+    return (
+        "degraded",
+        status,
+        f"Service responded with status {status}. Verify endpoint path and access controls.",
+    )
 
 
 def target_stats(targets: list) -> dict[str, object]:
