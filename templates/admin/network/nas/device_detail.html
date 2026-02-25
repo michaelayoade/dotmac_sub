@@ -3,6 +3,36 @@
 
 {% block title %}{{ device.name }} - NAS Device - Admin{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #nas-device-map { height: 360px; border-radius: 0.5rem; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+{% if active_tab == 'map' and enhanced_fields.latitude and enhanced_fields.longitude %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function() {
+    const mapEl = document.getElementById('nas-device-map');
+    if (!mapEl) return;
+    const lat = parseFloat({{ enhanced_fields.latitude | tojson | safe }});
+    const lng = parseFloat({{ enhanced_fields.longitude | tojson | safe }});
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+    const map = L.map('nas-device-map').setView([lat, lng], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
+    }).addTo(map);
+    L.marker([lat, lng]).addTo(map).bindPopup({{ device.name | tojson | safe }});
+})();
+</script>
+{% endif %}
+{% endblock %}
+
 {% block content %}
 <div class="space-y-6">
     <!-- Header -->
@@ -56,9 +86,35 @@
         </div>
     </div>
 
+    <div class="border-b border-slate-200 dark:border-slate-700">
+        <nav class="flex gap-1" aria-label="Tabs">
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=information"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'information' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                Information
+            </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=connection-rules"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'connection-rules' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                Connection Rules
+            </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=vendor-specific"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'vendor-specific' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                Vendor-Specific
+            </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=device-log"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'device-log' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                Device Log
+            </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=map"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'map' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                Map
+            </a>
+        </nav>
+    </div>
+
     <div class="grid gap-6 lg:grid-cols-3">
         <!-- Main Info -->
         <div class="lg:col-span-2 space-y-6">
+            {% if active_tab == 'information' %}
             <!-- Device Details -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -111,6 +167,12 @@
                     <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
                         <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Description</dt>
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.description }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if partner_org_names %}
+                    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                        <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Partner / Organization</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ partner_org_names | join(', ') }}</dd>
                     </div>
                     {% endif %}
                 </div>
@@ -201,7 +263,42 @@
                     {% endif %}
                 </div>
             </div>
+            {% endif %}
 
+            {% if active_tab == 'connection-rules' %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Connection Rules</h2>
+                </div>
+                <div class="p-6 space-y-3 text-sm text-slate-700 dark:text-slate-300">
+                    <p><span class="text-slate-500">Authorization:</span> {{ enhanced_fields.authorization_type or 'none' }}</p>
+                    <p><span class="text-slate-500">Accounting:</span> {{ enhanced_fields.accounting_type or 'none' }}</p>
+                    <p><span class="text-slate-500">Default connection:</span> {{ device.default_connection_type.value|upper if device.default_connection_type else '-' }}</p>
+                    <p><span class="text-slate-500">RADIUS pools:</span> {{ radius_pool_names | join(', ') if radius_pool_names else 'Any pool' }}</p>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if active_tab == 'vendor-specific' %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Vendor-Specific</h2>
+                </div>
+                <div class="p-6 space-y-3 text-sm">
+                    <p class="text-slate-700 dark:text-slate-300"><span class="text-slate-500">Vendor:</span> {{ device.vendor.value|title }}</p>
+                    <p class="text-slate-700 dark:text-slate-300"><span class="text-slate-500">API URL:</span> {{ device.api_url or '-' }}</p>
+                    <p class="text-slate-700 dark:text-slate-300"><span class="text-slate-500">API User:</span> {{ device.api_username or '-' }}</p>
+                    {% if device.vendor.value == 'mikrotik' %}
+                    <div class="mt-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <p class="font-medium text-slate-900 dark:text-white">MikroTik API Panel</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Enable API credentials in device form and use monitoring tasks for live RouterOS metrics.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            {% if active_tab == 'device-log' %}
             <!-- Recent Provisioning Logs -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -239,18 +336,30 @@
                                     </p>
                                 </div>
                             </div>
-                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         </a>
                         {% endfor %}
                     </div>
                     {% else %}
-                    <div class="text-center py-6">
-                        <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No provisioning activity yet</p>
-                    </div>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No provisioning activity yet</p>
                     {% endif %}
                 </div>
             </div>
+            {% endif %}
+
+            {% if active_tab == 'map' %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Device Map</h2>
+                </div>
+                <div class="p-6">
+                    {% if enhanced_fields.latitude and enhanced_fields.longitude %}
+                    <div id="nas-device-map"></div>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No GPS coordinates configured. Set latitude/longitude in device form.</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Sidebar -->

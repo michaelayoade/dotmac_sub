@@ -390,6 +390,12 @@ def device_create(
             if pool_id not in valid_pool_ids:
                 errors.append(f"Invalid RADIUS pool selected: {pool_id}")
                 break
+    if partner_org_ids:
+        valid_org_ids = {str(org.id) for org in db.query(Organization).all()}
+        for org_id in partner_org_ids:
+            if org_id not in valid_org_ids:
+                errors.append(f"Invalid organization selected: {org_id}")
+                break
     if latitude:
         try:
             lat_value = float(latitude)
@@ -675,6 +681,12 @@ def device_update(
         for pool_id in radius_pool_ids:
             if pool_id not in valid_pool_ids:
                 errors.append(f"Invalid RADIUS pool selected: {pool_id}")
+                break
+    if partner_org_ids:
+        valid_org_ids = {str(org.id) for org in db.query(Organization).all()}
+        for org_id in partner_org_ids:
+            if org_id not in valid_org_ids:
+                errors.append(f"Invalid organization selected: {org_id}")
                 break
     if latitude:
         try:

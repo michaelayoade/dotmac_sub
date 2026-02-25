@@ -18,6 +18,22 @@ def test_merge_radius_pool_tags_replaces_previous_radius_tags():
     assert merged == ["site:pop1", "radius_pool:pool-a", "radius_pool:pool-b"]
 
 
+def test_extract_enhanced_fields_from_tags():
+    fields = nas_web._extract_enhanced_fields(
+        [
+            "partner_org:11111111-1111-1111-1111-111111111111",
+            "authorization_type:ppp_dhcp_radius",
+            "accounting_type:radius_accounting",
+            "physical_address:Main Street",
+            "latitude:9.0820",
+            "longitude:8.6753",
+        ]
+    )
+    assert fields["partner_org_ids"] == ["11111111-1111-1111-1111-111111111111"]
+    assert fields["authorization_type"] == "ppp_dhcp_radius"
+    assert fields["accounting_type"] == "radius_accounting"
+
+
 def test_usable_ipv4_count_handles_common_prefixes():
     assert web_network_ip_service._usable_ipv4_count("10.0.0.0/24") == 254
     assert web_network_ip_service._usable_ipv4_count("10.0.0.0/31") == 2
