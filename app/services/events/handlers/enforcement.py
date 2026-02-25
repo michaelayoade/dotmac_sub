@@ -10,9 +10,11 @@ from app.services import settings_spec
 from app.services.enforcement import (
     apply_radius_profile_to_account,
     apply_subscription_address_list_block,
+    cleanup_subscription_on_cancel,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
     remove_subscription_address_list_block,
+    update_subscription_sessions,
 )
 from app.services.events import emit_event
 from app.services.events.types import Event, EventType
@@ -27,11 +29,16 @@ class EnforcementHandler:
         if event.event_type == EventType.subscription_suspended:
             self._handle_subscription_block(db, event, "suspended")
         elif event.event_type == EventType.subscription_canceled:
-            self._handle_subscription_block(db, event, "canceled")
+            self._handle_subscription_cancel(db, event)
         elif event.event_type == EventType.subscription_activated:
             self._handle_subscription_restore(db, event)
         elif event.event_type == EventType.subscription_resumed:
             self._handle_subscription_restore(db, event)
+        elif event.event_type in (
+            EventType.subscription_upgraded,
+            EventType.subscription_downgraded,
+        ):
+            self._handle_subscription_speed_change(db, event)
         elif event.event_type == EventType.subscriber_throttled:
             self._handle_account_throttle(db, event)
         elif event.event_type == EventType.usage_exhausted:
@@ -52,6 +59,28 @@ class EnforcementHandler:
                 exc,
             )
 
+    def _handle_subscription_cancel(self, db: Session, event: Event) -> None:
+        """Full cleanup on subscription cancellation.
+
+        Releases IPs, deactivates credentials, removes from external
+        RADIUS DB, removes NAS user entries, and cleans up address lists.
+        """
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            logger.warning("Skipping cancellation cleanup: missing subscription_id.")
+            return
+        try:
+            stats = cleanup_subscription_on_cancel(db, str(subscription_id))
+            logger.info(
+                "Cancellation cleanup for subscription %s: %s",
+                subscription_id, stats,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Cancellation cleanup failed for subscription %s: %s",
+                subscription_id, exc,
+            )
+
     def _handle_subscription_restore(self, db: Session, event: Event) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
@@ -69,6 +98,26 @@ class EnforcementHandler:
                 "Failed to refresh sessions for subscription %s: %s",
                 subscription_id,
                 exc,
+            )
+
+    def _handle_subscription_speed_change(self, db: Session, event: Event) -> None:
+        """Handle mid-session speed change via CoA-Update."""
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            logger.warning("Skipping speed change enforcement: missing subscription_id.")
+            return
+        try:
+            updated = update_subscription_sessions(
+                db, str(subscription_id), reason=event.event_type.value,
+            )
+            logger.info(
+                "Speed change enforcement: %s sessions updated for subscription %s.",
+                updated, subscription_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to apply speed change for subscription %s: %s",
+                subscription_id, exc,
             )
 
     def _handle_account_throttle(self, db: Session, event: Event) -> None:

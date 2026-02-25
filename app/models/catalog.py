@@ -984,6 +984,13 @@ class AccessCredential(Base):
     radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_profiles.id")
     )
+    # IPoE/DHCP Option 82 relay agent fields
+    circuit_id: Mapped[str | None] = mapped_column(String(255))
+    remote_id: Mapped[str | None] = mapped_column(String(255))
+    # Connection type override (if credential uses different type than NAS default)
+    connection_type: Mapped[ConnectionType | None] = mapped_column(
+        Enum(ConnectionType, values_callable=lambda x: [e.value for e in x]),
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

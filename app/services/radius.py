@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 from datetime import UTC, datetime
 
@@ -10,7 +11,6 @@ from app.metrics import observe_job
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
-    RadiusAttribute,
     RadiusProfile,
     Subscription,
     SubscriptionStatus,
@@ -43,6 +43,8 @@ from app.services.common import (
 from app.services.credential_crypto import decrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_int_setting(value: object) -> int | None:
@@ -264,6 +266,8 @@ def _external_sync_users(
     config: dict,
     credentials: list[AccessCredential],
 ) -> dict[str, int]:
+    from app.services.connection_type_provisioning import build_radius_reply_attributes
+
     radcheck = config["radcheck_table"]
     radreply = config["radreply_table"]
     radusergroup = config["radusergroup_table"]
@@ -275,7 +279,7 @@ def _external_sync_users(
 
     engine = create_engine(config["db_url"])
     created = 0
-    profile_cache: dict[str, tuple[RadiusProfile | None, list[RadiusAttribute]]] = {}
+    profile_cache: dict[str, RadiusProfile | None] = {}
     with engine.begin() as conn:
         for credential in credentials:
             subscription = (
@@ -307,49 +311,41 @@ def _external_sync_users(
                         "val": credential.secret_hash,
                     },
                 )
-            if credential.radius_profile_id:
-                cache_key = str(credential.radius_profile_id)
+
+            # Resolve profile from credential or subscription
+            profile_id = credential.radius_profile_id or subscription.radius_profile_id
+            profile: RadiusProfile | None = None
+            if profile_id:
+                cache_key = str(profile_id)
                 if cache_key not in profile_cache:
-                    profile = db.get(RadiusProfile, credential.radius_profile_id)
-                    attributes = []
-                    if profile:
-                        attributes = (
-                            db.query(RadiusAttribute)
-                            .filter(RadiusAttribute.profile_id == profile.id)
-                            .all()
-                        )
-                    profile_cache[cache_key] = (profile, attributes)
-                profile, attributes = profile_cache[cache_key]
-                if use_group and profile:
-                    conn.execute(
-                        text(f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"),  # noqa: S608
-                        {"u": username, "g": profile.name, "p": group_priority},
-                    )
-                if profile and profile.mikrotik_address_list:
-                    has_address_list = any(
-                        attr.attribute.lower() == "mikrotik-address-list"
-                        for attr in attributes
-                    )
-                    if not has_address_list:
-                        conn.execute(
-                            text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
-                            {
-                                "u": username,
-                                "attr": "Mikrotik-Address-List",
-                                "op": default_reply_op,
-                                "val": profile.mikrotik_address_list,
-                            },
-                        )
-                for attr in attributes:
-                    conn.execute(
-                        text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
-                        {
-                            "u": username,
-                            "attr": attr.attribute,
-                            "op": attr.operator or default_reply_op,
-                            "val": attr.value,
-                        },
-                    )
+                    profile_cache[cache_key] = db.get(RadiusProfile, profile_id)
+                profile = profile_cache[cache_key]
+
+            if use_group and profile:
+                conn.execute(
+                    text(f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"),  # noqa: S608
+                    {"u": username, "g": profile.name, "p": group_priority},
+                )
+
+            # Build connection-type-aware RADIUS reply attributes
+            reply_attrs = build_radius_reply_attributes(
+                db, subscription, profile=profile,
+            )
+            seen: set[str] = set()
+            for attr_dict in reply_attrs:
+                attr_key = attr_dict["attribute"].lower()
+                if attr_key in seen and attr_dict["op"] != "+=":
+                    continue
+                seen.add(attr_key)
+                conn.execute(
+                    text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
+                    {
+                        "u": username,
+                        "attr": attr_dict["attribute"],
+                        "op": attr_dict.get("op") or default_reply_op,
+                        "val": attr_dict["value"],
+                    },
+                )
             created += 1
     return {"external_users_synced": created}
 
@@ -731,9 +727,10 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
             synced = True
         except Exception:
             # Log but don't fail - the periodic sync will catch it
-            import logging
-            logging.getLogger(__name__).warning(
-                f"Failed to sync credential {credential.username} to RADIUS job {job.id}"
+            logger.warning(
+                "Failed to sync credential %s to RADIUS job %s",
+                credential.username,
+                job.id,
             )
 
     return synced
@@ -752,8 +749,6 @@ def sync_account_credentials_to_radius(db: Session, account_id) -> int:
     Returns:
         Number of credentials synced
     """
-    from app.services.common import coerce_uuid
-
     account_uuid = coerce_uuid(account_id)
     credentials = (
         db.query(AccessCredential)

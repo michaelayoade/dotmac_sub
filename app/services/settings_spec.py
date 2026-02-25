@@ -1187,6 +1187,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Default MikroTik Address List",
     ),
     SettingSpec(
+        domain=SettingDomain.network,
+        key="hotspot_walled_garden",
+        env_var="NETWORK_HOTSPOT_WALLED_GARDEN",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Hotspot Walled Garden Domains (comma-separated)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="hotspot_redirect_url",
+        env_var="NETWORK_HOTSPOT_REDIRECT_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Hotspot Login Redirect URL",
+    ),
+    SettingSpec(
         domain=SettingDomain.collections,
         key="default_dunning_case_status",
         env_var="COLLECTIONS_DEFAULT_DUNNING_CASE_STATUS",
