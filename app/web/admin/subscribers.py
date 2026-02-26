@@ -1,6 +1,7 @@
 """Admin subscriber management web routes."""
 
 import json
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
@@ -9,23 +10,33 @@ from fastapi import (
     APIRouter,
     Body,
     Depends,
+    File,
     Form,
     HTTPException,
     Query,
     Request,
     Response,
+    UploadFile,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationChannel, NotificationStatus
+from app.models.stored_file import StoredFile
 from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import AddressUpdate, SubscriberUpdate
 from app.services import audit as audit_service
 from app.services import customer_portal
+from app.services import geocoding as geocoding_service
+from app.services import gis_sync as gis_sync_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
@@ -34,6 +45,8 @@ from app.services import web_subscriber_actions as web_subscriber_actions_servic
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
 from app.services.auth_dependencies import require_permission
+from app.services.file_storage import build_content_disposition, file_uploads
+from app.services.object_storage import ObjectNotFoundError
 from app.services.web_subscriber_details import (
     build_subscriber_detail_page_context,
 )
@@ -44,6 +57,7 @@ from app.services.web_subscriber_forms import (
 )
 from app.web.request_parsing import parse_json_body
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/subscribers", tags=["web-admin-subscribers"])
 
@@ -393,7 +407,14 @@ def subscriber_detail(
             db=db,
             subscriber_id=subscriber_id,
         )
+    except HTTPException as exc:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": exc.detail or "Subscriber not found"},
+            status_code=exc.status_code,
+        )
     except Exception:
+        logger.exception("Error loading subscriber detail %s", subscriber_id)
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Subscriber not found"},
@@ -822,6 +843,7 @@ def subscriber_add_comment(
     comment: str = Form(...),
     is_todo: str | None = Form(None),
     mention_ids: str | None = Form(None),
+    attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
     """Add a comment to the subscriber activity timeline."""
@@ -836,6 +858,48 @@ def subscriber_add_comment(
     cleaned_comment = comment.strip()
     if not cleaned_comment:
         return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
+
+    actor_id = _actor_id(request)
+    organization_id = (
+        file_uploads.resolve_user_organization(db, actor_id) if actor_id else None
+    )
+    uploaded_attachments: list[dict[str, object]] = []
+    for attachment in attachments or []:
+        filename = (attachment.filename or "").strip()
+        if not filename:
+            continue
+        payload = attachment.file.read()
+        if not payload:
+            continue
+        try:
+            record = file_uploads.upload(
+                db=db,
+                domain="attachments",
+                entity_type="subscriber_comment_attachment",
+                entity_id=str(subscriber_id),
+                original_filename=filename,
+                content_type=attachment.content_type,
+                data=payload,
+                uploaded_by=actor_id,
+                organization_id=organization_id,
+            )
+        except ValueError as exc:
+            return _toast_response(
+                request=request,
+                redirect_url=f"/admin/subscribers/{subscriber_id}",
+                ok=False,
+                title="Attachment upload failed",
+                message=str(exc),
+            )
+        uploaded_attachments.append(
+            {
+                "id": str(record.id),
+                "filename": record.original_filename,
+                "size": record.file_size,
+                "content_type": record.content_type,
+            }
+        )
+
     mentioned_subscriber_ids = _parse_mentioned_subscriber_ids(mention_ids)
     notified_count, resolved_mentions = _notify_tagged_subscribers(
         db,
@@ -850,13 +914,14 @@ def subscriber_add_comment(
         action="comment",
         entity_type="subscriber",
         entity_id=str(subscriber_id),
-        actor_id=_actor_id(request),
+        actor_id=actor_id,
         metadata={
             "comment": cleaned_comment,
             "is_todo": bool(is_todo),
             "is_completed": False,
             "mentions": resolved_mentions,
             "notified_users": notified_count,
+            "attachments": uploaded_attachments,
         },
     )
     return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
@@ -901,6 +966,49 @@ def subscriber_toggle_comment_todo(
         },
     )
     return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
+
+
+@router.get(
+    "/{subscriber_id}/comments/files/{file_id}/download",
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def subscriber_comment_file_download(
+    request: Request,
+    subscriber_id: UUID,
+    file_id: UUID,
+    db: Session = Depends(get_db),
+):
+    record = db.get(StoredFile, file_id)
+    if not record or record.is_deleted:
+        raise HTTPException(status_code=404, detail="File not found")
+    if (
+        record.entity_type != "subscriber_comment_attachment"
+        or str(record.entity_id) != str(subscriber_id)
+    ):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    current_org = (
+        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else None
+    )
+    file_uploads.assert_tenant_access(record, current_org)
+    try:
+        stream = file_uploads.stream_file(record)
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+
+    headers = {"Content-Disposition": build_content_disposition(record.original_filename)}
+    if stream.content_length is not None:
+        headers["Content-Length"] = str(stream.content_length)
+    return StreamingResponse(
+        stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+        headers=headers,
+    )
 
 
 @router.get(
@@ -1186,6 +1294,85 @@ def geocode_primary_address(
     )
 
 
+@router.post(
+    "/{subscriber_id}/geocode-now",
+    response_class=JSONResponse,
+)
+def geocode_primary_now(
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Automatically geocode primary subscriber address and persist coordinates."""
+    from app.schemas.subscriber import AddressCreate, AddressUpdate
+
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+
+    addresses = subscriber_service.addresses.list(
+        db=db,
+        subscriber_id=str(subscriber_id),
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    primary_address = next((addr for addr in addresses if addr.is_primary), addresses[0] if addresses else None)
+    created = False
+    if primary_address is None:
+        if not (subscriber.address_line1 or "").strip():
+            raise HTTPException(status_code=400, detail="No address available to geocode")
+        primary_address = subscriber_service.addresses.create(
+            db=db,
+            payload=AddressCreate(
+                subscriber_id=subscriber_id,
+                address_line1=subscriber.address_line1,
+                address_line2=subscriber.address_line2,
+                city=subscriber.city,
+                region=subscriber.region,
+                postal_code=subscriber.postal_code,
+                country_code=subscriber.country_code,
+                is_primary=True,
+            ),
+        )
+        created = True
+
+    payload = {
+        "address_line1": primary_address.address_line1,
+        "address_line2": primary_address.address_line2,
+        "city": primary_address.city,
+        "region": primary_address.region,
+        "postal_code": primary_address.postal_code,
+        "country_code": primary_address.country_code,
+    }
+    resolved = geocoding_service.geocode_address(db, payload)
+    lat = resolved.get("latitude")
+    lon = resolved.get("longitude")
+    if lat is None or lon is None:
+        raise HTTPException(status_code=422, detail="No geocoding result for this address")
+
+    updated = subscriber_service.addresses.update(
+        db=db,
+        address_id=str(primary_address.id),
+        payload=AddressUpdate(latitude=float(lat), longitude=float(lon)),
+    )
+
+    try:
+        gis_sync_service.geo_sync.sync_addresses(db, deactivate_missing=False)
+    except Exception:
+        db.rollback()
+
+    return JSONResponse(
+        {
+            "success": True,
+            "created_address": created,
+            "address_id": str(updated.id),
+            "latitude": updated.latitude,
+            "longitude": updated.longitude,
+        }
+    )
+
+
 @router.post("/{subscriber_id}/deactivate", response_class=HTMLResponse)
 def subscriber_deactivate(
     request: Request,
@@ -1425,18 +1612,24 @@ def subscriber_delete(
     subscriber_id: UUID,
     db: Session = Depends(get_db),
 ):
-    """Delete a subscriber (soft delete)."""
+    """Mark a subscriber as deleted for recovery (soft delete)."""
     try:
-        web_subscriber_actions_service.delete_subscriber(db=db, subscriber_id=subscriber_id)
         from app.web.admin import get_current_user
         current_user = get_current_user(request)
+        actor_id = str(current_user.get("subscriber_id")) if current_user else None
+        web_subscriber_actions_service.delete_subscriber(
+            db=db,
+            subscriber_id=subscriber_id,
+            actor_id=actor_id,
+        )
         log_audit_event(
             db=db,
             request=request,
             action="delete",
             entity_type="subscriber",
             entity_id=str(subscriber_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=actor_id,
+            metadata={"mode": "soft_delete_recoverable"},
         )
 
         if request.headers.get("HX-Request"):
@@ -1520,6 +1713,9 @@ def bulk_delete(
     """Bulk delete inactive subscribers."""
     try:
         ids = body.get("subscriber_ids", [])
+        from app.web.admin import get_current_user
+        current_user = get_current_user(request)
+        actor_id = str(current_user.get("subscriber_id")) if current_user else None
 
         if not ids:
             return _htmx_error_response("No subscribers selected", title="Error", reswap="none")
@@ -1527,9 +1723,10 @@ def bulk_delete(
         deleted_count, skipped_active = web_subscriber_actions_service.bulk_delete_inactive_subscribers(
             db=db,
             subscriber_ids=ids,
+            actor_id=actor_id,
         )
 
-        message_parts = [f"{deleted_count} subscriber(s) deleted"]
+        message_parts = [f"{deleted_count} subscriber(s) moved to recovery queue"]
         if skipped_active > 0:
             message_parts.append(f"{skipped_active} active (skipped)")
 
