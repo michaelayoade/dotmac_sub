@@ -25,7 +25,7 @@ opentelemetry-exporter-otlp = "1.26.0"
 opentelemetry-instrumentation-fastapi = "0.47b0"
 opentelemetry-instrumentation-sqlalchemy = "0.47b0"
 opentelemetry-instrumentation-celery = "0.47b0"
-python-jose = {version = "3.3.0", extras = ["cryptography"]}
+authlib = ">=1.3.0,<2.0"
 passlib = {version = "1.7.4", extras = ["bcrypt"]}
 pyotp = "2.9.0"
 cryptography = "42.0.8"

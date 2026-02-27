@@ -7,11 +7,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pyotp
+from authlib.jose import JsonWebToken
+from authlib.jose.errors import JoseError
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, Request, Response, status
-from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import func, select as sa_select
+from sqlalchemy import func
+from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -241,7 +243,8 @@ def _issue_access_token(
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    alg = _jwt_algorithm(db)
+    return JsonWebToken([alg]).encode({"alg": alg}, payload, _jwt_secret(db).encode()).decode()
 
 
 def _issue_mfa_token(
@@ -258,7 +261,8 @@ def _issue_mfa_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
     }
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    alg = _jwt_algorithm(db)
+    return JsonWebToken([alg]).encode({"alg": alg}, payload, _jwt_secret(db).encode()).decode()
 
 
 def _password_reset_ttl_minutes(db: Session | None) -> int:
@@ -299,7 +303,8 @@ def _issue_password_reset_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()),
     }
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    alg = _jwt_algorithm(db)
+    return JsonWebToken([alg]).encode({"alg": alg}, payload, _jwt_secret(db).encode()).decode()
 
 
 def _decode_password_reset_token(db: Session | None, token: str) -> dict:
@@ -307,13 +312,13 @@ def _decode_password_reset_token(db: Session | None, token: str) -> dict:
 
 
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
+    alg = _jwt_algorithm(db)
     try:
-        payload = cast(
-            dict[Any, Any],
-            jwt.decode(token, _jwt_secret(db), algorithms=[_jwt_algorithm(db)]),
-        )
-    except JWTError as exc:
+        claims = JsonWebToken([alg]).decode(token, _jwt_secret(db).encode())
+        claims.validate()
+    except JoseError as exc:
         raise HTTPException(status_code=401, detail="Invalid token") from exc
+    payload = cast(dict[Any, Any], dict(claims))
     if payload.get("typ") != expected_type:
         raise HTTPException(status_code=401, detail="Invalid token type")
     return payload

@@ -2,8 +2,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from authlib.jose import JsonWebToken
 from fastapi import HTTPException
-from jose import jwt
 from starlette.requests import Request
 
 from app.models.auth import ApiKey, AuthProvider, SessionStatus, UserCredential
@@ -28,7 +28,7 @@ def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None
         payload["scopes"] = scopes
     if roles:
         payload["roles"] = roles
-    return jwt.encode(payload, "test-secret", algorithm="HS256")
+    return JsonWebToken(["HS256"]).encode({"alg": "HS256"}, payload, b"test-secret").decode()
 
 
 def _make_request():
@@ -209,11 +209,11 @@ def test_require_user_auth_missing_token(db_session):
 
 def test_require_user_auth_missing_claims(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    token = jwt.encode(
+    token = JsonWebToken(["HS256"]).encode(
+        {"alg": "HS256"},
         {"typ": "access", "iat": 1, "exp": 9999999999},
-        "test-secret",
-        algorithm="HS256",
-    )
+        b"test-secret",
+    ).decode()
     with pytest.raises(HTTPException):
         require_user_auth(authorization=f"Bearer {token}", db=db_session)
 

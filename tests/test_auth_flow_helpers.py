@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 
 import pyotp
 import pytest
+from authlib.jose import JsonWebToken
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
-from jose import jwt
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, UserCredential
@@ -161,7 +161,7 @@ def test_issue_and_decode_tokens(monkeypatch):
     access = auth_flow_service._issue_access_token(
         None, "person", "session", roles=["admin"], permissions=["audit:read"]
     )
-    payload = jwt.decode(access, "test-secret", algorithms=["HS256"])
+    payload = dict(JsonWebToken(["HS256"]).decode(access, b"test-secret"))
     assert payload["roles"] == ["admin"]
     assert payload["scopes"] == ["audit:read"]
 
@@ -360,11 +360,11 @@ def test_mfa_verify_missing_method(db_session, person, monkeypatch):
 
 def test_mfa_verify_missing_sub(monkeypatch, db_session):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    token = jwt.encode(
+    token = JsonWebToken(["HS256"]).encode(
+        {"alg": "HS256"},
         {"typ": "mfa", "iat": 1, "exp": 9999999999},
-        "test-secret",
-        algorithm="HS256",
-    )
+        b"test-secret",
+    ).decode()
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.mfa_verify(db_session, token, "123456", _make_request())
 
@@ -534,10 +534,10 @@ def test_password_reset_invalid_person(monkeypatch, db_session):
 
 def test_password_reset_missing_claims(monkeypatch, db_session):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    token = jwt.encode(
+    token = JsonWebToken(["HS256"]).encode(
+        {"alg": "HS256"},
         {"typ": "password_reset", "iat": 1, "exp": 9999999999},
-        "test-secret",
-        algorithm="HS256",
-    )
+        b"test-secret",
+    ).decode()
     with pytest.raises(HTTPException):
         auth_flow_service.reset_password(db_session, token, "new")

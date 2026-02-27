@@ -1,8 +1,6 @@
 import os
 import sqlite3
 import uuid
-from datetime import UTC
-from typing import Any
 
 import pytest
 from sqlalchemy import String, TypeDecorator, create_engine, event
@@ -10,30 +8,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-
-
-class _JoseDateTimeProxy:
-    def utcnow(self):
-        from datetime import datetime
-
-        return datetime.now(UTC)
-
-    def now(self, tz: Any | None = None):
-        from datetime import datetime
-
-        return datetime.now(tz)
-
-    def __getattr__(self, name: str) -> Any:
-        from datetime import datetime
-
-        return getattr(datetime, name)
-
-
-@pytest.fixture(autouse=True)
-def _patch_jose_datetime(monkeypatch):
-    import jose.jwt as jose_jwt
-
-    monkeypatch.setattr(jose_jwt, "datetime", _JoseDateTimeProxy(), raising=False)
 
 # Register UUID adapter for SQLite - store as string
 sqlite3.register_adapter(uuid.UUID, lambda u: str(u))
