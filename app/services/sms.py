@@ -12,8 +12,11 @@ Configuration via environment variables or DomainSettings:
 - SMS_WEBHOOK_URL (for webhook provider)
 """
 
+import ipaddress
 import logging
 import os
+import socket
+import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,6 +34,35 @@ from app.models.notification import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_webhook_target(webhook_url: str) -> None:
+    """Reject private/internal webhook targets to prevent SSRF."""
+    parsed_url = urllib.parse.urlparse(webhook_url)
+    hostname = parsed_url.hostname
+    if not hostname:
+        raise ValueError("SMS webhook URL is missing hostname")
+
+    resolved_ips: list[str] = []
+    try:
+        resolved_ips.append(str(ipaddress.ip_address(hostname)))
+    except ValueError:
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+        except socket.gaierror as exc:
+            raise ValueError(
+                f"SMS webhook hostname resolution failed: {hostname}"
+            ) from exc
+        resolved_ips.extend(item[4][0] for item in resolved)
+
+    for ip in resolved_ips:
+        resolved_ip = ipaddress.ip_address(ip)
+        if (
+            resolved_ip.is_private
+            or resolved_ip.is_loopback
+            or resolved_ip.is_link_local
+        ):
+            raise ValueError("SSRF blocked")
 
 
 def _get_setting(db: Session, key: str, env_key: str | None = None, default: str | None = None) -> str | None:
@@ -180,6 +212,8 @@ def _send_via_webhook(
     Returns: (success, external_id, error_message)
     """
     try:
+        _validate_webhook_target(webhook_url)
+
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
