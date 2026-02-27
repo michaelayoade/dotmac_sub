@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/hotfix-ci-22473772604-v2
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/hotfix-ci-22473772604-v2.log
+TASK_ID=hotfix-ci-22473772604-v2
+DESCRIPTION=HOTFIX:\ CI\ failure\ on\ main\ —\ poetry.lock\ is\ stale\ because\ pyproject.toml\ was\ updated\ \(jinja2\ 3.1.6\,\ cryptography\ \>=44.0.1\,\ fastapi\ \>=0.115.0\,\ uvicorn\ \>=0.34.0\,\ OTel\ 1.39.1/0.60b1\)\ without\ regenerating\ the\ lock\ file.\ Fix:\ cd\ into\ the\ project\ root\,\ run\ \'poetry\ lock\ --no-update\'\ to\ regenerate\ poetry.lock\,\ then\ run\ \'make\ check\ \&\&\ make\ test\'\ to\ verify.\ If\ make\ check\ fails\ due\ to\ missing\ packages\,\ run\ \'poetry\ install\'\ first.\ Commit\ the\ updated\ poetry.lock\ file.
+BRANCH=agent/hotfix-ci-22473772604-v2
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
