@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
+import nh3
 from sqlalchemy.orm import Session
 
 from app.models.contracts import ContractSignature
@@ -177,7 +178,25 @@ class ContractSignatures:
             db, LegalDocumentType.terms_of_service
         )
         if contract_template and contract_template.content:
-            contract_html = contract_template.content
+            contract_html = nh3.clean(
+                contract_template.content,
+                tags={
+                    "p",
+                    "h1",
+                    "h2",
+                    "h3",
+                    "ul",
+                    "ol",
+                    "li",
+                    "strong",
+                    "em",
+                    "a",
+                    "blockquote",
+                    "br",
+                    "span",
+                },
+                attributes={"a": ["href"]},
+            )
         else:
             contract_html = (
                 "<h2>Service Agreement</h2>"
