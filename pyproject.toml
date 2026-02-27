@@ -9,7 +9,7 @@ package-mode = false
 python = ">=3.11,<3.13"
 fastapi = ">=0.115.0"
 uvicorn = {version = ">=0.34.0", extras = ["standard"]}
-sqlalchemy = "2.0.31"
+sqlalchemy = ">=2.0.40"
 psycopg = {version = "3.1.19", extras = ["binary"]}
 alembic = "1.13.2"
 pydantic = "2.7.4"
