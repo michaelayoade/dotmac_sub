@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2026-02-27]
 
 ### Security
+- [Security] Fix IDOR in WireGuard peer config download: `download_peer_config()` and `download_mikrotik_script()` now verify peer ownership against the caller's subscriber_id; non-admin callers receive 403 for peers they do not own (PR #38)
+- [Security] Change `plaintext_login=True` to `plaintext_login=False` for RouterOS API connections in `wireguard.py`, `web_vpn_servers.py`, `provisioning_adapters.py`, and `mikrotik_poller.py` to prevent passwords being sent in plaintext (PR #41)
+- [Security] Change non-loopback `http://` defaults in `app/config.py` to `https://`; add startup warning log when any configured service URL uses `http://` to a non-loopback host (PR #36)
+- [Security] Add inline rationale to all `# noqa: S608` suppressions in `radius.py` and `enforcement.py`: table names are validated against `ALLOWED_RADIUS_TABLES` allowlist, not user-supplied input (PR #37)
 - [Security] Upgrade jinja2 from 3.1.4 to 3.1.6 to fix CVE-2024-56201 and CVE-2024-56326 (sandbox escape via `|attr` filter chains and `__init_subclass__`) (PR #1)
 - [Security] Upgrade cryptography from 42.0.8 to >=44.0.1 to fix CVE-2024-12797 (OpenSSL X.509 certificate verification bypass) (PR #2)
 - [Security] Migrate JWT library from python-jose (CVE-2024-33663, CVE-2024-33664, abandoned 2022) to authlib; explicit algorithm enforcement prevents algorithm-confusion attacks (PR #8)
@@ -38,11 +42,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Security] Fix path traversal in OLT backup path validation in `web_network_olts.py`: replace `str.startswith()` check with `Path.resolve().relative_to()` containment check (PR #35)
 
 ### Changed
+- [Changed] Upgrade celery from 5.4.0 to >=5.5.0 (PR #40)
+- [Changed] Upgrade redis from 5.0.4 to >=5.2.0 (PR #39)
+- [Changed] Upgrade sqlalchemy from 2.0.31 to >=2.0.40 (PR #43)
+- [Changed] Upgrade alembic from 1.13.2 to >=1.14.0 (PR #42)
+- [Changed] Upgrade shapely from 2.0.4 to >=2.1.0; verified geoalchemy2 0.14.7 compatibility (PR #45)
+- [Changed] Add explicit `urllib3>=2.0` dependency to mitigate CVE-2023-43804 and CVE-2023-45803 (PR #44)
 - [Changed] Upgrade OpenTelemetry from 1.26.0 to 1.39.1 and instrumentation packages from 0.47b0 (beta) to stable 0.60b1 (PR #6)
 - [Changed] Upgrade fastapi to >=0.115.0 and uvicorn to >=0.34.0 for security-relevant Starlette fixes and request validation improvements (commit c10d3bf)
 - [Changed] Upgrade weasyprint from 61.2 to >=65.0 to address SSRF risks in older versions when rendering user-supplied HTML (PR #27)
 - [Changed] Upgrade pydantic from 2.7.4 to >=2.11.0 (PR #28)
 - [Changed] Upgrade httpx from 0.27.0 to >=0.28.0 (PR #34)
+
+### Added
+- [Added] Automated security tests in `tests/security/` covering SSRF guards (webhook delivery, SMS webhook), path traversal (file storage, export download), and login rate limiting (PR #47)
 
 ### Fixed
 - [Fixed] Regenerate `poetry.lock` after pyproject.toml dependency upgrades to resolve CI lock-file staleness failure (PR #9)
