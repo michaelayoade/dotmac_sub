@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+import nh3
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,23 @@ from app.services.object_storage import ObjectNotFoundError, StreamResult
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = "uploads/legal"
+ALLOWED_HTML_TAGS = {
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "ul",
+    "ol",
+    "li",
+    "strong",
+    "em",
+    "a",
+    "blockquote",
+    "br",
+    "span",
+    "div",
+}
+ALLOWED_HTML_ATTRIBUTES = {"a": ["href"]}
 
 
 class LegalDocumentService:
@@ -106,13 +124,14 @@ class LegalDocumentService:
         )
 
     def create(self, db: Session, payload: LegalDocumentCreate) -> LegalDocument:
+        clean_content = self._sanitize_content(payload.content)
         document = LegalDocument(
             document_type=payload.document_type,
             title=payload.title,
             slug=payload.slug,
             version=payload.version,
             summary=payload.summary,
-            content=payload.content,
+            content=clean_content,
             is_published=payload.is_published,
             effective_date=payload.effective_date,
         )
@@ -134,6 +153,8 @@ class LegalDocumentService:
             return None
 
         update_data = payload.model_dump(exclude_unset=True)
+        if "content" in update_data and update_data["content"] is not None:
+            update_data["content"] = self._sanitize_content(update_data["content"])
         if "is_published" in update_data and update_data["is_published"]:
             if not document.is_published:
                 update_data["published_at"] = datetime.now(UTC)
@@ -301,6 +322,15 @@ class LegalDocumentService:
             )
         ).update({"is_current": False})
         document.is_current = True
+
+    def _sanitize_content(self, content: str | None) -> str | None:
+        if content is None:
+            return None
+        return nh3.clean(
+            content,
+            tags=ALLOWED_HTML_TAGS,
+            attributes=ALLOWED_HTML_ATTRIBUTES,
+        )
 
 
 legal_documents = LegalDocumentService()

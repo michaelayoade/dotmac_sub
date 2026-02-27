@@ -278,6 +278,26 @@ class TestLegalDocumentCreate:
         assert result.summary == "Our privacy practices"
         assert result.content == "Full privacy policy text..."
 
+    def test_create_sanitizes_content(self, db_session):
+        """Test creating document sanitizes HTML content."""
+        payload = LegalDocumentCreate(
+            document_type=LegalDocumentType.privacy_policy,
+            title="Sanitized Privacy",
+            slug="sanitized-privacy-create",
+            version="1.0",
+            content=(
+                '<p>Safe</p><script>alert("x")</script>'
+                '<a href="https://example.com" onclick="evil()">Link</a>'
+            ),
+        )
+
+        result = legal.legal_documents.create(db_session, payload)
+
+        assert result.content is not None
+        assert "<script" not in result.content
+        assert "onclick" not in result.content
+        assert '<a href="https://example.com"' in result.content
+
     def test_create_published_sets_timestamp(self, db_session):
         """Test creating published document sets published_at."""
         payload = LegalDocumentCreate(
@@ -396,6 +416,33 @@ class TestLegalDocumentUpdate:
         db_session.refresh(old_current)
         assert result.is_current is True
         assert old_current.is_current is False
+
+    def test_update_sanitizes_content(self, db_session):
+        """Test updating document sanitizes HTML content."""
+        doc = LegalDocument(
+            document_type=LegalDocumentType.terms_of_service,
+            title="Content Update",
+            slug="content-update-sanitize",
+            version="1.0",
+            content="<p>Original</p>",
+        )
+        db_session.add(doc)
+        db_session.commit()
+
+        payload = LegalDocumentUpdate(
+            content=(
+                '<h1>Updated</h1><img src=x onerror="alert(1)">'
+                '<a href="https://example.org" onclick="evil()">Terms</a>'
+            )
+        )
+        result = legal.legal_documents.update(db_session, str(doc.id), payload)
+
+        assert result is not None
+        assert result.content is not None
+        assert "<img" not in result.content
+        assert "onerror" not in result.content
+        assert "onclick" not in result.content
+        assert '<a href="https://example.org"' in result.content
 
 
 # =============================================================================
