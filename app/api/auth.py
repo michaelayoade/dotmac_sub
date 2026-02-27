@@ -20,6 +20,7 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ router = APIRouter()
     "/user-credentials",
     response_model=UserCredentialRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
 def create_user_credential(payload: UserCredentialCreate, db: Session = Depends(get_db)):
@@ -37,6 +39,7 @@ def create_user_credential(payload: UserCredentialCreate, db: Session = Depends(
 @router.get(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
 def get_user_credential(credential_id: str, db: Session = Depends(get_db)):
@@ -46,6 +49,7 @@ def get_user_credential(credential_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/user-credentials",
     response_model=ListResponse[UserCredentialRead],
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
 def list_user_credentials(
@@ -66,6 +70,7 @@ def list_user_credentials(
 @router.patch(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
 def update_user_credential(
@@ -77,6 +82,7 @@ def update_user_credential(
 @router.delete(
     "/user-credentials/{credential_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
 def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
@@ -87,6 +93,7 @@ def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
     "/mfa-methods",
     response_model=MFAMethodRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["mfa-methods"],
 )
 def create_mfa_method(payload: MFAMethodCreate, db: Session = Depends(get_db)):
@@ -96,6 +103,7 @@ def create_mfa_method(payload: MFAMethodCreate, db: Session = Depends(get_db)):
 @router.get(
     "/mfa-methods/{method_id}",
     response_model=MFAMethodRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["mfa-methods"],
 )
 def get_mfa_method(method_id: str, db: Session = Depends(get_db)):
@@ -105,6 +113,7 @@ def get_mfa_method(method_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/mfa-methods",
     response_model=ListResponse[MFAMethodRead],
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["mfa-methods"],
 )
 def list_mfa_methods(
@@ -136,6 +145,7 @@ def list_mfa_methods(
 @router.patch(
     "/mfa-methods/{method_id}",
     response_model=MFAMethodRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["mfa-methods"],
 )
 def update_mfa_method(
@@ -147,6 +157,7 @@ def update_mfa_method(
 @router.delete(
     "/mfa-methods/{method_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["mfa-methods"],
 )
 def delete_mfa_method(method_id: str, db: Session = Depends(get_db)):
@@ -157,6 +168,7 @@ def delete_mfa_method(method_id: str, db: Session = Depends(get_db)):
     "/sessions",
     response_model=SessionRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["sessions"],
 )
 def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
@@ -166,6 +178,7 @@ def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
 @router.get(
     "/sessions/{session_id}",
     response_model=SessionRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["sessions"],
 )
 def get_session(session_id: str, db: Session = Depends(get_db)):
@@ -175,6 +188,7 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/sessions",
     response_model=ListResponse[SessionRead],
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["sessions"],
 )
 def list_sessions(
@@ -194,6 +208,7 @@ def list_sessions(
 @router.patch(
     "/sessions/{session_id}",
     response_model=SessionRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["sessions"],
 )
 def update_session(
@@ -205,6 +220,7 @@ def update_session(
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["sessions"],
 )
 def delete_session(session_id: str, db: Session = Depends(get_db)):
@@ -215,6 +231,7 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
     "/api-keys",
     response_model=ApiKeyRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
@@ -225,6 +242,7 @@ def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
     "/api-keys/generate",
     response_model=ApiKeyGenerateResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def generate_api_key(
@@ -238,6 +256,7 @@ def generate_api_key(
 @router.get(
     "/api-keys/{key_id}",
     response_model=ApiKeyRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def get_api_key(key_id: str, db: Session = Depends(get_db)):
@@ -247,6 +266,7 @@ def get_api_key(key_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/api-keys",
     response_model=ListResponse[ApiKeyRead],
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def list_api_keys(
@@ -266,6 +286,7 @@ def list_api_keys(
 @router.patch(
     "/api-keys/{key_id}",
     response_model=ApiKeyRead,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get_db)):
@@ -275,6 +296,7 @@ def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get
 @router.delete(
     "/api-keys/{key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("auth:admin"))],
     tags=["api-keys"],
 )
 def delete_api_key(key_id: str, db: Session = Depends(get_db)):
