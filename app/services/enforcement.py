@@ -33,6 +33,16 @@ logger = logging.getLogger(__name__)
 # Characters that could break RouterOS CLI quoting or inject commands
 _ROUTEROS_UNSAFE_RE = re.compile(r'[";\\{}\n\r]')
 
+ALLOWED_RADIUS_TABLES = frozenset(
+    {"radcheck", "radreply", "radusergroup", "radpostauth", "radacct", "nas"}
+)
+
+
+def validate_radius_table(name: str) -> str:
+    if name not in ALLOWED_RADIUS_TABLES:
+        raise ValueError(f"Unsupported RADIUS table name: {name!r}")
+    return name
+
 
 def _sanitize_routeros_value(value: str) -> str:
     """Remove characters that could break RouterOS CLI quoting."""
@@ -730,9 +740,9 @@ def _delete_users_from_external_radius(
     """Delete user entries from an external FreeRADIUS database."""
     from sqlalchemy import create_engine, text
 
-    radcheck = config["radcheck_table"]
-    radreply = config["radreply_table"]
-    radusergroup = config["radusergroup_table"]
+    radcheck = validate_radius_table(config["radcheck_table"])
+    radreply = validate_radius_table(config["radreply_table"])
+    radusergroup = validate_radius_table(config["radusergroup_table"])
     use_group = config["use_group"]
 
     engine = create_engine(config["db_url"])
