@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urlparse
+import ipaddress
+import socket
+import urllib.parse
 from typing import cast
 from uuid import UUID
 
@@ -239,7 +241,7 @@ def build_embedded_connector_data(
 ) -> dict[str, object]:
     connector = connector_service.connector_configs.get(db, connector_id)
     base_url = (connector.base_url or "").strip()
-    parsed = urlparse(base_url) if base_url else None
+    parsed = urllib.parse.urlparse(base_url) if base_url else None
     is_http = bool(parsed and parsed.scheme in {"http", "https"} and parsed.netloc)
     health_status = "ready" if is_http else "misconfigured"
     health_http_status: int | None = None
@@ -265,6 +267,14 @@ def build_embedded_connector_data(
 
 def _probe_embedded_url_health(url: str) -> tuple[str, int | None, str]:
     try:
+        parsed = urllib.parse.urlparse(url)
+        hostname = parsed.hostname
+        if hostname:
+            addrinfos = socket.getaddrinfo(hostname, None)
+            for addrinfo in addrinfos:
+                ip = ipaddress.ip_address(addrinfo[4][0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local:
+                    raise ValueError("SSRF blocked: target resolves to internal address")
         response = httpx.get(url, timeout=6.0, follow_redirects=True)
     except Exception as exc:
         return (
