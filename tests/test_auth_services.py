@@ -55,6 +55,22 @@ def _make_request(user_agent: str = "pytest") -> Request:
     return Request(scope)
 
 
+@pytest.mark.parametrize(
+    ("next_url", "fallback", "expected"),
+    [
+        ("/admin/dashboard", "/admin/dashboard", "/admin/dashboard"),
+        ("/portal/dashboard", "/admin/dashboard", "/portal/dashboard"),
+        ("//evil.com", "/admin/dashboard", "/admin/dashboard"),
+        ("https://evil.com/phish", "/admin/dashboard", "/admin/dashboard"),
+        ("https://evil.com/phish", "/auth/login", "/auth/login"),
+        ("", "/admin/dashboard", "/admin/dashboard"),
+        (None, "/admin/dashboard", "/admin/dashboard"),
+    ],
+)
+def test_web_safe_next_only_allows_root_relative_paths(next_url, fallback, expected):
+    assert web_auth_service._safe_next(next_url, fallback) == expected
+
+
 def test_user_credentials_soft_delete(db_session, person):
     payload = UserCredentialCreate(
         person_id=person.id,
