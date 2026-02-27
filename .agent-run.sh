@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-26
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
-SCRIPT_DIR=/home/dotmac/.seabone/scripts
+SCRIPT_DIR=/home/dotmac/projects/dotmac_sub/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-26.log
+TASK_ID=fix-security-c1-26
+DESCRIPTION=Stored\ XSS\ via\ legal\ document\ content.\ Legal\ document\ HTML\ is\ rendered\ with\ \|\ safe\ in\ templates/public/legal/document.html:108\ on\ a\ public\ page\ without\ sanitization.\ Read\ the\ service\ that\ saves\ legal\ documents\ \(search\ app/services/\ for\ where\ document.content\ is\ written\ to\ the\ DB\ —\ likely\ app/services/legal.py\ or\ similar\).\ Fix:\ \(1\)\ Add\ nh3\>=0.2.0\ to\ pyproject.toml\ if\ not\ present.\ \(2\)\ In\ the\ service\ method\ that\ creates/updates\ a\ legal\ document\,\ import\ nh3\ and\ sanitize\ the\ content\ field\ before\ writing\ to\ DB:\ content\ =\ nh3.clean\(data.content\,\ tags=\{\'p\'\,\'h1\'\,\'h2\'\,\'h3\'\,\'ul\'\,\'ol\'\,\'li\'\,\'strong\'\,\'em\'\,\'a\'\,\'blockquote\'\,\'br\'\,\'span\'\,\'div\'\}\,\ attributes=\{\'a\':\ \[\'href\'\]\}\).\ \(3\)\ The\ \|\ safe\ in\ the\ template\ is\ then\ safe\ because\ the\ stored\ value\ is\ always\ clean.\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-26
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
@@ -75,11 +75,13 @@ if [[ "$ENGINE" == "claude" ]]; then
 elif [[ "$ENGINE" == "claude-frontend" ]]; then
     echo "[RUN] Claude Frontend Design Specialist..."
 
+    # Load the frontend design system prompt
     FRONTEND_PROMPT=""
     if [[ -f "$PROMPTS_DIR/frontend-design.md" ]]; then
         FRONTEND_PROMPT=$(cat "$PROMPTS_DIR/frontend-design.md")
     fi
 
+    # Build the full prompt: system context + task
     FULL_TASK="$FRONTEND_PROMPT
 
 ---
@@ -139,6 +141,7 @@ elif [[ "$ENGINE" == "codex" ]]; then
 elif [[ "$ENGINE" == "codex-test" ]]; then
     echo "[RUN] Codex Testing Specialist..."
 
+    # Load the testing system prompt
     TEST_PROMPT=""
     if [[ -f "$PROMPTS_DIR/testing-agent.md" ]]; then
         TEST_PROMPT=$(cat "$PROMPTS_DIR/testing-agent.md")
@@ -181,15 +184,19 @@ ${DESCRIPTION}
 elif [[ "$ENGINE" == "codex-senior" ]]; then
     echo "[RUN] Codex Senior Dev (Escalation)..."
 
+    # Load the senior dev system prompt
     SENIOR_PROMPT=""
     if [[ -f "$PROMPTS_DIR/senior-dev.md" ]]; then
         SENIOR_PROMPT=$(cat "$PROMPTS_DIR/senior-dev.md")
     fi
 
+    # Check for previous agent logs to provide context
     PREV_LOG_CONTEXT=""
+    # Extract base task ID (strip -v2, -v3 suffixes for escalation lookups)
     BASE_TASK_ID=$(echo "$TASK_ID" | sed -E 's/-v[0-9]+$//')
     for prev_log in "$LOG_DIR/${BASE_TASK_ID}"*.log; do
         if [[ -f "$prev_log" && "$prev_log" != "$LOG_FILE" ]]; then
+            # Get last 80 lines of previous attempts
             PREV_LOG_CONTEXT="${PREV_LOG_CONTEXT}
 
 --- Previous attempt log: $(basename "$prev_log") ---
