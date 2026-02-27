@@ -92,7 +92,7 @@ class MikroTikConnection:
                     username=self.username,
                     password=self.password,
                     port=self.port,
-                    plaintext_login=True,
+                    plaintext_login=False,
                 ),
             )
             pool = self._pool

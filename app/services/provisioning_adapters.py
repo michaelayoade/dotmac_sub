@@ -136,7 +136,7 @@ def _routeros_api(conn: dict) -> routeros_api.RouterOsApiPool:
         password=conn.get("password"),
         port=int(conn.get("port") or 8728),
         use_ssl=bool(conn.get("use_ssl")),
-        plaintext_login=True,
+        plaintext_login=False,
     )
 
 

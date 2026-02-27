@@ -640,7 +640,7 @@ def test_router_connection(
             port=port,
             use_ssl=use_ssl,
             ssl_verify=False,
-            plaintext_login=True,
+            plaintext_login=False,
         )
         api = pool.get_api()
 

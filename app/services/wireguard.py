@@ -1304,7 +1304,7 @@ class RouterSyncService:
                 password=conn["password"],
                 port=conn["port"],
                 use_ssl=conn["ssl"],
-                plaintext_login=True,
+                plaintext_login=False,
                 ssl_verify=False,
             )
             api = pool.get_api()
@@ -1381,7 +1381,7 @@ class RouterSyncService:
                 password=conn["password"],
                 port=conn["port"],
                 use_ssl=conn["ssl"],
-                plaintext_login=True,
+                plaintext_login=False,
                 ssl_verify=False,
             )
             api = pool.get_api()
