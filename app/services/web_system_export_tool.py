@@ -22,11 +22,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.billing import Invoice, Payment
 from app.models.catalog import NasDevice, Subscription
-from app.models.domain_settings import DomainSetting
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.provisioning import ServiceOrder
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscriber import Subscriber
@@ -70,7 +70,7 @@ EXPORT_SCHEDULE_TASK_NAME = "app.tasks.exports.run_scheduled_export"
 EXPORT_TEMPLATE_KEY_PREFIX = "export_template."
 EXPORT_JOB_KEY_PREFIX = "export_job."
 EXPORT_BG_THRESHOLD_ROWS = 10000
-EXPORT_JOBS_DIR = Path("uploads/system_exports")
+EXPORT_JOBS_DIR = Path(settings.export_jobs_base_dir)
 
 
 def module_options() -> list[dict[str, str]]:

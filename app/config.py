@@ -22,6 +22,7 @@ class Settings:
     avatar_max_size_bytes: int = int(os.getenv("AVATAR_MAX_SIZE_BYTES", str(2 * 1024 * 1024)))  # 2MB
     avatar_allowed_types: str = os.getenv("AVATAR_ALLOWED_TYPES", "image/jpeg,image/png,image/gif,image/webp")
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")
+    export_jobs_base_dir: str = os.getenv("EXPORT_JOBS_BASE_DIR", "uploads/system_exports")
 
     # Splynx MySQL sync settings (for incremental sync from remote Splynx DB)
     mysql_host: str = os.getenv("SPLYNX_MYSQL_HOST", "127.0.0.1")
