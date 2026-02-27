@@ -98,7 +98,7 @@ def validate_key(key_b64: str) -> bool:
         return False
 
 
-def get_encryption_key() -> bytes | None:
+def get_encryption_key() -> bytes:
     """Get the Fernet encryption key from settings or environment.
 
     Checks in order:
@@ -106,7 +106,10 @@ def get_encryption_key() -> bytes | None:
     2. Environment variable WIREGUARD_KEY_ENCRYPTION_KEY
 
     Returns:
-        Fernet key bytes if set, None otherwise
+        Fernet key bytes
+
+    Raises:
+        RuntimeError: If encryption key is not configured
     """
     global _encryption_warning_logged
 
@@ -135,19 +138,18 @@ def get_encryption_key() -> bytes | None:
         key_str = os.environ.get(_ENCRYPTION_KEY_ENV)
 
     if not key_str:
-        if not _encryption_warning_logged:
-            _logger.warning(
-                "WIREGUARD_KEY_ENCRYPTION_KEY not configured. "
-                "WireGuard private keys will be stored unencrypted."
-            )
-            _encryption_warning_logged = True
-        return None
+        raise RuntimeError(
+            "WIREGUARD_KEY_ENCRYPTION_KEY environment variable is required. "
+            "Generate one with: make generate-encryption-key"
+        )
 
     try:
         # Key should be URL-safe base64 encoded 32-byte key
         return key_str.encode("ascii")
-    except Exception:
-        return None
+    except (UnicodeEncodeError, AttributeError) as e:
+        raise RuntimeError(
+            "WIREGUARD_KEY_ENCRYPTION_KEY must be a valid ASCII string"
+        ) from e
 
 
 def generate_encryption_key() -> str:
@@ -164,20 +166,18 @@ def generate_encryption_key() -> str:
 def encrypt_private_key(private_key_b64: str) -> str:
     """Encrypt a private key for storage at rest.
 
-    If no encryption key is configured, returns the key unchanged
-    but prefixed with "plain:" for identification.
+    If no encryption key is configured, raises RuntimeError.
 
     Args:
         private_key_b64: Base64-encoded private key
 
     Returns:
-        Encrypted key (prefixed with "enc:") or plain key (prefixed with "plain:")
+        Encrypted key (prefixed with "enc:")
+
+    Raises:
+        RuntimeError: If encryption key is not configured
     """
     encryption_key = get_encryption_key()
-    if not encryption_key:
-        # No encryption configured - store with plain prefix
-        return f"plain:{private_key_b64}"
-
     fernet = Fernet(encryption_key)
     encrypted = fernet.encrypt(private_key_b64.encode("ascii"))
     return f"enc:{encrypted.decode('ascii')}"
@@ -201,11 +201,12 @@ def decrypt_private_key(stored_key: str) -> str:
         return stored_key[6:]
 
     if stored_key.startswith("enc:"):
-        encryption_key = get_encryption_key()
-        if not encryption_key:
+        try:
+            encryption_key = get_encryption_key()
+        except RuntimeError as e:
             raise ValueError(
                 "Encrypted key found but WIREGUARD_KEY_ENCRYPTION_KEY not set"
-            )
+            ) from e
         fernet = Fernet(encryption_key)
         try:
             decrypted = fernet.decrypt(stored_key[4:].encode("ascii"))
