@@ -22,10 +22,10 @@ from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
 from app.api.deps import require_role, require_user_auth
 from app.api.domains import router as domains_router
-from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_monitoring import router as domains_monitoring_router
 from app.api.domains_network_access import router as domains_network_access_router
 from app.api.domains_network_fiber import router as domains_network_fiber_router
+from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_usage import router as domains_usage_router
 from app.api.external import router as external_router
 from app.api.fiber_plant import router as fiber_plant_router
@@ -49,6 +49,7 @@ from app.api.validation import router as validation_router
 from app.api.webhooks import router as webhooks_router
 from app.api.wireguard import public_router as wireguard_public_router
 from app.api.wireguard import router as wireguard_router
+from app.config import settings, warn_insecure_service_urls
 from app.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -411,6 +412,7 @@ def metrics():
 
 @app.on_event("startup")
 def _start_jobs():
+    warn_insecure_service_urls(settings)
     try:
         ensure_storage_bucket()
     except Exception:

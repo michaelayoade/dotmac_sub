@@ -1,9 +1,11 @@
+import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,11 +46,26 @@ class Settings:
     )
 
     # S3-compatible object storage
-    s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
+    s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "https://minio:9000")
     s3_access_key: str = os.getenv("S3_ACCESS_KEY", "minioadmin")
     s3_secret_key: str = os.getenv("S3_SECRET_KEY", "minioadmin")
     s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "dotmac-private")
     s3_region: str = os.getenv("S3_REGION", "us-east-1")
+
+
+def warn_insecure_service_urls(config: Settings) -> None:
+    for config_field in fields(config):
+        field_name = config_field.name
+        if "url" not in field_name:
+            continue
+        url = getattr(config, field_name, None)
+        if (
+            isinstance(url, str)
+            and url.startswith("http://")
+            and "127.0.0.1" not in url
+            and "localhost" not in url
+        ):
+            logger.warning("Insecure http:// URL configured for %s", field_name)
 
 
 settings = Settings()
