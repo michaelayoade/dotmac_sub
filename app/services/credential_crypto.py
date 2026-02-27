@@ -17,7 +17,7 @@ _logger = logging.getLogger(__name__)
 _encryption_warning_logged = False
 
 
-def get_encryption_key() -> bytes | None:
+def get_encryption_key() -> bytes:
     """Get the Fernet encryption key from settings or environment.
 
     Checks in order:
@@ -25,7 +25,10 @@ def get_encryption_key() -> bytes | None:
     2. Environment variable CREDENTIAL_ENCRYPTION_KEY
 
     Returns:
-        Fernet key bytes if set, None otherwise
+        Fernet key bytes
+
+    Raises:
+        RuntimeError: If encryption key is not configured
     """
     global _encryption_warning_logged
 
@@ -52,18 +55,17 @@ def get_encryption_key() -> bytes | None:
         key_str = os.environ.get(_ENCRYPTION_KEY_ENV)
 
     if not key_str:
-        if not _encryption_warning_logged:
-            _logger.warning(
-                "CREDENTIAL_ENCRYPTION_KEY not configured. "
-                "NAS device credentials will be stored unencrypted."
-            )
-            _encryption_warning_logged = True
-        return None
+        raise RuntimeError(
+            "CREDENTIAL_ENCRYPTION_KEY environment variable is required. "
+            "Generate one with: make generate-encryption-key"
+        )
 
     if isinstance(key_str, bytes):
         return key_str
     if not isinstance(key_str, str):
-        return None
+        raise RuntimeError(
+            "CREDENTIAL_ENCRYPTION_KEY must be a string or bytes"
+        )
     # Key should be URL-safe base64 encoded 32-byte key
     return key_str.encode("ascii")
 
@@ -97,15 +99,16 @@ def is_encrypted(value: str | None) -> bool:
 def encrypt_credential(value: str | None) -> str | None:
     """Encrypt a credential for storage at rest.
 
-    If no encryption key is configured, returns the credential unchanged
-    but prefixed with "plain:" for identification.
+    If no encryption key is configured, raises RuntimeError.
 
     Args:
         value: Plain credential value to encrypt
 
     Returns:
-        Encrypted credential (prefixed with "enc:") or plain credential
-        (prefixed with "plain:"), or None if input is None/empty
+        Encrypted credential (prefixed with "enc:"), or None if input is None/empty
+
+    Raises:
+        RuntimeError: If encryption key is not configured
     """
     if not value:
         return value
@@ -115,10 +118,6 @@ def encrypt_credential(value: str | None) -> str | None:
         return value
 
     encryption_key = get_encryption_key()
-    if not encryption_key:
-        # No encryption configured - store with plain prefix
-        return f"plain:{value}"
-
     fernet = Fernet(encryption_key)
     encrypted = fernet.encrypt(value.encode("utf-8"))
     return f"enc:{encrypted.decode('ascii')}"
@@ -145,11 +144,12 @@ def decrypt_credential(value: str | None) -> str | None:
         return value[6:]
 
     if value.startswith("enc:"):
-        encryption_key = get_encryption_key()
-        if not encryption_key:
+        try:
+            encryption_key = get_encryption_key()
+        except RuntimeError as e:
             raise ValueError(
                 "Encrypted credential found but CREDENTIAL_ENCRYPTION_KEY not set"
-            )
+            ) from e
         fernet = Fernet(encryption_key)
         try:
             decrypted = fernet.decrypt(value[4:].encode("ascii"))
