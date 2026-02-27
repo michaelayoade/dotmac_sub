@@ -3,16 +3,16 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-17
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
-ENGINE=codex
-MODEL=gpt-5.3-codex
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-17.log
+TASK_ID=fix-security-c1-17
+DESCRIPTION=In\ app/services/auth_flow.py\ around\ line\ 577\,\ the\ login\ function\ checks\ account\ lockout\ AFTER\ password\ verification\,\ creating\ a\ timing\ oracle\ \(correct\ password\ +\ locked\ account\ =\ HTTP\ 403\,\ wrong\ password\ =\ HTTP\ 401\).\ Read\ the\ full\ login\ function.\ Fix:\ move\ the\ locked_until\ /\ is_locked\ check\ to\ BEFORE\ the\ password\ verification\ block\ so\ both\ locked\ and\ wrong-password\ cases\ return\ the\ same\ HTTP\ 401\ status\ and\ message.\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-17
+ENGINE=aider
+MODEL=deepseek-chat
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
 CONFIG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/config.json
 PROJECT_NAME=dotmac_sub
