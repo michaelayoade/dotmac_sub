@@ -53,3 +53,6 @@ htmlcov/
 .pytest_cache/
 .claude/
 .aider*
+
+# Seabone agent bootstrap (auto-generated, never commit)
+.agent-run.sh
