@@ -3,16 +3,16 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-4
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
-ENGINE=codex
-MODEL=gpt-5.3-codex
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-4.log
+TASK_ID=fix-security-c1-4
+DESCRIPTION=Remove\ ssl_verify=False\ from\ all\ RouterOS\ API\ connections.\ \(1\)\ Grep:\ grep\ -rn\ \'ssl_verify=False\'\ app/\ to\ find\ all\ occurrences\ \(wireguard.py\ ~1308\ and\ ~1385\,\ web_vpn_servers.py\ ~642\,\ provisioning_adapters.py\ ~139\,\ poller/mikrotik_poller.py\ ~95\).\ \(2\)\ Read\ each\ affected\ file\ around\ those\ lines.\ \(3\)\ Remove\ ssl_verify=False\ from\ each\ RouterOsApiPool\ instantiation.\ If\ a\ configurable\ CA\ bundle\ is\ available\ in\ settings\,\ use\ ssl_context\ with\ it\;\ otherwise\ just\ remove\ the\ parameter\ \(default\ is\ verify=True\).\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-4
+ENGINE=aider
+MODEL=deepseek-chat
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
 CONFIG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/config.json
 PROJECT_NAME=dotmac_sub
