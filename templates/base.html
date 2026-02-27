@@ -23,12 +23,9 @@
         })();
     </script>
 
-    <!-- Premium Typography - DM Sans for headings, Inter for body -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Typography: Outfit (display) + Plus Jakarta Sans (body) loaded via local WOFF2 @font-face in main.css -->
 
-    <!-- Compiled CSS (includes Tailwind + fonts + custom styles) -->
+    <!-- Compiled CSS (includes Tailwind + local fonts + custom styles) -->
     <link rel="stylesheet" href="/static/css/main.css" />
 
     <!-- Design System CSS Variables & Animations -->
@@ -217,6 +214,12 @@
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 antialiased"
       hx-ext="loading-states">
+
+    <!-- Skip navigation link for keyboard and screen reader users -->
+    <a href="#main-content"
+       class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-primary-600 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white focus:shadow-lg focus:outline-none">
+        Skip to main content
+    </a>
 
     {% block body %}
     <main>

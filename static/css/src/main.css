@@ -328,6 +328,7 @@ h1, h2, h3, .font-display {
 /* Respect reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
   .fade-in,
+  .animate-fade-in,
   .animate-fade-in-up,
   .stagger-in,
   .counter-animate {

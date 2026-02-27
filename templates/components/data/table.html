@@ -59,11 +59,15 @@
                 <tr>
                     {% for col in columns %}
                     <th scope="col"
+                        {% if col.sortable %}
+                        aria-sort="{{ 'ascending' if current_order_by == col.key and current_order_dir == 'asc' else 'descending' if current_order_by == col.key and current_order_dir == 'desc' else 'none' }}"
+                        {% endif %}
                         class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 {{ col.class | default('') }}">
                         {% if col.sortable and htmx_url %}
                         <button hx-get="{{ htmx_url }}?order_by={{ col.key }}&order_dir={{ 'desc' if current_order_by == col.key and current_order_dir == 'asc' else 'asc' }}"
                                 hx-target="#{{ htmx_target | default('table-body') }}"
                                 hx-include="[name='search']"
+                                aria-label="Sort by {{ col.label }}{% if current_order_by == col.key %} ({{ 'descending' if current_order_dir == 'asc' else 'ascending' }}){% endif %}"
                                 class="flex items-center gap-1 hover:text-slate-700 dark:hover:text-slate-200">
                             {{ col.label }}
                             {% if current_order_by == col.key %}

@@ -35,6 +35,7 @@
 
     <!-- 1. DASHBOARD -->
     <a href="/admin/dashboard"
+       {% if active_page == 'dashboard' %}aria-current="page"{% endif %}
        class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
               {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'dashboard' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
         <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -46,6 +47,8 @@
     <!-- 2. CUSTOMERS (Collapsible Section) -->
     {% if show_customers_section %}
     <button x-on:click="openSection = openSection === 'customers' ? '' : 'customers'" x-show="!sidebarCollapsed"
+            :aria-expanded="(openSection === 'customers').toString()"
+            aria-controls="sidebar-section-customers"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Customers</p>
         <svg class="h-3.5 w-3.5 text-slate-400 transition-transform" :class="{ 'rotate-180': openSection === 'customers' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -53,9 +56,10 @@
         </svg>
     </button>
 
-    <div x-show="openSection === 'customers' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+    <div id="sidebar-section-customers" x-show="openSection === 'customers' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
         <!-- Subscribers -->
         <a href="/admin/subscribers"
+           {% if active_page == 'subscribers' %}aria-current="page"{% endif %}
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'subscribers' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -69,6 +73,8 @@
     <!-- 3. SERVICES & CATALOG (Collapsible Section) -->
     {% if show_services_section %}
     <button x-on:click="openSection = openSection === 'services' ? '' : 'services'" x-show="!sidebarCollapsed"
+            :aria-expanded="(openSection === 'services').toString()"
+            aria-controls="sidebar-section-services"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Services</p>
         <svg class="h-3.5 w-3.5 text-slate-400 transition-transform" :class="{ 'rotate-180': openSection === 'services' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -76,10 +82,11 @@
         </svg>
     </button>
 
-    <div x-show="openSection === 'services' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+    <div id="sidebar-section-services" x-show="openSection === 'services' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
         {% if module_states.get('catalog', True) %}
         <!-- Catalog -->
         <a href="/admin/catalog"
+           {% if active_page == 'catalog' %}aria-current="page"{% endif %}
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'catalog' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -90,6 +97,7 @@
 
         <!-- Subscriptions -->
         <a href="/admin/catalog/subscriptions"
+           {% if active_page == 'subscriptions' %}aria-current="page"{% endif %}
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'subscriptions' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,6 +110,7 @@
         {% if module_states.get('provisioning', True) %}
         <!-- Service Orders -->
         <a href="/admin/provisioning"
+           {% if active_page == 'provisioning' %}aria-current="page"{% endif %}
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
                   {{ 'bg-primary-100 text-primary-700 border-l-2 border-primary-600 dark:bg-primary-600/20 dark:text-primary-400 dark:border-primary-400' if active_page == 'provisioning' else 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' }}">
             <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -128,6 +137,8 @@
     <!-- 4. BILLING (Collapsible Section) -->
     {% if show_billing_section %}
     <button x-on:click="openSection = openSection === 'billing' ? '' : 'billing'" x-show="!sidebarCollapsed"
+            :aria-expanded="(openSection === 'billing').toString()"
+            aria-controls="sidebar-section-billing"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Billing</p>
         <svg class="h-3.5 w-3.5 text-slate-400 transition-transform" :class="{ 'rotate-180': openSection === 'billing' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,7 +146,7 @@
         </svg>
     </button>
 
-    <div x-show="openSection === 'billing' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+    <div id="sidebar-section-billing" x-show="openSection === 'billing' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
         <!-- Dashboard -->
         <a href="/admin/billing"
            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
@@ -217,6 +228,8 @@
     <!-- 5. NETWORK (Collapsible Section) -->
     {% if show_network_section %}
     <button x-on:click="openSection = openSection === 'network' ? '' : 'network'" x-show="!sidebarCollapsed"
+            :aria-expanded="(openSection === 'network').toString()"
+            aria-controls="sidebar-section-network"
             class="flex w-full items-center justify-between px-3 pt-4 pb-2 group cursor-pointer">
         <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-400">Network</p>
         <svg class="h-3.5 w-3.5 text-slate-400 transition-transform" :class="{ 'rotate-180': openSection === 'network' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -224,7 +237,7 @@
         </svg>
     </button>
 
-    <div x-show="openSection === 'network' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
+    <div id="sidebar-section-network" x-show="openSection === 'network' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1">
         {% if feature_states.get('network_sites', True) %}
         <!-- Network Map (Comprehensive) -->
         <a href="/admin/network/map"
