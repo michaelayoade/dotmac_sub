@@ -5,8 +5,11 @@ Handles asynchronous HTTP delivery of webhook events with retry logic.
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
+import socket
+import urllib.parse
 from datetime import UTC, datetime
 
 import httpx
@@ -93,6 +96,32 @@ def deliver_webhook(self, delivery_id: str):
         delivery.last_attempt_at = datetime.now(UTC)
         session.commit()
 
+        parsed_url = urllib.parse.urlparse(endpoint.url)
+        if parsed_url.scheme == "http":
+            raise ValueError("Webhook URL must use HTTPS")
+        if parsed_url.scheme != "https":
+            raise ValueError("Webhook URL has invalid scheme")
+
+        hostname = parsed_url.hostname
+        if not hostname:
+            raise ValueError("Webhook URL is missing hostname")
+
+        try:
+            resolved_addresses = socket.getaddrinfo(hostname, None)
+        except socket.gaierror as exc:
+            raise ValueError(
+                f"Webhook hostname resolution failed: {hostname}"
+            ) from exc
+
+        for resolved in resolved_addresses:
+            resolved_ip = ipaddress.ip_address(resolved[4][0])
+            if (
+                resolved_ip.is_private
+                or resolved_ip.is_loopback
+                or resolved_ip.is_link_local
+            ):
+                raise ValueError("SSRF blocked")
+
         # Make HTTP request
         logger.info(
             f"Delivering webhook to {endpoint.url} "
@@ -159,6 +188,19 @@ def deliver_webhook(self, delivery_id: str):
 
         # Re-raise for Celery retry
         raise
+
+    except ValueError as exc:
+        logger.warning(f"Webhook delivery blocked for {delivery_id}: {exc}")
+        try:
+            delivery = session.get(WebhookDelivery, delivery_id)
+            if delivery:
+                delivery.attempt_count += 1
+                delivery.last_attempt_at = datetime.now(UTC)
+                delivery.status = WebhookDeliveryStatus.failed
+                delivery.error = str(exc)
+                session.commit()
+        except Exception:
+            session.rollback()
 
     except Exception as exc:
         logger.exception(f"Unexpected error delivering webhook {delivery_id}: {exc}")
