@@ -28,6 +28,7 @@ opentelemetry-instrumentation-celery = "0.60b1"
 python-jose = {version = "3.3.0", extras = ["cryptography"]}
 passlib = {version = "1.7.4", extras = ["bcrypt"]}
 pyotp = "2.9.0"
+slowapi = ">=0.1.9"
 cryptography = ">=44.0.1"
 paramiko = "3.4.1"
 ncclient = "0.6.15"

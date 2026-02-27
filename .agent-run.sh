@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-8
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-8.log
+TASK_ID=fix-security-c1-8
+DESCRIPTION=In\ app/api/auth_flow.py\ around\ line\ 48\,\ POST\ /auth/login\ has\ no\ IP-based\ rate\ limiting.\ Read\ app/main.py\ and\ the\ login\ endpoint.\ Fix\ using\ slowapi:\ \(1\)\ Check\ pyproject.toml\ for\ slowapi\;\ add\ if\ missing.\ \(2\)\ In\ the\ auth_flow\ module\,\ create:\ from\ slowapi\ import\ Limiter\;\ from\ slowapi.util\ import\ get_remote_address\;\ limiter\ =\ Limiter\(key_func=get_remote_address\).\ \(3\)\ Add\ @limiter.limit\(\'20/minute\'\)\ decorator\ to\ the\ login\ endpoint.\ \(4\)\ In\ app/main.py\,\ register:\ from\ slowapi\ import\ _rate_limit_exceeded_handler\;\ from\ slowapi.errors\ import\ RateLimitExceeded\;\ app.state.limiter\ =\ limiter\;\ app.add_exception_handler\(RateLimitExceeded\,\ _rate_limit_exceeded_handler\).\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-8
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
