@@ -1,6 +1,5 @@
 import hashlib
 import logging
-import re
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -45,6 +44,17 @@ from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_RADIUS_TABLES = frozenset(
+    {"radcheck", "radreply", "radusergroup", "radpostauth", "radacct", "nas"}
+)
+
+
+def validate_radius_table(name: str) -> str:
+    table_name = name.strip()
+    if table_name not in ALLOWED_RADIUS_TABLES:
+        raise ValueError(f"Unsupported RADIUS table name: {name!r}")
+    return table_name
 
 
 def _coerce_int_setting(value: object) -> int | None:
@@ -205,18 +215,11 @@ def _hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-_SQL_IDENT_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
 def _sanitize_table_identifier(raw: object, fallback: str) -> str:
     name = str(raw).strip() if raw is not None else fallback
     if not name:
         name = fallback
-    parts = name.split(".")
-    if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
-        raise ValueError(f"Invalid SQL table identifier: {name!r}")
-    # Identifiers are validated strictly above; quoting prevents keyword collisions.
-    return ".".join(f'"{part}"' for part in parts)
+    return validate_radius_table(name)
 
 
 def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
@@ -268,9 +271,9 @@ def _external_sync_users(
 ) -> dict[str, int]:
     from app.services.connection_type_provisioning import build_radius_reply_attributes
 
-    radcheck = config["radcheck_table"]
-    radreply = config["radreply_table"]
-    radusergroup = config["radusergroup_table"]
+    radcheck = validate_radius_table(config["radcheck_table"])
+    radreply = validate_radius_table(config["radreply_table"])
+    radusergroup = validate_radius_table(config["radusergroup_table"])
     password_attr = config["password_attribute"]
     password_op = config["password_op"]
     use_group = config["use_group"]
@@ -354,7 +357,7 @@ def _external_sync_nas(
     config: dict,
     nas_devices: list[NasDevice],
 ) -> dict[str, int]:
-    nas_table = config["nas_table"]
+    nas_table = validate_radius_table(config["nas_table"])
     engine = create_engine(config["db_url"])
     created = 0
     with engine.begin() as conn:
