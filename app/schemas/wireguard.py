@@ -1,13 +1,27 @@
 """Pydantic schemas for WireGuard server and peer management."""
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.models.wireguard import WireGuardPeerStatus
 
 # ============== WireGuard Server Schemas ==============
+
+
+INTERFACE_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,14}$"
+INTERFACE_NAME_DESCRIPTION = (
+    "Linux interface name (1-15 chars): must start with a letter and contain only "
+    "letters, numbers, underscores, or hyphens (e.g., wg0, wg-infra)"
+)
+WireGuardInterfaceName = Annotated[
+    str,
+    StringConstraints(
+        pattern=INTERFACE_NAME_PATTERN,
+    ),
+]
 
 
 class WireGuardServerBase(BaseModel):
@@ -15,11 +29,9 @@ class WireGuardServerBase(BaseModel):
 
     name: str = Field(min_length=1, max_length=160)
     description: str | None = None
-    interface_name: str = Field(
+    interface_name: WireGuardInterfaceName = Field(
         default="wg0",
-        min_length=1,
-        max_length=32,
-        description="Linux interface name (e.g., wg0, wg-infra)",
+        description=INTERFACE_NAME_DESCRIPTION,
     )
     listen_port: int = Field(default=51820, ge=1, le=65535)
     public_host: str | None = None
@@ -57,7 +69,10 @@ class WireGuardServerUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = None
-    interface_name: str | None = Field(default=None, min_length=1, max_length=32)
+    interface_name: WireGuardInterfaceName | None = Field(
+        default=None,
+        description=INTERFACE_NAME_DESCRIPTION,
+    )
     listen_port: int | None = Field(default=None, ge=1, le=65535)
     public_host: str | None = None
     public_port: int | None = Field(default=None, ge=1, le=65535)

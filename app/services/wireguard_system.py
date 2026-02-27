@@ -170,7 +170,17 @@ class WireGuardSystemService:
     @staticmethod
     def get_config_path(server: WireGuardServer) -> Path:
         """Get the config file path for a server."""
-        return WG_CONFIG_DIR / f"{server.interface_name}.conf"
+        base_dir = WG_CONFIG_DIR.resolve(strict=False)
+        config_path = (base_dir / f"{server.interface_name}.conf").resolve(strict=False)
+
+        try:
+            config_path.relative_to(base_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid interface_name for WireGuard config path: {server.interface_name!r}"
+            ) from exc
+
+        return config_path
 
     @staticmethod
     def write_config(db: Session, server_id: UUID) -> Path:

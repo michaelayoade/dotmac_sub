@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.models.wireguard import (
     WireGuardConnectionLog,
@@ -337,6 +338,50 @@ class TestNormalizeAllowedIps:
 
         result = _normalize_allowed_ips(["fd00::5"])
         assert result == ["fd00::5/128"]
+
+
+# ============================================================================
+# WireGuard schema validation tests
+# ============================================================================
+
+
+class TestWireGuardSchemaInterfaceName:
+    @pytest.mark.parametrize(
+        ("schema_cls", "base_kwargs"),
+        [
+            (WireGuardServerCreate, {"name": "schema-valid-create"}),
+            (WireGuardServerUpdate, {}),
+        ],
+    )
+    @pytest.mark.parametrize("interface_name", ["wg0", "wg-infra_1", "A12345678901234"])
+    def test_accepts_valid_interface_name(self, schema_cls, base_kwargs, interface_name):
+        payload = schema_cls(interface_name=interface_name, **base_kwargs)
+        assert payload.interface_name == interface_name
+
+    @pytest.mark.parametrize(
+        ("schema_cls", "base_kwargs"),
+        [
+            (WireGuardServerCreate, {"name": "schema-invalid-create"}),
+            (WireGuardServerUpdate, {}),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "interface_name",
+        [
+            "../../etc/passwd",
+            "../wg0",
+            "1wg0",
+            "wg/0",
+            "wg 0",
+            "",
+        ],
+    )
+    def test_rejects_invalid_interface_name(self, schema_cls, base_kwargs, interface_name):
+        with pytest.raises(ValidationError) as exc_info:
+            schema_cls(interface_name=interface_name, **base_kwargs)
+        error_text = str(exc_info.value)
+        assert "interface_name" in error_text
+        assert "String should match pattern" in error_text
 
 
 # ============================================================================
@@ -1259,6 +1304,28 @@ class TestWireGuardSystemService:
         config = WireGuardSystemService.generate_config(db_session, server.id)
         assert active_peer.public_key in config
         assert disabled_peer.public_key not in config
+
+    @patch("app.services.wireguard.WireGuardPeerService._auto_deploy")
+    def test_get_config_path_stays_within_config_dir(self, mock_deploy, db_session):
+        from app.services.wireguard_system import WG_CONFIG_DIR, WireGuardSystemService
+
+        server = _make_server(
+            db_session,
+            name=f"path-{uuid.uuid4().hex[:8]}",
+            interface_name="wg-infra_1",
+        )
+        config_path = WireGuardSystemService.get_config_path(server)
+        base_dir = WG_CONFIG_DIR.resolve(strict=False)
+        assert config_path.parent == base_dir
+        assert config_path.name == "wg-infra_1.conf"
+
+    def test_get_config_path_rejects_path_traversal(self):
+        from app.services.wireguard_system import WireGuardSystemService
+
+        server = MagicMock()
+        server.interface_name = "../../etc/passwd"
+        with pytest.raises(ValueError, match="Invalid interface_name"):
+            WireGuardSystemService.get_config_path(server)
 
     @patch("subprocess.run")
     def test_is_interface_up_true(self, mock_run):
