@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber
 from app.services.file_upload import MAGIC_BYTES
@@ -358,6 +359,11 @@ class UnifiedFileUploadService:
             return self._storage_client().stream(file.storage_key_or_relative_path)
         if file.legacy_local_path:
             path = Path(file.legacy_local_path).resolve()
+            base_upload_dir = Path(settings.base_upload_dir).resolve()
+            try:
+                path.relative_to(base_upload_dir)
+            except ValueError as exc:
+                raise PermissionError("Access denied: path outside upload directory") from exc
             if not path.exists():
                 raise ObjectNotFoundError(str(path))
 

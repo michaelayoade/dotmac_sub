@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-12
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-12.log
+TASK_ID=fix-security-c1-12
+DESCRIPTION=In\ app/services/file_storage.py\ around\ line\ 360\,\ stream_file\(\)\ opens\ StoredFile.legacy_local_path\ from\ the\ DB\ without\ containment\ check.\ Read\ the\ function.\ Fix:\ resolve\ the\ path\ with\ Path\(file_path\).resolve\(\)\,\ then\ validate\ it\ is\ within\ the\ configured\ upload\ base\ directory\ using:\ try:\ resolved.relative_to\(Path\(base_upload_dir\).resolve\(\)\)\ except\ ValueError:\ raise\ PermissionError\(\'Access\ denied:\ path\ outside\ upload\ directory\'\).\ Determine\ base_upload_dir\ from\ settings\ or\ app\ config.\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-12
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
