@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-10
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-10.log
+TASK_ID=fix-security-c1-10
+DESCRIPTION=In\ app/services/secrets.py\ around\ line\ 39\,\ resolve_openbao_ref\(\)\ constructs\ a\ URL\ from\ user-supplied\ bao://\ mount\ and\ path\ values\ without\ validation.\ Read\ the\ function.\ Fix:\ after\ parsing\ mount\ and\ path\,\ validate\ each\ with\ re.match\(r\'\^\[a-zA-Z0-9_/-\]+\$\'\,\ value\)\ —\ reject\ None\ match\ or\ values\ containing\ \'..\'\ or\ URL-encoded\ variants\ \(%2e\,\ %2f\,\ %252e\).\ Raise\ ValueError\(\'Invalid\ OpenBao\ reference:\ unsafe\ characters\ in\ mount\ or\ path\'\)\ if\ validation\ fails.\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-10
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log

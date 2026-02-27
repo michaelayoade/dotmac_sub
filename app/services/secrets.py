@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -33,9 +34,25 @@ def _parse_ref(reference: str) -> tuple[str, str, str]:
     return mount, path, field
 
 
+def _is_safe_openbao_component(value: str) -> bool:
+    if re.match(r"^[a-zA-Z0-9_/-]+$", value) is None:
+        return False
+    lowered = value.lower()
+    return (
+        ".." not in value
+        and "%2e" not in lowered
+        and "%2f" not in lowered
+        and "%252e" not in lowered
+    )
+
+
 def resolve_openbao_ref(reference: str) -> str:
     addr, token, namespace, kv_version = _openbao_config()
     mount, path, field = _parse_ref(reference)
+    if not _is_safe_openbao_component(mount) or not _is_safe_openbao_component(path):
+        raise ValueError(
+            "Invalid OpenBao reference: unsafe characters in mount or path"
+        )
     if str(kv_version) == "1":
         url = f"{addr}/v1/{mount}/{path}"
     else:
