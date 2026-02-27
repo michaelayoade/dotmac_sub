@@ -3,16 +3,16 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-001
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-001.log
-TASK_ID=fix-deps-001
-DESCRIPTION=Upgrade\ jinja2\ from\ 3.1.4\ to\ 3.1.6\ in\ pyproject.toml\ to\ fix\ CVE-2024-56201\ and\ CVE-2024-56326\ \(sandbox\ escape\ via\ \|attr\ filter\ chains\ and\ __init_subclass__\).\ Edit\ the\ jinja2\ line\ in\ pyproject.toml\,\ then\ run:\ make\ check\ \&\&\ make\ test\ to\ verify\ nothing\ broke.
-BRANCH=agent/fix-deps-001
-ENGINE=aider
-MODEL=deepseek-chat
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
+TASK_ID=fix-deps-005
+DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
+BRANCH=agent/fix-deps-005
+ENGINE=codex
+MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
 CONFIG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/config.json
 PROJECT_NAME=dotmac_sub
