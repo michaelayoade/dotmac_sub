@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -63,6 +66,24 @@ def resolve_talk_client(
             status_code=400,
             detail="Nextcloud Talk credentials are incomplete.",
         )
+
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme != "https":
+        raise ValueError("Nextcloud base_url must use https://")
+    if not parsed.hostname:
+        raise ValueError("Nextcloud base_url must include a hostname")
+
+    try:
+        addrs = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as exc:
+        raise ValueError("Nextcloud base_url hostname could not be resolved") from exc
+
+    for addr in addrs:
+        ip = ipaddress.ip_address(addr[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            raise ValueError(
+                "SSRF blocked: Nextcloud base_url resolves to internal address"
+            )
 
     return NextcloudTalkClient(
         base_url=base_url,
