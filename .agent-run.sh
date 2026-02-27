@@ -3,16 +3,16 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/hotfix-ci-22473772604-v2
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-014
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/hotfix-ci-22473772604-v2.log
-TASK_ID=hotfix-ci-22473772604-v2
-DESCRIPTION=HOTFIX:\ CI\ failure\ on\ main\ —\ poetry.lock\ is\ stale\ because\ pyproject.toml\ was\ updated\ \(jinja2\ 3.1.6\,\ cryptography\ \>=44.0.1\,\ fastapi\ \>=0.115.0\,\ uvicorn\ \>=0.34.0\,\ OTel\ 1.39.1/0.60b1\)\ without\ regenerating\ the\ lock\ file.\ Fix:\ cd\ into\ the\ project\ root\,\ run\ \'poetry\ lock\ --no-update\'\ to\ regenerate\ poetry.lock\,\ then\ run\ \'make\ check\ \&\&\ make\ test\'\ to\ verify.\ If\ make\ check\ fails\ due\ to\ missing\ packages\,\ run\ \'poetry\ install\'\ first.\ Commit\ the\ updated\ poetry.lock\ file.
-BRANCH=agent/hotfix-ci-22473772604-v2
-ENGINE=codex
-MODEL=gpt-5.3-codex
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-014.log
+TASK_ID=fix-deps-014
+DESCRIPTION=Upgrade\ shapely\ from\ 2.0.4\ to\ \>=2.1.0\ in\ pyproject.toml.\ Verify\ geoalchemy2\ 0.14.7\ compatibility\ \(it\ supports\ Shapely\ 2.1\).\ Run\ make\ check\ \&\&\ make\ test\ after.
+BRANCH=agent/fix-deps-014
+ENGINE=aider
+MODEL=deepseek-chat
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
 CONFIG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/config.json
 PROJECT_NAME=dotmac_sub
