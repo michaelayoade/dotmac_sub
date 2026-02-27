@@ -2,10 +2,11 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.db import get_db
 from app.models.wireguard import WireGuardPeerStatus
 from app.schemas.wireguard import (
@@ -28,6 +29,27 @@ from app.services import wireguard as wg_service
 
 router = APIRouter(prefix="/wireguard", tags=["wireguard"])
 public_router = APIRouter(prefix="/wireguard-provision", tags=["wireguard-provisioning-public"])
+
+
+def _assert_peer_download_access(peer: object, current_user: dict) -> None:
+    roles = {str(role).strip().lower() for role in (current_user.get("roles") or [])}
+    role = current_user.get("role")
+    if isinstance(role, str) and role.strip():
+        roles.add(role.strip().lower())
+
+    if "admin" in roles or "operator" in roles:
+        return
+
+    peer_subscriber_id = getattr(peer, "subscriber_id", None)
+    user_ids = {
+        str(value)
+        for value in (current_user.get("subscriber_id"), current_user.get("principal_id"))
+        if value is not None
+    }
+    if peer_subscriber_id is not None and str(peer_subscriber_id) in user_ids:
+        return
+
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 # ============== Server Endpoints ==============
@@ -243,8 +265,14 @@ def get_peer_config(peer_id: UUID, db: Session = Depends(get_db)):
     response_class=PlainTextResponse,
     tags=["wireguard-config"],
 )
-def download_peer_config(peer_id: UUID, db: Session = Depends(get_db)):
+def download_peer_config(
+    peer_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Download WireGuard configuration file for a peer."""
+    peer = wg_service.wg_peers.get(db, peer_id)
+    _assert_peer_download_access(peer, current_user)
     config = wg_service.wg_peers.generate_peer_config(db, peer_id)
     return PlainTextResponse(
         content=config.config_content,
@@ -270,8 +298,14 @@ def get_mikrotik_script(peer_id: UUID, db: Session = Depends(get_db)):
     response_class=PlainTextResponse,
     tags=["wireguard-config"],
 )
-def download_mikrotik_script(peer_id: UUID, db: Session = Depends(get_db)):
+def download_mikrotik_script(
+    peer_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Download RouterOS script file for a peer."""
+    peer = wg_service.wg_peers.get(db, peer_id)
+    _assert_peer_download_access(peer, current_user)
     script = wg_service.wg_mikrotik.generate_script(db, peer_id)
     return PlainTextResponse(
         content=script.script_content,
