@@ -19,6 +19,7 @@ class Settings:
 
     # Avatar settings
     avatar_upload_dir: str = os.getenv("AVATAR_UPLOAD_DIR", "static/avatars")
+    base_upload_dir: str = os.getenv("BASE_UPLOAD_DIR", "uploads")
     avatar_max_size_bytes: int = int(os.getenv("AVATAR_MAX_SIZE_BYTES", str(2 * 1024 * 1024)))  # 2MB
     avatar_allowed_types: str = os.getenv("AVATAR_ALLOWED_TYPES", "image/jpeg,image/png,image/gif,image/webp")
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")

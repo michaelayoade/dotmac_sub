@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -114,7 +115,11 @@ def test_tenant_access_denied():
     assert exc.value.status_code == 404
 
 
-def test_stream_legacy_file(tmp_path):
+def test_stream_legacy_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.file_storage.settings",
+        SimpleNamespace(base_upload_dir=str(tmp_path)),
+    )
     legacy = tmp_path / "legacy.txt"
     legacy.write_bytes(b"legacy")
 
@@ -133,3 +138,32 @@ def test_stream_legacy_file(tmp_path):
     stream = file_uploads.stream_file(record)
     assert isinstance(stream, StreamResult)
     assert b"".join(stream.chunks) == b"legacy"
+
+
+def test_stream_legacy_file_denies_path_outside_upload_root(tmp_path, monkeypatch):
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"blocked")
+    monkeypatch.setattr(
+        "app.services.file_storage.settings",
+        SimpleNamespace(base_upload_dir=str(upload_root)),
+    )
+
+    record = StoredFile(
+        organization_id=None,
+        entity_type="test",
+        entity_id="1",
+        original_filename="outside.txt",
+        storage_key_or_relative_path="legacy/path",
+        legacy_local_path=str(outside),
+        file_size=7,
+        content_type="text/plain",
+        storage_provider="local",
+        uploaded_by=None,
+    )
+
+    with pytest.raises(
+        PermissionError, match="Access denied: path outside upload directory"
+    ):
+        file_uploads.stream_file(record)
