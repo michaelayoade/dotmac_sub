@@ -3,6 +3,7 @@
 import json
 from base64 import b64encode
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
@@ -22,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
@@ -69,8 +71,8 @@ from app.services import web_system_users as web_system_users_service
 from app.services import web_system_webhook_forms as web_system_webhook_forms_service
 from app.services import web_system_webhooks as web_system_webhooks_service
 from app.services.auth_dependencies import require_permission
-from app.tasks.imports import run_import_job
 from app.tasks.exports import run_export_job
+from app.tasks.imports import run_import_job
 from app.web.request_parsing import (
     parse_form_data,
     parse_form_data_sync,
@@ -512,6 +514,7 @@ def system_export_tool(
 )
 def system_export_download(request: Request, db: Session = Depends(get_db)):
     from fastapi.responses import StreamingResponse
+
     from app.web.admin import get_current_user
 
     form = parse_form_data_sync(request)
@@ -613,6 +616,7 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
 )
 def system_export_job_download(request: Request, job_id: str, db: Session = Depends(get_db)):
     from fastapi.responses import FileResponse
+
     from app.web.admin import get_current_user
 
     job = web_system_export_tool_service.get_export_job(db, job_id)
@@ -623,6 +627,12 @@ def system_export_job_download(request: Request, job_id: str, db: Session = Depe
     file_path = str(job.get("file_path") or "").strip()
     if not file_path:
         raise HTTPException(status_code=404, detail="Export file not available")
+    resolved = Path(file_path).resolve()
+    export_jobs_base_dir = Path(settings.export_jobs_base_dir).resolve()
+    try:
+        resolved.relative_to(export_jobs_base_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Access denied") from exc
     filename = str(job.get("filename") or f"export_{job_id}.dat")
     current_user = get_current_user(request)
     actor_id = str(current_user.get("person_id") or "").strip() or None
@@ -636,7 +646,7 @@ def system_export_job_download(request: Request, job_id: str, db: Session = Depe
         entity_id=job_id,
         metadata={"filename": filename},
     )
-    return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
+    return FileResponse(path=str(resolved), filename=filename, media_type="application/octet-stream")
 
 
 @router.post(
