@@ -26,10 +26,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Security] Sanitize legal document content with `nh3` before DB storage to prevent stored XSS via `| safe` render in public legal pages (PR #22)
 - [Security] Sanitize contract template HTML with `nh3` in `get_contract_context()` to prevent stored XSS via `| safe` in customer contract signing page (PR #19)
 - [Security] Protect `/metrics` Prometheus endpoint with optional bearer token via `METRICS_AUTH_TOKEN` config; backward-compatible (unset = no auth) (PR #23)
+- [Security] Remove `ssl_verify=False` and `plaintext_login=True` from all 5 RouterOS connection sites in `wireguard.py`, `web_vpn_servers.py`, `provisioning_adapters.py`, and `mikrotik_poller.py`; enforce TLS verification (PR #11)
+- [Security] Block SSRF in `_probe_embedded_url_health()` in `web_integrations.py`: resolve hostname and reject RFC 1918 / loopback / link-local addresses before calling httpx.get() (PR #24)
+- [Security] Add `@limiter.limit('20/minute')` rate limit on `POST /auth/login` via slowapi to prevent credential brute-force attacks (PR #26)
+- [Security] Change S3 `s3_access_key`/`s3_secret_key` config defaults from well-known MinIO credentials (`minioadmin`) to `None`; add guard raising `ValueError` when S3 is used without credentials configured (PR #25)
+- [Security] Change MySQL password config default from empty string to `None`; add connection guard raising `ValueError` when MySQL is used without a password (PR #29)
+- [Security] Move account lockout check before password verification in login flow to prevent timing oracle — correct password + locked account no longer returns a distinct HTTP 403 response (PR #30)
+- [Security] Add minimum 32-character length check on JWT signing secret in `_jwt_secret()`; raises `HTTPException(500)` if `SECRET_KEY` is too short to be safe (PR #31)
+- [Security] Block SSRF in SMS webhook delivery: enforce HTTPS scheme and reject RFC 1918 / loopback / link-local addresses before POSTing to `webhook_url` in `sms.py` (PR #32)
+- [Security] Block SSRF in Nextcloud Talk `resolve_talk_client()`: enforce HTTPS scheme and reject RFC 1918 / loopback / link-local addresses for caller-supplied `base_url` (PR #33)
+- [Security] Fix path traversal in OLT backup path validation in `web_network_olts.py`: replace `str.startswith()` check with `Path.resolve().relative_to()` containment check (PR #35)
 
 ### Changed
 - [Changed] Upgrade OpenTelemetry from 1.26.0 to 1.39.1 and instrumentation packages from 0.47b0 (beta) to stable 0.60b1 (PR #6)
 - [Changed] Upgrade fastapi to >=0.115.0 and uvicorn to >=0.34.0 for security-relevant Starlette fixes and request validation improvements (commit c10d3bf)
+- [Changed] Upgrade weasyprint from 61.2 to >=65.0 to address SSRF risks in older versions when rendering user-supplied HTML (PR #27)
+- [Changed] Upgrade pydantic from 2.7.4 to >=2.11.0 (PR #28)
+- [Changed] Upgrade httpx from 0.27.0 to >=0.28.0 (PR #34)
 
 ### Fixed
 - [Fixed] Regenerate `poetry.lock` after pyproject.toml dependency upgrades to resolve CI lock-file staleness failure (PR #9)
