@@ -9,6 +9,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -43,6 +45,7 @@ from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post(
@@ -66,6 +69,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
         }
     },
 )
+@limiter.limit("20/minute")
 def login(
     payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 ) -> Response | LoginResponse:

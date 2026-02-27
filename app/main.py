@@ -6,12 +6,15 @@ from time import monotonic
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 
 from app.api.analytics import router as analytics_router
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
+from app.api.auth_flow import limiter as auth_flow_limiter
 from app.api.auth_flow import router as auth_flow_router
 from app.api.bandwidth import router as bandwidth_router
 from app.api.billing import router as billing_router
@@ -22,10 +25,10 @@ from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
 from app.api.deps import require_role, require_user_auth
 from app.api.domains import router as domains_router
-from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_monitoring import router as domains_monitoring_router
 from app.api.domains_network_access import router as domains_network_access_router
 from app.api.domains_network_fiber import router as domains_network_fiber_router
+from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_usage import router as domains_usage_router
 from app.api.external import router as external_router
 from app.api.fiber_plant import router as fiber_plant_router
@@ -97,6 +100,8 @@ from app.websocket.router import router as ws_router
 
 app = FastAPI(title="dotmac_sm API")
 logger = logging.getLogger(__name__)
+app.state.limiter = auth_flow_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
