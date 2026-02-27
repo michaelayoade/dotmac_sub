@@ -40,6 +40,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - [Security] Block SSRF in SMS webhook delivery: enforce HTTPS scheme and reject RFC 1918 / loopback / link-local addresses before POSTing to `webhook_url` in `sms.py` (PR #32)
 - [Security] Block SSRF in Nextcloud Talk `resolve_talk_client()`: enforce HTTPS scheme and reject RFC 1918 / loopback / link-local addresses for caller-supplied `base_url` (PR #33)
 - [Security] Fix path traversal in OLT backup path validation in `web_network_olts.py`: replace `str.startswith()` check with `Path.resolve().relative_to()` containment check (PR #35)
+- [Security] Fix open redirect in `_safe_next()`: reject protocol-relative URLs (`//evil.com`) and absolute URLs; only root-relative paths (starting with `/` but not `//`) are accepted as redirect targets in `web_auth.py` and `web_customer_auth.py` (PR #48)
+- [Security] Fix path traversal in WireGuard config path: add `pattern='^[A-Za-z][A-Za-z0-9_-]{0,14}$'` constraint to `interface_name` in `WireGuardServerBase` and `WireGuardServerUpdate` schemas; add `Path.resolve().relative_to(WG_CONFIG_DIR)` containment check in `WireGuardSystemService.get_config_path()` (PR #49)
 
 ### Changed
 - [Changed] Upgrade celery from 5.4.0 to >=5.5.0 (PR #40)
