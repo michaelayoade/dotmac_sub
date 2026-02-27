@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -27,7 +28,7 @@ class Settings:
     mysql_host: str = os.getenv("SPLYNX_MYSQL_HOST", "127.0.0.1")
     mysql_port: int = int(os.getenv("SPLYNX_MYSQL_PORT", "3306"))
     mysql_user: str = os.getenv("SPLYNX_MYSQL_USER", "splynx")
-    mysql_password: str = os.getenv("SPLYNX_MYSQL_PASSWORD", "")
+    mysql_password: Optional[str] = os.getenv("SPLYNX_MYSQL_PASSWORD")
     mysql_database: str = os.getenv("SPLYNX_MYSQL_DATABASE", "splynx")
 
     # Cookie security
