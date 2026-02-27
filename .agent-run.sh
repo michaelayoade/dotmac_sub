@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-001
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-006
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-001.log
-TASK_ID=fix-deps-001
-DESCRIPTION=Upgrade\ jinja2\ from\ 3.1.4\ to\ 3.1.6\ in\ pyproject.toml\ to\ fix\ CVE-2024-56201\ and\ CVE-2024-56326\ \(sandbox\ escape\ via\ \|attr\ filter\ chains\ and\ __init_subclass__\).\ Edit\ the\ jinja2\ line\ in\ pyproject.toml\,\ then\ run:\ make\ check\ \&\&\ make\ test\ to\ verify\ nothing\ broke.
-BRANCH=agent/fix-deps-001
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-006.log
+TASK_ID=fix-deps-006
+DESCRIPTION=Upgrade\ weasyprint\ from\ 61.2\ to\ \>=65.0\ in\ pyproject.toml.\ WeasyPrint\ older\ versions\ have\ SSRF\ risks\ when\ rendering\ user-supplied\ HTML.\ After\ upgrading\,\ grep\ the\ codebase\ for\ all\ weasyprint\ call\ sites\ \(grep\ -r\ \'weasyprint\\\|HTML\(\'\ app/\)\ and\ ensure\ user-controlled\ HTML\ content\ is\ sanitized\ before\ being\ passed\ to\ WeasyPrint\,\ or\ that\ URL\ loading\ is\ disabled.\ Run\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-deps-006
 ENGINE=aider
 MODEL=deepseek-chat
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
