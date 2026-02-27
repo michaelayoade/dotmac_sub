@@ -3,16 +3,16 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-006-v2
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
-ENGINE=codex
-MODEL=gpt-5.3-codex
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-006-v2.log
+TASK_ID=fix-deps-006-v2
+DESCRIPTION=Upgrade\ weasyprint\ from\ 61.2\ to\ \>=65.0\ in\ pyproject.toml.\ WeasyPrint\ older\ versions\ have\ SSRF\ risks\ when\ rendering\ user-supplied\ HTML.\ IMPORTANT:\ Only\ edit\ pyproject.toml\ —\ do\ NOT\ create\ any\ other\ files.\ After\ editing\,\ grep\ the\ codebase\ for\ all\ weasyprint\ call\ sites\ \(grep\ -r\ weasyprint\ app/\)\ and\ ensure\ user-controlled\ HTML\ content\ is\ sanitized.\ Run\ make\ check\ \&\&\ make\ test.\ Previous\ attempt\ \(v1\)\ was\ rejected\ because\ the\ aider\ agent\ created\ garbage\ files\ with\ LLM\ reasoning\ text\ as\ filenames.\ This\ time:\ only\ change\ the\ weasyprint\ version\ line\ in\ pyproject.toml.
+BRANCH=agent/fix-deps-006-v2
+ENGINE=aider
+MODEL=deepseek-chat
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
 CONFIG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/config.json
 PROJECT_NAME=dotmac_sub
