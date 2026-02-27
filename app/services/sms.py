@@ -12,8 +12,11 @@ Configuration via environment variables or DomainSettings:
 - SMS_WEBHOOK_URL (for webhook provider)
 """
 
+import ipaddress
 import logging
 import os
+import socket
+import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
 
@@ -180,6 +183,20 @@ def _send_via_webhook(
     Returns: (success, external_id, error_message)
     """
     try:
+        parsed_url = urllib.parse.urlparse(webhook_url)
+        if parsed_url.scheme == "http":
+            raise ValueError("Insecure webhook URL scheme")
+        if parsed_url.scheme != "https":
+            raise ValueError("Invalid webhook URL scheme")
+        if not parsed_url.hostname:
+            raise ValueError("Invalid webhook URL")
+
+        addrinfo = socket.getaddrinfo(parsed_url.hostname, parsed_url.port or 443, type=socket.SOCK_STREAM)
+        for _, _, _, _, sockaddr in addrinfo:
+            ip = ipaddress.ip_address(sockaddr[0].split("%", 1)[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise ValueError("SSRF blocked")
+
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
