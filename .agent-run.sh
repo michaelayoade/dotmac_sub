@@ -3,14 +3,14 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---- Injected at spawn time ----
-WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-deps-005
+WORKTREE_DIR=/home/dotmac/projects/dotmac_sub/.worktrees/fix-security-c1-7
 PROJECT_DIR=/home/dotmac/projects/dotmac_sub
 SCRIPT_DIR=/home/dotmac/.seabone/scripts
 ACTIVE_FILE=/home/dotmac/projects/dotmac_sub/.seabone/active-tasks.json
-LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-deps-005.log
-TASK_ID=fix-deps-005
-DESCRIPTION=Upgrade\ opentelemetry-instrumentation-fastapi\,\ opentelemetry-instrumentation-sqlalchemy\,\ and\ opentelemetry-instrumentation-celery\ from\ 0.47b0\ \(beta\)\ to\ their\ stable\ 1.x\ releases\ in\ pyproject.toml.\ Also\ align\ opentelemetry-api\,\ opentelemetry-sdk\,\ and\ opentelemetry-exporter-otlp\ to\ compatible\ stable\ versions.\ Check\ https://pypi.org/project/opentelemetry-instrumentation-fastapi/\ for\ the\ latest\ stable\ version.\ Run\ make\ check\ \&\&\ make\ test\ after.
-BRANCH=agent/fix-deps-005
+LOG_FILE=/home/dotmac/projects/dotmac_sub/.seabone/logs/fix-security-c1-7.log
+TASK_ID=fix-security-c1-7
+DESCRIPTION=In\ app/services/enforcement.py\ around\ line\ 742\,\ RADIUS\ table\ names\ are\ interpolated\ into\ SQL\ f-strings\ \(3\ occurrences\,\ noqa:\ S608\).\ Read\ the\ file\ to\ find\ all\ occurrences.\ Fix:\ \(1\)\ Define\ at\ module\ level:\ ALLOWED_RADIUS_TABLES\ =\ frozenset\(\{\'radcheck\'\,\ \'radreply\'\,\ \'radusergroup\'\,\ \'radpostauth\'\,\ \'radacct\'\,\ \'nas\'\}\).\ \(2\)\ Create\ validate_radius_table\(name:\ str\)\ -\>\ str\ that\ checks\ membership\ and\ raises\ ValueError\ if\ not\ found.\ \(3\)\ Wrap\ each\ table\ name\ variable\ with\ validate_radius_table\(\)\ before\ it\ enters\ the\ f-string.\ Run:\ make\ check\ \&\&\ make\ test.
+BRANCH=agent/fix-security-c1-7
 ENGINE=codex
 MODEL=gpt-5.3-codex
 EVENT_LOG=/home/dotmac/projects/dotmac_sub/.seabone/logs/events.log
