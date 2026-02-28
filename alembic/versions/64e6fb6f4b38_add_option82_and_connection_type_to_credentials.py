@@ -1,6 +1,6 @@
 """Add Option 82 and connection type fields to access credentials.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 64e6fb6f4b38
 Revises: z7b8c9d0e1f2
 Create Date: 2026-02-25
 """
@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "64e6fb6f4b38"
 down_revision: str | Sequence[str] | None = "z7b8c9d0e1f2"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None

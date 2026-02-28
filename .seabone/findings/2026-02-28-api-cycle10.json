@@ -1,0 +1,90 @@
+[
+  {
+    "id": "api-c10-1",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/wireguard.py",
+    "line": 37,
+    "issue": "`list_servers` (line 37) and `list_peers` (line 130) both declare `limit`/`offset` query params but return bare `list[WireGuardServerRead]` and `list[WireGuardPeerRead]` instead of `ListResponse[X]`, so API clients receive no total count and cannot implement correct pagination.",
+    "task": "Change `response_model=list[WireGuardServerRead]` to `response_model=ListResponse[WireGuardServerRead]` on `list_servers` and `list_peers`, update the service methods to return a `ListResponse` wrapper (following the pattern in `app/api/subscribers.py:list_subscribers`).",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c10-2",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/wireguard.py",
+    "line": 331,
+    "issue": "`list_peer_connection_logs` constructs `[WireGuardConnectionLogRead(**log) for log in logs]` directly in the route handler instead of in the service layer, violating the thin-wrapper rule, and returns bare `list[WireGuardConnectionLogRead]` without a `ListResponse` wrapper despite having `limit`/`offset` params.",
+    "task": "Move the list comprehension and Pydantic model construction into the `wg_connection_logs.list_by_peer_with_names` service method, have it return a `ListResponse[WireGuardConnectionLogRead]`, and update the route to `response_model=ListResponse[WireGuardConnectionLogRead]`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c10-3",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/gis.py",
+    "line": 103,
+    "issue": "`find_nearby_locations` (line 103) and `find_locations_in_area` (line 122) accept geographic coordinates but have no `limit` query parameter and no pagination, meaning a bounding box covering a dense area can return an unbounded number of rows directly to the client.",
+    "task": "Add `limit: int = Query(default=100, ge=1, le=1000)` and `offset: int = Query(default=0, ge=0)` to both spatial query endpoints and change `response_model=list[GeoLocationRead]` to `response_model=ListResponse[GeoLocationRead]`, passing limit/offset through to the service.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c10-4",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/gis.py",
+    "line": 223,
+    "issue": "`find_areas_containing_point` returns `list[GeoAreaRead]` with no limit parameter and no pagination, allowing a point query to return all matching coverage areas without bound.",
+    "task": "Add `limit: int = Query(default=100, ge=1, le=1000)` to `find_areas_containing_point` and change `response_model=list[GeoAreaRead]` to `response_model=ListResponse[GeoAreaRead]`, updating the underlying service call to respect the limit.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c10-5",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 282,
+    "issue": "`preview_template` (POST `/templates/{template_id}/preview`) has no `response_model` declaration and constructs a raw dict `{\"template_id\": ..., \"rendered_content\": ...}` directly in the route handler, violating the thin-wrapper rule and leaving the response shape undocumented in OpenAPI.",
+    "task": "Create a `TemplatePreviewResponse` Pydantic schema in `app/schemas/nas.py`, add `response_model=TemplatePreviewResponse` to the decorator, move the dict construction into the service layer (`ProvisioningTemplates.preview`), and have the route call that and return the result.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c10-6",
+    "severity": "low",
+    "category": "api",
+    "file": "app/api/bandwidth.py",
+    "line": 114,
+    "issue": "The two SSE streaming endpoints `get_live_bandwidth` (line 114) and `get_my_live_bandwidth` (line 240) have no `response_model` and no `summary` in their decorator, leaving the streamed event payload shape (`{timestamp, rx_bps, tx_bps}`) completely undocumented in OpenAPI.",
+    "task": "Add `response_class=EventSourceResponse` (or a custom `StreamingResponse` annotation) to both SSE endpoint decorators and a `summary` string; optionally define a `BandwidthEvent` TypedDict or Pydantic model describing the SSE payload and add it to the docstring.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c10-7",
+    "severity": "low",
+    "category": "api",
+    "file": "app/api/provisioning.py",
+    "line": 108,
+    "issue": "`app/api/provisioning.py` and `app/api/nas.py` use bare integer literals (`status_code=201`, `status_code=204`) for all POST/DELETE endpoints instead of `status.HTTP_201_CREATED` / `status.HTTP_204_NO_CONTENT`, inconsistent with every other API file (`rbac.py`, `catalog.py`, `subscribers.py`, `comms.py`) that uses the named constants.",
+    "task": "Replace all occurrences of literal `status_code=201` with `status_code=status.HTTP_201_CREATED` and `status_code=204` with `status_code=status.HTTP_204_NO_CONTENT` in `app/api/provisioning.py` (13 occurrences) and `app/api/nas.py` (6 occurrences), ensuring `from fastapi import status` is imported.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c10-8",
+    "severity": "low",
+    "category": "api",
+    "file": "app/api/bandwidth.py",
+    "line": 162,
+    "issue": "`get_top_users` returns `list[TopUserEntry]` with no `ListResponse` wrapper, inconsistent with other list endpoints in the codebase; while the endpoint accepts a `limit` param, clients receive no total count and the absence of a wrapper signals a non-paginated response contract different from other list endpoints.",
+    "task": "Either document the intentional non-paginated nature of `get_top_users` with a comment and OpenAPI `summary`, or align it with the `ListResponse[TopUserEntry]` pattern if a total count is useful; at minimum add `summary=\"Top bandwidth consumers (capped list)\"` to the decorator.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  }
+]

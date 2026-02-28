@@ -61,6 +61,7 @@ def upgrade() -> None:
     _create_enum_if_missing("healthstatus", HEALTH_STATUS_VALUES)
 
     if _has_column("nas_devices", "health_status"):
+        op.execute(sa.text("ALTER TABLE nas_devices ALTER COLUMN health_status DROP DEFAULT"))
         op.execute(
             sa.text(
                 "ALTER TABLE nas_devices "
@@ -76,6 +77,7 @@ def upgrade() -> None:
         )
 
     if _has_column("network_devices", "health_status"):
+        op.execute(sa.text("ALTER TABLE network_devices ALTER COLUMN health_status DROP DEFAULT"))
         op.execute(
             sa.text(
                 "ALTER TABLE network_devices "
@@ -94,6 +96,7 @@ def upgrade() -> None:
     _create_enum_if_missing("provisioninglogstatus", PROVISIONING_LOG_STATUS_VALUES)
 
     if _has_column("provisioning_logs", "status"):
+        op.execute(sa.text("ALTER TABLE provisioning_logs ALTER COLUMN status DROP DEFAULT"))
         op.execute(
             sa.text(
                 "ALTER TABLE provisioning_logs "
@@ -148,6 +151,7 @@ def upgrade() -> None:
     _create_enum_if_missing("wirelessmaststatus", WIRELESS_MAST_STATUS_VALUES)
 
     if _has_column("wireless_masts", "status"):
+        op.execute(sa.text("ALTER TABLE wireless_masts ALTER COLUMN status DROP DEFAULT"))
         op.execute(
             sa.text(
                 "ALTER TABLE wireless_masts "

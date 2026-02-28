@@ -1,0 +1,222 @@
+[
+  {
+    "id": "quality-c2-1",
+    "severity": "critical",
+    "category": "quality",
+    "file": "app/services/",
+    "line": null,
+    "issue": "815+ instances of SQLAlchemy 1.x `db.query()` / `session.query()` remain codebase-wide (570 in services alone, 40 in web_network_fiber.py, 33 in network_monitoring.py), violating the project's SQLAlchemy 2.0 mandate to use `select()`.",
+    "task": "Migrate all `db.query(Model).filter(...).all()` calls to `db.scalars(select(Model).where(...)).all()` across the codebase, prioritising high-traffic service files: auth_flow.py, subscriber.py, enforcement.py, billing/payments.py, notification.py, and the Celery tasks.",
+    "auto_fixable": true,
+    "effort": "large"
+  },
+  {
+    "id": "quality-c2-2",
+    "severity": "critical",
+    "category": "quality",
+    "file": "app/services/",
+    "line": null,
+    "issue": "570 `db.commit()` calls exist in the service layer versus only 78 `db.flush()` calls, meaning services own transactions instead of letting the caller (route/task) control commit boundaries — a project-wide violation of CLAUDE.md Rule 1.",
+    "task": "Replace all `db.commit()` calls in service methods with `db.flush()` (or remove them entirely where the caller already commits), reserving `db.commit()` only for Celery tasks that manage their own sessions.",
+    "auto_fixable": true,
+    "effort": "large"
+  },
+  {
+    "id": "quality-c2-3",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/scheduler_config.py",
+    "line": 205,
+    "issue": "`build_beat_schedule()` is 513 lines long — a single monolithic function that reads every feature flag from the database and assembles the entire Celery Beat schedule, making it untestable and extremely brittle to change.",
+    "task": "Decompose `build_beat_schedule()` into per-feature helper functions (e.g., `_gis_schedule()`, `_billing_schedule()`, `_network_schedule()`) that each return a partial schedule dict, then merge them in a short top-level function.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c2-4",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/billing/reporting.py",
+    "line": 189,
+    "issue": "`get_dashboard_stats()` is 484 lines long, assembling six different stat categories (overview, account stats, collection rate, revenue trend, chart data, recent invoices) inside a single method, making it hard to test or extend individual sections.",
+    "task": "Extract each stat category into a dedicated private method (`_overview_stats()`, `_collection_rate()`, `_revenue_trend()`, etc.) and have `get_dashboard_stats()` merge and return their results.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c2-5",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/billing_automation.py",
+    "line": 253,
+    "issue": "`run_invoice_cycle()` is 268 lines long, mixing subscription query logic, proration calculation, invoice generation, and side-effect triggering in a single function with no sub-method decomposition.",
+    "task": "Extract discrete phases of the invoice cycle into separate private methods (`_select_billable_subscriptions()`, `_generate_invoice()`, `_trigger_post_invoice_events()`) called in sequence from a short orchestrator method.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c2-6",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/enforcement.py",
+    "line": 316,
+    "issue": "`update_subscription_sessions()` makes a separate `db.get(AccessCredential, session.access_credential_id)` call for each RADIUS accounting session inside a loop, producing an N+1 query pattern that scales linearly with active session count.",
+    "task": "Replace the per-iteration `db.get()` call with a bulk load before the loop: `credentials = {c.id: c for c in db.scalars(select(AccessCredential).where(AccessCredential.id.in_([s.access_credential_id for s in sessions]))).all()}` then look up from the dict inside the loop.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-7",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/api/billing.py",
+    "line": 943,
+    "issue": "`paystack_webhook` (line 943) and `flutterwave_webhook` (line 957) are `async def` route handlers that receive a synchronous SQLAlchemy `Session` dependency, causing the sync DB I/O to block the async event loop thread pool and risking thread starvation under load.",
+    "task": "Convert both webhook handlers to `def` (synchronous), read the raw body via `request.body()` using `anyio.to_thread.run_sync` or restructure so that body reading happens in a dependency, to avoid mixing async and sync I/O.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-8",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/web/admin/provisioning.py",
+    "line": 231,
+    "issue": "`bulk_activate_preview` and `bulk_activate_execute` are `async def` handlers that use a synchronous SQLAlchemy `Session`, mixing async form parsing (`await request.form()`) with blocking DB calls and violating CLAUDE.md's rule that route handlers should be sync.",
+    "task": "Refactor both handlers to synchronous `def` by pre-parsing form data with a sync wrapper or by using `request.form()` in a sync context via FastAPI's form dependency injection instead of `await request.form()`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-9",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/enforcement.py",
+    "line": 748,
+    "issue": "`_delete_users_from_external_radius()` calls `create_engine(config['db_url'])` to get a short-lived external RADIUS DB connection but never calls `engine.dispose()`, leaking the connection pool on every invocation.",
+    "task": "Add a `try/finally` block around the engine usage to ensure `engine.dispose()` is always called after the `with engine.begin()` block completes or raises.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c2-10",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/usage.py",
+    "line": 582,
+    "issue": "`UsageCharges.bulk_post_by_ids()` silently swallows all exceptions per charge with `except Exception: pass`, meaning posting failures (e.g. missing subscription, DB errors) are completely invisible — no log line and no return indicator of partial failure.",
+    "task": "Replace the bare `pass` with `logger.warning('Failed to post usage charge %s: %s', charge_id, exc, exc_info=True)` so failures are visible, and change the return type to a tuple `(posted_count, failed_count)` so callers can detect partial failures.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c2-11",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/tasks/notifications.py",
+    "line": 61,
+    "issue": "The notification delivery loop calls `db.commit()` once per notification (after setting `status = NotificationStatus.sending`), producing one DB round-trip per notification and slowing batch delivery linearly with queue size.",
+    "task": "Batch-update statuses with a single `UPDATE ... WHERE id IN (...)` before the delivery loop (using `db.execute(update(Notification).where(...).values(status=...))`) then commit once, rather than committing per iteration.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-12",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_catalog_settings.py",
+    "line": 255,
+    "issue": "Five identical bulk-delete helper functions (`bulk_delete_region_zones`, `bulk_delete_usage_allowances`, etc.) each wrap individual deletes in `except Exception: logger.debug(...)`, silently downgrading real errors (constraint violations, DB failures) to debug-level log noise.",
+    "task": "Raise log level to `logger.warning()` or `logger.error()` with `exc_info=True` so delete failures are visible in production, and extract the repeated pattern into a single `_bulk_delete_items(db, ids, delete_fn, entity_name)` helper to eliminate the 5× duplication.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-13",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/api/nas.py",
+    "line": 50,
+    "issue": "Five endpoints in `nas.py` use `response_model=dict` (lines 50, 136, 222, 342, 373), and `provisioning.py` has seven more (lines 79, 180, 264, 348, 417, 516, 602), meaning FastAPI cannot validate or document the response schema for these endpoints.",
+    "task": "Define or reuse appropriate typed Pydantic response models (e.g., `ListResponse[NasDeviceRead]`, `ServiceOrderRead`) and replace `response_model=dict` declarations on all 12+ affected endpoints.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c2-14",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/api/catalog.py",
+    "line": 577,
+    "issue": "The parameter aliasing `if not subscriber_id and account_id: subscriber_id = account_id` is duplicated verbatim in two route handlers (lines 577–578 and 1120–1121), violating the service-layer rule and the DRY principle.",
+    "task": "Move the alias logic into the service method or a shared schema validator so the route simply calls the service with the raw parameters and the alias is handled in one place.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c2-15",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/models/network.py",
+    "line": 226,
+    "issue": "148 ORM `relationship()` calls across all model files lack a `back_populates` argument, leaving SQLAlchemy without bidirectional relationship wiring and causing potential `DetachedInstanceError` and unnecessary lazy-load queries when traversing the reverse side.",
+    "task": "Audit all relationships in `app/models/` and add matching `back_populates` pairs to both sides; for read-only or one-directional relationships, add `viewonly=True` with an explanatory comment to make the intent explicit.",
+    "auto_fixable": false,
+    "effort": "large"
+  },
+  {
+    "id": "quality-c2-16",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/tasks/",
+    "line": null,
+    "issue": "20+ functions across tasks and services use local imports inside function bodies (e.g., `app/tasks/events.py:27`, `app/tasks/olt_polling.py:26`, `app/services/subscription_changes.py:56`), re-executing the import machinery on every call rather than at module load time.",
+    "task": "Move all local-function imports to module-level unless they are genuinely needed to break a circular import, in which case add a comment explaining the circular dependency.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-17",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/collections/_core.py",
+    "line": 1106,
+    "issue": "Two `run()` static methods in `collections/_core.py` are 201 lines (DunningRunner.run, line 1106) and 181 lines (PrepaidEnforcementRunner.run, line 1346) respectively — both use legacy `db.query()` and embed all processing logic without decomposition.",
+    "task": "Decompose each `run()` method into smaller private helpers (account selection, action evaluation, action execution, result aggregation), and migrate the internal queries to SQLAlchemy 2.0 `select()` while refactoring.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c2-18",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/web/admin/nas.py",
+    "line": 367,
+    "issue": "`device_update()` route handler has a 55-parameter signature consuming 166 lines just for its `Form(...)` declarations, making it impossible to read, test, or add new fields without touching the already-unwieldy function signature.",
+    "task": "Define a `NasDeviceUpdateForm` Pydantic model that reads from `Form` fields (using `model_config = ConfigDict(...)` or individual `Field(...)` annotations) and inject it as a single dependency into the route, reducing the signature to a handful of parameters.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c2-19",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/subscriber.py",
+    "line": 445,
+    "issue": "`get_dashboard_stats()` imports `calendar` and `from datetime import UTC, datetime, timedelta` inside the function body (lines 445–446), incurring import overhead on every dashboard request and obscuring the module's dependencies.",
+    "task": "Move `import calendar` and the datetime imports to the module-level import block at the top of `subscriber.py`.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c2-20",
+    "severity": "low",
+    "category": "quality",
+    "file": "app/services/web_billing_dunning.py",
+    "line": 106,
+    "issue": "`apply_dunning_cases_bulk()` catches `except Exception: continue` inside a loop over case IDs without logging any information about which cases failed or why, making it impossible to diagnose dunning processing failures in production.",
+    "task": "Add `logger.warning('Failed to apply dunning action for case %s: %s', case_id, exc, exc_info=True)` before `continue` so failures are observable, and optionally return a struct with `{processed: [...], failed: [...]}` for callers.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  }
+]

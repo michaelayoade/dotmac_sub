@@ -1,0 +1,178 @@
+[
+  {
+    "id": "quality-c6-1",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/subscriber.py",
+    "line": 1,
+    "issue": "`subscriber.py` (802 lines) has zero logging infrastructure — no `import logging` and no `logger = logging.getLogger(__name__)` — meaning all exceptions, state transitions, and important events in the core subscriber lifecycle service are completely invisible in production logs, violating CLAUDE.md's convention that every service file must have a module-level logger.",
+    "task": "Add `import logging` and `logger = logging.getLogger(__name__)` to the top of `app/services/subscriber.py`, then replace any bare exception handlers (`except Exception: pass` or `except Exception: ...` without logging) with `logger.warning(...)` or `logger.exception(...)` calls so failures are observable.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c6-2",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/nas.py",
+    "line": 1,
+    "issue": "`nas.py` (2248 lines — the largest service file) has zero logging infrastructure — no `import logging` and no `logger = logging.getLogger(__name__)` — making all NAS device connection errors, backup failures, and provisioning events completely invisible in production logs, violating CLAUDE.md's logging convention.",
+    "task": "Add `import logging` and `logger = logging.getLogger(__name__)` to the top of `app/services/nas.py`, then identify and instrument the key error paths (connection failures, backup errors, SSH/API call failures) with appropriate `logger.warning()` or `logger.exception()` calls.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-3",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/web_billing_invoice_bulk.py",
+    "line": 38,
+    "issue": "Seven `except Exception: continue` clauses across `list_invoices_by_ids()`, `bulk_issue()`, `bulk_send()`, `bulk_void()`, `bulk_mark_paid()`, `bulk_queue_pdf_exports()`, and `bulk_pdf_readiness()` swallow all exceptions without logging, making bulk invoice operation failures completely invisible; additionally, lines 52, 85, and 110 call `db.commit()` directly in service methods, violating the CLAUDE.md rule that callers control transaction boundaries.",
+    "task": "Replace every bare `except Exception: continue` block with `except Exception: logger.warning('Bulk invoice action failed for %s: %s', invoice_id, exc, exc_info=True); continue`, add a module-level `logger = logging.getLogger(__name__)`, and convert the three `db.commit()` calls to `db.flush()` so the caller controls the commit.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-4",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/network_map.py",
+    "line": 25,
+    "issue": "`build_network_map_context()` is a 323-line monolithic function that builds the entire network map GeoJSON (POP sites, splitters, fiber segments, FDH cabinets, splice closures, subscribers, access points) using multiple legacy `db.query()` calls, with all geometry-building logic inlined — untestable and fragile when any entity type is added or changed.",
+    "task": "Decompose `build_network_map_context()` into per-entity helper functions (`_pop_site_features()`, `_splitter_features()`, `_fiber_segment_features()`, `_subscriber_features()`, etc.), each returning a `list[dict]` of GeoJSON Feature objects, then merge them in a short top-level orchestrator. Also migrate the internal `db.query()` calls to SQLAlchemy 2.0 `select()`.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c6-5",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/web_network_core_devices_views.py",
+    "line": 283,
+    "issue": "`onts_list_page_data()` is 211 lines long, mixing ONT query construction, status-group counting, fiber-path resolution, CPE lookup, and pagination into a single function body, making it difficult to test individual data-assembly steps or to add new ONT display columns without risk of regression.",
+    "task": "Extract the distinct phases of `onts_list_page_data()` into private helpers (`_count_by_status()`, `_resolve_fiber_paths()`, `_enrich_ont_rows()`, `_apply_ont_filters()`) called in sequence from a short orchestrator, reducing the main function to under 40 lines.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c6-6",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/bandwidth.py",
+    "line": 452,
+    "issue": "`top_users()` calls `db.get(Subscription, UUID(sub_id))` once per entry in the VictoriaMetrics top-users result list (inside a loop at line 452), then further triggers lazy-loads of `subscription.subscriber` and `subscriber.organization`, producing three or more DB round-trips per result row — an N+1 pattern in a metrics endpoint likely called frequently.",
+    "task": "Collect all `sub_id` values from the results list before the loop, batch-load subscriptions with their relationships using `db.scalars(select(Subscription).options(selectinload(Subscription.subscriber).selectinload(Subscriber.organization)).where(Subscription.id.in_(sub_uuids))).all()` into a dict, then look up from the dict inside the loop.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-7",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/collections/_core.py",
+    "line": 1143,
+    "issue": "`DunningRunner.run()` calls `db.get(Subscriber, account_id)` (line 1143) inside a loop over all overdue accounts, then calls `_resolve_policy_set_for_account()` and `_resolve_dunning_steps()` per account (lines 1151–1157) — each of which issues additional queries — producing a severe N+1 pattern that multiplies DB queries by 3+ for every overdue account processed in each dunning cycle.",
+    "task": "Pre-load all overdue account `Subscriber` records in a single bulk query before the loop using `db.scalars(select(Subscriber).where(Subscriber.id.in_(overdue_account_ids))).all()`, cache policy sets and dunning steps in dicts keyed by account tier/type rather than re-querying per account, and pass the pre-loaded data into each iteration.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-8",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_billing_payments.py",
+    "line": 556,
+    "issue": "`_enrich_payment_row()` tacks computed display attributes (`display_number`, `display_method`, `narration`) directly onto `Payment` ORM model instances using `# type: ignore[attr-defined]` suppressions (lines 556–558); the same pattern exists in `web_network_speed_profiles.py:51,53` with `_speed_display`. These attributes only exist after enrichment runs, templates must use `| default(...)` guards, and mypy must be silenced — a fragile pattern that makes ORM objects carry display-layer state.",
+    "task": "Define a typed `PaymentRowDTO` dataclass (or TypedDict) with the base Payment fields plus the computed display fields, return a `list[PaymentRowDTO]` from `build_payments_list_data()` instead of mutating ORM objects, and update the Jinja2 template to use the DTO attributes directly without `| default` guards.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-9",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/",
+    "line": null,
+    "issue": "94 logging calls codebase-wide use f-string interpolation (`logger.info(f\"...\")`, `logger.warning(f\"...\")`, etc.) instead of lazy `%`-style formatting (`logger.info(\"...\", var)`). F-strings are always eagerly evaluated — even when the logger's level suppresses the output — wasting CPU on string construction in hot paths; concentrated in `app/tasks/bandwidth.py` (9), `app/tasks/events.py` (3), `app/tasks/webhooks.py` (4), and `app/poller/mikrotik_poller.py` (5+).",
+    "task": "Run `ruff --fix` with rule `G004` (Logging statement uses f-string) enabled to auto-convert all `logger.*(f\"...\")` calls to `logger.*(\"...\", ...)` format across the codebase.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c6-10",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/notification.py",
+    "line": 1,
+    "issue": "`notification.py` (899 lines) has zero logging infrastructure — no `import logging` and no `logger = logging.getLogger(__name__)` — making notification dispatch failures, template render errors, and channel routing decisions completely invisible in production.",
+    "task": "Add `import logging` and `logger = logging.getLogger(__name__)` to the top of `app/services/notification.py`, then add `logger.warning()` calls at the key failure paths (notification send failure, missing template, unknown channel) so operators can debug notification delivery problems.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c6-11",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/gis.py",
+    "line": 3,
+    "issue": "Four service files (`gis.py`, `network_monitoring.py`, `bandwidth.py`, `rbac.py`) each have `import builtins` followed by `from __future__ import annotations` — but `from __future__ import annotations` makes all annotations lazy strings, so the `builtins.list[T]` workaround to avoid shadowing by class methods named `list` is unnecessary; plain `list[T]` would work identically, making the `import builtins` dead import.",
+    "task": "In `app/services/gis.py`, `app/services/network_monitoring.py`, `app/services/bandwidth.py`, and `app/services/rbac.py`, remove `import builtins` and replace all `builtins.list[T]` type annotations with `list[T]` — the `from __future__ import annotations` already ensures these are never evaluated at runtime.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c6-12",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_billing_overview.py",
+    "line": 364,
+    "issue": "`build_ar_aging_data()` and `build_overview_data()` fetch all invoices with `limit=2000` (lines 364 and 65 respectively), and `web_billing_payments.py:601` does the same for payment import — operators with more than 2000 open invoices will silently receive incomplete AR aging reports and incorrect dashboard totals with no warning.",
+    "task": "Remove the hard-coded `limit=2000` ceiling from AR aging and overview queries by using an unpaginated query or a scrollable cursor; if a practical limit is needed for performance, add an explicit warning log when the result count hits the limit so operators know results are truncated.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-13",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_billing_payments.py",
+    "line": 443,
+    "issue": "`build_payments_list_data()` is 199 lines long with four nested inner functions (`_build_status_totals`, `_method_enum`, `_apply_payment_filters`, `_enrich_payment_row`), mixing filter construction, aggregation, enrichment, and CSV-export logic in a single outer function body.",
+    "task": "Promote the four inner functions to module-level private helpers and split `build_payments_list_data()` into separate `_build_payment_filters()`, `_aggregate_payment_totals()`, and `_enrich_payment_rows()` functions called in sequence from a short orchestrator.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-14",
+    "severity": "low",
+    "category": "quality",
+    "file": "app/tasks/events.py",
+    "line": 27,
+    "issue": "Three Celery task functions in `tasks/events.py` (`retry_failed_events` line 27, `cleanup_old_events` line 100, `mark_stale_processing_events` line 136) use local `from app.models.event_store import ...` and `from app.services.events.dispatcher import get_dispatcher` imports inside the function body, re-executing Python's import machinery on every Celery task invocation instead of at module load time.",
+    "task": "Move the three `from app.models.event_store import ...` and `from app.services.events.dispatcher import get_dispatcher` statements to the module-level import block at the top of `app/tasks/events.py`; if circular imports are a concern, add a comment explaining why.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c6-15",
+    "severity": "low",
+    "category": "quality",
+    "file": "app/services/web_billing_invoice_bulk.py",
+    "line": 49,
+    "issue": "`bulk_issue()`, `bulk_void()`, and `bulk_mark_paid()` directly mutate ORM model fields (`invoice.status`, `invoice.issued_at`, `invoice.paid_at`, `invoice.balance_due`) rather than calling the `billing.invoices` service — creating hidden business logic in a utility module that duplicates and potentially diverges from the canonical invoice status-transition logic in `app/services/billing/invoices.py`.",
+    "task": "Replace the direct field mutations in `web_billing_invoice_bulk.py` with calls to appropriate `billing_service.invoices.*` methods (e.g., `billing_service.invoices.issue(db, invoice)`, `billing_service.invoices.void(db, invoice)`) so all invoice state transitions go through one canonical path.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c6-16",
+    "severity": "low",
+    "category": "quality",
+    "file": "app/services/web_subscriber_details.py",
+    "line": 176,
+    "issue": "`build_subscriber_detail_snapshot()` is 192 lines long, assembling subscriber identity, subscription summary, billing overview, network status, and service order history in a single function with no sub-method decomposition — making it hard to test, extend, or selectively refresh individual sections via HTMX partials.",
+    "task": "Extract each snapshot section into a private helper (`_billing_snapshot()`, `_network_snapshot()`, `_service_order_snapshot()`) returning typed dicts, and have `build_subscriber_detail_snapshot()` merge and return them, reducing the main function to under 30 lines.",
+    "auto_fixable": false,
+    "effort": "small"
+  }
+]

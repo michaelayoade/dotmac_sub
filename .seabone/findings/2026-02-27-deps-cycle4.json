@@ -1,0 +1,46 @@
+[
+  {
+    "id": "deps-c4-1",
+    "severity": "high",
+    "category": "deps",
+    "file": "app/services/nas.py",
+    "line": 885,
+    "issue": "`requests` is imported inside two function bodies (`get_mikrotik_api_status` line 885 and `_execute_api` line 2128) but is not declared in pyproject.toml — it is only available as a transitive dependency of other packages. If the dependency tree changes, these imports will silently break at runtime with no lock-file warning.",
+    "task": "Replace the two lazy `import requests` calls in `app/services/nas.py` with `import httpx` (already declared) and convert the `requests.get`/`requests.post` call patterns to their `httpx` equivalents, passing explicit `timeout=` and `verify=` parameters to match existing httpx usage in the codebase.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "deps-c4-2",
+    "severity": "medium",
+    "category": "deps",
+    "file": "pyproject.toml",
+    "line": 43,
+    "issue": "`aiosmtpd = \"1.4.6\"` is declared in pyproject.toml but is never imported in any Python source file under `app/`. All email sending uses `smtplib` from the standard library. The package is an SMTP *server* library (not a client), so it is almost certainly a remnant of a feature that was not built or was removed, adding unnecessary attack surface and install size.",
+    "task": "Remove `aiosmtpd` from the `[tool.poetry.dependencies]` section in `pyproject.toml`, then run `poetry lock --no-update` to regenerate the lock file and confirm no other package depends on it.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c4-3",
+    "severity": "low",
+    "category": "deps",
+    "file": "app/api/bandwidth.py",
+    "line": 13,
+    "issue": "`anyio` is imported directly in `app/api/bandwidth.py:13` and `app/web/request_parsing.py:7` but is not listed as a direct dependency in pyproject.toml. It is only available because it is a transitive dependency of FastAPI/starlette. A future FastAPI upgrade or starlette refactor could remove this transitive exposure.",
+    "task": "Add `anyio = \">=4.0.0\"` to `[tool.poetry.dependencies]` in pyproject.toml to explicitly declare the direct usage of this package.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c4-4",
+    "severity": "low",
+    "category": "deps",
+    "file": "app/api/",
+    "line": null,
+    "issue": "Both `app/api/` and `app/schemas/` directories contain Python modules but are missing `__init__.py` files, relying on implicit namespace packages (PEP 420). While Python 3.3+ supports this, missing `__init__.py` can cause subtle import resolution failures with pytest, mypy, and certain IDE tooling, and is inconsistent with the rest of the codebase (all other `app/` subdirectories have `__init__.py`).",
+    "task": "Create empty `app/api/__init__.py` and `app/schemas/__init__.py` files to make these explicit packages, consistent with all other modules in `app/`.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  }
+]

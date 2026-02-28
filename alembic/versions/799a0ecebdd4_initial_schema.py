@@ -275,13 +275,6 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['account_id'], ['subscriber_accounts.id'], ),
-    sa.ForeignKeyConstraint(['address_id'], ['addresses.id'], ),
-    sa.ForeignKeyConstraint(['approved_quote_id'], ['project_quotes.id'], ),
-    sa.ForeignKeyConstraint(['assigned_vendor_id'], ['vendors.id'], ),
-    sa.ForeignKeyConstraint(['buildout_project_id'], ['buildout_projects.id'], ),
-    sa.ForeignKeyConstraint(['created_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('project_id', name='uq_installation_projects_project')
     )
@@ -527,10 +520,6 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['created_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['project_id'], ['installation_projects.id'], ),
-    sa.ForeignKeyConstraint(['reviewed_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['vendor_id'], ['vendors.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('project_task_status_transitions',
@@ -3226,70 +3215,21 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['work_order_id'], ['work_orders.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.drop_table('pagc_gaz')
-    op.drop_index('idx_tiger_faces_countyfp', table_name='faces')
-    op.drop_index('idx_tiger_faces_tfid', table_name='faces')
-    op.drop_index('tiger_faces_the_geom_gist', table_name='faces', postgresql_using='gist')
-    op.drop_table('faces')
-    op.drop_table('layer')
-    op.drop_index('idx_addrfeat_geom_gist', table_name='addrfeat', postgresql_using='gist')
-    op.drop_index('idx_addrfeat_tlid', table_name='addrfeat')
-    op.drop_index('idx_addrfeat_zipl', table_name='addrfeat')
-    op.drop_index('idx_addrfeat_zipr', table_name='addrfeat')
-    op.drop_table('addrfeat')
-    op.drop_table('tabblock20')
-    op.drop_index('idx_tiger_county', table_name='county')
-    op.drop_table('county')
-    op.drop_index('tiger_place_the_geom_gist', table_name='place', postgresql_using='gist')
-    op.drop_table('place')
-    op.drop_table('topology')
-    op.drop_table('pagc_lex')
-    op.drop_table('zip_lookup_base')
-    op.drop_index('direction_lookup_abbrev_idx', table_name='direction_lookup')
-    op.drop_table('direction_lookup')
-    op.drop_index('county_lookup_name_idx', table_name='county_lookup')
-    op.drop_index('county_lookup_state_idx', table_name='county_lookup')
-    op.drop_table('county_lookup')
-    op.drop_table('loader_variables')
-    op.drop_index('idx_tiger_addr_tlid_statefp', table_name='addr')
-    op.drop_index('idx_tiger_addr_zip', table_name='addr')
-    op.drop_table('addr')
-    op.drop_index('idx_tiger_state_the_geom_gist', table_name='state', postgresql_using='gist')
-    op.drop_table('state')
-    op.drop_table('zip_state')
-    op.drop_table('loader_platform')
-    op.drop_table('bg')
-    op.drop_table('geocode_settings')
-    op.drop_table('pagc_rules')
-    op.drop_table('zip_state_loc')
-    op.drop_index('countysub_lookup_name_idx', table_name='countysub_lookup')
-    op.drop_index('countysub_lookup_state_idx', table_name='countysub_lookup')
-    op.drop_table('countysub_lookup')
-    op.drop_index('idx_tiger_featnames_lname', table_name='featnames')
-    op.drop_index('idx_tiger_featnames_snd_name', table_name='featnames')
-    op.drop_index('idx_tiger_featnames_tlid_statefp', table_name='featnames')
-    op.drop_table('featnames')
-    op.drop_index('secondary_unit_lookup_abbrev_idx', table_name='secondary_unit_lookup')
-    op.drop_table('secondary_unit_lookup')
-    op.drop_table('tabblock')
-    op.drop_table('zip_lookup_all')
-    op.drop_index('place_lookup_name_idx', table_name='place_lookup')
-    op.drop_index('place_lookup_state_idx', table_name='place_lookup')
-    op.drop_table('place_lookup')
-    op.drop_table('geocode_settings_default')
-    op.drop_index('idx_edges_tlid', table_name='edges')
-    op.drop_index('idx_tiger_edges_countyfp', table_name='edges')
-    op.drop_index('idx_tiger_edges_the_geom_gist', table_name='edges', postgresql_using='gist')
-    op.drop_table('edges')
-    op.drop_table('zip_lookup')
-    op.drop_table('zcta5')
-    op.drop_table('tract')
-    op.drop_index('street_type_lookup_abbrev_idx', table_name='street_type_lookup')
-    op.drop_table('street_type_lookup')
-    op.drop_table('loader_lookuptables')
-    op.drop_index('tige_cousub_the_geom_gist', table_name='cousub', postgresql_using='gist')
-    op.drop_table('cousub')
-    op.drop_table('state_lookup')
+
+    # Deferred FK constraints for project_quotes (depends on tables created later)
+    op.create_foreign_key(None, 'project_quotes', 'people', ['created_by_person_id'], ['id'])
+    op.create_foreign_key(None, 'project_quotes', 'installation_projects', ['project_id'], ['id'])
+    op.create_foreign_key(None, 'project_quotes', 'people', ['reviewed_by_person_id'], ['id'])
+    op.create_foreign_key(None, 'project_quotes', 'vendors', ['vendor_id'], ['id'])
+
+    # Deferred FK constraints for installation_projects (depends on tables created later)
+    op.create_foreign_key(None, 'installation_projects', 'subscriber_accounts', ['account_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'addresses', ['address_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'project_quotes', ['approved_quote_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'vendors', ['assigned_vendor_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'buildout_projects', ['buildout_project_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'people', ['created_by_person_id'], ['id'])
+    op.create_foreign_key(None, 'installation_projects', 'projects', ['project_id'], ['id'])
     # ### end Alembic commands ###
 
 

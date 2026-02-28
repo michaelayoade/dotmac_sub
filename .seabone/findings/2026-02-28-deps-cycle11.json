@@ -1,0 +1,101 @@
+[
+  {
+    "id": "deps-c11-1",
+    "severity": "high",
+    "category": "deps",
+    "file": "app/tasks/olt_config_backup.py",
+    "line": 33,
+    "issue": "`pysnmp` is imported (lazy, inside try/except ImportError) in `olt_config_backup.py:33` and `web_network_olts.py:278` but is not declared in pyproject.toml and is not present in poetry.lock, meaning SNMP-based OLT config backup silently fails in all deployments.",
+    "task": "Add `pysnmp-lextudio` (the maintained fork) to pyproject.toml under `[tool.poetry.dependencies]` as an optional dependency with the relevant extras, or document in both call sites why pysnmp is optional and update the ImportError message with an install hint.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c11-2",
+    "severity": "high",
+    "category": "deps",
+    "file": "app/services/auth_flow.py",
+    "line": 12,
+    "issue": "`python-jose 3.3.0` (CVE-2024-33663 and CVE-2024-33664) is still imported in `auth_flow.py:12` and `observability.py:6` despite fix-deps-003 being marked complete; the CVE allows algorithm confusion attacks on JWT verification.",
+    "task": "Replace `from jose import JWTError, jwt` with `import jwt` from `PyJWT` (already transitively available) in both `auth_flow.py` and `observability.py`, then remove `python-jose` from pyproject.toml.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "deps-c11-3",
+    "severity": "high",
+    "category": "deps",
+    "file": "app/services/auth_flow.py",
+    "line": 13,
+    "issue": "`passlib 1.7.4` (unmaintained since 2020) is still imported in `auth_flow.py:13`; the installed `bcrypt 5.x` removed the `__about__` module that passlib probes at import time, causing a guaranteed `AttributeError` or warning on startup.",
+    "task": "Replace `from passlib.context import CryptContext` and its usages with direct `bcrypt.hashpw` / `bcrypt.checkpw` calls (or use `argon2-cffi` for new hashes), then remove `passlib` from pyproject.toml.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "deps-c11-4",
+    "severity": "medium",
+    "category": "deps",
+    "file": "app/poller/mikrotik_poller.py",
+    "line": 87,
+    "issue": "`asyncio.get_event_loop()` (deprecated since Python 3.10, emits DeprecationWarning in 3.12+ when called outside a running event loop) is used 5 times in `mikrotik_poller.py` (lines 87, 117, 131, 155, 454).",
+    "task": "Replace all 5 `asyncio.get_event_loop()` calls in `mikrotik_poller.py` with `asyncio.get_running_loop()` since the poller only runs from within an async context; add `# type: ignore` only if needed for the executor pattern.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c11-5",
+    "severity": "medium",
+    "category": "deps",
+    "file": "app/services/nas.py",
+    "line": 885,
+    "issue": "`import requests` is used inside function bodies at `nas.py:885` and `nas.py:2128` but `requests` is not declared in pyproject.toml (transitive only via other packages), and `requests.get()` (used at lines 905, 915) is not covered by the hand-rolled `stubs/requests/__init__.pyi` (which only declares `post()`), leaving those calls completely untyped.",
+    "task": "Migrate `nas.py`'s two `requests`-using functions (`get_mikrotik_api_status` and `_execute_api`) to use `httpx` (already declared in pyproject.toml), then update `stubs/requests/__init__.pyi` to add `get()` or delete the stub entirely since requests itself is not a declared dep.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "deps-c11-6",
+    "severity": "medium",
+    "category": "deps",
+    "file": "app/api/bandwidth.py",
+    "line": 13,
+    "issue": "`import anyio` is used directly in `app/api/bandwidth.py:13` and `app/web/request_parsing.py:7` but `anyio` is not declared in pyproject.toml; it is only available as a transitive dependency of FastAPI/Starlette and could disappear on a dependency upgrade.",
+    "task": "Add `anyio = \">=3.0\"` to `[tool.poetry.dependencies]` in pyproject.toml to make the direct `anyio` usage an explicit declared dependency.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c11-7",
+    "severity": "low",
+    "category": "deps",
+    "file": "pyproject.toml",
+    "line": 40,
+    "issue": "`shapely = \"2.0.4\"` is declared as a direct dependency in pyproject.toml but is never imported anywhere in `app/`; `shapely` is a transitive dependency of `geoalchemy2` and does not need to be declared directly.",
+    "task": "Remove `shapely = \"2.0.4\"` from `[tool.poetry.dependencies]` in pyproject.toml; if a specific shapely version constraint is needed for geoalchemy2 compatibility, add it as a constraint comment instead.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c11-8",
+    "severity": "low",
+    "category": "deps",
+    "file": "pyproject.toml",
+    "line": 44,
+    "issue": "`boto3` is declared in pyproject.toml but no `boto3-stubs` type package is in dev dependencies, leaving all boto3 API calls in `app/services/object_storage.py:64` (S3 client creation and operations) completely untyped and invisible to mypy.",
+    "task": "Add `boto3-stubs = {version = \"*\", extras = [\"s3\"]}` to `[tool.poetry.group.dev.dependencies]` in pyproject.toml so mypy can type-check the S3 client usage in `object_storage.py`.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "deps-c11-9",
+    "severity": "low",
+    "category": "deps",
+    "file": "pyproject.toml",
+    "line": 42,
+    "issue": "`aiosmtpd = \"1.4.6\"` is declared in pyproject.toml but is never imported anywhere in `app/`; all SMTP sending uses stdlib `smtplib` (seen in `notification.py` and related files).",
+    "task": "Remove `aiosmtpd = \"1.4.6\"` from `[tool.poetry.dependencies]` in pyproject.toml to reduce the dependency surface.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  }
+]

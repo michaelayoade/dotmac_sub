@@ -6,15 +6,15 @@ services:
     ports:
     - 127.0.0.1:8001:8001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
-      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://postgres:bM8biKVGYQFZvRVyrvvq7b7QP_8VzfVzPrYtPGrIHXg@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/1
+      REDIS_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-dotmac-sub-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-RSF0U0vLTgfaU7wqtOibmpCSXVeLD-5s}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
     env_file:
@@ -45,13 +45,13 @@ services:
     container_name: dotmac_sub_celery_worker
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
-      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://postgres:bM8biKVGYQFZvRVyrvvq7b7QP_8VzfVzPrYtPGrIHXg@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/1
+      REDIS_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-dotmac-sub-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-RSF0U0vLTgfaU7wqtOibmpCSXVeLD-5s}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
     env_file:
@@ -74,13 +74,13 @@ services:
     container_name: dotmac_sub_celery_beat
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/1
-      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://postgres:bM8biKVGYQFZvRVyrvvq7b7QP_8VzfVzPrYtPGrIHXg@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/1
+      REDIS_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-dotmac-sub-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-RSF0U0vLTgfaU7wqtOibmpCSXVeLD-5s}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
     env_file:
@@ -103,30 +103,30 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Bes3SpEVyg61QebbXSpUse7_4vbOVOa_
+      POSTGRES_PASSWORD: bM8biKVGYQFZvRVyrvvq7b7QP_8VzfVzPrYtPGrIHXg
       POSTGRES_DB: dotmac_sub
     ports:
-    - 5434:5432
+    - 127.0.0.1:5434:5432
     volumes:
     - dotmac_sub_db_data:/var/lib/postgresql/data
   redis:
     image: redis:7
     container_name: dotmac_sub_redis
     restart: unless-stopped
-    command: redis-server --requirepass nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq
+    command: redis-server --requirepass WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q
     ports:
-    - 6379:6379
+    - 127.0.0.1:6384:6379
   minio:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     container_name: dotmac_sub_minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-dotmac-sub-admin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-RSF0U0vLTgfaU7wqtOibmpCSXVeLD-5s}
     command: server /data --console-address ":9001"
     ports:
-    - 9000:9000
-    - 9001:9001
+    - 9002:9000
+    - 9003:9001
     volumes:
     - minio_data:/data
   nominatim:
@@ -160,17 +160,17 @@ services:
     - RADIUS_DB_HOST=radius-db
     - RADIUS_DB_NAME=radius
     - RADIUS_DB_USER=radius
-    - RADIUS_DB_PASS=l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-
+    - RADIUS_DB_PASS=U7W9rniJZhRQMqYJHtpyGlT89z28jri_BMOstBduiRk
   radius-db:
     image: postgres:16
     container_name: dotmac_sub_radius_db
     restart: unless-stopped
     environment:
       POSTGRES_USER: radius
-      POSTGRES_PASSWORD: l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-
+      POSTGRES_PASSWORD: U7W9rniJZhRQMqYJHtpyGlT89z28jri_BMOstBduiRk
       POSTGRES_DB: radius
     ports:
-    - 5437:5432
+    - 127.0.0.1:5437:5432
     volumes:
     - radius_db_data:/var/lib/postgresql/data
     - ./config/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -186,16 +186,16 @@ services:
     depends_on:
     - genieacs-mongodb
     environment:
-    - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm@genieacs-mongodb/genieacs?authSource=admin
+    - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:ihDB8I_ohCytYf9Dq_DTBxs3jOTl6aoZtpxS6GblJWo@genieacs-mongodb/genieacs?authSource=admin
   genieacs-mongodb:
     image: mongo:4.4
     container_name: dotmac_sub_genieacs_mongodb
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: genieacs
-      MONGO_INITDB_ROOT_PASSWORD: Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm
+      MONGO_INITDB_ROOT_PASSWORD: ihDB8I_ohCytYf9Dq_DTBxs3jOTl6aoZtpxS6GblJWo
     ports:
-    - 27017:27017
+    - 127.0.0.1:27017:27017
     volumes:
     - genieacs_mongodb_data:/data/db
   victoriametrics:
@@ -214,16 +214,16 @@ services:
     container_name: dotmac_sub_bandwidth_poller
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@db:5432/dotmac_sub
-      REDIS_URL: redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://postgres:bM8biKVGYQFZvRVyrvvq7b7QP_8VzfVzPrYtPGrIHXg@db:5432/dotmac_sub
+      REDIS_URL: redis://:WjGCq7ve4rTaPQqkOdk9KaAFd_hnxj2z9l_fDJBMj9Q@redis:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
       BANDWIDTH_POLL_INTERVAL_MS: '1000'
       BANDWIDTH_HOT_RETENTION_HOURS: '24'
       BANDWIDTH_REDIS_STREAM: bandwidth:samples
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-dotmac-sub-admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-RSF0U0vLTgfaU7wqtOibmpCSXVeLD-5s}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
     env_file:
@@ -252,4 +252,4 @@ networks:
     name: dotmac_sub_default
     ipam:
       config:
-      - subnet: 172.20.255.0/24
+      - subnet: 172.20.254.0/24

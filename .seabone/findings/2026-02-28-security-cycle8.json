@@ -1,0 +1,112 @@
+[
+  {
+    "id": "security-c8-1",
+    "severity": "critical",
+    "category": "security",
+    "file": "app/services/integration_hooks.py",
+    "line": 417,
+    "issue": "`_execute_cli_hook()` calls `subprocess.run(command, shell=True, ...)` where `command` is the raw `hook.command` string set by an admin — any admin who can create a CLI integration hook can execute arbitrary shell commands on the server as the application user.",
+    "task": "Replace `shell=True` with `shell=False` and split the command string using `shlex.split(command)` so it is passed as an argument list, preventing shell metacharacter interpretation; additionally, consider an allowlist of approved command prefixes or disable CLI hooks in production.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "security-c8-2",
+    "severity": "high",
+    "category": "security",
+    "file": "app/api/scheduler.py",
+    "line": 30,
+    "issue": "All five scheduler endpoints (`POST /tasks`, `PATCH /tasks/{id}`, `DELETE /tasks/{id}`, `POST /tasks/refresh`, `POST /tasks/{id}/enqueue`) have no `require_permission` dependency — any authenticated user can create a scheduled task with an arbitrary Celery `task_name` and immediately enqueue it via `celery_app.send_task(task_name, args, kwargs)`, potentially triggering any registered Celery task with attacker-controlled arguments.",
+    "task": "Add `dependencies=[Depends(require_permission('scheduler:write'))]` to the create, update, delete, refresh, and enqueue endpoints in `app/api/scheduler.py`, and `dependencies=[Depends(require_permission('scheduler:read'))]` to the list and get endpoints; additionally validate `task_name` against a hardcoded allowlist of registered task names in `app/services/scheduler.py:97`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "security-c8-3",
+    "severity": "high",
+    "category": "security",
+    "file": "app/api/search.py",
+    "line": 1,
+    "issue": "All 15 typeahead/search endpoints in `app/api/search.py` — covering subscribers, accounts, contacts, invoices, NAS devices, network devices, subscriptions, and more — have no `require_permission` dependency; only `require_user_auth` is applied at router level, so any authenticated user (including low-privilege users) can enumerate all business data via search.",
+    "task": "Add per-endpoint `dependencies=[Depends(require_permission('subscriber:read'))]`, `require_permission('billing:read')`, etc. matching the entity type to each route decorator in `app/api/search.py` — at minimum add `dependencies=[Depends(require_permission('search:read'))]` to all endpoints as a base control.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "security-c8-4",
+    "severity": "high",
+    "category": "security",
+    "file": "app/api/analytics.py",
+    "line": 1,
+    "issue": "All 8 analytics endpoints (KPI config CRUD + KPI aggregate CRUD + KPI compute) in `app/api/analytics.py` have no `require_permission` dependency — any authenticated user can create, update, delete, and trigger computation of KPI configurations without authorization.",
+    "task": "Add `dependencies=[Depends(require_permission('analytics:write'))]` to the create, update, and delete endpoints and `dependencies=[Depends(require_permission('analytics:read'))]` to the list, get, and compute endpoints in `app/api/analytics.py`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "security-c8-5",
+    "severity": "high",
+    "category": "security",
+    "file": "app/api/gis.py",
+    "line": 368,
+    "issue": "`POST /gis/sync` has no `require_permission` dependency — any authenticated user can trigger a full GIS data synchronization operation (potentially with `deactivate_missing=True`) which could cause data loss by deactivating records for missing entries.",
+    "task": "Add `dependencies=[Depends(require_permission('gis:write'))]` to the `POST /sync` decorator at line 368 in `app/api/gis.py`.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "security-c8-6",
+    "severity": "medium",
+    "category": "security",
+    "file": "app/services/integration_hooks.py",
+    "line": 398,
+    "issue": "`_execute_http_hook()` sends an HTTP request to `hook.url` via `httpx.request()` without any RFC 1918 / SSRF guard — an admin with integration hook creation rights can probe internal network services (metadata endpoints, internal APIs, Redis, PostgreSQL health checks).",
+    "task": "Add RFC 1918 and link-local IP block validation to `_execute_http_hook()` in `app/services/integration_hooks.py` before issuing the outbound request, consistent with the pattern recommended for `app/services/web_integrations.py:268`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "security-c8-7",
+    "severity": "medium",
+    "category": "security",
+    "file": "app/api/nextcloud_talk.py",
+    "line": 37,
+    "issue": "Three endpoints (`POST /messages`, `GET /rooms`, `POST /rooms`) catch `NextcloudTalkError` and return `detail=str(exc)` directly to the caller — exception messages may contain internal hostnames, configuration paths, or connection error details that should not be exposed.",
+    "task": "Replace `detail=str(exc)` on lines 37, 52, and 69 in `app/api/nextcloud_talk.py` with a generic message (e.g., `detail='External Nextcloud service error'`) and log the full exception with `logger.error(..., exc_info=True)` instead.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "security-c8-8",
+    "severity": "medium",
+    "category": "security",
+    "file": "app/services/web_vendor_routes.py",
+    "line": 372,
+    "issue": "`vendor_fiber_map_update_asset_location()` catches a bare `Exception` and returns `JSONResponse({'error': str(exc)}, status_code=500)` — internal exception messages including DB errors, constraint details, or stack context are returned verbatim to vendor portal users.",
+    "task": "Replace `return JSONResponse({'error': str(exc)}, status_code=500)` at line 372 in `app/services/web_vendor_routes.py` with a generic `{'error': 'An internal error occurred'}` response and log the exception server-side.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "security-c8-9",
+    "severity": "low",
+    "category": "security",
+    "file": "app/web/admin/billing_payments.py",
+    "line": 673,
+    "issue": "The payment import endpoint returns `JSONResponse({'message': f'Import failed: {str(exc)}'}, status_code=500)` — internal exception details from the billing import pipeline are exposed to admin users, potentially leaking DB schema, file paths, or library version information.",
+    "task": "Replace `f'Import failed: {str(exc)}'` at line 673 in `app/web/admin/billing_payments.py` with a generic `'Import failed due to an internal error'` message and log the full exception with `logger.exception()`.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "security-c8-10",
+    "severity": "low",
+    "category": "security",
+    "file": "app/services/web_network_core_devices_views.py",
+    "line": 45,
+    "issue": "`_get_olt_health()` interpolates `olt.name` directly into PromQL label selector strings without escaping special characters — an admin who sets an OLT name containing `}` or `{` could inject arbitrary PromQL expressions into the VictoriaMetrics query.",
+    "task": "Escape the `olt_name` value before interpolation in the PromQL strings at lines 45-48 in `app/services/web_network_core_devices_views.py` by replacing `}` with `\\}` and `{` with `\\{` (PromQL label value escaping), or use a parameterized query helper if available.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  }
+]

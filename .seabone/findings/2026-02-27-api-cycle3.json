@@ -1,0 +1,123 @@
+[
+  {
+    "id": "api-c3-1",
+    "severity": "high",
+    "category": "api",
+    "file": "app/api/wireguard.py",
+    "line": 49,
+    "issue": "`list_servers()` calls `wg_service.wg_servers.to_read_schema(s, db)` for every server in a loop, triggering a separate `get_peer_count()` DB query per server — a classic N+1 pattern that scales linearly with server count.",
+    "task": "In `WireGuardServerService.to_read_schema`, replace the per-server `get_peer_count` call with a batch query before the mapping loop: `SELECT server_id, COUNT(*) FROM wireguard_peers GROUP BY server_id WHERE server_id IN (...)` and pass the counts map into `to_read_schema` as a pre-loaded value.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c3-2",
+    "severity": "high",
+    "category": "api",
+    "file": "app/api/wireguard.py",
+    "line": 149,
+    "issue": "`list_peers()` calls `wg_service.wg_peers.to_read_schema(p, db)` for every peer, which queries the server name per peer via a separate DB lookup (wireguard.py:904), producing N+1 DB queries on every peer list request.",
+    "task": "Preload all referenced servers in a single bulk query before the list comprehension: `servers = {s.id: s.name for s in db.scalars(select(WireGuardServer).where(WireGuardServer.id.in_([p.server_id for p in peers if p.server_id]))).all()}`, then pass server names directly to `to_read_schema`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c3-3",
+    "severity": "high",
+    "category": "api",
+    "file": "app/api/billing.py",
+    "line": 76,
+    "issue": "The `billing_dashboard` endpoint has no `response_model` and uses a local import inside the function body (`from app.services.billing.reporting import billing_reporting` at line 78), making the schema opaque to OpenAPI and re-running import machinery on every request.",
+    "task": "Move the import to the module top-level, define a typed `BillingDashboardRead` Pydantic schema that mirrors the `get_dashboard_stats()` return structure, and add `response_model=BillingDashboardRead` to the endpoint decorator.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "api-c3-4",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/gis.py",
+    "line": 207,
+    "issue": "`check_area_contains_point` uses `response_model=dict` and returns a raw dict with keys `area_id`, `latitude`, `longitude`, `contained` — skipping FastAPI response validation and hiding the schema from OpenAPI docs.",
+    "task": "Define an inline `PointContainmentResult(BaseModel)` schema with the four fields and replace `response_model=dict` with `response_model=PointContainmentResult` in the decorator.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c3-5",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/provisioning.py",
+    "line": 68,
+    "issue": "`get_order_stats()` has no `response_model` declaration and returns an untyped dict from `ServiceOrders.get_dashboard_stats(db)`, making the stats payload invisible to OpenAPI consumers.",
+    "task": "Define a `ServiceOrderStats` Pydantic model matching the dict keys returned by `get_dashboard_stats()` and add `response_model=ServiceOrderStats` to the `@router.get('/orders/stats')` decorator.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c3-6",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/scheduler.py",
+    "line": 58,
+    "issue": "`refresh_schedule` (line 58) and `enqueue_scheduled_task` (line 63) declare no `response_model`, so FastAPI emits no schema for their responses and clients cannot rely on a typed contract.",
+    "task": "Inspect `scheduler_service.refresh_schedule()` and `enqueue_by_id()` return values, define appropriate small response schemas (e.g., `ScheduleRefreshResult`, `TaskEnqueueResult`), and add `response_model=` to both decorators.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c3-7",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/integrations.py",
+    "line": 111,
+    "issue": "`refresh_integration_schedule` uses `status_code=HTTP_200_OK` with no `response_model`, returning whatever `integration_service.refresh_schedule(db)` produces without validation or documentation.",
+    "task": "Inspect the return value of `refresh_schedule`, define a small Pydantic response schema (or reuse an existing one), and add `response_model=` to the decorator.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c3-8",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 194,
+    "issue": "`get_backup_content` (line 194) and `compare_backups` (line 208) both lack a `response_model` declaration and return raw dicts, while `get_backup_content` also hard-codes a subset of backup fields that diverges from the canonical `NasConfigBackupRead` schema.",
+    "task": "Define a `BackupContentRead(BaseModel)` schema with `id`, `config_format`, and `content` fields for `get_backup_content`; reuse or define a `BackupCompareResult` for `compare_backups`; add `response_model=` to both decorators.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c3-9",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 397,
+    "issue": "Four utility endpoints (`/vendors` line 397, `/connection-types` line 408, `/provisioning-actions` line 426, `/backup-methods` line 437) all return raw dicts with nested lists of `{value, label}` pairs but have no `response_model`, giving OpenAPI no schema for these enum-list responses.",
+    "task": "Define a reusable `EnumOption(BaseModel)` schema with `value: str` and `label: str` (plus optional `description: str`), wrap each endpoint's return in a typed container (e.g., `class VendorListResponse(BaseModel): vendors: list[EnumOption]`), and add matching `response_model=` to all four decorators.",
+    "auto_fixable": true,
+    "effort": "small"
+  },
+  {
+    "id": "api-c3-10",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nextcloud_talk.py",
+    "line": 30,
+    "issue": "All three Nextcloud Talk endpoints use `response_model=list[dict]` or `response_model=dict`, mirroring the external Nextcloud API response verbatim rather than wrapping it in typed schemas, making these endpoints undocumented black-boxes in OpenAPI.",
+    "task": "Define `NextcloudTalkRoom`, `NextcloudTalkRoomCreated`, and `NextcloudTalkMessageSent` Pydantic models with the fields returned by the Nextcloud Talk API, and replace the `dict`/`list[dict]` response models on all three endpoints.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c3-11",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/fiber_plant.py",
+    "line": 12,
+    "issue": "All four fiber plant endpoints (`/geojson`, `/fdh-cabinets/{id}/splitters`, `/closures/{id}/splices`, `/stats`) declare no `response_model`, returning untyped service layer results — notably `/geojson` returns a GeoJSON FeatureCollection that could be typed with a proper schema.",
+    "task": "Define a `GeoJSONFeatureCollection` schema (or import from a shared module if one exists) for `/geojson`, a `FiberPlantStats` schema for `/stats`, and appropriate typed list responses for the splitter and splice endpoints; add `response_model=` to all four decorators.",
+    "auto_fixable": false,
+    "effort": "small"
+  }
+]

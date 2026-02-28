@@ -1,0 +1,112 @@
+[
+  {
+    "id": "api-c7-1",
+    "severity": "high",
+    "category": "api",
+    "file": "app/api/imports.py",
+    "line": 10,
+    "issue": "`POST /imports/subscriber-custom-fields` (line 10) has neither a `response_model` declaration nor a `require_permission(...)` dependency — any authenticated user can trigger bulk CSV imports of subscriber custom field data without authorization, and the response schema is invisible to OpenAPI clients and mypy.",
+    "task": "Add `response_model=ImportResult` (define a simple Pydantic schema with `imported_count: int`, `errors: list[str]`) and `dependencies=[Depends(require_permission('subscriber:write'))]` to the `POST /subscriber-custom-fields` decorator in `app/api/imports.py`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-2",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/analytics.py",
+    "line": 82,
+    "issue": "`GET /analytics/kpis` (line 82) returns `response_model=list[KPIReadout]` with NO pagination parameters — it computes and returns ALL configured KPIs in a single synchronous call; as KPI configurations grow, this becomes an unbounded, increasingly slow endpoint with no client-side control over result size.",
+    "task": "Add `limit: int = Query(default=50, ge=1, le=200)` and `offset: int = Query(default=0, ge=0)` parameters to `compute_kpis()`, pass them to `analytics_service.compute_kpis(db, limit, offset)`, and change `response_model` to `ListResponse[KPIReadout]` using the standard `list_response()` wrapper.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-3",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 136,
+    "issue": "Three NAS list endpoints — `GET /nas/devices/{device_id}/backups` (line 136), `GET /nas/logs` (line 342), and `GET /nas/devices/{device_id}/logs` (line 373) — all use `response_model=dict` instead of the typed `ListResponse[NasConfigBackupRead]` / `ListResponse[ProvisioningLogRead]` schemas; the underlying service already returns `list_response` format but the API contract is invisible to OpenAPI and mypy.",
+    "task": "Replace `response_model=dict` with `response_model=ListResponse[NasConfigBackupRead]` on line 136 and `response_model=ListResponse[ProvisioningLogRead]` on lines 342 and 373 in `app/api/nas.py`; import the schemas at the top of the file.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c7-4",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 222,
+    "issue": "`GET /nas/templates` (line 222) uses `response_model=dict` (weak typing) and `POST /nas/templates/{template_id}/preview` (line 281) has no `response_model` at all — both endpoints return structured data that the service layer knows how to build but clients cannot discover the shape from OpenAPI.",
+    "task": "Change `response_model=dict` to `response_model=ListResponse[ProvisioningTemplateRead]` on line 222 and add `response_model=ProvisioningTemplatePreviewRead` (define a simple schema with `rendered: str`) to the preview endpoint decorator on line 281.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-5",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 89,
+    "issue": "`GET /nas/devices/stats` (line 89) has no `response_model` — it returns device-count statistics as a raw dict but the response shape is undocumented in OpenAPI, making it impossible for API clients to know what fields to expect.",
+    "task": "Define a `NasDeviceStatsRead` Pydantic schema (fields: `total: int`, `active: int`, `inactive: int`, `by_vendor: dict[str, int]`) in `app/schemas/nas.py` and add `response_model=NasDeviceStatsRead` to the `GET /nas/devices/stats` decorator.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-6",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/gis.py",
+    "line": 368,
+    "issue": "`POST /gis/sync` (line 368) has `status_code=200` but no `response_model` — the GIS sync endpoint's return value (sync result summary) is completely undocumented in OpenAPI and mypy cannot validate the contract.",
+    "task": "Define a `GisSyncResult` Pydantic schema (fields: `synced_pops: int`, `synced_addresses: int`, `errors: list[str]`, `background: bool`) in `app/schemas/gis.py` and add `response_model=GisSyncResult` to the `POST /sync` decorator in `app/api/gis.py`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-7",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/search.py",
+    "line": 140,
+    "issue": "`GET /search/global` (line 140) is the only endpoint in `search.py` without a `response_model` — all 12 other search endpoints in the same file declare `response_model=ListResponse[TypeaheadItem]`, but `global_search` returns a categorized dict whose shape is invisible to OpenAPI and mypy.",
+    "task": "Define a `GlobalSearchResult` Pydantic schema (e.g., `subscribers: list[TypeaheadItem]`, `invoices: list[TypeaheadItem]`, `subscriptions: list[TypeaheadItem]`, etc.) in `app/schemas/typeahead.py` and add `response_model=GlobalSearchResult` to the `GET /search/global` decorator.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-8",
+    "severity": "medium",
+    "category": "api",
+    "file": "app/api/tables.py",
+    "line": 78,
+    "issue": "`GET /tables/{table_key}/data` (line 78) extracts `limit` and `offset` from `dict(request.query_params)` using plain `int()` conversion with no bounds validation — any caller can pass `?limit=999999` to request an arbitrarily large result set, bypassing the `Query(ge=1, le=200)` guard that all other list endpoints enforce.",
+    "task": "Replace the raw `request_params.get('limit', 50)` extraction at lines 78-79 with FastAPI `Query` parameters `limit: int = Query(default=50, ge=1, le=500)` and `offset: int = Query(default=0, ge=0)` on the `get_table_data()` function signature, and pass them directly to `apply_query_config()`.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "api-c7-9",
+    "severity": "low",
+    "category": "api",
+    "file": "app/api/imports.py",
+    "line": 1,
+    "issue": "`app/api/imports.py` has no `tags` in the router definition and no `require_permission` on the single endpoint — the entire import module is missing from OpenAPI's tag-based grouping because the router declares `tags=['imports']` but no individual endpoint carries an OpenAPI `summary=` or docstring, leaving the operation undocumented in generated client SDKs.",
+    "task": "Add a docstring `\"\"\"Import subscriber custom field values from a CSV file.\"\"\"` to `import_subscriber_custom_fields()` in `app/api/imports.py` so the OpenAPI operation description is populated.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  },
+  {
+    "id": "api-c7-10",
+    "severity": "low",
+    "category": "api",
+    "file": "app/api/nas.py",
+    "line": 397,
+    "issue": "The four NAS utility list endpoints (`GET /nas/vendors` line 397, `GET /nas/connection-types` line 408, `GET /nas/provisioning-actions` line 426, `GET /nas/backup-methods` line 437) all return raw `list[dict]` without any `response_model`, but each has a corresponding enum type (`NasVendor`, `ConnectionType`, `ProvisioningAction`, `BackupMethod`) — a typed schema would let clients enumerate valid values from OpenAPI rather than relying on out-of-band documentation.",
+    "task": "Define a `EnumValueRead` schema (`{\"value\": str, \"label\": str}`) or use `response_model=list[str]` for the four NAS enum list endpoints at lines 397, 408, 426, 437 in `app/api/nas.py` so the response contract is visible in OpenAPI.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  }
+]

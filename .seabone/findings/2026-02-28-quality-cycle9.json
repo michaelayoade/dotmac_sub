@@ -1,0 +1,112 @@
+[
+  {
+    "id": "quality-c9-1",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/radius.py",
+    "line": 283,
+    "issue": "`create_engine()` is called at lines 283 and 361 without a subsequent `engine.dispose()`, leaking SQLAlchemy connection pools on every RADIUS provisioning and NAS sync operation; the same bug as `enforcement.py:748` (already noted) but in two additional hotpaths.",
+    "task": "Wrap both `create_engine()` usages in `radius.py` (lines 283 and 361) with a try/finally that calls `engine.dispose()`, or refactor to use `engine.connect()` as a context manager so the pool is released automatically after the block exits.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c9-2",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/tasks/snmp.py",
+    "line": null,
+    "issue": "Seven Celery tasks that make network calls — `snmp.py`, `olt_polling.py`, `olt_config_backup.py`, `nas.py`, `integrations.py`, `vpn.py`, and `radius.py` — have no `autoretry_for` or `max_retries` configuration, so any transient network error (timeout, refused connection) permanently fails the task with no retry attempt; only `webhooks.py` has correct retry logic.",
+    "task": "Add `autoretry_for=(httpx.RequestError, httpx.TimeoutException, OSError)`, `max_retries=3`, and `retry_backoff=True` to each of the seven network-intensive Celery task decorators, following the pattern in `app/tasks/webhooks.py:38-45`.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c9-3",
+    "severity": "high",
+    "category": "quality",
+    "file": "app/services/snmp_discovery.py",
+    "line": 233,
+    "issue": "`time.sleep(1)` is called inside `discover_device_resources()` to measure SNMP interface bandwidth, and this function is invoked directly from synchronous web route handlers in `web_network_core_devices_forms.py` (lines 383, 1011, 1064, 1100), blocking an entire Uvicorn worker thread for one second per request.",
+    "task": "Move the bandwidth sampling logic that includes `time.sleep(1)` into a dedicated Celery task so it runs asynchronously; the web handler should enqueue the task and return a job ID, with the UI polling for results.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c9-4",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_billing_dunning.py",
+    "line": 106,
+    "issue": "`apply_bulk_action()` silently swallows all exceptions from individual dunning action failures with `except Exception: continue` and no logging, making it impossible to diagnose why dunning actions fail for specific accounts during bulk processing.",
+    "task": "Replace `except Exception: continue` at line 106 in `web_billing_dunning.py` with `except Exception: logger.warning('Dunning action %s failed for case %s', action, case_id, exc_info=True); continue` to preserve the skip-on-error behaviour while logging failures.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c9-5",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/usage.py",
+    "line": 582,
+    "issue": "`except Exception: pass` at line 582 silently drops all errors from usage charge posting — failed charges leave no trace in logs, making revenue reconciliation impossible when this code path fails.",
+    "task": "Replace `except Exception: pass` at line 582 in `usage.py` with `except Exception: logger.exception('Failed to post usage charge for subscription')` so failures are logged with full traceback without breaking the batch loop.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c9-6",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_catalog_settings.py",
+    "line": 255,
+    "issue": "Five bulk-delete exception handlers (lines 255, 264, 273, 282, 291) log at `DEBUG` level only — in production with `LOG_LEVEL=INFO` these failures are invisible, so administrators get no feedback when bulk deletion of zones, allowances, SLA profiles, policy sets, or add-ons silently fails.",
+    "task": "Change all five `logger.debug(\"Skipping ... during bulk delete\", ...)` calls in `web_catalog_settings.py` to `logger.warning(...)` so bulk-delete failures surface in production logs.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c9-7",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/vpn_cache.py",
+    "line": 319,
+    "issue": "Bare `# type: ignore` on line 319 suppresses mypy for a `return cached_value` where `cached_value` is a raw `bytes | str` from Redis rather than the expected generic type `T`, meaning the cache decorator silently returns an incorrectly-typed value on JSON decode failure.",
+    "task": "Fix the return type on the JSON decode failure path at `vpn_cache.py:319` by either calling `cast(T, cached_value)` with a proper comment explaining the invariant, or decoding the bytes to str before returning, and remove the bare `# type: ignore` in favour of a specific suppression if still needed.",
+    "auto_fixable": false,
+    "effort": "trivial"
+  },
+  {
+    "id": "quality-c9-8",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/",
+    "line": null,
+    "issue": "51 service functions across at least 12 files (including `web_network_cpes.py`, `web_billing_dunning.py`, `web_billing_channels.py`, `settings_spec.py`, `web_integrations.py`, `web_billing_invoice_batch.py`) declare `db` without `db: Session` annotation, breaking mypy type inference and IDE support for all callers.",
+    "task": "Add `db: Session` type annotations to all 51 untyped `db` parameters in the service layer; run `grep -rn 'def .*db,' app/services/ | grep -v 'db: Session'` to find them all, then add the annotation and the necessary `from sqlalchemy.orm import Session` import where missing.",
+    "auto_fixable": false,
+    "effort": "medium"
+  },
+  {
+    "id": "quality-c9-9",
+    "severity": "medium",
+    "category": "quality",
+    "file": "app/services/web_billing_ledger.py",
+    "line": 36,
+    "issue": "Two nested helper functions — `_apply_date_range()` in `web_billing_ledger.py:36` and `_apply_filters()` in `web_billing_overview.py:108` — suppress mypy with `# type: ignore[no-untyped-def]` instead of adding proper parameter and return type annotations, leaving the SQLAlchemy query manipulation untyped.",
+    "task": "Add explicit type annotations to `_apply_date_range(query: Select) -> Select` in `web_billing_ledger.py:36` and `_apply_filters(query: Select, *, include_status: bool) -> Select` in `web_billing_overview.py:108`, then remove the `# type: ignore[no-untyped-def]` suppressions.",
+    "auto_fixable": false,
+    "effort": "small"
+  },
+  {
+    "id": "quality-c9-10",
+    "severity": "low",
+    "category": "quality",
+    "file": "app/api/",
+    "line": null,
+    "issue": "`app/api/` and `app/schemas/` are the only two subdirectories under `app/` without `__init__.py` files, creating an inconsistency with all other subpackages and potentially causing import resolution differences between direct and package-relative imports in test environments.",
+    "task": "Create empty `app/api/__init__.py` and `app/schemas/__init__.py` files to make these directories proper Python packages, consistent with `app/models/`, `app/services/`, `app/tasks/`, and all other `app/` subdirectories.",
+    "auto_fixable": true,
+    "effort": "trivial"
+  }
+]
