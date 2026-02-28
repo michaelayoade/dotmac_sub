@@ -22,7 +22,7 @@
   "queue_dispatch_batch": 1,
   "engine": "claude",
   "codex_model": "o3",
-  "claude_model": "sonnet",
+  "claude_model": "opus",
   "frontend_audit_enabled": false,
   "single_executor_mode": false,
   "single_executor_engine": "codex",
