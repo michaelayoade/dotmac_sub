@@ -1,0 +1,41 @@
+[
+  {
+    "id": "sub-fix-migrations",
+    "finding_date": "2026-02-28",
+    "severity": "high",
+    "category": "quality",
+    "task": "Fix Alembic migration failures in dotmac_sub. Check alembic/versions/, ensure migration chain is valid. Run alembic check.",
+    "engine": "aider",
+    "priority_score": 90,
+    "track": "quality",
+    "status": "pending",
+    "attempt_count": 0,
+    "estimated_effort": 4
+  },
+  {
+    "id": "sub-fix-docker-health",
+    "finding_date": "2026-02-28",
+    "severity": "high",
+    "category": "quality",
+    "task": "Fix Docker health check failure in dotmac_sub. Ensure /health endpoint exists and returns 200. Check docker-compose healthcheck config.",
+    "engine": "aider",
+    "priority_score": 90,
+    "track": "quality",
+    "status": "pending",
+    "attempt_count": 0,
+    "estimated_effort": 2
+  },
+  {
+    "id": "sub-fix-lint",
+    "finding_date": "2026-02-28",
+    "severity": "medium",
+    "category": "quality",
+    "task": "Fix ruff lint/format and bandit security lint errors in dotmac_sub.",
+    "engine": "aider",
+    "priority_score": 60,
+    "track": "quality",
+    "status": "pending",
+    "attempt_count": 0,
+    "estimated_effort": 2
+  }
+]
