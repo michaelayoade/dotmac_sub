@@ -20,7 +20,7 @@
   "model_learning_enabled": true,
   "log_retention_days": 14,
   "queue_dispatch_batch": 1,
-  "engine": "aider",
+  "engine": "claude",
   "codex_model": "o3",
   "claude_model": "sonnet",
   "frontend_audit_enabled": false,
@@ -71,21 +71,32 @@
   "escalation_engine": "claude",
   "escalation_model": "opus",
   "engine_routing": {
-    "deps": "aider",
-    "docs": "aider",
-    "formatting": "aider",
     "lint-fix": "aider",
-    "readme": "aider",
+    "deps": "aider",
+    "formatting": "aider",
     "changelog": "aider",
-    "test-scaffold": "aider",
-    "security": "aider",
-    "quality": "aider",
-    "api": "aider",
-    "coverage": "aider",
-    "refactor": "aider",
-    "feature": "aider"
+    "readme": "aider",
+    "docs": "aider",
+    "reactive": "claude",
+    "security": "claude",
+    "feature": "claude",
+    "quality": "claude",
+    "api": "claude",
+    "coverage": "claude"
   },
   "plan_before_execute": true,
   "plan_engine": "claude",
-  "plan_model": "sonnet"
+  "plan_model": "sonnet",
+  "focus_rotation": [
+    "security",
+    "fullstack",
+    "frontend",
+    "backend",
+    "database",
+    "optimization",
+    "quality",
+    "api",
+    "deps",
+    "coverage"
+  ]
 }
