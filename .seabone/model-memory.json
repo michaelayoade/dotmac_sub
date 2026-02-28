@@ -1,1 +1,12 @@
-{"models":{}}
+{
+  "models": {
+    "openrouter/minimax/minimax-m2.5": {
+      "failure": 3,
+      "categories": {
+        "general": {
+          "failure": 3
+        }
+      }
+    }
+  }
+}
