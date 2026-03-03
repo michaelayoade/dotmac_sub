@@ -109,7 +109,11 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
         .filter(Invoice.is_active.is_(True))
         .filter(
             Invoice.status.in_(
-                [InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue]
+                [
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                ]
             )
         )
         .scalar()
@@ -123,7 +127,11 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
         .filter(Subscription.subscriber_id == account_id)
         .filter(
             Subscription.status.in_(
-                [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
+                [
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.suspended,
+                    SubscriptionStatus.pending,
+                ]
             )
         )
         .options(
@@ -289,7 +297,10 @@ def _restore_account(db: Session, account_id: str) -> int:
     if account.status == SubscriberStatus.canceled:
         logger.info(f"Account {account_id} is canceled, skipping restore")
         return 0
-    was_suspended = account.status in {SubscriberStatus.suspended, SubscriberStatus.delinquent}
+    was_suspended = account.status in {
+        SubscriberStatus.suspended,
+        SubscriberStatus.delinquent,
+    }
     if was_suspended:
         account.status = SubscriberStatus.active
     restored_count = 0
@@ -393,7 +404,9 @@ def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
     original_profiles = {}  # Track original profiles for logging
     for cred in credentials:
         # Track original profile for audit/logging purposes
-        if cred.radius_profile_id and str(cred.radius_profile_id) != str(throttle_profile_id):
+        if cred.radius_profile_id and str(cred.radius_profile_id) != str(
+            throttle_profile_id
+        ):
             original_profiles[str(cred.id)] = str(cred.radius_profile_id)
         cred.radius_profile_id = throttle_profile.id
         throttled_count += 1
@@ -458,12 +471,17 @@ def _restore_throttle(db: Session, account_id: str) -> int:
         subscription = (
             db.query(Subscription)
             .filter(Subscription.subscriber_id == coerce_uuid(account_id))
-            .filter(Subscription.status.in_([SubscriptionStatus.active, SubscriptionStatus.suspended]))
+            .filter(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
+                )
+            )
             .first()
         )
         if subscription and subscription.offer:
             # Get the offer's RADIUS profile
             from app.models.catalog import OfferRadiusProfile
+
             offer_profile = (
                 db.query(OfferRadiusProfile)
                 .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
@@ -478,12 +496,16 @@ def _restore_throttle(db: Session, account_id: str) -> int:
         restored_count += 1
 
     if restored_count:
-        logger.info(f"Restored {restored_count} throttled credentials for account {account_id}")
+        logger.info(
+            f"Restored {restored_count} throttled credentials for account {account_id}"
+        )
 
     return restored_count
 
 
-def _create_throttle_notification(db: Session, account_id: str, days_overdue: int) -> None:
+def _create_throttle_notification(
+    db: Session, account_id: str, days_overdue: int
+) -> None:
     """Create email notification that account has been throttled."""
     from app.models.notification import (
         Notification,
@@ -493,7 +515,9 @@ def _create_throttle_notification(db: Session, account_id: str, days_overdue: in
 
     email = _get_account_email(db, account_id)
     if not email:
-        logger.warning(f"Cannot create throttle notification for account {account_id}: no email found")
+        logger.warning(
+            f"Cannot create throttle notification for account {account_id}: no email found"
+        )
         return
 
     notification = Notification(
@@ -501,7 +525,7 @@ def _create_throttle_notification(db: Session, account_id: str, days_overdue: in
         recipient=email,
         subject="Service Speed Reduced - Payment Overdue",
         body=f"Your internet speed has been reduced due to payment being {days_overdue} days overdue. "
-             "Please make a payment to restore full speed.",
+        "Please make a payment to restore full speed.",
         status=NotificationStatus.queued,
     )
     db.add(notification)
@@ -520,10 +544,15 @@ def _create_suspension_warning_notification(
 
     email = _get_account_email(db, account_id)
     if not email:
-        logger.warning(f"Cannot create suspension warning notification for account {account_id}: no email found")
+        logger.warning(
+            f"Cannot create suspension warning notification for account {account_id}: no email found"
+        )
         return
 
-    body = note or f"Your account is {days_overdue} days past due. Please make a payment to avoid service suspension."
+    body = (
+        note
+        or f"Your account is {days_overdue} days past due. Please make a payment to avoid service suspension."
+    )
     notification = Notification(
         channel=NotificationChannel.email,
         recipient=email,
@@ -545,7 +574,9 @@ def _create_suspension_notification(db: Session, account_id: str) -> None:
 
     email = _get_account_email(db, account_id)
     if not email:
-        logger.warning(f"Cannot create suspension notification for account {account_id}: no email found")
+        logger.warning(
+            f"Cannot create suspension notification for account {account_id}: no email found"
+        )
         return
 
     # Idempotency check: don't create duplicate suspension notification within 24 hours
@@ -608,14 +639,18 @@ def _create_prepaid_warning_notification(
         return
 
     subject = str(
-        settings_spec.resolve_value(db, SettingDomain.collections, "prepaid_warning_subject")
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "prepaid_warning_subject"
+        )
         or "Low Balance Warning"
     )
     body_template = str(
-        settings_spec.resolve_value(db, SettingDomain.collections, "prepaid_warning_body")
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "prepaid_warning_body"
+        )
         or (
-        "Your prepaid balance is below the minimum threshold ({threshold}). "
-        "Current balance: {balance}. Please top up to avoid suspension."
+            "Your prepaid balance is below the minimum threshold ({threshold}). "
+            "Current balance: {balance}. Please top up to avoid suspension."
         )
     )
     try:
@@ -648,9 +683,12 @@ def _create_prepaid_deactivation_notification(db: Session, account_id: str) -> N
         )
         return
 
-    subject = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_deactivation_subject"
-    ) or "Service Deactivated"
+    subject = (
+        settings_spec.resolve_value(
+            db, SettingDomain.collections, "prepaid_deactivation_subject"
+        )
+        or "Service Deactivated"
+    )
 
     # Idempotency check: don't create duplicate deactivation notification within 24 hours
     recent_threshold = datetime.now(UTC) - timedelta(hours=24)
@@ -694,7 +732,11 @@ def _deactivate_prepaid_subscriptions(
         .filter(Subscription.subscriber_id == coerce_uuid(account_id))
         .filter(
             Subscription.status.in_(
-                [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
+                [
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.suspended,
+                    SubscriptionStatus.pending,
+                ]
             )
         )
         .filter(Subscription.billing_mode == BillingMode.prepaid)
@@ -799,7 +841,7 @@ class DunningCases(ListResponseMixin):
                 )
         case = DunningCase(**data)
         db.add(case)
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -842,7 +884,7 @@ class DunningCases(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Dunning case not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(case, key, value)
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -852,7 +894,7 @@ class DunningCases(ListResponseMixin):
         if not case:
             raise HTTPException(status_code=404, detail="Dunning case not found")
         db.delete(case)
-        db.commit()
+        db.flush()
 
     @staticmethod
     def pause(db: Session, case_id: str, notes: str | None = None) -> DunningCase:
@@ -888,7 +930,7 @@ class DunningCases(ListResponseMixin):
             },
             account_id=case.account_id,
         )
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -915,7 +957,7 @@ class DunningCases(ListResponseMixin):
             outcome="resumed",
             notes=notes or "Case resumed",
         )
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -959,7 +1001,11 @@ class DunningCases(ListResponseMixin):
                 .filter(Invoice.is_active.is_(True))
                 .filter(
                     Invoice.status.in_(
-                        [InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue]
+                        [
+                            InvoiceStatus.issued,
+                            InvoiceStatus.partially_paid,
+                            InvoiceStatus.overdue,
+                        ]
                     )
                 )
                 .count()
@@ -968,7 +1014,7 @@ class DunningCases(ListResponseMixin):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot close case: account has {overdue_invoices} unpaid invoice(s). "
-                           "Pay invoices first or use skip_payment_check=True for admin override.",
+                    "Pay invoices first or use skip_payment_check=True for admin override.",
                 )
 
         now = datetime.now(UTC)
@@ -989,7 +1035,7 @@ class DunningCases(ListResponseMixin):
         # Restore any throttled credentials
         _restore_throttle(db, str(case.account_id))
 
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -1009,7 +1055,7 @@ class DunningCases(ListResponseMixin):
             outcome="note_added",
             notes=note,
         )
-        db.commit()
+        db.flush()
         db.refresh(case)
         return case
 
@@ -1044,7 +1090,7 @@ class DunningActionLogs(ListResponseMixin):
     def create(db: Session, payload: DunningActionLogCreate):
         action = DunningActionLog(**payload.model_dump())
         db.add(action)
-        db.commit()
+        db.flush()
         db.refresh(action)
         return action
 
@@ -1077,7 +1123,10 @@ class DunningActionLogs(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"executed_at": DunningActionLog.executed_at, "action": DunningActionLog.action},
+            {
+                "executed_at": DunningActionLog.executed_at,
+                "action": DunningActionLog.action,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -1088,7 +1137,7 @@ class DunningActionLogs(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Dunning action not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(action, key, value)
-        db.commit()
+        db.flush()
         db.refresh(action)
         return action
 
@@ -1098,7 +1147,7 @@ class DunningActionLogs(ListResponseMixin):
         if not action:
             raise HTTPException(status_code=404, detail="Dunning action not found")
         db.delete(action)
-        db.commit()
+        db.flush()
 
 
 class DunningWorkflow(ListResponseMixin):
@@ -1116,10 +1165,10 @@ class DunningWorkflow(ListResponseMixin):
         overdue_accounts: dict[UUID, list[Invoice]] = {}
         for invoice in invoices:
             overdue_accounts.setdefault(invoice.account_id, []).append(invoice)
-            if (
-                not payload.dry_run
-                and invoice.status in {InvoiceStatus.issued, InvoiceStatus.partially_paid}
-            ):
+            if not payload.dry_run and invoice.status in {
+                InvoiceStatus.issued,
+                InvoiceStatus.partially_paid,
+            }:
                 invoice.status = InvoiceStatus.overdue
         postpaid_account_ids = {
             row[0]
@@ -1128,7 +1177,11 @@ class DunningWorkflow(ListResponseMixin):
                 .filter(Subscription.billing_mode == BillingMode.postpaid)
                 .filter(
                     Subscription.status.in_(
-                        [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                            SubscriptionStatus.pending,
+                        ]
                     )
                 )
                 .distinct()
@@ -1159,8 +1212,7 @@ class DunningWorkflow(ListResponseMixin):
 
             # Calculate max overdue days accounting for grace period
             max_days = max(
-                _resolve_overdue_days(inv, run_at, account)
-                for inv in account_invoices
+                _resolve_overdue_days(inv, run_at, account) for inv in account_invoices
             )
 
             # If all invoices are within grace period, skip dunning
@@ -1256,7 +1308,9 @@ class DunningWorkflow(ListResponseMixin):
                             [DunningCaseStatus.open, DunningCaseStatus.paused]
                         )
                     )
-                    .filter(DunningCase.account_id.notin_(list(overdue_accounts.keys())))
+                    .filter(
+                        DunningCase.account_id.notin_(list(overdue_accounts.keys()))
+                    )
                     .all()
                 )
             else:
@@ -1297,7 +1351,7 @@ class DunningWorkflow(ListResponseMixin):
                     # Restore throttled credentials if any
                     _restore_throttle(db, str(case.account_id))
         if not payload.dry_run:
-            db.commit()
+            db.flush()
         return DunningRunResponse(
             run_at=run_at,
             accounts_scanned=len(overdue_accounts),
@@ -1317,7 +1371,9 @@ class DunningWorkflow(ListResponseMixin):
             db.query(DunningCase)
             .filter(DunningCase.account_id == account_id)
             .filter(
-                DunningCase.status.in_([DunningCaseStatus.open, DunningCaseStatus.paused])
+                DunningCase.status.in_(
+                    [DunningCaseStatus.open, DunningCaseStatus.paused]
+                )
             )
             .all()
         )
@@ -1337,16 +1393,19 @@ class DunningWorkflow(ListResponseMixin):
                 notes="Resolved after payment",
             )
         if commit:
-            db.commit()
+            db.flush()
         return len(cases)
 
 
 class PrepaidEnforcement(ListResponseMixin):
     @staticmethod
-    def run(db: Session, payload: PrepaidEnforcementRunRequest) -> PrepaidEnforcementRunResponse:
+    def run(
+        db: Session, payload: PrepaidEnforcementRunRequest
+    ) -> PrepaidEnforcementRunResponse:
         run_at = payload.run_at or datetime.now(UTC)
         timezone_name = str(
-            settings_spec.resolve_value(db, SettingDomain.scheduler, "timezone") or "UTC"
+            settings_spec.resolve_value(db, SettingDomain.scheduler, "timezone")
+            or "UTC"
         )
         blocking_time_value = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_blocking_time"
@@ -1357,9 +1416,12 @@ class PrepaidEnforcement(ListResponseMixin):
         skip_weekends = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_skip_weekends"
         )
-        skip_holidays = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_skip_holidays"
-        ) or []
+        skip_holidays = (
+            settings_spec.resolve_value(
+                db, SettingDomain.collections, "prepaid_skip_holidays"
+            )
+            or []
+        )
         grace_days_default_raw = settings_spec.resolve_value(
             db, SettingDomain.collections, "prepaid_grace_days"
         )
@@ -1368,7 +1430,9 @@ class PrepaidEnforcement(ListResponseMixin):
         )
         try:
             grace_days_default = (
-                int(str(grace_days_default_raw)) if grace_days_default_raw is not None else 0
+                int(str(grace_days_default_raw))
+                if grace_days_default_raw is not None
+                else 0
             )
         except (TypeError, ValueError):
             grace_days_default = 0
@@ -1430,7 +1494,11 @@ class PrepaidEnforcement(ListResponseMixin):
             .filter(Subscription.billing_mode == BillingMode.prepaid)
             .filter(
                 Subscription.status.in_(
-                    [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
+                    [
+                        SubscriptionStatus.active,
+                        SubscriptionStatus.suspended,
+                        SubscriptionStatus.pending,
+                    ]
                 )
             )
             .distinct()
@@ -1443,7 +1511,11 @@ class PrepaidEnforcement(ListResponseMixin):
                 .filter(Subscription.billing_mode == BillingMode.postpaid)
                 .filter(
                     Subscription.status.in_(
-                        [SubscriptionStatus.active, SubscriptionStatus.suspended, SubscriptionStatus.pending]
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                            SubscriptionStatus.pending,
+                        ]
                     )
                 )
                 .distinct()
@@ -1478,7 +1550,10 @@ class PrepaidEnforcement(ListResponseMixin):
             balance = _resolve_prepaid_available_balance(db, str(account_id))
             if balance >= threshold:
                 if not payload.dry_run:
-                    if account.prepaid_low_balance_at or account.prepaid_deactivation_at:
+                    if (
+                        account.prepaid_low_balance_at
+                        or account.prepaid_deactivation_at
+                    ):
                         account.prepaid_low_balance_at = None
                         account.prepaid_deactivation_at = None
                 continue
@@ -1487,13 +1562,19 @@ class PrepaidEnforcement(ListResponseMixin):
             if not payload.dry_run and account.prepaid_low_balance_at is None:
                 account.prepaid_low_balance_at = run_at
                 if deactivation_days_default:
-                    account.prepaid_deactivation_at = run_at + timedelta(days=deactivation_days_default)
+                    account.prepaid_deactivation_at = run_at + timedelta(
+                        days=deactivation_days_default
+                    )
             grace_days = (
                 int(account.grace_period_days)
                 if account.grace_period_days is not None
                 else grace_days_default
             )
-            grace_until = low_balance_at + timedelta(days=grace_days) if grace_days > 0 else low_balance_at
+            grace_until = (
+                low_balance_at + timedelta(days=grace_days)
+                if grace_days > 0
+                else low_balance_at
+            )
             if run_at < grace_until:
                 if not payload.dry_run:
                     _create_prepaid_warning_notification(
@@ -1515,7 +1596,7 @@ class PrepaidEnforcement(ListResponseMixin):
 
         if not payload.dry_run:
             _set_prepaid_last_run_date(db, run_date)
-            db.commit()
+            db.flush()
 
         return PrepaidEnforcementRunResponse(
             run_at=run_at,
@@ -1559,7 +1640,7 @@ class PrepaidEnforcement(ListResponseMixin):
                 notes="Resolved after payment",
             )
         if commit:
-            db.commit()
+            db.flush()
         return len(cases)
 
 

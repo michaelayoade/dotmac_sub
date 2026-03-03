@@ -8,7 +8,7 @@ import math
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
@@ -79,7 +79,9 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
     return default
 
 
-def _setting_float(db: Session, domain: SettingDomain, key: str, default: float) -> float:
+def _setting_float(
+    db: Session, domain: SettingDomain, key: str, default: float
+) -> float:
     return _coerce_float(settings_spec.resolve_value(db, domain, key), default)
 
 
@@ -87,45 +89,45 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
     return _coerce_int(settings_spec.resolve_value(db, domain, key), default)
 
 
-def _setting_bool(db: Session, domain: SettingDomain, key: str, default: bool = False) -> bool:
+def _setting_bool(
+    db: Session, domain: SettingDomain, key: str, default: bool = False
+) -> bool:
     return _coerce_bool(settings_spec.resolve_value(db, domain, key), default)
 
 
 def get_fiber_plant_consolidated_data(db: Session) -> dict[str, object]:
     """Return datasets/statistics for the consolidated fiber plant page."""
-    cabinets = (
-        db.query(FdhCabinet)
-        .filter(FdhCabinet.is_active.is_(True))
+    cabinets = db.scalars(
+        select(FdhCabinet)
+        .where(FdhCabinet.is_active.is_(True))
         .order_by(FdhCabinet.name)
         .limit(200)
-        .all()
-    )
-    splitters = (
-        db.query(Splitter)
-        .filter(Splitter.is_active.is_(True))
+    ).all()
+    splitters = db.scalars(
+        select(Splitter)
+        .where(Splitter.is_active.is_(True))
         .order_by(Splitter.name)
         .limit(200)
-        .all()
-    )
-    strands = (
-        db.query(FiberStrand)
+    ).all()
+    strands = db.scalars(
+        select(FiberStrand)
         .order_by(FiberStrand.cable_name, FiberStrand.strand_number)
         .limit(200)
-        .all()
-    )
-    closures = (
-        db.query(FiberSpliceClosure)
-        .filter(FiberSpliceClosure.is_active.is_(True))
+    ).all()
+    closures = db.scalars(
+        select(FiberSpliceClosure)
+        .where(FiberSpliceClosure.is_active.is_(True))
         .order_by(FiberSpliceClosure.name)
         .limit(200)
-        .all()
-    )
+    ).all()
     change_requests = change_request_service.list_requests(
         db,
         status=FiberChangeRequestStatus.pending,
     )
 
-    strands_available = sum(1 for strand in strands if strand.status.value == "available")
+    strands_available = sum(
+        1 for strand in strands if strand.status.value == "available"
+    )
     strands_in_use = sum(1 for strand in strands if strand.status.value == "in_use")
 
     stats = {
@@ -158,7 +160,9 @@ def has_change_request_conflict(db: Session, change_request) -> bool:
         return False
     asset_updated_at = getattr(asset, "updated_at", None)
     request_created_at = getattr(change_request, "created_at", None)
-    if not isinstance(asset_updated_at, datetime) or not isinstance(request_created_at, datetime):
+    if not isinstance(asset_updated_at, datetime) or not isinstance(
+        request_created_at, datetime
+    ):
         return False
     return asset_updated_at > request_created_at
 
@@ -183,24 +187,21 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
     """Return GeoJSON + stats + cost settings for fiber map page."""
     features: list[dict] = []
 
-    fdh_cabinets = (
-        db.query(FdhCabinet)
-        .filter(
+    fdh_cabinets = db.scalars(
+        select(FdhCabinet).where(
             FdhCabinet.is_active.is_(True),
             FdhCabinet.latitude.isnot(None),
             FdhCabinet.longitude.isnot(None),
         )
-        .all()
-    )
+    ).all()
     splitter_counts: dict[UUID, int] = {}
     if fdh_cabinets:
         fdh_ids = [fdh.id for fdh in fdh_cabinets]
-        for fdh_id, count in (
-            db.query(Splitter.fdh_id, func.count(Splitter.id))
-            .filter(Splitter.fdh_id.in_(fdh_ids))
+        for fdh_id, count in db.execute(
+            select(Splitter.fdh_id, func.count(Splitter.id))
+            .where(Splitter.fdh_id.in_(fdh_ids))
             .group_by(Splitter.fdh_id)
-            .all()
-        ):
+        ).all():
             if fdh_id is not None:
                 splitter_counts[fdh_id] = int(count)
     for fdh in fdh_cabinets:
@@ -221,32 +222,28 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
             }
         )
 
-    closures = (
-        db.query(FiberSpliceClosure)
-        .filter(
+    closures = db.scalars(
+        select(FiberSpliceClosure).where(
             FiberSpliceClosure.is_active.is_(True),
             FiberSpliceClosure.latitude.isnot(None),
             FiberSpliceClosure.longitude.isnot(None),
         )
-        .all()
-    )
+    ).all()
     splice_counts: dict[UUID, int] = {}
     tray_counts: dict[UUID, int] = {}
     if closures:
         closure_ids = [closure.id for closure in closures]
-        for closure_id, count in (
-            db.query(FiberSplice.closure_id, func.count(FiberSplice.id))
-            .filter(FiberSplice.closure_id.in_(closure_ids))
+        for closure_id, count in db.execute(
+            select(FiberSplice.closure_id, func.count(FiberSplice.id))
+            .where(FiberSplice.closure_id.in_(closure_ids))
             .group_by(FiberSplice.closure_id)
-            .all()
-        ):
+        ).all():
             splice_counts[closure_id] = int(count)
-        for closure_id, count in (
-            db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id))
-            .filter(FiberSpliceTray.closure_id.in_(closure_ids))
+        for closure_id, count in db.execute(
+            select(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id))
+            .where(FiberSpliceTray.closure_id.in_(closure_ids))
             .group_by(FiberSpliceTray.closure_id)
-            .all()
-        ):
+        ).all():
             tray_counts[closure_id] = int(count)
     for closure in closures:
         features.append(
@@ -266,15 +263,13 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
             }
         )
 
-    access_points = (
-        db.query(FiberAccessPoint)
-        .filter(
+    access_points = db.scalars(
+        select(FiberAccessPoint).where(
             FiberAccessPoint.is_active.is_(True),
             FiberAccessPoint.latitude.isnot(None),
             FiberAccessPoint.longitude.isnot(None),
         )
-        .all()
-    )
+    ).all()
     for access_point in access_points:
         features.append(
             {
@@ -294,12 +289,14 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
             }
         )
 
-    segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
-    segment_geoms = (
-        db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom))
-        .filter(FiberSegment.is_active.is_(True), FiberSegment.route_geom.isnot(None))
-        .all()
-    )
+    segments = db.scalars(
+        select(FiberSegment).where(FiberSegment.is_active.is_(True))
+    ).all()
+    segment_geoms = db.execute(
+        select(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom)).where(
+            FiberSegment.is_active.is_(True), FiberSegment.route_geom.isnot(None)
+        )
+    ).all()
     for segment, geojson_str in segment_geoms:
         if not geojson_str:
             continue
@@ -312,8 +309,12 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
                     "id": str(segment.id),
                     "type": "fiber_segment",
                     "name": segment.name,
-                    "segment_type": segment.segment_type.value if segment.segment_type else None,
-                    "cable_type": segment.cable_type.value if segment.cable_type else None,
+                    "segment_type": segment.segment_type.value
+                    if segment.segment_type
+                    else None,
+                    "cable_type": segment.cable_type.value
+                    if segment.cable_type
+                    else None,
                     "fiber_count": segment.fiber_count,
                     "length_m": segment.length_m,
                 },
@@ -321,22 +322,26 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
         )
 
     stats = {
-        "fdh_cabinets": db.query(func.count(FdhCabinet.id))
-        .filter(FdhCabinet.is_active.is_(True))
-        .scalar(),
+        "fdh_cabinets": db.scalar(
+            select(func.count(FdhCabinet.id)).where(FdhCabinet.is_active.is_(True))
+        ),
         "fdh_with_location": len(fdh_cabinets),
-        "splice_closures": db.query(func.count(FiberSpliceClosure.id))
-        .filter(FiberSpliceClosure.is_active.is_(True))
-        .scalar(),
+        "splice_closures": db.scalar(
+            select(func.count(FiberSpliceClosure.id)).where(
+                FiberSpliceClosure.is_active.is_(True)
+            )
+        ),
         "closures_with_location": len(closures),
-        "splitters": db.query(func.count(Splitter.id))
-        .filter(Splitter.is_active.is_(True))
-        .scalar(),
-        "total_splices": db.query(func.count(FiberSplice.id)).scalar(),
+        "splitters": db.scalar(
+            select(func.count(Splitter.id)).where(Splitter.is_active.is_(True))
+        ),
+        "total_splices": db.scalar(select(func.count(FiberSplice.id))),
         "segments": len(segments),
-        "access_points": db.query(func.count(FiberAccessPoint.id))
-        .filter(FiberAccessPoint.is_active.is_(True))
-        .scalar(),
+        "access_points": db.scalar(
+            select(func.count(FiberAccessPoint.id)).where(
+                FiberAccessPoint.is_active.is_(True)
+            )
+        ),
         "access_points_with_location": len(access_points),
     }
 
@@ -353,7 +358,9 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
         "installation_base": _setting_float(
             db, SettingDomain.network, "fiber_installation_base_fee", 50.00
         ),
-        "currency": settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+        "currency": settings_spec.resolve_value(
+            db, SettingDomain.billing, "default_currency"
+        )
         or "NGN",
     }
 
@@ -368,65 +375,80 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     """Return aggregated report data and customer map for fiber reports page."""
     stats = {
         "fdh_cabinets": {
-            "total": db.query(func.count(FdhCabinet.id)).scalar() or 0,
-            "active": db.query(func.count(FdhCabinet.id))
-            .filter(FdhCabinet.is_active.is_(True))
-            .scalar()
+            "total": db.scalar(select(func.count(FdhCabinet.id))) or 0,
+            "active": db.scalar(
+                select(func.count(FdhCabinet.id)).where(
+                    FdhCabinet.is_active.is_(True)
+                )
+            )
             or 0,
-            "with_location": db.query(func.count(FdhCabinet.id))
-            .filter(FdhCabinet.latitude.isnot(None), FdhCabinet.longitude.isnot(None))
-            .scalar()
+            "with_location": db.scalar(
+                select(func.count(FdhCabinet.id)).where(
+                    FdhCabinet.latitude.isnot(None),
+                    FdhCabinet.longitude.isnot(None),
+                )
+            )
             or 0,
         },
         "splice_closures": {
-            "total": db.query(func.count(FiberSpliceClosure.id)).scalar() or 0,
-            "active": db.query(func.count(FiberSpliceClosure.id))
-            .filter(FiberSpliceClosure.is_active.is_(True))
-            .scalar()
-            or 0,
-            "with_location": db.query(func.count(FiberSpliceClosure.id))
-            .filter(
-                FiberSpliceClosure.latitude.isnot(None),
-                FiberSpliceClosure.longitude.isnot(None),
+            "total": db.scalar(select(func.count(FiberSpliceClosure.id))) or 0,
+            "active": db.scalar(
+                select(func.count(FiberSpliceClosure.id)).where(
+                    FiberSpliceClosure.is_active.is_(True)
+                )
             )
-            .scalar()
+            or 0,
+            "with_location": db.scalar(
+                select(func.count(FiberSpliceClosure.id)).where(
+                    FiberSpliceClosure.latitude.isnot(None),
+                    FiberSpliceClosure.longitude.isnot(None),
+                )
+            )
             or 0,
         },
         "splitters": {
-            "total": db.query(func.count(Splitter.id)).scalar() or 0,
-            "active": db.query(func.count(Splitter.id))
-            .filter(Splitter.is_active.is_(True))
-            .scalar()
+            "total": db.scalar(select(func.count(Splitter.id))) or 0,
+            "active": db.scalar(
+                select(func.count(Splitter.id)).where(Splitter.is_active.is_(True))
+            )
             or 0,
         },
-        "splices": {"total": db.query(func.count(FiberSplice.id)).scalar() or 0},
-        "trays": {"total": db.query(func.count(FiberSpliceTray.id)).scalar() or 0},
+        "splices": {"total": db.scalar(select(func.count(FiberSplice.id))) or 0},
+        "trays": {"total": db.scalar(select(func.count(FiberSpliceTray.id))) or 0},
         "ont_units": {
-            "total": db.query(func.count(OntUnit.id)).scalar() or 0,
-            "active": db.query(func.count(OntUnit.id))
-            .filter(OntUnit.is_active.is_(True))
-            .scalar()
+            "total": db.scalar(select(func.count(OntUnit.id))) or 0,
+            "active": db.scalar(
+                select(func.count(OntUnit.id)).where(OntUnit.is_active.is_(True))
+            )
             or 0,
-            "assigned": db.query(func.count(OntAssignment.id))
-            .filter(OntAssignment.active.is_(True))
-            .scalar()
+            "assigned": db.scalar(
+                select(func.count(OntAssignment.id)).where(
+                    OntAssignment.active.is_(True)
+                )
+            )
             or 0,
         },
     }
 
-    segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
+    segments = db.scalars(
+        select(FiberSegment).where(FiberSegment.is_active.is_(True))
+    ).all()
     segment_stats: dict[str, object] = {
         "feeder": {"count": 0, "length": 0},
         "distribution": {"count": 0, "length": 0},
         "drop": {"count": 0, "length": 0},
     }
     for segment in segments:
-        segment_type = segment.segment_type.value if segment.segment_type else "distribution"
+        segment_type = (
+            segment.segment_type.value if segment.segment_type else "distribution"
+        )
         if segment_type in segment_stats:
             entry = segment_stats[segment_type]
             if isinstance(entry, dict):
                 entry["count"] = int(entry.get("count", 0)) + 1
-                entry["length"] = int(entry.get("length", 0)) + int(segment.length_m or 0)
+                entry["length"] = int(entry.get("length", 0)) + int(
+                    segment.length_m or 0
+                )
 
     segment_stats["total_count"] = len(segments)
     segment_stats["total_length"] = sum(
@@ -440,20 +462,21 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
         map_limit = None
 
     customer_total = (
-        db.query(func.count(Address.id))
-        .join(OntAssignment, OntAssignment.service_address_id == Address.id)
-        .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .filter(
-            OntAssignment.active.is_(True),
-            Address.latitude.isnot(None),
-            Address.longitude.isnot(None),
+        db.scalar(
+            select(func.count(Address.id))
+            .join(OntAssignment, OntAssignment.service_address_id == Address.id)
+            .join(Subscriber, Address.subscriber_id == Subscriber.id)
+            .where(
+                OntAssignment.active.is_(True),
+                Address.latitude.isnot(None),
+                Address.longitude.isnot(None),
+            )
         )
-        .scalar()
         or 0
     )
 
-    customer_addresses_query = (
-        db.query(
+    customer_addresses_stmt = (
+        select(
             Address.id,
             Address.address_line1,
             Address.city,
@@ -464,7 +487,7 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
         )
         .join(OntAssignment, OntAssignment.service_address_id == Address.id)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .filter(
+        .where(
             OntAssignment.active.is_(True),
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
@@ -472,8 +495,8 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
         .order_by(Address.id)
     )
     if map_limit:
-        customer_addresses_query = customer_addresses_query.limit(map_limit)
-    customer_addresses = customer_addresses_query.all()
+        customer_addresses_stmt = customer_addresses_stmt.limit(map_limit)
+    customer_addresses = db.execute(customer_addresses_stmt).all()
 
     features: list[dict] = []
     for address in customer_addresses:
@@ -497,15 +520,13 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             }
         )
 
-    fdh_cabinets = (
-        db.query(FdhCabinet)
-        .filter(
+    fdh_cabinets = db.scalars(
+        select(FdhCabinet).where(
             FdhCabinet.is_active.is_(True),
             FdhCabinet.latitude.isnot(None),
             FdhCabinet.longitude.isnot(None),
         )
-        .all()
-    )
+    ).all()
     for fdh in fdh_cabinets:
         features.append(
             {
@@ -523,15 +544,13 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             }
         )
 
-    closures = (
-        db.query(FiberSpliceClosure)
-        .filter(
+    closures = db.scalars(
+        select(FiberSpliceClosure).where(
             FiberSpliceClosure.is_active.is_(True),
             FiberSpliceClosure.latitude.isnot(None),
             FiberSpliceClosure.longitude.isnot(None),
         )
-        .all()
-    )
+    ).all()
     for closure in closures:
         features.append(
             {
@@ -570,9 +589,13 @@ def update_asset_position(
 
     asset: FdhCabinet | FiberSpliceClosure | None
     if asset_type == "fdh_cabinet":
-        asset = db.query(FdhCabinet).filter(FdhCabinet.id == asset_id).first()
+        asset = db.scalars(
+            select(FdhCabinet).where(FdhCabinet.id == asset_id)
+        ).first()
     elif asset_type == "splice_closure":
-        asset = db.query(FiberSpliceClosure).filter(FiberSpliceClosure.id == asset_id).first()
+        asset = db.scalars(
+            select(FiberSpliceClosure).where(FiberSpliceClosure.id == asset_id)
+        ).first()
     else:
         return {"error": "Invalid asset type"}, 400
 
@@ -581,7 +604,7 @@ def update_asset_position(
 
     asset.latitude = latitude
     asset.longitude = longitude
-    db.commit()
+    db.flush()
     return {
         "success": True,
         "id": str(asset.id),
@@ -590,7 +613,9 @@ def update_asset_position(
     }, 200
 
 
-def find_nearest_cabinet_data(db: Session, *, lat: float, lng: float) -> tuple[dict, int]:
+def find_nearest_cabinet_data(
+    db: Session, *, lat: float, lng: float
+) -> tuple[dict, int]:
     """Find nearest cabinet and routing path details for coordinates."""
     max_km = _setting_float(db, SettingDomain.gis, "map_nearest_search_max_km", 50.0)
     snap_max_m = _setting_float(db, SettingDomain.gis, "map_snap_max_m", 250.0)
@@ -618,7 +643,9 @@ def find_nearest_cabinet_data(db: Session, *, lat: float, lng: float) -> tuple[d
     start_node, _ = _snap_to_graph(lat, lng, graph, edges, snap_max_m)
     if nearest.latitude is None or nearest.longitude is None:
         return {"error": "Nearest cabinet is missing coordinates"}, 500
-    cabinet_node, _ = _snap_to_graph(nearest.latitude, nearest.longitude, graph, edges, snap_max_m)
+    cabinet_node, _ = _snap_to_graph(
+        nearest.latitude, nearest.longitude, graph, edges, snap_max_m
+    )
     if start_node and cabinet_node:
         path_distance, path = _shortest_path(graph, start_node, cabinet_node)
         if path_distance is not None and path:
@@ -666,7 +693,10 @@ def get_plan_options_data(db: Session, *, lat: float, lng: float) -> tuple[dict,
             }
         )
     options.sort(key=lambda item: item["distance_m"])
-    return {"options": options[:10], "customer_coords": {"latitude": lat, "longitude": lng}}, 200
+    return {
+        "options": options[:10],
+        "customer_coords": {"latitude": lat, "longitude": lng},
+    }, 200
 
 
 def get_plan_route_data(
@@ -677,16 +707,14 @@ def get_plan_route_data(
     cabinet_id: str,
 ) -> tuple[dict, int]:
     """Return fiber-only route path from coordinates to selected cabinet."""
-    cabinet = (
-        db.query(FdhCabinet)
-        .filter(
+    cabinet = db.scalars(
+        select(FdhCabinet).where(
             FdhCabinet.id == cabinet_id,
             FdhCabinet.is_active.is_(True),
             FdhCabinet.latitude.isnot(None),
             FdhCabinet.longitude.isnot(None),
         )
-        .first()
-    )
+    ).first()
     if not cabinet:
         return {"error": "Cabinet not found"}, 404
 
@@ -695,7 +723,9 @@ def get_plan_route_data(
     start_node, start_snap = _snap_to_graph(lat, lng, graph, edges, snap_max_m)
     if cabinet.latitude is None or cabinet.longitude is None:
         return {"error": "Cabinet is missing coordinates"}, 400
-    cabinet_node, cabinet_snap = _snap_to_graph(cabinet.latitude, cabinet.longitude, graph, edges, snap_max_m)
+    cabinet_node, cabinet_snap = _snap_to_graph(
+        cabinet.latitude, cabinet.longitude, graph, edges, snap_max_m
+    )
     if not start_node or not cabinet_node:
         return {
             "error": "Unable to snap to fiber network",
@@ -781,7 +811,12 @@ def _closest_point_on_segment(
 def _build_fiber_graph(db: Session):
     graph: dict[tuple[float, float], list[tuple[tuple[float, float], float]]] = {}
     edges: list[
-        tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]
+        tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ]
     ] = []
 
     def add_edge(a: tuple[float, float], b: tuple[float, float]) -> None:
@@ -789,9 +824,11 @@ def _build_fiber_graph(db: Session):
         graph.setdefault(a, []).append((b, dist))
         graph.setdefault(b, []).append((a, dist))
 
-    segments = db.query(func.ST_AsGeoJSON(FiberSegment.route_geom)).filter(
-        FiberSegment.is_active.is_(True),
-        FiberSegment.route_geom.isnot(None),
+    segments = db.execute(
+        select(func.ST_AsGeoJSON(FiberSegment.route_geom)).where(
+            FiberSegment.is_active.is_(True),
+            FiberSegment.route_geom.isnot(None),
+        )
     ).all()
     for (geojson_str,) in segments:
         if not geojson_str:
@@ -821,7 +858,12 @@ def _snap_to_graph(
     lon_in: float,
     graph: dict[tuple[float, float], list[tuple[tuple[float, float], float]]],
     edges: list[
-        tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]
+        tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ]
     ],
     snap_max_m: float,
 ) -> tuple[tuple[float, float] | None, float]:
@@ -898,13 +940,13 @@ def _nearby_cabinets(db: Session, lat: float, lng: float, max_km: float):
     if max_deg <= 0:
         return []
     return (
-        db.query(FdhCabinet)
-        .filter(
-            FdhCabinet.is_active.is_(True),
-            FdhCabinet.latitude.isnot(None),
-            FdhCabinet.longitude.isnot(None),
-            FdhCabinet.latitude.between(lat - max_deg, lat + max_deg),
-            FdhCabinet.longitude.between(lng - max_deg, lng + max_deg),
-        )
-        .all()
+        db.scalars(
+            select(FdhCabinet).where(
+                FdhCabinet.is_active.is_(True),
+                FdhCabinet.latitude.isnot(None),
+                FdhCabinet.longitude.isnot(None),
+                FdhCabinet.latitude.between(lat - max_deg, lat + max_deg),
+                FdhCabinet.longitude.between(lng - max_deg, lng + max_deg),
+            )
+        ).all()
     )

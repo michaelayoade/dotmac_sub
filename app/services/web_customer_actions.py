@@ -142,21 +142,47 @@ def parse_contact_rows(contact_columns: dict[str, list[str]]) -> list[dict[str, 
     max_len = max((len(field) for field in fields), default=0)
     rows: list[dict[str, Any]] = []
     for idx in range(max_len):
-        first = contact_first_name[idx].strip() if idx < len(contact_first_name) and contact_first_name[idx] else ""
-        last = contact_last_name[idx].strip() if idx < len(contact_last_name) and contact_last_name[idx] else ""
-        title_value = contact_title[idx].strip() if idx < len(contact_title) and contact_title[idx] else None
-        email_value = contact_email[idx].strip() if idx < len(contact_email) and contact_email[idx] else None
-        phone_value = contact_phone[idx].strip() if idx < len(contact_phone) and contact_phone[idx] else None
+        first = (
+            contact_first_name[idx].strip()
+            if idx < len(contact_first_name) and contact_first_name[idx]
+            else ""
+        )
+        last = (
+            contact_last_name[idx].strip()
+            if idx < len(contact_last_name) and contact_last_name[idx]
+            else ""
+        )
+        title_value = (
+            contact_title[idx].strip()
+            if idx < len(contact_title) and contact_title[idx]
+            else None
+        )
+        email_value = (
+            contact_email[idx].strip()
+            if idx < len(contact_email) and contact_email[idx]
+            else None
+        )
+        phone_value = (
+            contact_phone[idx].strip()
+            if idx < len(contact_phone) and contact_phone[idx]
+            else None
+        )
         is_primary_value = (
             contact_is_primary[idx].strip().lower() == "true"
             if idx < len(contact_is_primary) and contact_is_primary[idx]
             else False
         )
-        if not any([first, last, title_value, email_value, phone_value, is_primary_value]):
+        if not any(
+            [first, last, title_value, email_value, phone_value, is_primary_value]
+        ):
             continue
         if not first or not last:
             raise ValueError("Contact first and last name are required.")
-        role_value = contact_role[idx].strip() if idx < len(contact_role) and contact_role[idx] else "primary"
+        role_value = (
+            contact_role[idx].strip()
+            if idx < len(contact_role) and contact_role[idx]
+            else "primary"
+        )
         rows.append(
             {
                 "first_name": first,
@@ -171,7 +197,9 @@ def parse_contact_rows(contact_columns: dict[str, list[str]]) -> list[dict[str, 
     return rows
 
 
-def build_error_contact_rows(contact_columns: dict[str, list[str]]) -> list[dict[str, Any]]:
+def build_error_contact_rows(
+    contact_columns: dict[str, list[str]],
+) -> list[dict[str, Any]]:
     contact_first_name = contact_columns.get("first_name", [])
     contact_last_name = contact_columns.get("last_name", [])
     contact_title = contact_columns.get("title", [])
@@ -193,8 +221,12 @@ def build_error_contact_rows(contact_columns: dict[str, list[str]]) -> list[dict
     ):
         rows.append(
             {
-                "first_name": contact_first_name[idx] if idx < len(contact_first_name) else "",
-                "last_name": contact_last_name[idx] if idx < len(contact_last_name) else "",
+                "first_name": contact_first_name[idx]
+                if idx < len(contact_first_name)
+                else "",
+                "last_name": contact_last_name[idx]
+                if idx < len(contact_last_name)
+                else "",
                 "title": contact_title[idx] if idx < len(contact_title) else "",
                 "role": contact_role[idx] if idx < len(contact_role) else "primary",
                 "email": contact_email[idx] if idx < len(contact_email) else "",
@@ -304,7 +336,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                     "status": "active",
                 },
             )
-        db.commit()
+        db.flush()
         return "organization", str(organization.id)
 
     raise ValueError("Invalid customer type")
@@ -331,7 +363,9 @@ def create_customer_from_form(
             .first()
         )
         if existing:
-            raise ValueError(f"A customer with email {normalized_email} already exists.")
+            raise ValueError(
+                f"A customer with email {normalized_email} already exists."
+            )
         customer = _create_subscriber(
             db=db,
             payload={
@@ -344,7 +378,8 @@ def create_customer_from_form(
                 "phone": _normalize_optional(form_data.get("phone")),
                 "date_of_birth": form_data.get("date_of_birth") or None,
                 "gender": form_data.get("gender") or "unknown",
-                "preferred_contact_method": form_data.get("preferred_contact_method") or None,
+                "preferred_contact_method": form_data.get("preferred_contact_method")
+                or None,
                 "locale": _normalize_optional(form_data.get("locale")),
                 "timezone": _normalize_optional(form_data.get("timezone")),
                 "address_line1": _normalize_optional(form_data.get("address_line1")),
@@ -382,11 +417,14 @@ def create_customer_from_form(
             payload={
                 "first_name": first_contact["first_name"],
                 "last_name": first_contact["last_name"],
-                "email": first_contact["email"] or f"org-{organization.id}@placeholder.local",
+                "email": first_contact["email"]
+                or f"org-{organization.id}@placeholder.local",
                 "phone": first_contact["phone"] or None,
                 "organization_id": organization.id,
                 "is_active": True,
-                "account_start_date": _parse_date(form_data.get("org_account_start_date")),
+                "account_start_date": _parse_date(
+                    form_data.get("org_account_start_date")
+                ),
             },
         )
         _create_subscriber_channels_from_rows(db, str(primary_person.id), contact_rows)
@@ -424,7 +462,9 @@ def create_impersonation_session(
 
     selected_subscription_id = None
     if subscription_id:
-        subscription = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=subscription_id
+        )
         if str(getattr(subscription, "subscriber_id", "")) != str(selected_account.id):
             raise HTTPException(status_code=404, detail="Subscription not found")
         selected_subscription_id = subscription.id
@@ -465,7 +505,9 @@ def create_impersonation_session(
 
     actor_id_value = None
     if isinstance(auth, dict):
-        actor_id_value = str(auth.get("subscriber_id") or auth.get("person_id") or "") or None
+        actor_id_value = (
+            str(auth.get("subscriber_id") or auth.get("person_id") or "") or None
+        )
 
     audit_payload = AuditEventCreate(
         actor_type=AuditActorType.user,
@@ -480,7 +522,9 @@ def create_impersonation_session(
         metadata_={
             "customer_type": customer_type,
             "customer_id": customer_id,
-            "subscription_id": str(selected_subscription_id) if selected_subscription_id else None,
+            "subscription_id": str(selected_subscription_id)
+            if selected_subscription_id
+            else None,
         },
     )
     audit_service.audit_events.create(db=db, payload=audit_payload)
@@ -555,7 +599,7 @@ def update_person_customer(
             parsed_date = _parse_date(account_start_date)
             if parsed_date:
                 subscriber.account_start_date = parsed_date
-                db.commit()
+                db.flush()
     return before, after
 
 
@@ -596,7 +640,7 @@ def update_organization_customer(
             parsed_date = _parse_date(org_account_start_date)
             if parsed_date:
                 subscriber.account_start_date = parsed_date
-                db.commit()
+                db.flush()
     return before, after
 
 
@@ -610,7 +654,7 @@ def deactivate_person_customer(db: Session, customer_id: str):
     db.query(UserCredential).filter(UserCredential.subscriber_id == before.id).update(
         {"is_active": False}
     )
-    db.commit()
+    db.flush()
     after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     return before, after
 
@@ -623,17 +667,19 @@ def deactivate_organization_customer(db: Session, customer_id: str) -> None:
         .filter(Subscriber.organization_id == org_uuid)
         .update({"is_active": False}, synchronize_session=False)
     )
-    db.commit()
+    db.flush()
 
 
 def delete_person_customer(db: Session, customer_id: str) -> None:
     subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if subscriber.is_active:
-        raise HTTPException(status_code=409, detail="Deactivate customer before deleting.")
+        raise HTTPException(
+            status_code=409, detail="Deactivate customer before deleting."
+        )
 
-    db.query(UserCredential).filter(UserCredential.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
+    db.query(UserCredential).filter(
+        UserCredential.subscriber_id == subscriber.id
+    ).delete(synchronize_session=False)
     db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(
         synchronize_session=False
     )
@@ -643,7 +689,7 @@ def delete_person_customer(db: Session, customer_id: str) -> None:
     db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
         synchronize_session=False
     )
-    db.commit()
+    db.flush()
     subscriber_service.subscribers.delete(db=db, subscriber_id=customer_id)
 
 
@@ -674,7 +720,13 @@ def bulk_update_customer_status(
             if customer_type in {"person", "subscriber"}:
                 subscriber = db.get(Subscriber, customer_id)
                 if not subscriber:
-                    errors.append({"id": str(customer_id), "type": str(customer_type), "error": "Subscriber not found"})
+                    errors.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "error": "Subscriber not found",
+                        }
+                    )
                     continue
                 subscriber.is_active = is_active
                 subscriber.status = (
@@ -693,8 +745,10 @@ def bulk_update_customer_status(
                 )
             updated_count += 1
         except Exception as exc:
-            errors.append({"id": str(customer_id), "type": str(customer_type), "error": str(exc)})
-    db.commit()
+            errors.append(
+                {"id": str(customer_id), "type": str(customer_type), "error": str(exc)}
+            )
+    db.flush()
     return {
         "success": True,
         "updated_count": updated_count,
@@ -715,37 +769,75 @@ def bulk_delete_customers(
             if customer_type in {"person", "subscriber"}:
                 subscriber = db.get(Subscriber, customer_id)
                 if not subscriber:
-                    skipped.append({"id": str(customer_id), "type": str(customer_type), "reason": "Subscriber not found"})
+                    skipped.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "reason": "Subscriber not found",
+                        }
+                    )
                     continue
                 if subscriber.is_active:
-                    skipped.append({"id": str(customer_id), "type": str(customer_type), "reason": "Customer is still active"})
+                    skipped.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "reason": "Customer is still active",
+                        }
+                    )
                     continue
-                if db.query(Subscription).filter(Subscription.subscriber_id == subscriber.id).count():
-                    skipped.append({"id": str(customer_id), "type": str(customer_type), "reason": "Has associated subscriptions"})
+                if (
+                    db.query(Subscription)
+                    .filter(Subscription.subscriber_id == subscriber.id)
+                    .count()
+                ):
+                    skipped.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "reason": "Has associated subscriptions",
+                        }
+                    )
                     continue
-                db.query(UserCredential).filter(UserCredential.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
-                )
-                db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
-                )
-                db.query(AuthSession).filter(AuthSession.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
-                )
+                db.query(UserCredential).filter(
+                    UserCredential.subscriber_id == subscriber.id
+                ).delete(synchronize_session=False)
+                db.query(MFAMethod).filter(
+                    MFAMethod.subscriber_id == subscriber.id
+                ).delete(synchronize_session=False)
+                db.query(AuthSession).filter(
+                    AuthSession.subscriber_id == subscriber.id
+                ).delete(synchronize_session=False)
                 db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
                     synchronize_session=False
                 )
-                subscriber_service.subscribers.delete(db=db, subscriber_id=str(customer_id))
+                subscriber_service.subscribers.delete(
+                    db=db, subscriber_id=str(customer_id)
+                )
                 deleted_count += 1
             elif customer_type == "organization":
                 org_uuid = UUID(str(customer_id))
-                if db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).count():
-                    skipped.append({"id": str(customer_id), "type": str(customer_type), "reason": "Has associated subscribers"})
+                if (
+                    db.query(Subscriber)
+                    .filter(Subscriber.organization_id == org_uuid)
+                    .count()
+                ):
+                    skipped.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "reason": "Has associated subscribers",
+                        }
+                    )
                     continue
-                subscriber_service.organizations.delete(db=db, organization_id=str(customer_id))
+                subscriber_service.organizations.delete(
+                    db=db, organization_id=str(customer_id)
+                )
                 deleted_count += 1
         except Exception as exc:
-            skipped.append({"id": str(customer_id), "type": str(customer_type), "reason": str(exc)})
+            skipped.append(
+                {"id": str(customer_id), "type": str(customer_type), "reason": str(exc)}
+            )
     return {
         "success": True,
         "deleted_count": deleted_count,
@@ -763,9 +855,13 @@ def export_customers_csv(
     customers: list[dict[str, str]] = []
     if ids == "all":
         if customer_type != "organization":
-            people_query = db.query(Subscriber).filter(Subscriber.organization_id.is_(None))
+            people_query = db.query(Subscriber).filter(
+                Subscriber.organization_id.is_(None)
+            )
             if search:
-                people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
+                people_query = people_query.filter(
+                    Subscriber.email.ilike(f"%{search}%")
+                )
             people = people_query.order_by(Subscriber.created_at.desc()).all()
             for person in people:
                 customers.append(
@@ -776,7 +872,9 @@ def export_customers_csv(
                         "email": person.email,
                         "phone": person.phone or "",
                         "is_active": "Active" if person.is_active else "Inactive",
-                        "created_at": person.created_at.strftime("%Y-%m-%d %H:%M:%S") if person.created_at else "",
+                        "created_at": person.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if person.created_at
+                        else "",
                     }
                 )
         if customer_type != "person":
@@ -792,8 +890,12 @@ def export_customers_csv(
                         "name": org.name,
                         "email": getattr(org, "email", ""),
                         "phone": getattr(org, "phone", ""),
-                        "is_active": "Active" if getattr(org, "is_active", True) else "Inactive",
-                        "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S") if org.created_at else "",
+                        "is_active": "Active"
+                        if getattr(org, "is_active", True)
+                        else "Inactive",
+                        "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if org.created_at
+                        else "",
                     }
                 )
     else:
@@ -803,7 +905,9 @@ def export_customers_csv(
             ctype, cid = item.split(":", 1)
             try:
                 if ctype == "person":
-                    person = subscriber_service.subscribers.get(db=db, subscriber_id=cid)
+                    person = subscriber_service.subscribers.get(
+                        db=db, subscriber_id=cid
+                    )
                     customers.append(
                         {
                             "id": str(person.id),
@@ -812,11 +916,17 @@ def export_customers_csv(
                             "email": person.email,
                             "phone": person.phone or "",
                             "is_active": "Active" if person.is_active else "Inactive",
-                            "created_at": person.created_at.strftime("%Y-%m-%d %H:%M:%S") if person.created_at else "",
+                            "created_at": person.created_at.strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            )
+                            if person.created_at
+                            else "",
                         }
                     )
                 elif ctype == "organization":
-                    org = subscriber_service.organizations.get(db=db, organization_id=cid)
+                    org = subscriber_service.organizations.get(
+                        db=db, organization_id=cid
+                    )
                     customers.append(
                         {
                             "id": str(org.id),
@@ -824,8 +934,12 @@ def export_customers_csv(
                             "name": org.name,
                             "email": getattr(org, "email", ""),
                             "phone": getattr(org, "phone", ""),
-                            "is_active": "Active" if getattr(org, "is_active", True) else "Inactive",
-                            "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S") if org.created_at else "",
+                            "is_active": "Active"
+                            if getattr(org, "is_active", True)
+                            else "Inactive",
+                            "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                            if org.created_at
+                            else "",
                         }
                     )
             except Exception:
@@ -842,7 +956,9 @@ def export_customers_csv(
     return content, filename
 
 
-def _status_from_legacy(value: str | None, is_active: bool | None = None) -> SubscriberStatus | None:
+def _status_from_legacy(
+    value: str | None, is_active: bool | None = None
+) -> SubscriberStatus | None:
     if is_active is not None and not is_active:
         return SubscriberStatus.suspended
     if not value:
@@ -872,8 +988,10 @@ def convert_contact_to_subscriber(
     if not person:
         raise HTTPException(status_code=404, detail="Subscriber not found")
     person.is_active = True
-    person.status = _status_from_legacy(account_status, is_active=True) or SubscriberStatus.active
-    db.commit()
+    person.status = (
+        _status_from_legacy(account_status, is_active=True) or SubscriberStatus.active
+    )
+    db.flush()
     db.refresh(person)
     return person, not bool(person.email)
 
@@ -944,4 +1062,4 @@ def delete_customer_contact(db: Session, *, contact_id: str) -> None:
     channel = db.get(SubscriberChannel, contact_id)
     if channel:
         db.delete(channel)
-        db.commit()
+        db.flush()
