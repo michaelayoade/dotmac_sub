@@ -1,6 +1,5 @@
 """Field validation API endpoints for real-time form validation."""
 
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -14,6 +13,7 @@ router = APIRouter(prefix="/validation", tags=["validation"])
 
 class FieldValidationRequest(BaseModel):
     """Request body for single field validation."""
+
     field: str
     value: str
     context: dict | None = None  # Additional context (e.g., entity ID for update)
@@ -21,6 +21,7 @@ class FieldValidationRequest(BaseModel):
 
 class FieldValidationResponse(BaseModel):
     """Response for field validation."""
+
     valid: bool
     message: str | None = None
     field: str
@@ -28,6 +29,7 @@ class FieldValidationResponse(BaseModel):
 
 class FormValidationRequest(BaseModel):
     """Request body for full form validation."""
+
     fields: dict[str, str]
     form_type: str
     context: dict | None = None
@@ -35,6 +37,7 @@ class FormValidationRequest(BaseModel):
 
 class FormValidationResponse(BaseModel):
     """Response for form validation."""
+
     valid: bool
     errors: dict[str, str]
 
@@ -43,7 +46,7 @@ class FormValidationResponse(BaseModel):
 def validate_field(
     request: FieldValidationRequest,
     db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    _user=Depends(require_user_auth),
 ):
     """
     Validate a single form field.
@@ -69,7 +72,7 @@ def validate_form(
     form_type: str,
     request: FormValidationRequest,
     db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    _user=Depends(require_user_auth),
 ):
     """
     Validate an entire form.

@@ -62,7 +62,9 @@ def queue_backup_failure_notification(
         db, SettingDomain.notification, "alert_notifications_enabled"
     )
     enabled = _coerce_bool(
-        enabled_raw if enabled_raw is not None else os.getenv("ALERT_NOTIFICATIONS_ENABLED", "true"),
+        enabled_raw
+        if enabled_raw is not None
+        else os.getenv("ALERT_NOTIFICATIONS_ENABLED", "true"),
         True,
     )
     if not enabled:
@@ -72,7 +74,9 @@ def queue_backup_failure_notification(
         db, SettingDomain.notification, "alert_notifications_default_recipient"
     )
     recipient = str(
-        recipient_raw if recipient_raw is not None else os.getenv("ALERT_NOTIFICATIONS_DEFAULT_RECIPIENT", "")
+        recipient_raw
+        if recipient_raw is not None
+        else os.getenv("ALERT_NOTIFICATIONS_DEFAULT_RECIPIENT", "")
     ).strip()
     if not recipient:
         return False

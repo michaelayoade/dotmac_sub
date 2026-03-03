@@ -13,8 +13,11 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/reports", tags=["web-admin-reports"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, heading: str, description: str):
+def _base_context(
+    request: Request, db: Session, active_page: str, heading: str, description: str
+):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -173,6 +176,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 @router.get("/technician", response_class=HTMLResponse)
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     report_data = web_reports_service.get_technician_report_data(db)
 
     context = {
@@ -199,5 +203,7 @@ def reports_technician_export(days: int | None = None, db: Session = Depends(get
     return Response(
         content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=technician-performance.csv"},
+        headers={
+            "Content-Disposition": "attachment; filename=technician-performance.csv"
+        },
     )

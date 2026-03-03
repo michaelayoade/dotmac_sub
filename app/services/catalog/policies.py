@@ -152,7 +152,10 @@ class PolicyDunningSteps(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"day_offset": PolicyDunningStep.day_offset, "action": PolicyDunningStep.action},
+            {
+                "day_offset": PolicyDunningStep.day_offset,
+                "action": PolicyDunningStep.action,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

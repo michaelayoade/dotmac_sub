@@ -17,6 +17,7 @@ from app.db import Base
 
 class EventStatus(enum.Enum):
     """Status of an event in the event store."""
+
     pending = "pending"
     processing = "processing"
     completed = "completed"
@@ -54,9 +55,7 @@ class EventStore(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), index=True
     )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), index=True
-    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
     subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     service_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

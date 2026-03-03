@@ -137,13 +137,19 @@ def update_subscriber_from_form(
 
 
 def delete_subscriber(db: Session, subscriber_id: UUID) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if subscriber.is_active:
-        raise HTTPException(status_code=409, detail="Deactivate subscriber before deleting.")
+        raise HTTPException(
+            status_code=409, detail="Deactivate subscriber before deleting."
+        )
     subscriber_service.subscribers.delete(db=db, subscriber_id=str(subscriber_id))
 
 
-def bulk_set_subscriber_status(db: Session, subscriber_ids: list[str], is_active: bool) -> int:
+def bulk_set_subscriber_status(
+    db: Session, subscriber_ids: list[str], is_active: bool
+) -> int:
     updated_count = 0
     for subscriber_id in subscriber_ids:
         try:
@@ -158,16 +164,22 @@ def bulk_set_subscriber_status(db: Session, subscriber_ids: list[str], is_active
     return updated_count
 
 
-def bulk_delete_inactive_subscribers(db: Session, subscriber_ids: list[str]) -> tuple[int, int]:
+def bulk_delete_inactive_subscribers(
+    db: Session, subscriber_ids: list[str]
+) -> tuple[int, int]:
     deleted_count = 0
     skipped_active = 0
     for subscriber_id in subscriber_ids:
         try:
-            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+            subscriber = subscriber_service.subscribers.get(
+                db=db, subscriber_id=subscriber_id
+            )
             if subscriber.is_active:
                 skipped_active += 1
                 continue
-            subscriber_service.subscribers.delete(db=db, subscriber_id=str(subscriber_id))
+            subscriber_service.subscribers.delete(
+                db=db, subscriber_id=str(subscriber_id)
+            )
             deleted_count += 1
         except Exception:
             continue

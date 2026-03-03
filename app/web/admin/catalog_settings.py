@@ -45,6 +45,7 @@ from app.web.request_parsing import parse_form_data
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/settings", tags=["web-admin-catalog-settings"])
 
+
 def _form_str(form: FormData, key: str, default: str = "") -> str:
     value = form.get(key, default)
     return value if isinstance(value, str) else default
@@ -59,8 +60,11 @@ def _form_getlist_str(form: FormData, key: str) -> list[str]:
     return [value for value in form.getlist(key) if isinstance(value, str)]
 
 
-def _base_context(request: Request, db: Session, active_page: str, settings_tab: str = "") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, settings_tab: str = ""
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -78,7 +82,9 @@ def _base_context(request: Request, db: Session, active_page: str, settings_tab:
 
 
 @router.get("", response_class=HTMLResponse)
-def catalog_settings_index(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_settings_index(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     """Settings overview with cards linking to each section."""
     counts = settings_svc.settings_overview_counts(db)
     context = _base_context(request, db, active_page="catalog-settings")
@@ -108,33 +114,51 @@ def region_zones_list(
         is_active = False
 
     result = settings_svc.list_region_zones_paginated(
-        db, is_active=is_active, search=search, page=page, per_page=per_page,
+        db,
+        is_active=is_active,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="region-zones")
-    context.update({
-        "zones": result.items,
-        "status": status,
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": result.total,
-        "total_pages": result.total_pages,
-    })
-    return templates.TemplateResponse("admin/catalog/settings/region_zones.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="region-zones"
+    )
+    context.update(
+        {
+            "zones": result.items,
+            "status": status,
+            "search": search,
+            "page": page,
+            "per_page": per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/region_zones.html", context
+    )
 
 
 @router.get("/region-zones/new", response_class=HTMLResponse)
 def region_zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Create region zone form."""
     zone = {"name": "", "code": "", "description": "", "is_active": True}
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="region-zones")
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="region-zones"
+    )
     context.update({"zone": zone, "action_url": "/admin/catalog/settings/region-zones"})
-    return templates.TemplateResponse("admin/catalog/settings/region_zone_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/region_zone_form.html", context
+    )
 
 
 @router.post("/region-zones", response_class=HTMLResponse)
-def region_zone_create(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def region_zone_create(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Create region zone."""
     zone = {
         "name": _form_str(form, "name").strip(),
@@ -159,13 +183,25 @@ def region_zone_create(request: Request, form: FormData = Depends(parse_form_dat
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="region-zones")
-    context.update({"zone": zone, "error": error, "action_url": "/admin/catalog/settings/region-zones"})
-    return templates.TemplateResponse("admin/catalog/settings/region_zone_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="region-zones"
+    )
+    context.update(
+        {
+            "zone": zone,
+            "error": error,
+            "action_url": "/admin/catalog/settings/region-zones",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/region_zone_form.html", context
+    )
 
 
 @router.get("/region-zones/{zone_id}/edit", response_class=HTMLResponse)
-def region_zone_edit(request: Request, zone_id: str, db: Session = Depends(get_db)) -> Response:
+def region_zone_edit(
+    request: Request, zone_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Edit region zone form."""
     try:
         zone_obj = catalog_service.region_zones.get(db=db, zone_id=zone_id)
@@ -179,13 +215,27 @@ def region_zone_edit(request: Request, zone_id: str, db: Session = Depends(get_d
         "description": zone_obj.description or "",
         "is_active": zone_obj.is_active,
     }
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="region-zones")
-    context.update({"zone": zone, "action_url": f"/admin/catalog/settings/region-zones/{zone_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/region_zone_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="region-zones"
+    )
+    context.update(
+        {
+            "zone": zone,
+            "action_url": f"/admin/catalog/settings/region-zones/{zone_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/region_zone_form.html", context
+    )
 
 
 @router.post("/region-zones/{zone_id}/edit", response_class=HTMLResponse)
-def region_zone_update(request: Request, zone_id: str, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def region_zone_update(
+    request: Request,
+    zone_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Update region zone."""
     zone = {
         "id": zone_id,
@@ -211,13 +261,25 @@ def region_zone_update(request: Request, zone_id: str, form: FormData = Depends(
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="region-zones")
-    context.update({"zone": zone, "error": error, "action_url": f"/admin/catalog/settings/region-zones/{zone_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/region_zone_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="region-zones"
+    )
+    context.update(
+        {
+            "zone": zone,
+            "error": error,
+            "action_url": f"/admin/catalog/settings/region-zones/{zone_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/region_zone_form.html", context
+    )
 
 
 @router.post("/region-zones/{zone_id}/delete", response_class=HTMLResponse)
-def region_zone_delete(request: Request, zone_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def region_zone_delete(
+    request: Request, zone_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     """Delete (deactivate) region zone."""
     try:
         catalog_service.region_zones.delete(db=db, zone_id=zone_id)
@@ -248,24 +310,36 @@ def usage_allowances_list(
         is_active = False
 
     result = settings_svc.list_usage_allowances_paginated(
-        db, is_active=is_active, search=search, page=page, per_page=per_page,
+        db,
+        is_active=is_active,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="usage-allowances")
-    context.update({
-        "allowances": result.items,
-        "status": status,
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": result.total,
-        "total_pages": result.total_pages,
-    })
-    return templates.TemplateResponse("admin/catalog/settings/usage_allowances.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="usage-allowances"
+    )
+    context.update(
+        {
+            "allowances": result.items,
+            "status": status,
+            "search": search,
+            "page": page,
+            "per_page": per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/usage_allowances.html", context
+    )
 
 
 @router.get("/usage-allowances/new", response_class=HTMLResponse)
-def usage_allowance_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def usage_allowance_new(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     """Create usage allowance form."""
     allowance = {
         "name": "",
@@ -275,13 +349,26 @@ def usage_allowance_new(request: Request, db: Session = Depends(get_db)) -> HTML
         "throttle_rate_mbps": "",
         "is_active": True,
     }
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="usage-allowances")
-    context.update({"allowance": allowance, "action_url": "/admin/catalog/settings/usage-allowances"})
-    return templates.TemplateResponse("admin/catalog/settings/usage_allowance_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="usage-allowances"
+    )
+    context.update(
+        {
+            "allowance": allowance,
+            "action_url": "/admin/catalog/settings/usage-allowances",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/usage_allowance_form.html", context
+    )
 
 
 @router.post("/usage-allowances", response_class=HTMLResponse)
-def usage_allowance_create(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def usage_allowance_create(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Create usage allowance."""
     allowance = {
         "name": _form_str(form, "name").strip(),
@@ -300,31 +387,51 @@ def usage_allowance_create(request: Request, form: FormData = Depends(parse_form
             {
                 "name": allowance["name"],
                 "included_gb": int(included_gb_s) if included_gb_s else None,
-                "overage_rate": allowance["overage_rate"] if allowance["overage_rate"] else None,
+                "overage_rate": allowance["overage_rate"]
+                if allowance["overage_rate"]
+                else None,
                 "overage_cap_gb": int(overage_cap_gb_s) if overage_cap_gb_s else None,
-                "throttle_rate_mbps": int(throttle_rate_mbps_s) if throttle_rate_mbps_s else None,
+                "throttle_rate_mbps": int(throttle_rate_mbps_s)
+                if throttle_rate_mbps_s
+                else None,
                 "is_active": allowance["is_active"],
             }
         )
         catalog_service.usage_allowances.create(db=db, payload=payload)
-        return RedirectResponse("/admin/catalog/settings/usage-allowances", status_code=303)
+        return RedirectResponse(
+            "/admin/catalog/settings/usage-allowances", status_code=303
+        )
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="usage-allowances")
-    context.update({"allowance": allowance, "error": error, "action_url": "/admin/catalog/settings/usage-allowances"})
-    return templates.TemplateResponse("admin/catalog/settings/usage_allowance_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="usage-allowances"
+    )
+    context.update(
+        {
+            "allowance": allowance,
+            "error": error,
+            "action_url": "/admin/catalog/settings/usage-allowances",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/usage_allowance_form.html", context
+    )
 
 
 @router.get("/usage-allowances/{allowance_id}/edit", response_class=HTMLResponse)
-def usage_allowance_edit(request: Request, allowance_id: str, db: Session = Depends(get_db)) -> Response:
+def usage_allowance_edit(
+    request: Request, allowance_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Edit usage allowance form."""
     try:
         obj = catalog_service.usage_allowances.get(db=db, allowance_id=allowance_id)
     except Exception:
-        return RedirectResponse("/admin/catalog/settings/usage-allowances", status_code=303)
+        return RedirectResponse(
+            "/admin/catalog/settings/usage-allowances", status_code=303
+        )
 
     allowance = {
         "id": str(obj.id),
@@ -335,13 +442,27 @@ def usage_allowance_edit(request: Request, allowance_id: str, db: Session = Depe
         "throttle_rate_mbps": obj.throttle_rate_mbps or "",
         "is_active": obj.is_active,
     }
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="usage-allowances")
-    context.update({"allowance": allowance, "action_url": f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/usage_allowance_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="usage-allowances"
+    )
+    context.update(
+        {
+            "allowance": allowance,
+            "action_url": f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/usage_allowance_form.html", context
+    )
 
 
 @router.post("/usage-allowances/{allowance_id}/edit", response_class=HTMLResponse)
-def usage_allowance_update(request: Request, allowance_id: str, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def usage_allowance_update(
+    request: Request,
+    allowance_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Update usage allowance."""
     allowance = {
         "id": allowance_id,
@@ -361,26 +482,46 @@ def usage_allowance_update(request: Request, allowance_id: str, form: FormData =
             {
                 "name": allowance["name"],
                 "included_gb": int(included_gb_s) if included_gb_s else None,
-                "overage_rate": allowance["overage_rate"] if allowance["overage_rate"] else None,
+                "overage_rate": allowance["overage_rate"]
+                if allowance["overage_rate"]
+                else None,
                 "overage_cap_gb": int(overage_cap_gb_s) if overage_cap_gb_s else None,
-                "throttle_rate_mbps": int(throttle_rate_mbps_s) if throttle_rate_mbps_s else None,
+                "throttle_rate_mbps": int(throttle_rate_mbps_s)
+                if throttle_rate_mbps_s
+                else None,
                 "is_active": allowance["is_active"],
             }
         )
-        catalog_service.usage_allowances.update(db=db, allowance_id=allowance_id, payload=payload)
-        return RedirectResponse("/admin/catalog/settings/usage-allowances", status_code=303)
+        catalog_service.usage_allowances.update(
+            db=db, allowance_id=allowance_id, payload=payload
+        )
+        return RedirectResponse(
+            "/admin/catalog/settings/usage-allowances", status_code=303
+        )
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="usage-allowances")
-    context.update({"allowance": allowance, "error": error, "action_url": f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/usage_allowance_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="usage-allowances"
+    )
+    context.update(
+        {
+            "allowance": allowance,
+            "error": error,
+            "action_url": f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/usage_allowance_form.html", context
+    )
 
 
 @router.post("/usage-allowances/{allowance_id}/delete", response_class=HTMLResponse)
-def usage_allowance_delete(request: Request, allowance_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def usage_allowance_delete(
+    request: Request, allowance_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     """Delete (deactivate) usage allowance."""
     try:
         catalog_service.usage_allowances.delete(db=db, allowance_id=allowance_id)
@@ -411,20 +552,30 @@ def sla_profiles_list(
         is_active = False
 
     result = settings_svc.list_sla_profiles_paginated(
-        db, is_active=is_active, search=search, page=page, per_page=per_page,
+        db,
+        is_active=is_active,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="sla-profiles")
-    context.update({
-        "profiles": result.items,
-        "status": status,
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": result.total,
-        "total_pages": result.total_pages,
-    })
-    return templates.TemplateResponse("admin/catalog/settings/sla_profiles.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="sla-profiles"
+    )
+    context.update(
+        {
+            "profiles": result.items,
+            "status": status,
+            "search": search,
+            "page": page,
+            "per_page": per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/sla_profiles.html", context
+    )
 
 
 @router.get("/sla-profiles/new", response_class=HTMLResponse)
@@ -439,13 +590,23 @@ def sla_profile_new(request: Request, db: Session = Depends(get_db)) -> HTMLResp
         "notes": "",
         "is_active": True,
     }
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="sla-profiles")
-    context.update({"profile": profile, "action_url": "/admin/catalog/settings/sla-profiles"})
-    return templates.TemplateResponse("admin/catalog/settings/sla_profile_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="sla-profiles"
+    )
+    context.update(
+        {"profile": profile, "action_url": "/admin/catalog/settings/sla-profiles"}
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/sla_profile_form.html", context
+    )
 
 
 @router.post("/sla-profiles", response_class=HTMLResponse)
-def sla_profile_create(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def sla_profile_create(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Create SLA profile."""
     profile = {
         "name": _form_str(form, "name").strip(),
@@ -463,10 +624,18 @@ def sla_profile_create(request: Request, form: FormData = Depends(parse_form_dat
         payload = SlaProfileCreate.model_validate(
             {
                 "name": profile["name"],
-                "uptime_percent": profile["uptime_percent"] if profile["uptime_percent"] else None,
-                "response_time_hours": int(response_time_hours_s) if response_time_hours_s else None,
-                "resolution_time_hours": int(resolution_time_hours_s) if resolution_time_hours_s else None,
-                "credit_percent": profile["credit_percent"] if profile["credit_percent"] else None,
+                "uptime_percent": profile["uptime_percent"]
+                if profile["uptime_percent"]
+                else None,
+                "response_time_hours": int(response_time_hours_s)
+                if response_time_hours_s
+                else None,
+                "resolution_time_hours": int(resolution_time_hours_s)
+                if resolution_time_hours_s
+                else None,
+                "credit_percent": profile["credit_percent"]
+                if profile["credit_percent"]
+                else None,
                 "notes": profile["notes"] or None,
                 "is_active": profile["is_active"],
             }
@@ -478,13 +647,25 @@ def sla_profile_create(request: Request, form: FormData = Depends(parse_form_dat
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="sla-profiles")
-    context.update({"profile": profile, "error": error, "action_url": "/admin/catalog/settings/sla-profiles"})
-    return templates.TemplateResponse("admin/catalog/settings/sla_profile_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="sla-profiles"
+    )
+    context.update(
+        {
+            "profile": profile,
+            "error": error,
+            "action_url": "/admin/catalog/settings/sla-profiles",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/sla_profile_form.html", context
+    )
 
 
 @router.get("/sla-profiles/{profile_id}/edit", response_class=HTMLResponse)
-def sla_profile_edit(request: Request, profile_id: str, db: Session = Depends(get_db)) -> Response:
+def sla_profile_edit(
+    request: Request, profile_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Edit SLA profile form."""
     try:
         obj = catalog_service.sla_profiles.get(db=db, profile_id=profile_id)
@@ -501,13 +682,27 @@ def sla_profile_edit(request: Request, profile_id: str, db: Session = Depends(ge
         "notes": obj.notes or "",
         "is_active": obj.is_active,
     }
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="sla-profiles")
-    context.update({"profile": profile, "action_url": f"/admin/catalog/settings/sla-profiles/{profile_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/sla_profile_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="sla-profiles"
+    )
+    context.update(
+        {
+            "profile": profile,
+            "action_url": f"/admin/catalog/settings/sla-profiles/{profile_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/sla_profile_form.html", context
+    )
 
 
 @router.post("/sla-profiles/{profile_id}/edit", response_class=HTMLResponse)
-def sla_profile_update(request: Request, profile_id: str, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def sla_profile_update(
+    request: Request,
+    profile_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Update SLA profile."""
     profile = {
         "id": profile_id,
@@ -526,28 +721,50 @@ def sla_profile_update(request: Request, profile_id: str, form: FormData = Depen
         payload = SlaProfileUpdate.model_validate(
             {
                 "name": profile["name"],
-                "uptime_percent": profile["uptime_percent"] if profile["uptime_percent"] else None,
-                "response_time_hours": int(response_time_hours_s) if response_time_hours_s else None,
-                "resolution_time_hours": int(resolution_time_hours_s) if resolution_time_hours_s else None,
-                "credit_percent": profile["credit_percent"] if profile["credit_percent"] else None,
+                "uptime_percent": profile["uptime_percent"]
+                if profile["uptime_percent"]
+                else None,
+                "response_time_hours": int(response_time_hours_s)
+                if response_time_hours_s
+                else None,
+                "resolution_time_hours": int(resolution_time_hours_s)
+                if resolution_time_hours_s
+                else None,
+                "credit_percent": profile["credit_percent"]
+                if profile["credit_percent"]
+                else None,
                 "notes": profile["notes"] or None,
                 "is_active": profile["is_active"],
             }
         )
-        catalog_service.sla_profiles.update(db=db, profile_id=profile_id, payload=payload)
+        catalog_service.sla_profiles.update(
+            db=db, profile_id=profile_id, payload=payload
+        )
         return RedirectResponse("/admin/catalog/settings/sla-profiles", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
     except Exception as exc:
         error = str(exc)
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="sla-profiles")
-    context.update({"profile": profile, "error": error, "action_url": f"/admin/catalog/settings/sla-profiles/{profile_id}/edit"})
-    return templates.TemplateResponse("admin/catalog/settings/sla_profile_form.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="sla-profiles"
+    )
+    context.update(
+        {
+            "profile": profile,
+            "error": error,
+            "action_url": f"/admin/catalog/settings/sla-profiles/{profile_id}/edit",
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/sla_profile_form.html", context
+    )
 
 
 @router.post("/sla-profiles/{profile_id}/delete", response_class=HTMLResponse)
-def sla_profile_delete(request: Request, profile_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def sla_profile_delete(
+    request: Request, profile_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     """Delete (deactivate) SLA profile."""
     try:
         catalog_service.sla_profiles.delete(db=db, profile_id=profile_id)
@@ -578,31 +795,47 @@ def policy_sets_list(
         is_active = False
 
     result = settings_svc.list_policy_sets_paginated(
-        db, is_active=is_active, search=search, page=page, per_page=per_page,
+        db,
+        is_active=is_active,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="policy-sets")
-    context.update({
-        "policies": result.items,
-        "status": status,
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": result.total,
-        "total_pages": result.total_pages,
-    })
-    return templates.TemplateResponse("admin/catalog/settings/policy_sets.html", context)
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="policy-sets"
+    )
+    context.update(
+        {
+            "policies": result.items,
+            "status": status,
+            "search": search,
+            "page": page,
+            "per_page": per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/catalog/settings/policy_sets.html", context
+    )
 
 
-def _policy_form_context(request: Request, db: Session, policy: dict, error: str | None = None) -> dict:
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="policy-sets")
-    context.update({
-        "policy": policy,
-        "proration_policies": [item.value for item in ProrationPolicy],
-        "suspension_actions": [item.value for item in SuspensionAction],
-        "refund_policies": [item.value for item in RefundPolicy],
-        "dunning_actions": [item.value for item in DunningAction],
-    })
+def _policy_form_context(
+    request: Request, db: Session, policy: dict, error: str | None = None
+) -> dict:
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="policy-sets"
+    )
+    context.update(
+        {
+            "policy": policy,
+            "proration_policies": [item.value for item in ProrationPolicy],
+            "suspension_actions": [item.value for item in SuspensionAction],
+            "refund_policies": [item.value for item in RefundPolicy],
+            "dunning_actions": [item.value for item in DunningAction],
+        }
+    )
     if error:
         context["error"] = error
     return context
@@ -626,11 +859,17 @@ def policy_set_new(request: Request, db: Session = Depends(get_db)) -> HTMLRespo
     }
     context = _policy_form_context(request, db, policy)
     context["action_url"] = "/admin/catalog/settings/policy-sets"
-    return templates.TemplateResponse("admin/catalog/settings/policy_set_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/policy_set_form.html", context
+    )
 
 
 @router.post("/policy-sets", response_class=HTMLResponse)
-def policy_set_create(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def policy_set_create(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Create policy set with dunning steps."""
 
     # Parse dunning steps from form
@@ -643,11 +882,13 @@ def policy_set_create(request: Request, form: FormData = Depends(parse_form_data
         action = _form_str(form, f"dunning_steps[{i}][action]").strip()
         note = _form_str(form, f"dunning_steps[{i}][note]").strip()
         if day_offset.strip() and action:
-            dunning_steps.append({
-                "day_offset": day_offset.strip(),
-                "action": action,
-                "note": note,
-            })
+            dunning_steps.append(
+                {
+                    "day_offset": day_offset.strip(),
+                    "action": action,
+                    "note": note,
+                }
+            )
         i += 1
 
     name = _form_str(form, "name").strip()
@@ -684,7 +925,9 @@ def policy_set_create(request: Request, form: FormData = Depends(parse_form_data
             grace_days=int(grace_days_s) if grace_days_s else None,
             suspension_action=SuspensionAction(suspension_action),
             refund_policy=RefundPolicy(refund_policy),
-            refund_window_days=int(refund_window_days_s) if refund_window_days_s else None,
+            refund_window_days=int(refund_window_days_s)
+            if refund_window_days_s
+            else None,
             is_active=is_active,
         )
         created = catalog_service.policy_sets.create(db=db, payload=payload)
@@ -697,11 +940,15 @@ def policy_set_create(request: Request, form: FormData = Depends(parse_form_data
 
     context = _policy_form_context(request, db, policy, error)
     context["action_url"] = "/admin/catalog/settings/policy-sets"
-    return templates.TemplateResponse("admin/catalog/settings/policy_set_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/policy_set_form.html", context
+    )
 
 
 @router.get("/policy-sets/{policy_id}/edit", response_class=HTMLResponse)
-def policy_set_edit(request: Request, policy_id: str, db: Session = Depends(get_db)) -> Response:
+def policy_set_edit(
+    request: Request, policy_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Edit policy set form."""
     try:
         obj = catalog_service.policy_sets.get(db=db, policy_id=policy_id)
@@ -710,33 +957,56 @@ def policy_set_edit(request: Request, policy_id: str, db: Session = Depends(get_
 
     # Get dunning steps
     steps = catalog_service.policy_dunning_steps.list(
-        db=db, policy_set_id=policy_id, order_by="day_offset", order_dir="asc", limit=100, offset=0
+        db=db,
+        policy_set_id=policy_id,
+        order_by="day_offset",
+        order_dir="asc",
+        limit=100,
+        offset=0,
     )
 
     policy = {
         "id": str(obj.id),
         "name": obj.name,
-        "proration_policy": obj.proration_policy.value if obj.proration_policy else "immediate",
-        "downgrade_policy": obj.downgrade_policy.value if obj.downgrade_policy else "next_cycle",
+        "proration_policy": obj.proration_policy.value
+        if obj.proration_policy
+        else "immediate",
+        "downgrade_policy": obj.downgrade_policy.value
+        if obj.downgrade_policy
+        else "next_cycle",
         "trial_days": obj.trial_days or "",
         "trial_card_required": obj.trial_card_required,
         "grace_days": obj.grace_days or "",
-        "suspension_action": obj.suspension_action.value if obj.suspension_action else "suspend",
+        "suspension_action": obj.suspension_action.value
+        if obj.suspension_action
+        else "suspend",
         "refund_policy": obj.refund_policy.value if obj.refund_policy else "none",
         "refund_window_days": obj.refund_window_days or "",
         "is_active": obj.is_active,
         "dunning_steps": [
-            {"id": str(s.id), "day_offset": s.day_offset, "action": s.action.value, "note": s.note or ""}
+            {
+                "id": str(s.id),
+                "day_offset": s.day_offset,
+                "action": s.action.value,
+                "note": s.note or "",
+            }
             for s in steps
         ],
     }
     context = _policy_form_context(request, db, policy)
     context["action_url"] = f"/admin/catalog/settings/policy-sets/{policy_id}/edit"
-    return templates.TemplateResponse("admin/catalog/settings/policy_set_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/policy_set_form.html", context
+    )
 
 
 @router.post("/policy-sets/{policy_id}/edit", response_class=HTMLResponse)
-def policy_set_update(request: Request, policy_id: str, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def policy_set_update(
+    request: Request,
+    policy_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Update policy set with dunning steps."""
 
     # Parse dunning steps from form
@@ -750,12 +1020,14 @@ def policy_set_update(request: Request, policy_id: str, form: FormData = Depends
         action = _form_str(form, f"dunning_steps[{i}][action]").strip()
         note = _form_str(form, f"dunning_steps[{i}][note]").strip()
         if day_offset.strip() and action:
-            dunning_steps.append({
-                "id": step_id,
-                "day_offset": day_offset.strip(),
-                "action": action,
-                "note": note,
-            })
+            dunning_steps.append(
+                {
+                    "id": step_id,
+                    "day_offset": day_offset.strip(),
+                    "action": action,
+                    "note": note,
+                }
+            )
         i += 1
 
     name = _form_str(form, "name").strip()
@@ -793,7 +1065,9 @@ def policy_set_update(request: Request, policy_id: str, form: FormData = Depends
             grace_days=int(grace_days_s) if grace_days_s else None,
             suspension_action=SuspensionAction(suspension_action),
             refund_policy=RefundPolicy(refund_policy),
-            refund_window_days=int(refund_window_days_s) if refund_window_days_s else None,
+            refund_window_days=int(refund_window_days_s)
+            if refund_window_days_s
+            else None,
             is_active=is_active,
         )
         catalog_service.policy_sets.update(db=db, policy_id=policy_id, payload=payload)
@@ -806,11 +1080,15 @@ def policy_set_update(request: Request, policy_id: str, form: FormData = Depends
 
     context = _policy_form_context(request, db, policy, error)
     context["action_url"] = f"/admin/catalog/settings/policy-sets/{policy_id}/edit"
-    return templates.TemplateResponse("admin/catalog/settings/policy_set_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/policy_set_form.html", context
+    )
 
 
 @router.post("/policy-sets/{policy_id}/delete", response_class=HTMLResponse)
-def policy_set_delete(request: Request, policy_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def policy_set_delete(
+    request: Request, policy_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     """Delete (deactivate) policy set."""
     try:
         catalog_service.policy_sets.delete(db=db, policy_id=policy_id)
@@ -842,34 +1120,48 @@ def add_ons_list(
         is_active = False
 
     result = settings_svc.list_add_ons_paginated(
-        db, is_active=is_active, addon_type=addon_type, search=search,
-        page=page, per_page=per_page,
+        db,
+        is_active=is_active,
+        addon_type=addon_type,
+        search=search,
+        page=page,
+        per_page=per_page,
     )
 
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="add-ons")
-    context.update({
-        "add_ons": result.items,
-        "status": status,
-        "addon_type": addon_type,
-        "addon_types": [item.value for item in AddOnType],
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": result.total,
-        "total_pages": result.total_pages,
-    })
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="add-ons"
+    )
+    context.update(
+        {
+            "add_ons": result.items,
+            "status": status,
+            "addon_type": addon_type,
+            "addon_types": [item.value for item in AddOnType],
+            "search": search,
+            "page": page,
+            "per_page": per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+        }
+    )
     return templates.TemplateResponse("admin/catalog/settings/add_ons.html", context)
 
 
-def _addon_form_context(request: Request, db: Session, addon: dict, error: str | None = None) -> dict:
-    context = _base_context(request, db, active_page="catalog-settings", settings_tab="add-ons")
-    context.update({
-        "addon": addon,
-        "addon_types": [item.value for item in AddOnType],
-        "price_types": [item.value for item in PriceType],
-        "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
-        "price_units": [item.value for item in PriceUnit],
-    })
+def _addon_form_context(
+    request: Request, db: Session, addon: dict, error: str | None = None
+) -> dict:
+    context = _base_context(
+        request, db, active_page="catalog-settings", settings_tab="add-ons"
+    )
+    context.update(
+        {
+            "addon": addon,
+            "addon_types": [item.value for item in AddOnType],
+            "price_types": [item.value for item in PriceType],
+            "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
+            "price_units": [item.value for item in PriceUnit],
+        }
+    )
     if error:
         context["error"] = error
     return context
@@ -887,11 +1179,17 @@ def add_on_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     }
     context = _addon_form_context(request, db, addon)
     context["action_url"] = "/admin/catalog/settings/add-ons"
-    return templates.TemplateResponse("admin/catalog/settings/add_on_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/add_on_form.html", context
+    )
 
 
 @router.post("/add-ons", response_class=HTMLResponse)
-def add_on_create(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def add_on_create(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Create add-on with prices."""
 
     # Parse prices from form
@@ -907,14 +1205,16 @@ def add_on_create(request: Request, form: FormData = Depends(parse_form_data), d
         unit = _form_str(form, f"prices[{i}][unit]").strip()
         description = _form_str(form, f"prices[{i}][description]").strip()
         if amount.strip() and price_type:
-            prices.append({
-                "price_type": price_type,
-                "amount": amount.strip(),
-                "currency": currency,
-                "billing_cycle": billing_cycle,
-                "unit": unit,
-                "description": description,
-            })
+            prices.append(
+                {
+                    "price_type": price_type,
+                    "amount": amount.strip(),
+                    "currency": currency,
+                    "billing_cycle": billing_cycle,
+                    "unit": unit,
+                    "description": description,
+                }
+            )
         i += 1
 
     addon = {
@@ -944,11 +1244,15 @@ def add_on_create(request: Request, form: FormData = Depends(parse_form_data), d
 
     context = _addon_form_context(request, db, addon, error)
     context["action_url"] = "/admin/catalog/settings/add-ons"
-    return templates.TemplateResponse("admin/catalog/settings/add_on_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/add_on_form.html", context
+    )
 
 
 @router.get("/add-ons/{addon_id}/edit", response_class=HTMLResponse)
-def add_on_edit(request: Request, addon_id: str, db: Session = Depends(get_db)) -> Response:
+def add_on_edit(
+    request: Request, addon_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Edit add-on form."""
     try:
         obj = catalog_service.add_ons.get(db=db, add_on_id=addon_id)
@@ -957,7 +1261,13 @@ def add_on_edit(request: Request, addon_id: str, db: Session = Depends(get_db)) 
 
     # Get prices
     prices_list = catalog_service.add_on_prices.list(
-        db=db, add_on_id=addon_id, is_active=None, order_by="created_at", order_dir="asc", limit=100, offset=0
+        db=db,
+        add_on_id=addon_id,
+        is_active=None,
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
     )
 
     addon = {
@@ -981,11 +1291,18 @@ def add_on_edit(request: Request, addon_id: str, db: Session = Depends(get_db)) 
     }
     context = _addon_form_context(request, db, addon)
     context["action_url"] = f"/admin/catalog/settings/add-ons/{addon_id}/edit"
-    return templates.TemplateResponse("admin/catalog/settings/add_on_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/add_on_form.html", context
+    )
 
 
 @router.post("/add-ons/{addon_id}/edit", response_class=HTMLResponse)
-def add_on_update(request: Request, addon_id: str, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> Response:
+def add_on_update(
+    request: Request,
+    addon_id: str,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> Response:
     """Update add-on with prices."""
 
     # Parse prices from form
@@ -1002,15 +1319,17 @@ def add_on_update(request: Request, addon_id: str, form: FormData = Depends(pars
         unit = _form_str(form, f"prices[{i}][unit]").strip()
         description = _form_str(form, f"prices[{i}][description]").strip()
         if amount.strip() and price_type:
-            prices.append({
-                "id": price_id,
-                "price_type": price_type,
-                "amount": amount.strip(),
-                "currency": currency,
-                "billing_cycle": billing_cycle,
-                "unit": unit,
-                "description": description,
-            })
+            prices.append(
+                {
+                    "id": price_id,
+                    "price_type": price_type,
+                    "amount": amount.strip(),
+                    "currency": currency,
+                    "billing_cycle": billing_cycle,
+                    "unit": unit,
+                    "description": description,
+                }
+            )
         i += 1
 
     addon = {
@@ -1041,11 +1360,15 @@ def add_on_update(request: Request, addon_id: str, form: FormData = Depends(pars
 
     context = _addon_form_context(request, db, addon, error)
     context["action_url"] = f"/admin/catalog/settings/add-ons/{addon_id}/edit"
-    return templates.TemplateResponse("admin/catalog/settings/add_on_form.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/settings/add_on_form.html", context
+    )
 
 
 @router.post("/add-ons/{addon_id}/delete", response_class=HTMLResponse)
-def add_on_delete(request: Request, addon_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def add_on_delete(
+    request: Request, addon_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     """Delete (deactivate) add-on."""
     try:
         catalog_service.add_ons.delete(db=db, add_on_id=addon_id)
@@ -1060,7 +1383,11 @@ def add_on_delete(request: Request, addon_id: str, db: Session = Depends(get_db)
 
 
 @router.post("/region-zones/bulk-delete", response_class=HTMLResponse)
-def bulk_delete_region_zones(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> RedirectResponse:
+def bulk_delete_region_zones(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
     """Bulk delete (deactivate) region zones."""
     ids = _form_getlist_str(form, "ids")
     settings_svc.bulk_delete_region_zones(db, ids)
@@ -1068,7 +1395,11 @@ def bulk_delete_region_zones(request: Request, form: FormData = Depends(parse_fo
 
 
 @router.post("/usage-allowances/bulk-delete", response_class=HTMLResponse)
-def bulk_delete_usage_allowances(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> RedirectResponse:
+def bulk_delete_usage_allowances(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
     """Bulk delete (deactivate) usage allowances."""
     ids = _form_getlist_str(form, "ids")
     settings_svc.bulk_delete_usage_allowances(db, ids)
@@ -1076,7 +1407,11 @@ def bulk_delete_usage_allowances(request: Request, form: FormData = Depends(pars
 
 
 @router.post("/sla-profiles/bulk-delete", response_class=HTMLResponse)
-def bulk_delete_sla_profiles(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> RedirectResponse:
+def bulk_delete_sla_profiles(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
     """Bulk delete (deactivate) SLA profiles."""
     ids = _form_getlist_str(form, "ids")
     settings_svc.bulk_delete_sla_profiles(db, ids)
@@ -1084,7 +1419,11 @@ def bulk_delete_sla_profiles(request: Request, form: FormData = Depends(parse_fo
 
 
 @router.post("/policy-sets/bulk-delete", response_class=HTMLResponse)
-def bulk_delete_policy_sets(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> RedirectResponse:
+def bulk_delete_policy_sets(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
     """Bulk delete (deactivate) policy sets."""
     ids = _form_getlist_str(form, "ids")
     settings_svc.bulk_delete_policy_sets(db, ids)
@@ -1092,7 +1431,11 @@ def bulk_delete_policy_sets(request: Request, form: FormData = Depends(parse_for
 
 
 @router.post("/add-ons/bulk-delete", response_class=HTMLResponse)
-def bulk_delete_add_ons(request: Request, form: FormData = Depends(parse_form_data), db: Session = Depends(get_db)) -> RedirectResponse:
+def bulk_delete_add_ons(
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
     """Bulk delete (deactivate) add-ons."""
     ids = _form_getlist_str(form, "ids")
     settings_svc.bulk_delete_add_ons(db, ids)

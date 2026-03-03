@@ -100,7 +100,9 @@ class OntActions:
         client, device_id = resolved
         try:
             result = client.reboot_device(device_id)
-            logger.info("Reboot sent to ONT %s (device %s)", ont.serial_number, device_id)
+            logger.info(
+                "Reboot sent to ONT %s (device %s)", ont.serial_number, device_id
+            )
             return ActionResult(
                 success=True,
                 message=f"Reboot command sent to {ont.serial_number}.",
@@ -137,7 +139,9 @@ class OntActions:
 
         client, device_id = resolved
         try:
-            result = client.refresh_object(device_id, "Device.", connection_request=True)
+            result = client.refresh_object(
+                device_id, "Device.", connection_request=True
+            )
             logger.info(
                 "Refresh sent to ONT %s (device %s)", ont.serial_number, device_id
             )

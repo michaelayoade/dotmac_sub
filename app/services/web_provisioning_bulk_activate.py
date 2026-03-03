@@ -21,7 +21,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
@@ -75,7 +74,9 @@ def _normalize_tab(tab: str | None) -> str:
     return normalized
 
 
-def _date_window(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+def _date_window(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime | None, datetime | None]:
     start_dt: datetime | None = None
     end_dt: datetime | None = None
     if date_from:
@@ -105,13 +106,18 @@ def parse_mapping(form: dict[str, Any]) -> BulkMapping:
         offer_id=str(form.get("offer_id") or "").strip() or None,
         activation_date=str(form.get("activation_date") or "").strip() or None,
         nas_device_id=str(form.get("nas_device_id") or "").strip() or None,
-        ipv4_assignment=str(form.get("ipv4_assignment") or "dynamic").strip().lower() or "dynamic",
+        ipv4_assignment=str(form.get("ipv4_assignment") or "dynamic").strip().lower()
+        or "dynamic",
         static_ipv4=str(form.get("static_ipv4") or "").strip() or None,
         mac_address=str(form.get("mac_address") or "").strip() or None,
         login_prefix=str(form.get("login_prefix") or "").strip() or None,
         login_suffix=str(form.get("login_suffix") or "").strip() or None,
-        service_password_mode=str(form.get("service_password_mode") or "auto").strip().lower() or "auto",
-        service_password_manual=str(form.get("service_password_manual") or "").strip() or None,
+        service_password_mode=str(form.get("service_password_mode") or "auto")
+        .strip()
+        .lower()
+        or "auto",
+        service_password_manual=str(form.get("service_password_manual") or "").strip()
+        or None,
         skip_active_service_check=bool(form.get("skip_active_service_check")),
         set_subscribers_active=bool(form.get("set_subscribers_active")),
     )
@@ -123,7 +129,9 @@ def _matching_subscribers(db: Session, filters: BulkFilters) -> list[Subscriber]
         query = query.filter(Subscriber.reseller_id == filters.reseller_id)
     if filters.subscriber_status:
         try:
-            query = query.filter(Subscriber.status == SubscriberStatus(filters.subscriber_status))
+            query = query.filter(
+                Subscriber.status == SubscriberStatus(filters.subscriber_status)
+            )
         except ValueError:
             return []
     start_dt, end_dt = _date_window(filters.date_from, filters.date_to)
@@ -138,7 +146,8 @@ def _matching_subscribers(db: Session, filters: BulkFilters) -> list[Subscriber]
         for subscriber in candidates:
             has_site = any(
                 subscription.provisioning_nas_device is not None
-                and str(subscription.provisioning_nas_device.pop_site_id or "") == filters.pop_site_id
+                and str(subscription.provisioning_nas_device.pop_site_id or "")
+                == filters.pop_site_id
                 for subscription in subscriber.subscriptions
             )
             if has_site:
@@ -163,11 +172,16 @@ def _category_for_tab(tab: str) -> PlanCategory:
     return TAB_TO_CATEGORY.get(_normalize_tab(tab), PlanCategory.internet)
 
 
-def _subscriber_category_subscriptions(db: Session, subscriber_id: str, tab: str) -> list[Subscription]:
+def _subscriber_category_subscriptions(
+    db: Session, subscriber_id: str, tab: str
+) -> list[Subscription]:
     category = _category_for_tab(tab)
     return (
         db.query(Subscription)
-        .options(joinedload(Subscription.offer), joinedload(Subscription.provisioning_nas_device))
+        .options(
+            joinedload(Subscription.offer),
+            joinedload(Subscription.provisioning_nas_device),
+        )
         .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
         .filter(Subscription.subscriber_id == subscriber_id)
         .filter(CatalogOffer.plan_category == category)
@@ -176,8 +190,14 @@ def _subscriber_category_subscriptions(db: Session, subscriber_id: str, tab: str
     )
 
 
-def _preview_row(subscriber: Subscriber, existing: Subscription | None, mapping: BulkMapping) -> tuple[str, str | None]:
-    if existing and existing.status == SubscriptionStatus.active and not mapping.skip_active_service_check:
+def _preview_row(
+    subscriber: Subscriber, existing: Subscription | None, mapping: BulkMapping
+) -> tuple[str, str | None]:
+    if (
+        existing
+        and existing.status == SubscriptionStatus.active
+        and not mapping.skip_active_service_check
+    ):
         return "skip_active_exists", "Active subscription exists"
     if existing:
         return "update", None
@@ -195,7 +215,9 @@ def build_preview(
     rows: list[dict[str, Any]] = []
     counts = {"create": 0, "update": 0, "skip": 0}
     for subscriber in candidates[: max(limit, 1)]:
-        existing_rows = _subscriber_category_subscriptions(db, str(subscriber.id), filters.tab)
+        existing_rows = _subscriber_category_subscriptions(
+            db, str(subscriber.id), filters.tab
+        )
         existing = existing_rows[0] if existing_rows else None
         action, reason = _preview_row(subscriber, existing, mapping)
         if action == "create":
@@ -209,10 +231,16 @@ def build_preview(
                 "subscriber_id": str(subscriber.id),
                 "subscriber_name": subscriber.full_name,
                 "subscriber_email": subscriber.email,
-                "subscriber_status": subscriber.status.value if subscriber.status else "",
+                "subscriber_status": subscriber.status.value
+                if subscriber.status
+                else "",
                 "existing_subscription_id": str(existing.id) if existing else "",
-                "existing_offer_name": existing.offer.name if existing and existing.offer else "",
-                "existing_subscription_status": existing.status.value if existing else "",
+                "existing_offer_name": existing.offer.name
+                if existing and existing.offer
+                else "",
+                "existing_subscription_status": existing.status.value
+                if existing
+                else "",
                 "action": action,
                 "reason": reason or "",
             }
@@ -227,7 +255,9 @@ def build_preview(
 
 def _job_entries(db: Session) -> list[dict[str, Any]]:
     try:
-        setting = domain_settings_service.provisioning_settings.get_by_key(db, BULK_ACTIVATION_JOBS_KEY)
+        setting = domain_settings_service.provisioning_settings.get_by_key(
+            db, BULK_ACTIVATION_JOBS_KEY
+        )
     except Exception:
         return []
     if isinstance(setting.value_json, list):
@@ -344,11 +374,17 @@ def _activation_datetime(value: str | None) -> datetime:
 
 
 def _compute_login(subscriber: Subscriber, mapping: BulkMapping) -> str:
-    base = subscriber.subscriber_number or subscriber.account_number or subscriber.email.split("@", 1)[0]
+    base = (
+        subscriber.subscriber_number
+        or subscriber.account_number
+        or subscriber.email.split("@", 1)[0]
+    )
     return f"{mapping.login_prefix or ''}{base}{mapping.login_suffix or ''}"
 
 
-def _upsert_access_credential(db: Session, *, subscriber: Subscriber, username: str, password: str) -> None:
+def _upsert_access_credential(
+    db: Session, *, subscriber: Subscriber, username: str, password: str
+) -> None:
     credential = (
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscriber.id)
@@ -398,7 +434,9 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
 
     for idx, subscriber in enumerate(candidates, start=1):
         try:
-            existing_rows = _subscriber_category_subscriptions(db, str(subscriber.id), filters.tab)
+            existing_rows = _subscriber_category_subscriptions(
+                db, str(subscriber.id), filters.tab
+            )
             existing = existing_rows[0] if existing_rows else None
             action, _reason = _preview_row(subscriber, existing, mapping)
             if action.startswith("skip"):
@@ -429,10 +467,13 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 target.login = login
                 password = (
                     mapping.service_password_manual
-                    if mapping.service_password_mode == "manual" and mapping.service_password_manual
+                    if mapping.service_password_mode == "manual"
+                    and mapping.service_password_manual
                     else secrets.token_urlsafe(12)
                 )
-                _upsert_access_credential(db, subscriber=subscriber, username=login, password=password)
+                _upsert_access_credential(
+                    db, subscriber=subscriber, username=login, password=password
+                )
                 if mapping.set_subscribers_active:
                     subscriber.status = SubscriberStatus.active
                 activated += 1
@@ -447,7 +488,11 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 {
                     "job_id": job_id,
                     "progress_percent": pct,
-                    "counts": {"activated": activated, "failed": failed, "skipped": skipped},
+                    "counts": {
+                        "activated": activated,
+                        "failed": failed,
+                        "skipped": skipped,
+                    },
                 },
             )
 
@@ -491,8 +536,18 @@ def page_options(db: Session, *, tab: str) -> dict[str, Any]:
         .order_by(CatalogOffer.name.asc())
         .all()
     )
-    resellers = db.query(Reseller).filter(Reseller.is_active.is_(True)).order_by(Reseller.name.asc()).all()
-    pop_sites = db.query(PopSite).filter(PopSite.is_active.is_(True)).order_by(PopSite.name.asc()).all()
+    resellers = (
+        db.query(Reseller)
+        .filter(Reseller.is_active.is_(True))
+        .order_by(Reseller.name.asc())
+        .all()
+    )
+    pop_sites = (
+        db.query(PopSite)
+        .filter(PopSite.is_active.is_(True))
+        .order_by(PopSite.name.asc())
+        .all()
+    )
     nas_devices = (
         db.query(NasDevice)
         .filter(NasDevice.is_active.is_(True))

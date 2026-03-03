@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import connector as connector_service
-from app.services import integration_hooks as integration_hooks_service
 from app.services import integration as integration_service
+from app.services import integration_hooks as integration_hooks_service
 from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
@@ -19,9 +19,12 @@ router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "integrations") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "integrations"
+) -> dict:
     """Build base template context."""
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -32,6 +35,7 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
 
 
 # ==================== Connectors ====================
+
 
 @router.get("/connectors", response_class=HTMLResponse)
 def connectors_list(request: Request, db: Session = Depends(get_db)):
@@ -45,7 +49,9 @@ def connectors_list(request: Request, db: Session = Depends(get_db)):
             "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
         }
     )
-    return templates.TemplateResponse("admin/integrations/connectors/index.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/connectors/index.html", context
+    )
 
 
 @router.get("/connectors/new", response_class=HTMLResponse)
@@ -116,7 +122,9 @@ def connector_create(
 
 
 @router.get("/connectors/{connector_id}", response_class=HTMLResponse)
-def connector_detail(request: Request, connector_id: str, db: Session = Depends(get_db)):
+def connector_detail(
+    request: Request, connector_id: str, db: Session = Depends(get_db)
+):
     """Connector detail view."""
     try:
         connector = connector_service.connector_configs.get(db, connector_id)
@@ -125,11 +133,15 @@ def connector_detail(request: Request, connector_id: str, db: Session = Depends(
             raise
         context = _base_context(request, db, active_page="connectors")
         context["message"] = "The connector you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     context = _base_context(request, db, active_page="connectors")
     context.update({"connector": connector})
-    return templates.TemplateResponse("admin/integrations/connectors/detail.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/connectors/detail.html", context
+    )
 
 
 @router.get("/connectors/{connector_id}/embed", response_class=HTMLResponse)
@@ -147,14 +159,19 @@ def connector_embed(request: Request, connector_id: str, db: Session = Depends(g
             raise
         context = _base_context(request, db, active_page="connectors")
         context["message"] = "The connector you are trying to embed does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     context = _base_context(request, db, active_page="connectors")
     context.update(state)
-    return templates.TemplateResponse("admin/integrations/connectors/embed.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/connectors/embed.html", context
+    )
 
 
 # ==================== Integration Targets ====================
+
 
 @router.get("/targets", response_class=HTMLResponse)
 def targets_list(request: Request, db: Session = Depends(get_db)):
@@ -230,8 +247,12 @@ def target_detail(request: Request, target_id: str, db: Session = Depends(get_db
         if exc.status_code != 404:
             raise
         context = _base_context(request, db, active_page="targets")
-        context["message"] = "The integration target you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        context["message"] = (
+            "The integration target you are looking for does not exist."
+        )
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     context = _base_context(request, db, active_page="targets")
     context.update({"target": target})
@@ -239,6 +260,7 @@ def target_detail(request: Request, target_id: str, db: Session = Depends(get_db
 
 
 # ==================== Integration Jobs ====================
+
 
 @router.get("/jobs", response_class=HTMLResponse)
 def jobs_list(request: Request, db: Session = Depends(get_db)):
@@ -306,9 +328,7 @@ def job_create(
         return templates.TemplateResponse(
             "admin/integrations/jobs/new.html", context, status_code=400
         )
-    return RedirectResponse(
-        url=f"/admin/integrations/jobs/{job.id}", status_code=303
-    )
+    return RedirectResponse(url=f"/admin/integrations/jobs/{job.id}", status_code=303)
 
 
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
@@ -321,7 +341,9 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
             raise
         context = _base_context(request, db, active_page="jobs")
         context["message"] = "The integration job you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     runs = integration_service.integration_runs.list(
         db=db,
@@ -340,6 +362,7 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
 
 # ==================== Hooks ====================
 
+
 @router.get("/hooks", response_class=HTMLResponse)
 def hooks_list(request: Request, db: Session = Depends(get_db)):
     state = integration_hooks_service.build_hooks_page_state(db)
@@ -347,7 +370,9 @@ def hooks_list(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations/hooks"]),
+            "recent_activities": recent_activity_for_paths(
+                db, ["/admin/integrations/hooks"]
+            ),
         }
     )
     return templates.TemplateResponse("admin/integrations/hooks/index.html", context)
@@ -412,7 +437,9 @@ def hooks_create(
             notes=notes,
             is_enabled=is_enabled,
         )
-        return RedirectResponse(url=f"/admin/integrations/hooks/{hook.id}/edit", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/integrations/hooks/{hook.id}/edit", status_code=303
+        )
     except Exception as exc:
         context = _base_context(request, db, active_page="hooks")
         context.update(
@@ -440,7 +467,9 @@ def hooks_create(
                 "selected_template_id": "",
             }
         )
-        return templates.TemplateResponse("admin/integrations/hooks/form.html", context, status_code=400)
+        return templates.TemplateResponse(
+            "admin/integrations/hooks/form.html", context, status_code=400
+        )
 
 
 @router.get("/hooks/{hook_id}/edit", response_class=HTMLResponse)
@@ -452,7 +481,9 @@ def hooks_edit(request: Request, hook_id: str, db: Session = Depends(get_db)):
             raise
         context = _base_context(request, db, active_page="hooks")
         context["message"] = "The hook you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     form = {
         "title": hook.title,
@@ -535,7 +566,9 @@ def hooks_update(
             notes=notes,
             is_enabled=is_enabled,
         )
-        return RedirectResponse(url="/admin/integrations/hooks?saved=1", status_code=303)
+        return RedirectResponse(
+            url="/admin/integrations/hooks?saved=1", status_code=303
+        )
     except Exception as exc:
         context = _base_context(request, db, active_page="hooks")
         context.update(
@@ -564,17 +597,23 @@ def hooks_update(
                 "selected_template_id": "",
             }
         )
-        return templates.TemplateResponse("admin/integrations/hooks/form.html", context, status_code=400)
+        return templates.TemplateResponse(
+            "admin/integrations/hooks/form.html", context, status_code=400
+        )
 
 
 @router.post("/hooks/{hook_id}/duplicate", response_class=HTMLResponse)
 def hooks_duplicate(hook_id: str, db: Session = Depends(get_db)):
     copy = integration_hooks_service.duplicate_hook(db, hook_id=hook_id)
-    return RedirectResponse(url=f"/admin/integrations/hooks/{copy.id}/edit", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/integrations/hooks/{copy.id}/edit", status_code=303
+    )
 
 
 @router.post("/hooks/{hook_id}/toggle", response_class=HTMLResponse)
-def hooks_toggle(hook_id: str, enabled: bool = Form(False), db: Session = Depends(get_db)):
+def hooks_toggle(
+    hook_id: str, enabled: bool = Form(False), db: Session = Depends(get_db)
+):
     integration_hooks_service.set_enabled(db, hook_id=hook_id, is_enabled=enabled)
     return RedirectResponse(url="/admin/integrations/hooks", status_code=303)
 
@@ -582,10 +621,13 @@ def hooks_toggle(hook_id: str, enabled: bool = Form(False), db: Session = Depend
 @router.post("/hooks/{hook_id}/test", response_class=HTMLResponse)
 def hooks_test(hook_id: str, db: Session = Depends(get_db)):
     integration_hooks_service.trigger_test(db, hook_id=hook_id)
-    return RedirectResponse(url=f"/admin/integrations/hooks/{hook_id}/edit?tested=1", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/integrations/hooks/{hook_id}/edit?tested=1", status_code=303
+    )
 
 
 # ==================== Webhooks ====================
+
 
 @router.get("/webhooks", response_class=HTMLResponse)
 def webhooks_list(request: Request, db: Session = Depends(get_db)):
@@ -668,14 +710,19 @@ def webhook_detail(request: Request, endpoint_id: str, db: Session = Depends(get
             raise
         context = _base_context(request, db, active_page="webhooks")
         context["message"] = "The webhook endpoint you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     context = _base_context(request, db, active_page="webhooks")
     context.update(state)
-    return templates.TemplateResponse("admin/integrations/webhooks/detail.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/webhooks/detail.html", context
+    )
 
 
 # ==================== Payment Providers ====================
+
 
 @router.get("/providers", response_class=HTMLResponse)
 def providers_list(request: Request, db: Session = Depends(get_db)):
@@ -689,7 +736,9 @@ def providers_list(request: Request, db: Session = Depends(get_db)):
             "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
         }
     )
-    return templates.TemplateResponse("admin/integrations/providers/index.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/providers/index.html", context
+    )
 
 
 @router.get("/providers/new", response_class=HTMLResponse)
@@ -758,14 +807,19 @@ def provider_detail(request: Request, provider_id: str, db: Session = Depends(ge
             raise
         context = _base_context(request, db, active_page="providers")
         context["message"] = "The payment provider you are looking for does not exist."
-        return templates.TemplateResponse("admin/errors/404.html", context, status_code=404)
+        return templates.TemplateResponse(
+            "admin/errors/404.html", context, status_code=404
+        )
 
     context = _base_context(request, db, active_page="providers")
     context.update(state)
-    return templates.TemplateResponse("admin/integrations/providers/detail.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/providers/detail.html", context
+    )
 
 
 # ==================== WhatsApp Config ====================
+
 
 @router.get("/whatsapp/config", response_class=HTMLResponse)
 def whatsapp_config_page(request: Request, db: Session = Depends(get_db)):
@@ -774,10 +828,14 @@ def whatsapp_config_page(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations/whatsapp"]),
+            "recent_activities": recent_activity_for_paths(
+                db, ["/admin/integrations/whatsapp"]
+            ),
         }
     )
-    return templates.TemplateResponse("admin/integrations/whatsapp/config.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/whatsapp/config.html", context
+    )
 
 
 @router.post("/whatsapp/config", response_class=HTMLResponse)
@@ -801,7 +859,9 @@ def whatsapp_config_save(
             api_secret=api_secret,
             message_templates_json=message_templates_json,
         )
-        return RedirectResponse(url="/admin/integrations/whatsapp/config?saved=1", status_code=303)
+        return RedirectResponse(
+            url="/admin/integrations/whatsapp/config?saved=1", status_code=303
+        )
     except Exception as exc:
         state = web_integrations_whatsapp_service.build_config_state(db)
         context = _base_context(request, db, active_page="whatsapp")
@@ -856,7 +916,9 @@ def whatsapp_config_test_send(
         context["test_result"] = result
     except Exception as exc:
         context["error"] = str(exc)
-    return templates.TemplateResponse("admin/integrations/whatsapp/config.html", context)
+    return templates.TemplateResponse(
+        "admin/integrations/whatsapp/config.html", context
+    )
 
 
 def _parse_json_object(raw: str | None) -> dict | None:
@@ -908,7 +970,9 @@ def _auth_value(auth_config: object, key: str) -> str:
     return ""
 
 
-def _hook_form_defaults(*, template: dict[str, object] | None = None) -> dict[str, object]:
+def _hook_form_defaults(
+    *, template: dict[str, object] | None = None
+) -> dict[str, object]:
     defaults = {
         "title": "",
         "hook_type": "web",
@@ -933,7 +997,9 @@ def _hook_form_defaults(*, template: dict[str, object] | None = None) -> dict[st
                 "title": str(template.get("title") or defaults["title"]),
                 "hook_type": str(template.get("hook_type") or defaults["hook_type"]),
                 "url": str(template.get("url") or defaults["url"]),
-                "http_method": str(template.get("http_method") or defaults["http_method"]),
+                "http_method": str(
+                    template.get("http_method") or defaults["http_method"]
+                ),
                 "auth_type": str(template.get("auth_type") or defaults["auth_type"]),
                 "event_filters_csv": str(
                     template.get("event_filters_csv") or defaults["event_filters_csv"]

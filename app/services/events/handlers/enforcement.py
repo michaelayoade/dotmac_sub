@@ -44,7 +44,9 @@ class EnforcementHandler:
         elif event.event_type == EventType.usage_exhausted:
             self._handle_usage_exhausted(db, event)
 
-    def _handle_subscription_block(self, db: Session, event: Event, reason: str) -> None:
+    def _handle_subscription_block(
+        self, db: Session, event: Event, reason: str
+    ) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             logger.warning("Skipping session disconnect: missing subscription_id.")
@@ -73,12 +75,14 @@ class EnforcementHandler:
             stats = cleanup_subscription_on_cancel(db, str(subscription_id))
             logger.info(
                 "Cancellation cleanup for subscription %s: %s",
-                subscription_id, stats,
+                subscription_id,
+                stats,
             )
         except Exception as exc:
             logger.warning(
                 "Cancellation cleanup failed for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _handle_subscription_restore(self, db: Session, event: Event) -> None:
@@ -91,7 +95,9 @@ class EnforcementHandler:
         refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
         try:
             if refresh_enabled:
-                disconnect_subscription_sessions(db, str(subscription_id), reason="restore")
+                disconnect_subscription_sessions(
+                    db, str(subscription_id), reason="restore"
+                )
             remove_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
             logger.warning(
@@ -104,20 +110,26 @@ class EnforcementHandler:
         """Handle mid-session speed change via CoA-Update."""
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
-            logger.warning("Skipping speed change enforcement: missing subscription_id.")
+            logger.warning(
+                "Skipping speed change enforcement: missing subscription_id."
+            )
             return
         try:
             updated = update_subscription_sessions(
-                db, str(subscription_id), reason=event.event_type.value,
+                db,
+                str(subscription_id),
+                reason=event.event_type.value,
             )
             logger.info(
                 "Speed change enforcement: %s sessions updated for subscription %s.",
-                updated, subscription_id,
+                updated,
+                subscription_id,
             )
         except Exception as exc:
             logger.warning(
                 "Failed to apply speed change for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _handle_account_throttle(self, db: Session, event: Event) -> None:
@@ -145,14 +157,19 @@ class EnforcementHandler:
         if not subscription_id or not account_id:
             logger.warning("Skipping FUP enforcement: missing subscription/account.")
             return
-        action = settings_spec.resolve_value(db, SettingDomain.usage, "fup_action") or "throttle"
+        action = (
+            settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
+            or "throttle"
+        )
         if action not in {"throttle", "suspend", "block", "none"}:
             action = "throttle"
         if action == "none":
             return
         if action == "block":
             try:
-                disconnect_subscription_sessions(db, str(subscription_id), reason="fup_block")
+                disconnect_subscription_sessions(
+                    db, str(subscription_id), reason="fup_block"
+                )
                 apply_subscription_address_list_block(db, str(subscription_id))
             except Exception as exc:
                 logger.warning(
@@ -195,9 +212,16 @@ class EnforcementHandler:
                 refresh = settings_spec.resolve_value(
                     db, SettingDomain.radius, "refresh_sessions_on_profile_change"
                 )
-                refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
+                refresh_enabled = str(refresh).lower() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }
                 if refresh_enabled:
-                    disconnect_account_sessions(db, str(account_id), reason="fup_throttle")
+                    disconnect_account_sessions(
+                        db, str(account_id), reason="fup_throttle"
+                    )
         except Exception as exc:
             logger.warning(
                 "Failed to apply FUP throttle for subscription %s: %s",

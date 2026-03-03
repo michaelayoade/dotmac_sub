@@ -25,7 +25,9 @@ router = APIRouter(prefix="/network", tags=["web-admin-network"])
 _coerce_float_or_none = web_network_core_runtime_service.coerce_float_or_none
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -36,8 +38,15 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
         "sidebar_stats": get_sidebar_stats(db),
     }
 
-@router.get("/pop-sites", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def pop_sites_list(request: Request, status: str | None = None, db: Session = Depends(get_db)):
+
+@router.get(
+    "/pop-sites",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def pop_sites_list(
+    request: Request, status: str | None = None, db: Session = Depends(get_db)
+):
     """List all POP sites."""
     page_data = web_network_pop_sites_service.list_page_data(db, status)
     context = _base_context(request, db, active_page="pop-sites")
@@ -45,7 +54,11 @@ def pop_sites_list(request: Request, status: str | None = None, db: Session = De
     return templates.TemplateResponse("admin/network/pop-sites/index.html", context)
 
 
-@router.get("/pop-sites/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/pop-sites/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def pop_site_new(request: Request, db: Session = Depends(get_db)):
     reference_data = web_network_pop_sites_service.form_reference_data(db)
     form_context = web_network_pop_sites_service.build_form_context(
@@ -60,16 +73,24 @@ def pop_site_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
 
-@router.post("/pop-sites", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     reference_data = web_network_pop_sites_service.form_reference_data(db)
     values = web_network_pop_sites_service.parse_site_form_values(form)
     normalized, error = web_network_pop_sites_service.validate_site_values(values)
-    lat_value = _coerce_float_or_none(normalized.get("latitude")) if normalized else None
-    lon_value = _coerce_float_or_none(normalized.get("longitude")) if normalized else None
-    mast_enabled, mast_data, mast_error, mast_defaults = web_network_pop_sites_service.parse_mast_form(
-        form, lat_value, lon_value
+    lat_value = (
+        _coerce_float_or_none(normalized.get("latitude")) if normalized else None
+    )
+    lon_value = (
+        _coerce_float_or_none(normalized.get("longitude")) if normalized else None
+    )
+    mast_enabled, mast_data, mast_error, mast_defaults = (
+        web_network_pop_sites_service.parse_mast_form(form, lat_value, lon_value)
     )
 
     if error:
@@ -98,7 +119,9 @@ def pop_site_create(request: Request, db: Session = Depends(get_db)):
         return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
     assert normalized is not None
-    normalized, error = web_network_pop_sites_service.resolve_site_relationships(db, normalized)
+    normalized, error = web_network_pop_sites_service.resolve_site_relationships(
+        db, normalized
+    )
     if error:
         form_context = web_network_pop_sites_service.build_form_context(
             pop_site=None,
@@ -114,6 +137,7 @@ def pop_site_create(request: Request, db: Session = Depends(get_db)):
     assert normalized is not None
     pop_site = web_network_pop_sites_service.create_site(db, normalized)
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -131,7 +155,11 @@ def pop_site_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(f"/admin/network/pop-sites/{pop_site.id}", status_code=303)
 
 
-@router.get("/pop-sites/{pop_site_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/pop-sites/{pop_site_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def pop_site_edit(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
     pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
     if not pop_site:
@@ -153,7 +181,11 @@ def pop_site_edit(request: Request, pop_site_id: str, db: Session = Depends(get_
     return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
 
-@router.post("/pop-sites/{pop_site_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
     pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
     if not pop_site:
@@ -168,13 +200,17 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
     values = web_network_pop_sites_service.parse_site_form_values(form)
     normalized, error = web_network_pop_sites_service.validate_site_values(values)
     fallback_lat = (
-        _coerce_float_or_none(normalized.get("latitude")) if normalized else pop_site.latitude
+        _coerce_float_or_none(normalized.get("latitude"))
+        if normalized
+        else pop_site.latitude
     )
     fallback_lon = (
-        _coerce_float_or_none(normalized.get("longitude")) if normalized else pop_site.longitude
+        _coerce_float_or_none(normalized.get("longitude"))
+        if normalized
+        else pop_site.longitude
     )
-    mast_enabled, mast_data, mast_error, mast_defaults = web_network_pop_sites_service.parse_mast_form(
-        form, fallback_lat, fallback_lon
+    mast_enabled, mast_data, mast_error, mast_defaults = (
+        web_network_pop_sites_service.parse_mast_form(form, fallback_lat, fallback_lon)
     )
 
     if error:
@@ -204,7 +240,9 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
         context.update(form_context)
         return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
-    normalized, error = web_network_pop_sites_service.resolve_site_relationships(db, normalized)
+    normalized, error = web_network_pop_sites_service.resolve_site_relationships(
+        db, normalized
+    )
     if error:
         form_context = web_network_pop_sites_service.build_form_context(
             pop_site=pop_site,
@@ -225,6 +263,7 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata_payload = {"changes": changes} if changes else None
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -242,7 +281,11 @@ def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(ge
     return RedirectResponse(f"/admin/network/pop-sites/{pop_site.id}", status_code=303)
 
 
-@router.get("/pop-sites/{pop_site_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/pop-sites/{pop_site_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def pop_site_detail(
     request: Request,
     pop_site_id: str,
@@ -276,7 +319,11 @@ def pop_site_detail(
     return templates.TemplateResponse("admin/network/pop-sites/detail.html", context)
 
 
-@router.post("/pop-sites/{pop_site_id}/photos", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}/photos",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_photo_upload(
     request: Request,
     pop_site_id: str,
@@ -321,7 +368,11 @@ def pop_site_photo_upload(
     )
 
 
-@router.post("/pop-sites/{pop_site_id}/documents", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}/documents",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_document_upload(
     request: Request,
     pop_site_id: str,
@@ -369,7 +420,10 @@ def pop_site_document_upload(
     )
 
 
-@router.get("/pop-sites/{pop_site_id}/files/{file_id}/download", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/pop-sites/{pop_site_id}/files/{file_id}/download",
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def pop_site_file_download(
     request: Request,
     pop_site_id: str,
@@ -393,7 +447,9 @@ def pop_site_file_download(
     except ObjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="File not found") from exc
 
-    headers = {"Content-Disposition": build_content_disposition(record.original_filename)}
+    headers = {
+        "Content-Disposition": build_content_disposition(record.original_filename)
+    }
     if stream.content_length is not None:
         headers["Content-Length"] = str(stream.content_length)
     return StreamingResponse(
@@ -403,7 +459,10 @@ def pop_site_file_download(
     )
 
 
-@router.get("/pop-sites/{pop_site_id}/files/{file_id}/preview", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/pop-sites/{pop_site_id}/files/{file_id}/preview",
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def pop_site_file_preview(
     request: Request,
     pop_site_id: str,
@@ -432,7 +491,10 @@ def pop_site_file_preview(
     )
 
 
-@router.post("/pop-sites/{pop_site_id}/files/{file_id}/delete", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}/files/{file_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_file_delete(
     request: Request,
     pop_site_id: str,
@@ -461,7 +523,10 @@ def pop_site_file_delete(
     )
 
 
-@router.post("/pop-sites/{pop_site_id}/contacts", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}/contacts",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_contact_create(
     pop_site_id: str,
     name: str = Form(...),
@@ -496,7 +561,10 @@ def pop_site_contact_create(
     )
 
 
-@router.post("/pop-sites/{pop_site_id}/contacts/{contact_id}/delete", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/pop-sites/{pop_site_id}/contacts/{contact_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def pop_site_contact_delete(
     pop_site_id: str,
     contact_id: str,

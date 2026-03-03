@@ -5,7 +5,13 @@ from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -15,7 +21,9 @@ from app.models.subscriber import Subscriber
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_payment_forms as web_billing_payment_forms_service
 from app.services import web_billing_payments as web_billing_payments_service
-from app.services import web_billing_reconciliation as web_billing_reconciliation_service
+from app.services import (
+    web_billing_reconciliation as web_billing_reconciliation_service,
+)
 from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_json_body
@@ -24,7 +32,11 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-@router.get("/payments", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def payments_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -67,7 +79,9 @@ def payments_list(
     )
 
 
-@router.get("/payments/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments/export.csv", dependencies=[Depends(require_permission("billing:read"))]
+)
 def payments_export_csv(
     request: Request,
     customer_ref: str | None = Query(None),
@@ -91,15 +105,21 @@ def payments_export_csv(
         date_range=date_range,
         unallocated_only=unallocated_only,
     )
-    content = web_billing_payments_service.render_payments_csv(cast(list[Payment], state["payments"]))
+    content = web_billing_payments_service.render_payments_csv(
+        cast(list[Payment], state["payments"])
+    )
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename=\"payments_export.csv\"'},
+        headers={"Content-Disposition": 'attachment; filename="payments_export.csv"'},
     )
 
 
-@router.get("/payments/unallocated", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments/unallocated",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def payments_unallocated(
     request: Request,
     page: int = Query(1, ge=1),
@@ -127,7 +147,11 @@ def payments_unallocated(
     )
 
 
-@router.get("/payments/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get(
+    "/payments/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def payment_new(
     request: Request,
     invoice_id: str | None = Query(None),
@@ -166,9 +190,17 @@ def payment_new(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": bool(selected_account),
-            "account_label": web_billing_payment_forms_service.account_label(selected_account) if selected_account else None,
-            "account_number": selected_account.account_number if selected_account else None,
-            "selected_account_id": str(selected_account.id) if selected_account else None,
+            "account_label": web_billing_payment_forms_service.account_label(
+                selected_account
+            )
+            if selected_account
+            else None,
+            "account_number": selected_account.account_number
+            if selected_account
+            else None,
+            "selected_account_id": str(selected_account.id)
+            if selected_account
+            else None,
             "currency_locked": bool(prefill.get("invoice_id")),
             "show_invoice_typeahead": not bool(selected_account),
             "selected_invoice_id": prefill.get("invoice_id"),
@@ -295,7 +327,9 @@ def billing_customer_subscribers(
     subscriber_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    subscribers = web_billing_customers_service.subscribers_for_customer(db, customer_ref)
+    subscribers = web_billing_customers_service.subscribers_for_customer(
+        db, customer_ref
+    )
     return templates.TemplateResponse(
         "admin/billing/_customer_subscriber_select.html",
         {
@@ -307,7 +341,11 @@ def billing_customer_subscribers(
     )
 
 
-@router.post("/payments/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/payments/create",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def payment_create(
     request: Request,
     account_id: str | None = Form(None),
@@ -381,9 +419,17 @@ def payment_create(
     return RedirectResponse(url="/admin/billing/payments", status_code=303)
 
 
-@router.get("/payments/{payment_id:uuid}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
-def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get_db)) -> HTMLResponse:
-    state = web_billing_payments_service.build_payment_detail_data(db, payment_id=str(payment_id))
+@router.get(
+    "/payments/{payment_id:uuid}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
+def payment_detail(
+    request: Request, payment_id: UUID, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    state = web_billing_payments_service.build_payment_detail_data(
+        db, payment_id=str(payment_id)
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -406,9 +452,17 @@ def payment_detail(request: Request, payment_id: UUID, db: Session = Depends(get
     )
 
 
-@router.get("/payments/{payment_id:uuid}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
-def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_db)) -> HTMLResponse:
-    state = web_billing_payments_service.build_payment_edit_data(db, payment_id=str(payment_id))
+@router.get(
+    "/payments/{payment_id:uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
+def payment_edit(
+    request: Request, payment_id: UUID, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    state = web_billing_payments_service.build_payment_edit_data(
+        db, payment_id=str(payment_id)
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -438,9 +492,15 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": True,
-            "account_label": web_billing_payment_forms_service.account_label(selected_account),
-            "account_number": selected_account.account_number if selected_account else None,
-            "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id),
+            "account_label": web_billing_payment_forms_service.account_label(
+                selected_account
+            ),
+            "account_number": selected_account.account_number
+            if selected_account
+            else None,
+            "selected_account_id": str(selected_account.id)
+            if selected_account
+            else str(payment.account_id),
             "currency_locked": bool(primary_invoice_id),
             "show_invoice_typeahead": False,
             "selected_invoice_id": primary_invoice_id,
@@ -450,7 +510,11 @@ def payment_edit(request: Request, payment_id: UUID, db: Session = Depends(get_d
     )
 
 
-@router.post("/payments/{payment_id:uuid}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/payments/{payment_id:uuid}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def payment_update(
     request: Request,
     payment_id: UUID,
@@ -517,7 +581,11 @@ def payment_update(
     return RedirectResponse(url="/admin/billing/payments", status_code=303)
 
 
-@router.get("/payments/import", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get(
+    "/payments/import",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def payment_import_page(
     request: Request,
     history_handler: str | None = Query(None),
@@ -550,7 +618,11 @@ def payment_import_page(
     )
 
 
-@router.get("/payments/reconciliation", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments/reconciliation",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def payment_reconciliation_page(
     request: Request,
     date_range: str | None = Query(None),
@@ -577,7 +649,10 @@ def payment_reconciliation_page(
     )
 
 
-@router.get("/payments/import/history.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments/import/history.csv",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def payment_import_history_csv(
     request: Request,
     history_handler: str | None = Query(None),
@@ -596,11 +671,15 @@ def payment_import_history_csv(
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="payment_import_history.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="payment_import_history.csv"'
+        },
     )
 
 
-@router.post("/payments/import", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/payments/import", dependencies=[Depends(require_permission("billing:write"))]
+)
 def payment_import_submit(
     request: Request,
     body: dict = Depends(parse_json_body),
@@ -673,10 +752,15 @@ def payment_import_submit(
         return JSONResponse({"message": f"Import failed: {str(exc)}"}, status_code=500)
 
 
-@router.get("/payments/import/template", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/payments/import/template",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def payment_import_template():
     return Response(
         content=web_billing_payments_service.import_template_csv(),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=payment_import_template.csv"},
+        headers={
+            "Content-Disposition": "attachment; filename=payment_import_template.csv"
+        },
     )

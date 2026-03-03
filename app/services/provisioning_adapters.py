@@ -45,7 +45,9 @@ class StubProvisioner(Provisioner, ListResponseMixin):
         return ProvisioningResult(status="ok", detail="assign_ont stub", payload=config)
 
     def push_config(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return ProvisioningResult(status="ok", detail="push_config stub", payload=config)
+        return ProvisioningResult(
+            status="ok", detail="push_config stub", payload=config
+        )
 
     def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
         return ProvisioningResult(status="ok", detail="confirm_up stub", payload=config)
@@ -82,9 +84,7 @@ def _ssh_client(conn: dict) -> paramiko.SSHClient:
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
     pkey = None
     if conn.get("private_key"):
-        pkey = paramiko.RSAKey.from_private_key(
-            io.StringIO(conn["private_key"])
-        )
+        pkey = paramiko.RSAKey.from_private_key(io.StringIO(conn["private_key"]))
     elif conn.get("private_key_path"):
         pkey = paramiko.RSAKey.from_private_key_file(conn["private_key_path"])
     client.connect(
@@ -152,7 +152,9 @@ class MikrotikProvisioner(Provisioner, ListResponseMixin):
     def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
         return self._execute(context, config, "confirm_up")
 
-    def _execute(self, context: dict, config: dict | None, step: str) -> ProvisioningResult:
+    def _execute(
+        self, context: dict, config: dict | None, step: str
+    ) -> ProvisioningResult:
         config = config or {}
         conn = _resolve_connection(context)
         commands = config.get("commands") or []
@@ -177,7 +179,9 @@ class MikrotikProvisioner(Provisioner, ListResponseMixin):
                 pool.disconnect()
         if not commands and not api_calls:
             raise ValueError(f"{step} requires commands or api_calls")
-        return ProvisioningResult(status="ok", detail="mikrotik step ok", payload={"outputs": outputs})
+        return ProvisioningResult(
+            status="ok", detail="mikrotik step ok", payload={"outputs": outputs}
+        )
 
 
 class HuaweiProvisioner(Provisioner, ListResponseMixin):
@@ -192,18 +196,24 @@ class HuaweiProvisioner(Provisioner, ListResponseMixin):
     def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
         return self._execute(context, config, "confirm_up")
 
-    def _execute(self, context: dict, config: dict | None, step: str) -> ProvisioningResult:
+    def _execute(
+        self, context: dict, config: dict | None, step: str
+    ) -> ProvisioningResult:
         config = config or {}
         conn = _resolve_connection(context)
         commands = config.get("commands") or []
         if commands:
             outputs = _run_ssh_commands(conn, commands)
-            return ProvisioningResult(status="ok", detail="huawei ssh ok", payload={"outputs": outputs})
+            return ProvisioningResult(
+                status="ok", detail="huawei ssh ok", payload={"outputs": outputs}
+            )
         edit_config = config.get("edit_config")
         rpc = config.get("rpc")
         get_filter = config.get("get_filter")
         if not any([edit_config, rpc, get_filter]):
-            raise ValueError(f"{step} requires commands, edit_config, rpc, or get_filter")
+            raise ValueError(
+                f"{step} requires commands, edit_config, rpc, or get_filter"
+            )
         with _netconf_manager(conn) as mgr:
             netconf_outputs: list[str] = []
             if edit_config:
@@ -244,7 +254,9 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         if isinstance(device_id, str) and device_id:
             return device_id
         oui = config.get("oui") or context.get("tr069_oui")
-        product_class = config.get("product_class") or context.get("tr069_product_class")
+        product_class = config.get("product_class") or context.get(
+            "tr069_product_class"
+        )
         serial_number = (
             config.get("serial_number")
             or context.get("tr069_serial_number")
@@ -261,14 +273,20 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             return f"{oui}-{product_class}-{serial_number}"
         return None
 
-    def _execute(self, context: dict, config: dict | None, step: str) -> ProvisioningResult:
+    def _execute(
+        self, context: dict, config: dict | None, step: str
+    ) -> ProvisioningResult:
         config = config or {}
         device_id = self._resolve_device_id(context, config)
         if not device_id:
             raise ValueError("GenieACS device_id is required")
         connector = context.get("connector") or {}
         auth_config = connector.get("auth_config") or {}
-        base_url = config.get("base_url") or connector.get("base_url") or auth_config.get("host")
+        base_url = (
+            config.get("base_url")
+            or connector.get("base_url")
+            or auth_config.get("host")
+        )
         if not base_url:
             raise ValueError("GenieACS base_url is required")
         if not base_url.startswith(("http://", "https://")):

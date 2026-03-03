@@ -4,6 +4,7 @@ Bandwidth API Router
 Provides endpoints for bandwidth time series data, real-time streaming,
 and usage statistics. Supports both admin and customer portal access.
 """
+
 import asyncio
 import logging
 from datetime import UTC, datetime
@@ -85,7 +86,9 @@ def get_bandwidth_series(
     )
 
     data = [BandwidthSeriesPoint(**point) for point in result["data"]]
-    return BandwidthSeriesResponse(data=data, total=result["total"], source=result["source"])
+    return BandwidthSeriesResponse(
+        data=data, total=result["total"], source=result["source"]
+    )
 
 
 @router.get("/stats/{subscription_id}", response_model=BandwidthStats)
@@ -135,7 +138,9 @@ def get_live_bandwidth(
 
             try:
                 # Get current bandwidth from VictoriaMetrics
-                current = await metrics_store.get_current_bandwidth(str(subscription_id))
+                current = await metrics_store.get_current_bandwidth(
+                    str(subscription_id)
+                )
                 now = datetime.now(UTC)
 
                 yield {
@@ -178,10 +183,10 @@ def get_top_users(
     results = cast(
         list[dict[str, object]],
         anyio.from_thread.run(
-        bandwidth_samples.get_top_users,
-        db,
-        limit,
-        duration,
+            bandwidth_samples.get_top_users,
+            db,
+            limit,
+            duration,
         ),
     )
     return [TopUserEntry.model_validate(r) for r in results]
@@ -212,7 +217,9 @@ def get_my_bandwidth_series(
         interval,
     )
     data = [BandwidthSeriesPoint(**point) for point in result["data"]]
-    return BandwidthSeriesResponse(data=data, total=result["total"], source=result["source"])
+    return BandwidthSeriesResponse(
+        data=data, total=result["total"], source=result["source"]
+    )
 
 
 @router.get("/my/stats", response_model=BandwidthStats)

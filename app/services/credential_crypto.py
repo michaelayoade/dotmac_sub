@@ -42,7 +42,9 @@ def get_encryption_key() -> bytes:
 
         session = SessionLocal()
         try:
-            raw = resolve_value(session, SettingDomain.auth, "credential_encryption_key")
+            raw = resolve_value(
+                session, SettingDomain.auth, "credential_encryption_key"
+            )
             if isinstance(raw, str):
                 key_str = raw
         finally:
@@ -63,9 +65,7 @@ def get_encryption_key() -> bytes:
     if isinstance(key_str, bytes):
         return key_str
     if not isinstance(key_str, str):
-        raise RuntimeError(
-            "CREDENTIAL_ENCRYPTION_KEY must be a string or bytes"
-        )
+        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY must be a string or bytes")
     # Key should be URL-safe base64 encoded 32-byte key
     return key_str.encode("ascii")
 
@@ -164,14 +164,16 @@ def decrypt_credential(value: str | None) -> str | None:
 
 
 # Credential field names that should be encrypted
-ENCRYPTED_CREDENTIAL_FIELDS = frozenset({
-    "shared_secret",
-    "ssh_password",
-    "ssh_key",
-    "api_password",
-    "api_token",
-    "snmp_community",
-})
+ENCRYPTED_CREDENTIAL_FIELDS = frozenset(
+    {
+        "shared_secret",
+        "ssh_password",
+        "ssh_key",
+        "api_password",
+        "api_token",
+        "snmp_community",
+    }
+)
 
 
 def encrypt_nas_credentials(data: dict) -> dict:

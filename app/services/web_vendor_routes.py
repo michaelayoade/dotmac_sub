@@ -106,7 +106,7 @@ def vendor_projects_mine(request: Request, db: Session):
         "vendor/projects/my-projects.html",
         {
             "request": request,
-        "active_page": "fiber-map",
+            "active_page": "fiber-map",
             "vendor": context["vendor"],
             "current_user": context["current_user"],
             "projects": projects,
@@ -170,7 +170,9 @@ def vendor_fiber_map(request: Request, db: Session):
     )
     from app.services import settings_spec
 
-    def _resolve_float_setting(domain: SettingDomain, key: str, default: float) -> float:
+    def _resolve_float_setting(
+        domain: SettingDomain, key: str, default: float
+    ) -> float:
         raw = settings_spec.resolve_value(db, domain, key)
         if raw is None or isinstance(raw, bool):
             return default
@@ -186,112 +188,167 @@ def vendor_fiber_map(request: Request, db: Session):
     features = []
 
     # FDH Cabinets
-    fdh_cabinets = db.query(FdhCabinet).filter(
-        FdhCabinet.is_active.is_(True),
-        FdhCabinet.latitude.isnot(None),
-        FdhCabinet.longitude.isnot(None)
-    ).all()
+    fdh_cabinets = (
+        db.query(FdhCabinet)
+        .filter(
+            FdhCabinet.is_active.is_(True),
+            FdhCabinet.latitude.isnot(None),
+            FdhCabinet.longitude.isnot(None),
+        )
+        .all()
+    )
     splitter_counts: dict[UUID, int] = {}
     if fdh_cabinets:
         fdh_ids = [fdh.id for fdh in fdh_cabinets]
-        rows = db.query(Splitter.fdh_id, func.count(Splitter.id)).filter(
-            Splitter.fdh_id.in_(fdh_ids)
-        ).group_by(Splitter.fdh_id).all()
+        rows = (
+            db.query(Splitter.fdh_id, func.count(Splitter.id))
+            .filter(Splitter.fdh_id.in_(fdh_ids))
+            .group_by(Splitter.fdh_id)
+            .all()
+        )
         typed_rows = cast(list[tuple[UUID | None, int]], rows)
-        splitter_counts = {fdh_id: count for fdh_id, count in typed_rows if fdh_id is not None}
+        splitter_counts = {
+            fdh_id: count for fdh_id, count in typed_rows if fdh_id is not None
+        }
     for fdh in fdh_cabinets:
         splitter_count = splitter_counts.get(fdh.id, 0)
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [fdh.longitude, fdh.latitude]},
-            "properties": {
-                "id": str(fdh.id),
-                "type": "fdh_cabinet",
-                "name": fdh.name,
-                "code": fdh.code,
-                "splitter_count": splitter_count,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [fdh.longitude, fdh.latitude],
+                },
+                "properties": {
+                    "id": str(fdh.id),
+                    "type": "fdh_cabinet",
+                    "name": fdh.name,
+                    "code": fdh.code,
+                    "splitter_count": splitter_count,
+                },
+            }
+        )
 
     # Splice Closures
-    closures = db.query(FiberSpliceClosure).filter(
-        FiberSpliceClosure.is_active.is_(True),
-        FiberSpliceClosure.latitude.isnot(None),
-        FiberSpliceClosure.longitude.isnot(None)
-    ).all()
+    closures = (
+        db.query(FiberSpliceClosure)
+        .filter(
+            FiberSpliceClosure.is_active.is_(True),
+            FiberSpliceClosure.latitude.isnot(None),
+            FiberSpliceClosure.longitude.isnot(None),
+        )
+        .all()
+    )
     splice_counts: dict[UUID, int] = {}
     tray_counts: dict[UUID, int] = {}
     if closures:
         closure_ids = [closure.id for closure in closures]
-        splice_rows = db.query(FiberSplice.closure_id, func.count(FiberSplice.id)).filter(
-            FiberSplice.closure_id.in_(closure_ids)
-        ).group_by(FiberSplice.closure_id).all()
+        splice_rows = (
+            db.query(FiberSplice.closure_id, func.count(FiberSplice.id))
+            .filter(FiberSplice.closure_id.in_(closure_ids))
+            .group_by(FiberSplice.closure_id)
+            .all()
+        )
         typed_splice_rows = cast(list[tuple[UUID, int]], splice_rows)
         splice_counts = {closure_id: count for closure_id, count in typed_splice_rows}
 
-        tray_rows = db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id)).filter(
-            FiberSpliceTray.closure_id.in_(closure_ids)
-        ).group_by(FiberSpliceTray.closure_id).all()
+        tray_rows = (
+            db.query(FiberSpliceTray.closure_id, func.count(FiberSpliceTray.id))
+            .filter(FiberSpliceTray.closure_id.in_(closure_ids))
+            .group_by(FiberSpliceTray.closure_id)
+            .all()
+        )
         typed_tray_rows = cast(list[tuple[UUID, int]], tray_rows)
         tray_counts = {closure_id: count for closure_id, count in typed_tray_rows}
     for closure in closures:
         splice_count = splice_counts.get(closure.id, 0)
         tray_count = tray_counts.get(closure.id, 0)
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [closure.longitude, closure.latitude]},
-            "properties": {
-                "id": str(closure.id),
-                "type": "splice_closure",
-                "name": closure.name,
-                "splice_count": splice_count,
-                "tray_count": tray_count,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [closure.longitude, closure.latitude],
+                },
+                "properties": {
+                    "id": str(closure.id),
+                    "type": "splice_closure",
+                    "name": closure.name,
+                    "splice_count": splice_count,
+                    "tray_count": tray_count,
+                },
+            }
+        )
 
     # Fiber Segments
     segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
-    segment_geoms = db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom)).filter(
-        FiberSegment.is_active.is_(True),
-        FiberSegment.route_geom.isnot(None),
-    ).all()
+    segment_geoms = (
+        db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom))
+        .filter(
+            FiberSegment.is_active.is_(True),
+            FiberSegment.route_geom.isnot(None),
+        )
+        .all()
+    )
     for segment, geojson_str in segment_geoms:
         if not geojson_str:
             continue
         geom = json.loads(geojson_str)
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "id": str(segment.id),
-                "type": "fiber_segment",
-                "name": segment.name,
-                "segment_type": segment.segment_type.value if segment.segment_type else None,
-                "cable_type": segment.cable_type.value if segment.cable_type else None,
-                "fiber_count": segment.fiber_count,
-                "length_m": segment.length_m,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "id": str(segment.id),
+                    "type": "fiber_segment",
+                    "name": segment.name,
+                    "segment_type": segment.segment_type.value
+                    if segment.segment_type
+                    else None,
+                    "cable_type": segment.cable_type.value
+                    if segment.cable_type
+                    else None,
+                    "fiber_count": segment.fiber_count,
+                    "length_m": segment.length_m,
+                },
+            }
+        )
 
     geojson_data = {"type": "FeatureCollection", "features": features}
 
     stats = {
-        "fdh_cabinets": db.query(func.count(FdhCabinet.id)).filter(FdhCabinet.is_active.is_(True)).scalar(),
+        "fdh_cabinets": db.query(func.count(FdhCabinet.id))
+        .filter(FdhCabinet.is_active.is_(True))
+        .scalar(),
         "fdh_with_location": len(fdh_cabinets),
-        "splice_closures": db.query(func.count(FiberSpliceClosure.id)).filter(FiberSpliceClosure.is_active.is_(True)).scalar(),
+        "splice_closures": db.query(func.count(FiberSpliceClosure.id))
+        .filter(FiberSpliceClosure.is_active.is_(True))
+        .scalar(),
         "closures_with_location": len(closures),
-        "splitters": db.query(func.count(Splitter.id)).filter(Splitter.is_active.is_(True)).scalar(),
+        "splitters": db.query(func.count(Splitter.id))
+        .filter(Splitter.is_active.is_(True))
+        .scalar(),
         "total_splices": db.query(func.count(FiberSplice.id)).scalar(),
         "segments": len(segments),
     }
 
-    currency_raw = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    currency_raw = settings_spec.resolve_value(
+        db, SettingDomain.billing, "default_currency"
+    )
     currency = currency_raw if isinstance(currency_raw, str) and currency_raw else "NGN"
     cost_settings = {
-        "drop_cable_per_meter": _resolve_float_setting(SettingDomain.network, "fiber_drop_cable_cost_per_meter", 2.50),
-        "labor_per_meter": _resolve_float_setting(SettingDomain.network, "fiber_labor_cost_per_meter", 1.50),
-        "ont_device": _resolve_float_setting(SettingDomain.network, "fiber_ont_device_cost", 85.00),
-        "installation_base": _resolve_float_setting(SettingDomain.network, "fiber_installation_base_fee", 50.00),
+        "drop_cable_per_meter": _resolve_float_setting(
+            SettingDomain.network, "fiber_drop_cable_cost_per_meter", 2.50
+        ),
+        "labor_per_meter": _resolve_float_setting(
+            SettingDomain.network, "fiber_labor_cost_per_meter", 1.50
+        ),
+        "ont_device": _resolve_float_setting(
+            SettingDomain.network, "fiber_ont_device_cost", 85.00
+        ),
+        "installation_base": _resolve_float_setting(
+            SettingDomain.network, "fiber_installation_base_fee", 50.00
+        ),
         "currency": currency,
     }
 
@@ -372,31 +429,40 @@ def vendor_fiber_map_update_position(request: Request, db: Session):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
-def vendor_fiber_map_nearest_cabinet(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_nearest_cabinet(
+    request: Request, lat: float, lng: float, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
+
     return admin_network.find_nearest_cabinet(request, lat, lng, db)
 
 
-def vendor_fiber_map_plan_options(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_plan_options(
+    request: Request, lat: float, lng: float, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
+
     return admin_network.plan_options(request, lat, lng, db)
 
 
-def vendor_fiber_map_route(request: Request, lat: float, lng: float, cabinet_id: str, db: Session):
+def vendor_fiber_map_route(
+    request: Request, lat: float, lng: float, cabinet_id: str, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network as admin_network
+
     return admin_network.plan_route(request, lat, lng, cabinet_id, db)

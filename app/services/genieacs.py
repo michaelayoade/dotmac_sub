@@ -75,7 +75,9 @@ class GenieACSClient:
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as e:
-            logger.error(f"GenieACS API error: {e.response.status_code} - {e.response.text}")
+            logger.error(
+                f"GenieACS API error: {e.response.status_code} - {e.response.text}"
+            )
             raise GenieACSError(f"API error: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error(f"GenieACS request error: {e}")
@@ -534,7 +536,9 @@ class GenieACSClient:
             raise ValueError(f"Invalid device ID format: {device_id}")
         return parts[0], parts[1], parts[2]
 
-    def extract_parameter_value(self, device: dict[str, Any], parameter_path: str) -> Any:
+    def extract_parameter_value(
+        self, device: dict[str, Any], parameter_path: str
+    ) -> Any:
         """Extract parameter value from device document.
 
         GenieACS stores parameters in a nested structure. This helper

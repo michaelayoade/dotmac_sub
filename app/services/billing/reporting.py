@@ -2,6 +2,7 @@
 
 Provides statistics, summaries, and reports for billing data.
 """
+
 from __future__ import annotations
 
 import calendar
@@ -229,9 +230,14 @@ class BillingReporting:
             comparable = _as_utc_aware(value)
             return bool(comparable and start <= comparable < end)
 
-        def _matches_scope(account, *, selected_partner_id: str | None, selected_location: str | None) -> bool:
+        def _matches_scope(
+            account, *, selected_partner_id: str | None, selected_location: str | None
+        ) -> bool:
             if selected_partner_id:
-                if str(getattr(account, "reseller_id", "") or "") != selected_partner_id:
+                if (
+                    str(getattr(account, "reseller_id", "") or "")
+                    != selected_partner_id
+                ):
                     return False
             if selected_location:
                 account_location = (
@@ -275,7 +281,11 @@ class BillingReporting:
             all_invoices = [
                 inv
                 for inv in all_invoices
-                if _matches_scope(getattr(inv, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
+                if _matches_scope(
+                    getattr(inv, "account", None),
+                    selected_partner_id=selected_partner_id,
+                    selected_location=selected_location,
+                )
             ]
 
         all_payments = payments_service.list(
@@ -293,7 +303,11 @@ class BillingReporting:
             all_payments = [
                 p
                 for p in all_payments
-                if _matches_scope(getattr(p, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
+                if _matches_scope(
+                    getattr(p, "account", None),
+                    selected_partner_id=selected_partner_id,
+                    selected_location=selected_location,
+                )
             ]
         succeeded_payments = [
             payment
@@ -301,7 +315,8 @@ class BillingReporting:
             if getattr(payment, "status", None) == PaymentStatus.succeeded
         ]
         total_payments_amount = sum(
-            Decimal(str(getattr(payment, "amount", 0) or 0)) for payment in succeeded_payments
+            Decimal(str(getattr(payment, "amount", 0) or 0))
+            for payment in succeeded_payments
         )
 
         unpaid_statuses = {
@@ -333,7 +348,11 @@ class BillingReporting:
             all_credit_notes = [
                 n
                 for n in all_credit_notes
-                if _matches_scope(getattr(n, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
+                if _matches_scope(
+                    getattr(n, "account", None),
+                    selected_partner_id=selected_partner_id,
+                    selected_location=selected_location,
+                )
             ]
         active_credit_notes = [
             note
@@ -394,23 +413,34 @@ class BillingReporting:
         last_month_start = _month_start(current_month_start - timedelta(days=1))
         next_month_start = _next_month_start(current_month_start)
         comparison_periods = [
-            ("Last Month", * _month_window(last_month_start)),
-            ("Current Month", * _month_window(current_month_start)),
-            ("Next Month", * _month_window(next_month_start)),
+            ("Last Month", *_month_window(last_month_start)),
+            ("Current Month", *_month_window(current_month_start)),
+            ("Next Month", *_month_window(next_month_start)),
         ]
         period_comparison: list[dict[str, Any]] = []
         for label, start, end in comparison_periods:
             period_payments = [
                 payment
                 for payment in succeeded_payments
-                if _in_window(getattr(payment, "paid_at", None) or getattr(payment, "created_at", None), start, end)
+                if _in_window(
+                    getattr(payment, "paid_at", None)
+                    or getattr(payment, "created_at", None),
+                    start,
+                    end,
+                )
             ]
-            payments_amount = sum(Decimal(str(getattr(p, "amount", 0) or 0)) for p in period_payments)
+            payments_amount = sum(
+                Decimal(str(getattr(p, "amount", 0) or 0)) for p in period_payments
+            )
             paid_invoices = [
                 inv
                 for inv in all_invoices
                 if getattr(inv, "status", None) == InvoiceStatus.paid
-                and _in_window(getattr(inv, "paid_at", None) or getattr(inv, "created_at", None), start, end)
+                and _in_window(
+                    getattr(inv, "paid_at", None) or getattr(inv, "created_at", None),
+                    start,
+                    end,
+                )
             ]
             unpaid_invoices_period = [
                 inv
@@ -423,7 +453,9 @@ class BillingReporting:
                 for note in active_credit_notes
                 if _in_window(getattr(note, "created_at", None), start, end)
             ]
-            credit_note_amount = sum(Decimal(str(getattr(n, "total", 0) or 0)) for n in period_credit_notes)
+            credit_note_amount = sum(
+                Decimal(str(getattr(n, "total", 0) or 0)) for n in period_credit_notes
+            )
             period_comparison.append(
                 {
                     "label": label,
@@ -450,10 +482,14 @@ class BillingReporting:
         method_totals: dict[str, Decimal] = {}
         for payment in succeeded_payments:
             method_key = "other"
-            if getattr(payment, "payment_method", None) and getattr(payment.payment_method, "method_type", None):
+            if getattr(payment, "payment_method", None) and getattr(
+                payment.payment_method, "method_type", None
+            ):
                 raw = payment.payment_method.method_type
                 method_key = raw.value if hasattr(raw, "value") else str(raw)
-            elif getattr(payment, "payment_channel", None) and getattr(payment.payment_channel, "channel_type", None):
+            elif getattr(payment, "payment_channel", None) and getattr(
+                payment.payment_channel, "channel_type", None
+            ):
                 raw = payment.payment_channel.channel_type
                 method_key = raw.value if hasattr(raw, "value") else str(raw)
             label = method_labels.get(method_key, "Other")
@@ -467,15 +503,21 @@ class BillingReporting:
 
         # Daily payments (current month)
         days_in_month = calendar.monthrange(now.year, now.month)[1]
-        daily_totals: dict[int, Decimal] = {day: Decimal("0") for day in range(1, days_in_month + 1)}
+        daily_totals: dict[int, Decimal] = {
+            day: Decimal("0") for day in range(1, days_in_month + 1)
+        }
         month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
         month_end = _next_month_start(month_start)
         for payment in succeeded_payments:
-            payment_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
+            payment_at = getattr(payment, "paid_at", None) or getattr(
+                payment, "created_at", None
+            )
             if not _in_window(payment_at, month_start, month_end):
                 continue
             if payment_at:
-                daily_totals[payment_at.day] += Decimal(str(getattr(payment, "amount", 0) or 0))
+                daily_totals[payment_at.day] += Decimal(
+                    str(getattr(payment, "amount", 0) or 0)
+                )
         daily_payments = {
             "labels": [str(day) for day in range(1, days_in_month + 1)],
             "values": [float(daily_totals[day]) for day in range(1, days_in_month + 1)],
@@ -512,7 +554,12 @@ class BillingReporting:
                         paid_overdue += total
                     else:
                         paid_on_time += total
-                elif status in {InvoiceStatus.issued, InvoiceStatus.overdue, InvoiceStatus.partially_paid, InvoiceStatus.draft}:
+                elif status in {
+                    InvoiceStatus.issued,
+                    InvoiceStatus.overdue,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.draft,
+                }:
                     unpaid += total
             invoicing_paid.append(float(paid))
             invoicing_unpaid.append(float(unpaid))
@@ -542,13 +589,23 @@ class BillingReporting:
             mrr_labels.append(calendar.month_abbr[month])
             month_mrr = Decimal("0")
             active_accounts: set[str] = set()
-            for sub in db.query(Subscription).filter(Subscription.status == SubscriptionStatus.active).all():
+            for sub in (
+                db.query(Subscription)
+                .filter(Subscription.status == SubscriptionStatus.active)
+                .all()
+            ):
                 sub_account = getattr(sub, "subscriber", None)
                 if selected_partner_id or selected_location:
-                    if not _matches_scope(sub_account, selected_partner_id=selected_partner_id, selected_location=selected_location):
+                    if not _matches_scope(
+                        sub_account,
+                        selected_partner_id=selected_partner_id,
+                        selected_location=selected_location,
+                    ):
                         continue
                 next_billing_at = getattr(sub, "next_billing_at", None)
-                if next_billing_at and _in_window(next_billing_at, month_start, month_end):
+                if next_billing_at and _in_window(
+                    next_billing_at, month_start, month_end
+                ):
                     month_mrr += Decimal(str(getattr(sub, "unit_price", 0) or 0))
                     if getattr(sub, "subscriber_id", None):
                         active_accounts.add(str(sub.subscriber_id))
@@ -558,19 +615,31 @@ class BillingReporting:
             arpu_values.append(float(month_mrr / Decimal(count)))
         mrr_growth_rate = 0.0
         if len(mrr_values) >= 2 and mrr_values[-2] > 0:
-            mrr_growth_rate = round(((mrr_values[-1] - mrr_values[-2]) / mrr_values[-2]) * 100, 2)
+            mrr_growth_rate = round(
+                ((mrr_values[-1] - mrr_values[-2]) / mrr_values[-2]) * 100, 2
+            )
 
         # Planned income (next billing period from active subscriptions).
         next_month_start = _next_month_start(_month_start(now))
         next_month_end = _next_month_start(next_month_start)
         planned_income = Decimal("0")
-        for sub in db.query(Subscription).filter(Subscription.status == SubscriptionStatus.active).all():
+        for sub in (
+            db.query(Subscription)
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .all()
+        ):
             sub_account = getattr(sub, "subscriber", None)
             if selected_partner_id or selected_location:
-                if not _matches_scope(sub_account, selected_partner_id=selected_partner_id, selected_location=selected_location):
+                if not _matches_scope(
+                    sub_account,
+                    selected_partner_id=selected_partner_id,
+                    selected_location=selected_location,
+                ):
                     continue
             next_billing_at = getattr(sub, "next_billing_at", None)
-            if next_billing_at and _in_window(next_billing_at, next_month_start, next_month_end):
+            if next_billing_at and _in_window(
+                next_billing_at, next_month_start, next_month_end
+            ):
                 planned_income += Decimal(str(getattr(sub, "unit_price", 0) or 0))
 
         # Net revenue retention (payment-based approximation).
@@ -581,26 +650,40 @@ class BillingReporting:
         prev_by_account: dict[str, Decimal] = {}
         current_by_account: dict[str, Decimal] = {}
         for payment in succeeded_payments:
-            paid_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
+            paid_at = getattr(payment, "paid_at", None) or getattr(
+                payment, "created_at", None
+            )
             account_id = str(getattr(payment, "account_id", "") or "")
             if not account_id:
                 continue
             amount = Decimal(str(getattr(payment, "amount", 0) or 0))
             if _in_window(paid_at, prev_start, prev_end):
-                prev_by_account[account_id] = prev_by_account.get(account_id, Decimal("0")) + amount
+                prev_by_account[account_id] = (
+                    prev_by_account.get(account_id, Decimal("0")) + amount
+                )
             if _in_window(paid_at, current_start, current_end):
-                current_by_account[account_id] = current_by_account.get(account_id, Decimal("0")) + amount
+                current_by_account[account_id] = (
+                    current_by_account.get(account_id, Decimal("0")) + amount
+                )
         cohort_ids = set(prev_by_account.keys())
         prev_total = sum(prev_by_account.values())
-        current_total = sum(current_by_account.get(acc_id, Decimal("0")) for acc_id in cohort_ids)
-        net_revenue_retention = round((float(current_total / prev_total) * 100), 2) if prev_total > 0 else 0.0
+        current_total = sum(
+            current_by_account.get(acc_id, Decimal("0")) for acc_id in cohort_ids
+        )
+        net_revenue_retention = (
+            round((float(current_total / prev_total) * 100), 2)
+            if prev_total > 0
+            else 0.0
+        )
 
         payer_totals: dict[str, Decimal] = {}
         payer_labels: dict[str, str] = {}
         period_start = _month_start(now)
         period_end = _next_month_start(period_start)
         for payment in succeeded_payments:
-            paid_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
+            paid_at = getattr(payment, "paid_at", None) or getattr(
+                payment, "created_at", None
+            )
             if not _in_window(paid_at, period_start, period_end):
                 continue
             payer_account = getattr(payment, "account", None)
@@ -608,23 +691,35 @@ class BillingReporting:
             if not account_id:
                 continue
             amount = Decimal(str(getattr(payment, "amount", 0) or 0))
-            payer_totals[account_id] = payer_totals.get(account_id, Decimal("0")) + amount
+            payer_totals[account_id] = (
+                payer_totals.get(account_id, Decimal("0")) + amount
+            )
             if payer_account:
                 payer_labels[account_id] = (
                     getattr(payer_account, "display_name", None)
                     or " ".join(
-                        part for part in [
+                        part
+                        for part in [
                             (getattr(payer_account, "first_name", "") or "").strip(),
                             (getattr(payer_account, "last_name", "") or "").strip(),
-                        ] if part
+                        ]
+                        if part
                     )
-                    or str(getattr(payer_account, "account_number", None) or f"Account {account_id[:8]}")
+                    or str(
+                        getattr(payer_account, "account_number", None)
+                        or f"Account {account_id[:8]}"
+                    )
                 )
             else:
                 payer_labels[account_id] = f"Account {account_id[:8]}"
-        top_payers_sorted = sorted(payer_totals.items(), key=lambda item: item[1], reverse=True)[:10]
+        top_payers_sorted = sorted(
+            payer_totals.items(), key=lambda item: item[1], reverse=True
+        )[:10]
         top_payers = {
-            "labels": [payer_labels.get(account_id, account_id) for account_id, _ in top_payers_sorted],
+            "labels": [
+                payer_labels.get(account_id, account_id)
+                for account_id, _ in top_payers_sorted
+            ],
             "values": [float(amount) for _, amount in top_payers_sorted],
         }
 

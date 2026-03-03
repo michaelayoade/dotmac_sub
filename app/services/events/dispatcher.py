@@ -86,10 +86,12 @@ class EventDispatcher:
                     f"Handler {handler_name} failed for event "
                     f"{event.event_type.value}: {exc}"
                 )
-                failed_handlers.append({
-                    "handler": handler_name,
-                    "error": str(exc),
-                })
+                failed_handlers.append(
+                    {
+                        "handler": handler_name,
+                        "error": str(exc),
+                    }
+                )
 
         # 3. Update event status
         if event_record:
@@ -97,7 +99,9 @@ class EventDispatcher:
                 if failed_handlers:
                     event_record.status = EventStatus.failed
                     event_record.failed_handlers = failed_handlers
-                    event_record.error = json.dumps([fh["error"] for fh in failed_handlers])
+                    event_record.error = json.dumps(
+                        [fh["error"] for fh in failed_handlers]
+                    )
                 else:
                     event_record.status = EventStatus.completed
                 event_record.processed_at = datetime.now(UTC)
@@ -136,7 +140,9 @@ class EventDispatcher:
         # Get handlers that failed previously
         failed_handler_names = set()
         if event_record.failed_handlers:
-            failed_handler_names = {fh["handler"] for fh in event_record.failed_handlers}
+            failed_handler_names = {
+                fh["handler"] for fh in event_record.failed_handlers
+            }
 
         # Update retry count and status
         event_record.retry_count += 1
@@ -157,10 +163,12 @@ class EventDispatcher:
                     f"Handler {handler_name} failed on retry for event "
                     f"{event.event_type.value}: {exc}"
                 )
-                new_failures.append({
-                    "handler": handler_name,
-                    "error": str(exc),
-                })
+                new_failures.append(
+                    {
+                        "handler": handler_name,
+                        "error": str(exc),
+                    }
+                )
 
         # Update final status
         if new_failures:
@@ -257,6 +265,7 @@ def emit_event(
             account_id=sub.account_id,
         )
     """
+
     # Normalize UUIDs
     def to_uuid(value: UUID | str | None) -> UUID | None:
         if value is None:
@@ -279,8 +288,6 @@ def emit_event(
     dispatcher = get_dispatcher()
     dispatcher.dispatch(db, event)
 
-    logger.info(
-        f"Event emitted: {event_type.value} (id={event.event_id})"
-    )
+    logger.info(f"Event emitted: {event_type.value} (id={event.event_id})")
 
     return event

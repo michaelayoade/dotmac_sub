@@ -53,7 +53,9 @@ def _round_percent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+def _merge_intervals(
+    intervals: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
     if not intervals:
         return []
     intervals.sort(key=lambda pair: pair[0])
@@ -106,7 +108,9 @@ def _alert_intervals_by_device(
 
 def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResponse:
     if payload.period_end <= payload.period_start:
-        raise HTTPException(status_code=400, detail="period_end must be after period_start")
+        raise HTTPException(
+            status_code=400, detail="period_end must be after period_start"
+        )
     window_seconds = int((payload.period_end - payload.period_start).total_seconds())
     devices = (
         db.query(NetworkDevice)
@@ -164,7 +168,9 @@ def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResp
             items.append(
                 UptimeReportItem(
                     group_by=group_by,
-                    group_id=grouped_devices[0].pop_site_id if grouped_devices else None,
+                    group_id=grouped_devices[0].pop_site_id
+                    if grouped_devices
+                    else None,
                     name=name,
                     device_count=device_count,
                     total_seconds=total_seconds,
@@ -288,18 +294,16 @@ def _violates_rule(db: Session, rule: AlertRule, metric: DeviceMetric) -> bool:
         violations = [
             sample
             for sample in samples
-            if _operator_check(rule.operator, float(sample.value), float(rule.threshold))
+            if _operator_check(
+                rule.operator, float(sample.value), float(rule.threshold)
+            )
         ]
         return len(violations) == len(samples)
     return _operator_check(rule.operator, float(metric.value), float(rule.threshold))
 
 
 def _process_alerts(db: Session, metric: DeviceMetric) -> None:
-    rules = (
-        db.query(AlertRule)
-        .filter(AlertRule.is_active.is_(True))
-        .all()
-    )
+    rules = db.query(AlertRule).filter(AlertRule.is_active.is_(True)).all()
     for rule in rules:
         if not _rule_matches(rule, metric):
             continue
@@ -358,7 +362,9 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
                 )
 
 
-def _can_create_alert_for_metric(db: Session, rule: AlertRule, metric: DeviceMetric) -> bool:
+def _can_create_alert_for_metric(
+    db: Session, rule: AlertRule, metric: DeviceMetric
+) -> bool:
     """Return whether a new alert should be opened for this metric sample."""
     if not metric.device_id:
         return True
@@ -408,7 +414,9 @@ def _delay_window_violated(
         sample_recorded_at = _as_utc(sample.recorded_at)
         if sample_recorded_at is None:
             continue
-        if not _operator_check(rule.operator, float(sample.value), float(rule.threshold)):
+        if not _operator_check(
+            rule.operator, float(sample.value), float(rule.threshold)
+        ):
             break
         streak_start = sample_recorded_at
 
@@ -546,29 +554,19 @@ class NetworkDevices(ListResponseMixin):
         from app.models.network_monitoring import DeviceStatus as DStatus
 
         active_devices = (
-            db.query(NetworkDevice)
-            .filter(NetworkDevice.is_active.is_(True))
-            .all()
+            db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
         )
         total_count = len(active_devices)
-        online_count = sum(
-            1 for d in active_devices if d.status == DStatus.online
-        )
-        degraded_count = sum(
-            1 for d in active_devices if d.status == DStatus.degraded
-        )
-        offline_count = sum(
-            1 for d in active_devices if d.status == DStatus.offline
-        )
+        online_count = sum(1 for d in active_devices if d.status == DStatus.online)
+        degraded_count = sum(1 for d in active_devices if d.status == DStatus.degraded)
+        offline_count = sum(1 for d in active_devices if d.status == DStatus.offline)
         maintenance_count = sum(
             1 for d in active_devices if d.status == DStatus.maintenance
         )
 
         uptime_percentage = (
             round(
-                (online_count + degraded_count + maintenance_count)
-                / total_count
-                * 100,
+                (online_count + degraded_count + maintenance_count) / total_count * 100,
                 1,
             )
             if total_count > 0
@@ -583,20 +581,10 @@ class NetworkDevices(ListResponseMixin):
         }
 
         # Active alarms by severity (AlertStatus: open/acknowledged/resolved)
-        open_alarms = (
-            db.query(Alert)
-            .filter(Alert.status == AStatus.open)
-            .all()
-        )
-        alarms_critical = sum(
-            1 for a in open_alarms if a.severity == Sev.critical
-        )
-        alarms_warning = sum(
-            1 for a in open_alarms if a.severity == Sev.warning
-        )
-        alarms_info = sum(
-            1 for a in open_alarms if a.severity == Sev.info
-        )
+        open_alarms = db.query(Alert).filter(Alert.status == AStatus.open).all()
+        alarms_critical = sum(1 for a in open_alarms if a.severity == Sev.critical)
+        alarms_warning = sum(1 for a in open_alarms if a.severity == Sev.warning)
+        alarms_info = sum(1 for a in open_alarms if a.severity == Sev.info)
 
         # Top 5 critical alarms
         critical_alarms = [
@@ -631,7 +619,6 @@ class NetworkDevices(ListResponseMixin):
             "alarms_warning": alarms_warning,
             "active_alarms": critical_alarms,
         }
-
 
     @staticmethod
     def get_monitoring_dashboard_stats(
@@ -687,15 +674,14 @@ class NetworkDevices(ListResponseMixin):
 
         # ---- Recent events ----
         recent_events = (
-            db.query(AlertEvent)
-            .order_by(AlertEvent.created_at.desc())
-            .limit(10)
-            .all()
+            db.query(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(10).all()
         )
 
         # ---- Subscribers online ----
         subscribers_online = (
-            db.query(sa_func.count(sa_func.distinct(RadiusAccountingSession.subscription_id)))
+            db.query(
+                sa_func.count(sa_func.distinct(RadiusAccountingSession.subscription_id))
+            )
             .filter(RadiusAccountingSession.session_end.is_(None))
             .filter(RadiusAccountingSession.status_type != AccountingStatus.stop)
             .scalar()
@@ -758,7 +744,9 @@ class NetworkDevices(ListResponseMixin):
                 {
                     "name": device.name,
                     "status": device.status.value if device.status else "unknown",
-                    "health_status": device.health_status.value if device.health_status else "unknown",
+                    "health_status": device.health_status.value
+                    if device.health_status
+                    else "unknown",
                     "max_concurrent_subscribers": device.max_concurrent_subscribers,
                     "current_subscriber_count": device.current_subscriber_count or 0,
                     "cpu": f"{cpu_m.value:.1f}%" if cpu_m else "--",
@@ -881,7 +869,10 @@ class DeviceMetrics(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": DeviceMetric.created_at, "recorded_at": DeviceMetric.recorded_at},
+            {
+                "created_at": DeviceMetric.created_at,
+                "recorded_at": DeviceMetric.recorded_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -981,7 +972,9 @@ class AlertRules(ListResponseMixin):
         ids = [coerce_uuid(rule_id) for rule_id in payload.rule_ids]
         rules = db.query(AlertRule).filter(AlertRule.id.in_(ids)).all()
         if len(rules) != len(ids):
-            raise HTTPException(status_code=404, detail="One or more alert rules not found")
+            raise HTTPException(
+                status_code=404, detail="One or more alert rules not found"
+            )
         for rule in rules:
             rule.is_active = payload.is_active
         db.commit()
@@ -1027,8 +1020,7 @@ class Alerts(ListResponseMixin):
             )
         if severity:
             query = query.filter(
-                Alert.severity
-                == validate_enum(severity, AlertSeverity, "severity")
+                Alert.severity == validate_enum(severity, AlertSeverity, "severity")
             )
         query = apply_ordering(
             query,
@@ -1267,11 +1259,7 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         return []
 
     # Enrich with PON port and OLT names + total ONT count per port
-    pon_ports = (
-        db.query(PonPort)
-        .filter(PonPort.id.in_(outage_port_ids))
-        .all()
-    )
+    pon_ports = db.query(PonPort).filter(PonPort.id.in_(outage_port_ids)).all()
     pon_port_map = {str(p.id): p for p in pon_ports}
 
     # Get total assigned ONTs per port for context
@@ -1291,7 +1279,9 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
 
     # Get OLT names
     olt_ids = list({str(p.olt_id) for p in pon_ports if p.olt_id})
-    olts = db.query(OLTDevice).filter(OLTDevice.id.in_(olt_ids)).all() if olt_ids else []
+    olts = (
+        db.query(OLTDevice).filter(OLTDevice.id.in_(olt_ids)).all() if olt_ids else []
+    )
     olt_map = {str(o.id): o.name for o in olts}
 
     results: list[dict] = []
@@ -1305,7 +1295,9 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         for item in offline_items:
             r = item["reason"]
             reasons[r] = reasons.get(r, 0) + 1
-            if item["last_seen"] and (latest_seen is None or item["last_seen"] > latest_seen):
+            if item["last_seen"] and (
+                latest_seen is None or item["last_seen"] > latest_seen
+            ):
                 latest_seen = item["last_seen"]
 
         results.append(

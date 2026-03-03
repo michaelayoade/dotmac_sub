@@ -13,14 +13,22 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-@router.get("/site-survey", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_list(request: Request, db: Session = Depends(get_db)):
     """List wireless site surveys."""
     context = site_survey_service.list_context(request, db)
     return templates.TemplateResponse("admin/network/site-survey/index.html", context)
 
 
-@router.get("/site-survey/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_new(
     request: Request,
     lat: float | None = None,
@@ -39,7 +47,11 @@ def site_survey_new(
     return templates.TemplateResponse("admin/network/site-survey/form.html", context)
 
 
-@router.post("/site-survey/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_create(
     request: Request,
     name: str = Form(...),
@@ -70,21 +82,33 @@ def site_survey_create(
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.get("/site-survey/{survey_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_detail(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Wireless site survey detail with interactive map."""
     context = site_survey_service.detail_context(request, db, survey_id=survey_id)
     return templates.TemplateResponse("admin/network/site-survey/detail.html", context)
 
 
-@router.get("/site-survey/{survey_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_edit(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Edit wireless site survey."""
     context = site_survey_service.edit_context(request, db, survey_id=survey_id)
     return templates.TemplateResponse("admin/network/site-survey/form.html", context)
 
 
-@router.post("/site-survey/{survey_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_update(
     request: Request,
     survey_id: str,
@@ -113,14 +137,21 @@ def site_survey_update(
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.post("/site-survey/{survey_id}/delete", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_delete(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Delete wireless site survey."""
     redirect_url = site_survey_service.delete_survey(request, db, survey_id=survey_id)
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.get("/site-survey/{survey_id}/elevation", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/elevation",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_elevation_lookup(
     request: Request,
     survey_id: str,
@@ -133,7 +164,10 @@ def site_survey_elevation_lookup(
     return JSONResponse(result)
 
 
-@router.post("/site-survey/{survey_id}/points", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/points",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_add_point(
     request: Request,
     survey_id: str,
@@ -158,14 +192,22 @@ def site_survey_add_point(
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.post("/site-survey/points/{point_id}/delete", dependencies=[Depends(require_permission("network:write"))])
-def site_survey_delete_point(request: Request, point_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/site-survey/points/{point_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def site_survey_delete_point(
+    request: Request, point_id: str, db: Session = Depends(get_db)
+):
     """Delete a survey point."""
     redirect_url = site_survey_service.delete_point(request, db, point_id=point_id)
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.post("/site-survey/{survey_id}/analyze-los", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/analyze-los",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_analyze_los(
     request: Request,
     survey_id: str,
@@ -184,7 +226,10 @@ def site_survey_analyze_los(
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.get("/site-survey/{survey_id}/los/{path_id}", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/los/{path_id}",
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_los_detail(
     request: Request, survey_id: str, path_id: str, db: Session = Depends(get_db)
 ):
@@ -193,8 +238,13 @@ def site_survey_los_detail(
     return JSONResponse(los_payload)
 
 
-@router.post("/site-survey/los/{path_id}/delete", dependencies=[Depends(require_permission("network:write"))])
-def site_survey_delete_los(request: Request, path_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/site-survey/los/{path_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def site_survey_delete_los(
+    request: Request, path_id: str, db: Session = Depends(get_db)
+):
     """Delete a LOS path."""
     redirect_url = site_survey_service.delete_los(request, db, path_id=path_id)
     return RedirectResponse(redirect_url, status_code=303)

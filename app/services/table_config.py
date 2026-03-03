@@ -50,7 +50,9 @@ class TableFieldDefinition:
             return self.expression_resolver(model)
         if hasattr(model, self.key):
             return getattr(model, self.key)
-        raise HTTPException(status_code=400, detail=f"Field has no expression mapping: {self.key}")
+        raise HTTPException(
+            status_code=400, detail=f"Field has no expression mapping: {self.key}"
+        )
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,9 @@ class TableRegistry:
             if field_key in seen_keys:
                 raise ValueError(f"Duplicate field in registry: {field_key}")
             if not hasattr(model, field_key):
-                raise ValueError(f"Field {field_key} is not present on model {model.__name__}")
+                raise ValueError(
+                    f"Field {field_key} is not present on model {model.__name__}"
+                )
 
             meta = overrides.get(field_key, {})
             fields.append(
@@ -152,11 +156,15 @@ class TableConfigurationService:
         )
 
     @staticmethod
-    def get_columns(db: Session, user_id: UUID, table_key: str) -> list[TableColumnResolved]:
+    def get_columns(
+        db: Session, user_id: UUID, table_key: str
+    ) -> list[TableColumnResolved]:
         definition = TableRegistry.get(table_key)
         state = TableConfigurationService._default_state(definition)
 
-        default_configs = TableConfigurationService._system_default_configs(db, table_key)
+        default_configs = TableConfigurationService._system_default_configs(
+            db, table_key
+        )
         for config in default_configs:
             if config.column_key in state:
                 state[config.column_key] = {
@@ -242,9 +250,13 @@ class TableConfigurationService:
         seen: set[str] = set()
         for item in payload:
             if item.column_key not in field_map:
-                raise HTTPException(status_code=400, detail=f"Invalid column_key: {item.column_key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid column_key: {item.column_key}"
+                )
             if item.column_key in seen:
-                raise HTTPException(status_code=400, detail=f"Duplicate column_key: {item.column_key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Duplicate column_key: {item.column_key}"
+                )
             seen.add(item.column_key)
             state[item.column_key] = {
                 "display_order": item.display_order,
@@ -256,10 +268,14 @@ class TableConfigurationService:
         if specified_keys:
             for key, config in state.items():
                 if key not in specified_keys:
-                    config["display_order"] = max_specified_order + 1 + config["display_order"]
+                    config["display_order"] = (
+                        max_specified_order + 1 + config["display_order"]
+                    )
 
         if not any(item["is_visible"] for item in state.values()):
-            raise HTTPException(status_code=400, detail="At least one column must be visible")
+            raise HTTPException(
+                status_code=400, detail="At least one column must be visible"
+            )
 
         normalized = sorted(state.items(), key=lambda kv: kv[1]["display_order"])
 
@@ -331,9 +347,13 @@ class TableConfigurationService:
         seen: set[str] = set()
         for item in payload:
             if item.column_key not in field_map:
-                raise HTTPException(status_code=400, detail=f"Invalid column_key: {item.column_key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid column_key: {item.column_key}"
+                )
             if item.column_key in seen:
-                raise HTTPException(status_code=400, detail=f"Duplicate column_key: {item.column_key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Duplicate column_key: {item.column_key}"
+                )
             seen.add(item.column_key)
 
         state = TableConfigurationService._default_state(definition)
@@ -348,10 +368,14 @@ class TableConfigurationService:
         if specified_keys:
             for key, config in state.items():
                 if key not in specified_keys:
-                    config["display_order"] = max_specified_order + 1 + config["display_order"]
+                    config["display_order"] = (
+                        max_specified_order + 1 + config["display_order"]
+                    )
 
         if not any(item["is_visible"] for item in state.values()):
-            raise HTTPException(status_code=400, detail="At least one column must be visible")
+            raise HTTPException(
+                status_code=400, detail="At least one column must be visible"
+            )
 
         normalized = sorted(state.items(), key=lambda kv: kv[1]["display_order"])
 
@@ -400,7 +424,9 @@ class TableConfigurationService:
                 continue
             field = field_map.get(key)
             if not field or not field.filterable:
-                raise HTTPException(status_code=400, detail=f"Invalid filter field: {key}")
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid filter field: {key}"
+                )
 
             if field.filter_resolver is not None:
                 query = field.filter_resolver(query, model, value)
@@ -411,7 +437,9 @@ class TableConfigurationService:
                 try:
                     value = SubscriberStatus(str(value))
                 except ValueError as exc:
-                    raise HTTPException(status_code=400, detail="Invalid status filter") from exc
+                    raise HTTPException(
+                        status_code=400, detail="Invalid status filter"
+                    ) from exc
             if isinstance(value, str) and "*" in value:
                 query = query.filter(expression.ilike(value.replace("*", "%")))
             else:
@@ -437,7 +465,9 @@ class TableConfigurationService:
         limit = int(request_params.get("limit", 50) or 50)
         offset = int(request_params.get("offset", 0) or 0)
         if limit < 1 or limit > 200:
-            raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+            raise HTTPException(
+                status_code=400, detail="limit must be between 1 and 200"
+            )
         if offset < 0:
             raise HTTPException(status_code=400, detail="offset must be >= 0")
 
@@ -456,7 +486,9 @@ class TableConfigurationService:
                 "code",
             ):
                 if hasattr(definition.model, field_name):
-                    search_columns.append(getattr(definition.model, field_name).ilike(like_term))
+                    search_columns.append(
+                        getattr(definition.model, field_name).ilike(like_term)
+                    )
             if search_columns:
                 query = query.filter(or_(*search_columns))
 
@@ -479,7 +511,9 @@ class TableConfigurationService:
             raise HTTPException(status_code=400, detail="Invalid sort field")
 
         sort_expression = sort_field.expression(definition.model)
-        query = query.order_by(sort_expression.desc() if sort_dir == "desc" else sort_expression.asc())
+        query = query.order_by(
+            sort_expression.desc() if sort_dir == "desc" else sort_expression.asc()
+        )
 
         query = query.offset(offset).limit(limit)
 
@@ -516,7 +550,9 @@ def _full_name_expression(model: type) -> Any:
 
 
 def _activation_state_expression(model: type) -> Any:
-    return case((model.is_active.is_(True), literal("active")), else_=literal("inactive"))
+    return case(
+        (model.is_active.is_(True), literal("active")), else_=literal("inactive")
+    )
 
 
 def _customer_type_expression(model: type) -> Any:

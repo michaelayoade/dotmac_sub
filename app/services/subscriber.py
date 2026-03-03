@@ -176,7 +176,9 @@ class Subscribers(ListResponseMixin):
                 setattr(subscriber, key, value)
             if category is not None:
                 subscriber.category = (
-                    category if isinstance(category, SubscriberCategory) else str(category)
+                    category
+                    if isinstance(category, SubscriberCategory)
+                    else str(category)
                 )
             if not subscriber.subscriber_number:
                 generated = numbering.generate_number(
@@ -287,7 +289,9 @@ class Subscribers(ListResponseMixin):
         if person_id:
             query = query.filter(Subscriber.id == coerce_uuid(person_id))
         if organization_id:
-            query = query.filter(Subscriber.organization_id == coerce_uuid(organization_id))
+            query = query.filter(
+                Subscriber.organization_id == coerce_uuid(organization_id)
+            )
         if subscriber_type:
             normalized = subscriber_type.strip().lower()
             if normalized == "person":
@@ -388,21 +392,24 @@ class Subscribers(ListResponseMixin):
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.is_active.is_(True))
             .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         # Count individuals (subscribers without organization)
         persons = (
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.organization_id.is_(None))
             .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         # Count organizations (subscribers with organization)
         organizations = (
             db.query(func.count(Subscriber.id))
             .filter(Subscriber.organization_id.is_not(None))
             .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         return {
             "total": total,
@@ -459,7 +466,8 @@ class Subscribers(ListResponseMixin):
 
         # New this month
         new_this_month = sum(
-            1 for s in all_subs
+            1
+            for s in all_subs
             if s.created_at is not None and s.created_at >= month_start
         )
 
@@ -478,7 +486,8 @@ class Subscribers(ListResponseMixin):
         # Churn rate: canceled in last 30 days / active at start of period
         thirty_days_ago = now - timedelta(days=30)
         churned_recent = sum(
-            1 for s in all_subs
+            1
+            for s in all_subs
             if (
                 getattr(s, "status", None) == SubStatus.canceled
                 and s.updated_at is not None
@@ -510,7 +519,8 @@ class Subscribers(ListResponseMixin):
                 year -= 1
             labels.append(calendar.month_abbr[month])
             count = sum(
-                1 for s in all_subs
+                1
+                for s in all_subs
                 if (
                     s.created_at is not None
                     and s.created_at.year == year
@@ -738,7 +748,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def get(db: Session, custom_field_id: str):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         return custom_field
 
     @staticmethod
@@ -773,7 +785,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def update(db: Session, custom_field_id: str, payload: SubscriberCustomFieldUpdate):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
@@ -789,7 +803,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def delete(db: Session, custom_field_id: str):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         custom_field.is_active = False
         db.commit()
 

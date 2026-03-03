@@ -19,6 +19,7 @@ from app.db import Base
 
 class ExternalEntityType(enum.Enum):
     """Entity types that can be synced with external systems."""
+
     subscriber = "subscriber"
     subscription = "subscription"
     invoice = "invoice"
@@ -64,7 +65,9 @@ class ExternalReference(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     connector_config = relationship("ConnectorConfig")

@@ -21,9 +21,7 @@ class NasDevices(ListResponseMixin):
                 db, SettingDomain.catalog, "default_nas_vendor"
             )
             if default_vendor:
-                data["vendor"] = validate_enum(
-                    default_vendor, NasVendor, "vendor"
-                )
+                data["vendor"] = validate_enum(default_vendor, NasVendor, "vendor")
         device = NasDevice(**data)
         db.add(device)
         db.commit()

@@ -4,6 +4,7 @@ MikroTik Bandwidth Poller
 High-frequency polling service that collects bandwidth samples from MikroTik
 devices using the RouterOS API and publishes them to a Redis stream.
 """
+
 import asyncio
 import logging
 import os
@@ -28,12 +29,17 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "1000"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
-POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in ("1", "true", "yes")
+POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 @dataclass
 class QueueStats:
     """Statistics for a single MikroTik queue."""
+
     name: str
     target: str
     rate_rx: int  # bytes per second
@@ -47,6 +53,7 @@ class QueueStats:
 @dataclass
 class BandwidthSample:
     """A single bandwidth sample to be published."""
+
     subscription_id: str
     nas_device_id: str
     queue_name: str
@@ -98,9 +105,7 @@ class MikroTikConnection:
             pool = self._pool
             if pool is None:
                 return False
-            self._connection = await loop.run_in_executor(
-                None, lambda: pool.get_api()
-            )
+            self._connection = await loop.run_in_executor(None, lambda: pool.get_api())
             self._last_connected = datetime.now(UTC)
             self._consecutive_failures = 0
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
@@ -130,8 +135,7 @@ class MikroTikConnection:
             # Try a simple command to verify connection
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
-                None,
-                lambda: conn.get_resource("/system/identity").get()
+                None, lambda: conn.get_resource("/system/identity").get()
             )
             return True
         except Exception:
@@ -154,8 +158,7 @@ class MikroTikConnection:
         try:
             loop = asyncio.get_event_loop()
             queues = await loop.run_in_executor(
-                None,
-                lambda: conn.get_resource("/queue/simple").get()
+                None, lambda: conn.get_resource("/queue/simple").get()
             )
 
             stats = []
@@ -165,16 +168,24 @@ class MikroTikConnection:
                 bytes_val = q.get("bytes", "0/0").split("/")
                 packets = q.get("packets", "0/0").split("/")
 
-                stats.append(QueueStats(
-                    name=q.get("name", ""),
-                    target=q.get("target", ""),
-                    rate_rx=int(rate[0]) if rate[0].isdigit() else 0,
-                    rate_tx=int(rate[1]) if len(rate) > 1 and rate[1].isdigit() else 0,
-                    bytes_rx=int(bytes_val[0]) if bytes_val[0].isdigit() else 0,
-                    bytes_tx=int(bytes_val[1]) if len(bytes_val) > 1 and bytes_val[1].isdigit() else 0,
-                    packets_rx=int(packets[0]) if packets[0].isdigit() else 0,
-                    packets_tx=int(packets[1]) if len(packets) > 1 and packets[1].isdigit() else 0,
-                ))
+                stats.append(
+                    QueueStats(
+                        name=q.get("name", ""),
+                        target=q.get("target", ""),
+                        rate_rx=int(rate[0]) if rate[0].isdigit() else 0,
+                        rate_tx=int(rate[1])
+                        if len(rate) > 1 and rate[1].isdigit()
+                        else 0,
+                        bytes_rx=int(bytes_val[0]) if bytes_val[0].isdigit() else 0,
+                        bytes_tx=int(bytes_val[1])
+                        if len(bytes_val) > 1 and bytes_val[1].isdigit()
+                        else 0,
+                        packets_rx=int(packets[0]) if packets[0].isdigit() else 0,
+                        packets_tx=int(packets[1])
+                        if len(packets) > 1 and packets[1].isdigit()
+                        else 0,
+                    )
+                )
 
             self._consecutive_failures = 0
             return stats
@@ -192,7 +203,7 @@ class MikroTikConnection:
         # Back off exponentially based on failures
         if self._consecutive_failures == 0:
             return True
-        backoff_seconds = 2 ** self._consecutive_failures
+        backoff_seconds = 2**self._consecutive_failures
         if backoff_seconds > 60:
             backoff_seconds = 60
         if self._last_connected:
@@ -374,14 +385,16 @@ class BandwidthPoller:
                 )
                 if subscription_id:
                     # Convert bytes/s to bits/s (multiply by 8)
-                    samples.append(BandwidthSample(
-                        subscription_id=str(subscription_id),
-                        nas_device_id=str(device_id),
-                        queue_name=qs.name,
-                        rx_bps=qs.rate_rx * 8,
-                        tx_bps=qs.rate_tx * 8,
-                        sample_at=sample_time,
-                    ))
+                    samples.append(
+                        BandwidthSample(
+                            subscription_id=str(subscription_id),
+                            nas_device_id=str(device_id),
+                            queue_name=qs.name,
+                            rx_bps=qs.rate_rx * 8,
+                            tx_bps=qs.rate_tx * 8,
+                            sample_at=sample_time,
+                        )
+                    )
 
         if samples:
             await self._publish_samples(samples)
@@ -402,9 +415,7 @@ class BandwidthPoller:
         self._running = True
         interval_seconds = self.poll_interval_ms / 1000.0
 
-        logger.info(
-            f"Starting bandwidth poller with {interval_seconds}s interval"
-        )
+        logger.info(f"Starting bandwidth poller with {interval_seconds}s interval")
 
         try:
             while self._running:

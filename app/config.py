@@ -20,10 +20,16 @@ class Settings:
     # Avatar settings
     avatar_upload_dir: str = os.getenv("AVATAR_UPLOAD_DIR", "static/avatars")
     base_upload_dir: str = os.getenv("BASE_UPLOAD_DIR", "uploads")
-    avatar_max_size_bytes: int = int(os.getenv("AVATAR_MAX_SIZE_BYTES", str(2 * 1024 * 1024)))  # 2MB
-    avatar_allowed_types: str = os.getenv("AVATAR_ALLOWED_TYPES", "image/jpeg,image/png,image/gif,image/webp")
+    avatar_max_size_bytes: int = int(
+        os.getenv("AVATAR_MAX_SIZE_BYTES", str(2 * 1024 * 1024))
+    )  # 2MB
+    avatar_allowed_types: str = os.getenv(
+        "AVATAR_ALLOWED_TYPES", "image/jpeg,image/png,image/gif,image/webp"
+    )
     avatar_url_prefix: str = os.getenv("AVATAR_URL_PREFIX", "/static/avatars")
-    export_jobs_base_dir: str = os.getenv("EXPORT_JOBS_BASE_DIR", "uploads/system_exports")
+    export_jobs_base_dir: str = os.getenv(
+        "EXPORT_JOBS_BASE_DIR", "uploads/system_exports"
+    )
 
     # Splynx MySQL sync settings (for incremental sync from remote Splynx DB)
     mysql_host: str = os.getenv("SPLYNX_MYSQL_HOST", "127.0.0.1")
@@ -33,7 +39,11 @@ class Settings:
     mysql_database: str = os.getenv("SPLYNX_MYSQL_DATABASE", "splynx")
 
     # Cookie security
-    secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() in ("true", "1", "yes")
+    secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
     # DEM settings
     dem_data_dir: str = os.getenv("DEM_DATA_DIR", "data/dem/srtm")

@@ -49,7 +49,10 @@ def parse_mast_form(
     fallback_lon: float | None,
 ) -> tuple[bool, dict[str, object] | None, str | None, dict[str, object]]:
     """Parse optional mast creation fields from form data."""
-    mast_enabled = _form_str(form, "create_mast") == "true" or _form_str(form, "add_mast") == "true"
+    mast_enabled = (
+        _form_str(form, "create_mast") == "true"
+        or _form_str(form, "add_mast") == "true"
+    )
     mast_is_active_raw = form.get("mast_is_active")
     mast_defaults: dict[str, object] = {
         "name": _form_str(form, "mast_name"),
@@ -61,7 +64,8 @@ def parse_mast_form(
         "status": _form_str(form, "mast_status") or "active",
         "notes": _form_str(form, "mast_notes"),
         "metadata": _form_str(form, "mast_metadata"),
-        "is_active": str(mast_is_active_raw).strip().lower() in {"true", "on", "1", "yes"},
+        "is_active": str(mast_is_active_raw).strip().lower()
+        in {"true", "on", "1", "yes"},
     }
     if not mast_enabled:
         return False, None, None, {**default_mast_context(), **mast_defaults}
@@ -88,7 +92,12 @@ def parse_mast_form(
     if lon is None:
         lon = fallback_lon
     if lat is None or lon is None:
-        return True, None, "Mast latitude and longitude are required (or set POP site coordinates).", mast_defaults
+        return (
+            True,
+            None,
+            "Mast latitude and longitude are required (or set POP site coordinates).",
+            mast_defaults,
+        )
 
     height_m, error = parse_float(str(mast_defaults["height_m"]), "Mast height")
     if error:
@@ -146,14 +155,20 @@ def _parse_optional_float(value: str, label: str) -> tuple[float | None, str | N
         return None, f"{label} must be a valid number."
 
 
-def validate_site_values(values: dict[str, object]) -> tuple[dict[str, object] | None, str | None]:
+def validate_site_values(
+    values: dict[str, object],
+) -> tuple[dict[str, object] | None, str | None]:
     """Validate and normalize POP site values."""
     if not values.get("name"):
         return None, "Site name is required"
-    latitude, error = _parse_optional_float(str(values.get("latitude_raw") or ""), "Latitude")
+    latitude, error = _parse_optional_float(
+        str(values.get("latitude_raw") or ""), "Latitude"
+    )
     if error:
         return None, error
-    longitude, error = _parse_optional_float(str(values.get("longitude_raw") or ""), "Longitude")
+    longitude, error = _parse_optional_float(
+        str(values.get("longitude_raw") or ""), "Longitude"
+    )
     if error:
         return None, error
     normalized = dict(values)
@@ -175,13 +190,19 @@ def resolve_site_relationships(
     values: dict[str, object],
 ) -> tuple[dict[str, object] | None, str | None]:
     normalized = dict(values)
-    zone_id, error = _parse_optional_uuid(str(values.get("zone_id_raw") or ""), "Location reference")
+    zone_id, error = _parse_optional_uuid(
+        str(values.get("zone_id_raw") or ""), "Location reference"
+    )
     if error:
         return None, error
-    organization_id, error = _parse_optional_uuid(str(values.get("organization_id_raw") or ""), "Organization")
+    organization_id, error = _parse_optional_uuid(
+        str(values.get("organization_id_raw") or ""), "Organization"
+    )
     if error:
         return None, error
-    reseller_id, error = _parse_optional_uuid(str(values.get("reseller_id_raw") or ""), "Partner")
+    reseller_id, error = _parse_optional_uuid(
+        str(values.get("reseller_id_raw") or ""), "Partner"
+    )
     if error:
         return None, error
 
@@ -200,9 +221,17 @@ def resolve_site_relationships(
 
 def form_reference_data(db: Session) -> dict[str, object]:
     return {
-        "zones": db.scalars(select(NetworkZone).where(NetworkZone.is_active.is_(True)).order_by(NetworkZone.name)).all(),
-        "organizations": db.scalars(select(Organization).order_by(Organization.name)).all(),
-        "resellers": db.scalars(select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name)).all(),
+        "zones": db.scalars(
+            select(NetworkZone)
+            .where(NetworkZone.is_active.is_(True))
+            .order_by(NetworkZone.name)
+        ).all(),
+        "organizations": db.scalars(
+            select(Organization).order_by(Organization.name)
+        ).all(),
+        "resellers": db.scalars(
+            select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name)
+        ).all(),
     }
 
 
@@ -276,7 +305,9 @@ def apply_site_update(pop_site: PopSite, values: dict[str, object]) -> None:
     pop_site.is_active = bool(values.get("is_active"))
 
 
-def commit_site_update(db: Session, pop_site: PopSite, values: dict[str, object]) -> None:
+def commit_site_update(
+    db: Session, pop_site: PopSite, values: dict[str, object]
+) -> None:
     """Apply values and commit POP site update."""
     apply_site_update(pop_site, values)
     db.flush()
@@ -382,7 +413,9 @@ def detail_page_data(db: Session, pop_site_id: str) -> dict[str, object] | None:
                     if subscriber
                     else "Unknown"
                 ),
-                "subscriber_number": subscriber.subscriber_number if subscriber else None,
+                "subscriber_number": subscriber.subscriber_number
+                if subscriber
+                else None,
                 "subscription_status": subscription.status.value.title()
                 if subscription.status
                 else "Unknown",
@@ -493,7 +526,9 @@ def get_site_file_or_none(db: Session, file_id: str) -> StoredFile | None:
     record = db.get(StoredFile, file_uuid)
     if not record or record.is_deleted:
         return None
-    if record.entity_type != "pop_site_photo" and not record.entity_type.startswith("pop_site_document_"):
+    if record.entity_type != "pop_site_photo" and not record.entity_type.startswith(
+        "pop_site_document_"
+    ):
         return None
     return record
 
@@ -546,7 +581,9 @@ def delete_contact(db: Session, *, pop_site_id: str, contact_id: str) -> bool:
     return True
 
 
-def maybe_create_mast(db: Session, pop_site_id: str, mast_data: dict[str, object] | None) -> None:
+def maybe_create_mast(
+    db: Session, pop_site_id: str, mast_data: dict[str, object] | None
+) -> None:
     """Create a wireless mast if payload is provided."""
     if not mast_data:
         return

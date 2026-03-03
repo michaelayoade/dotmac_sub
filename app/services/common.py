@@ -112,7 +112,9 @@ def apply_is_active_filter(query, model, is_active: bool | None):
     return query.filter(model.is_active == is_active)
 
 
-def get_or_404(db: Session, model: type[T], id: str, detail: str | None = None, **options) -> T:
+def get_or_404(
+    db: Session, model: type[T], id: str, detail: str | None = None, **options
+) -> T:
     """Get entity by ID or raise 404.
 
     Args:
@@ -131,8 +133,7 @@ def get_or_404(db: Session, model: type[T], id: str, detail: str | None = None, 
     entity = db.get(model, coerce_uuid(id), **options)
     if not entity:
         raise HTTPException(
-            status_code=404,
-            detail=detail or f"{model.__name__} not found"
+            status_code=404, detail=detail or f"{model.__name__} not found"
         )
     return entity
 

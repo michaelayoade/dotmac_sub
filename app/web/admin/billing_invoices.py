@@ -18,7 +18,6 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
-from app.services.billing import configuration as billing_config_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -26,6 +25,7 @@ router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -46,7 +46,9 @@ def _parse_uuid(value: str | None, field: str):
     return UUID(value)
 
 
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
+def _parse_decimal(
+    value: str | None, field: str, default: Decimal | None = None
+) -> Decimal:
     if value is None or value == "":
         if default is not None:
             return default
@@ -66,7 +68,11 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def billing_overview(
     request: Request,
     partner_id: str | None = Query(None),
@@ -82,6 +88,7 @@ def billing_overview(
 
     # Get sidebar stats and current user
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -98,7 +105,11 @@ def billing_overview(
     )
 
 
-@router.get("/invoices", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoices_list(
     request: Request,
     account_id: str | None = None,
@@ -148,6 +159,7 @@ def invoices_list(
 
     # Get sidebar stats and current user
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -162,7 +174,9 @@ def invoices_list(
     )
 
 
-@router.get("/invoices/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/export.csv", dependencies=[Depends(require_permission("billing:read"))]
+)
 def invoices_export_csv(
     request: Request,
     account_id: str | None = Query(None),
@@ -186,7 +200,9 @@ def invoices_export_csv(
         page=1,
         per_page=10000,
     )
-    content = web_billing_overview_service.render_invoices_csv(cast(list[Any], state["invoices"]))
+    content = web_billing_overview_service.render_invoices_csv(
+        cast(list[Any], state["invoices"])
+    )
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
@@ -194,7 +210,11 @@ def invoices_export_csv(
     )
 
 
-@router.get("/invoices/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get(
+    "/invoices/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_new(
     request: Request,
     account_id: str | None = Query(None),
@@ -207,6 +227,7 @@ def invoice_new(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/billing/invoice_form.html",
         {
@@ -225,7 +246,11 @@ def invoice_new(
     )
 
 
-@router.post("/invoices/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/create",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_create(
     request: Request,
     account_id: str | None = Form(None),
@@ -247,27 +272,29 @@ def invoice_create(
     db: Session = Depends(get_db),
 ):
     try:
-        invoice, resolved_account_id = web_billing_invoices_service.create_invoice_from_form(
-            db,
-            account_id=account_id,
-            customer_ref=customer_ref,
-            invoice_number=invoice_number,
-            status=status,
-            currency=currency,
-            issued_at=issued_at,
-            due_at=due_at,
-            memo=memo,
-            proforma_invoice=proforma_invoice,
-            line_description=line_description,
-            line_quantity=line_quantity,
-            line_unit_price=line_unit_price,
-            line_tax_rate_id=line_tax_rate_id,
-            line_items_json=line_items_json,
-            issue_immediately=issue_immediately,
-            send_notification=send_notification,
-            parse_uuid=_parse_uuid,
-            parse_datetime=_parse_datetime,
-            parse_decimal=_parse_decimal,
+        invoice, resolved_account_id = (
+            web_billing_invoices_service.create_invoice_from_form(
+                db,
+                account_id=account_id,
+                customer_ref=customer_ref,
+                invoice_number=invoice_number,
+                status=status,
+                currency=currency,
+                issued_at=issued_at,
+                due_at=due_at,
+                memo=memo,
+                proforma_invoice=proforma_invoice,
+                line_description=line_description,
+                line_quantity=line_quantity,
+                line_unit_price=line_unit_price,
+                line_tax_rate_id=line_tax_rate_id,
+                line_items_json=line_items_json,
+                issue_immediately=issue_immediately,
+                send_notification=send_notification,
+                parse_uuid=_parse_uuid,
+                parse_datetime=_parse_datetime,
+                parse_decimal=_parse_decimal,
+            )
         )
     except Exception as exc:
         state = web_billing_invoice_forms_service.new_form_state(
@@ -275,6 +302,7 @@ def invoice_create(
             account_id=locals().get("resolved_account_id") or account_id,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/billing/invoice_form.html",
             {
@@ -292,6 +320,7 @@ def invoice_create(
             status_code=400,
         )
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -302,10 +331,16 @@ def invoice_create(
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"invoice_number": invoice.invoice_number},
     )
-    return RedirectResponse(url=f"/admin/billing/invoices/{invoice.id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice.id}", status_code=303
+    )
 
 
-@router.get("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get(
+    "/invoices/{invoice_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_invoice_forms_service.edit_form_state(
         db,
@@ -318,6 +353,7 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/billing/invoice_form.html",
         {
@@ -334,7 +370,11 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
     )
 
 
-@router.post("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/{invoice_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_update(
     request: Request,
     invoice_id: UUID,
@@ -366,6 +406,7 @@ def invoice_update(
             parse_datetime=_parse_datetime,
         )
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -382,6 +423,7 @@ def invoice_update(
             invoice_id=str(invoice_id),
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/billing/invoice_form.html",
             {
@@ -399,15 +441,24 @@ def invoice_update(
             },
             status_code=400,
         )
-    return RedirectResponse(url=f"/admin/billing/invoices/{invoice_id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+    )
 
 
-@router.get("/invoices/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/search",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_search(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
 
 
-@router.get("/invoices/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/filter",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_filter(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
-

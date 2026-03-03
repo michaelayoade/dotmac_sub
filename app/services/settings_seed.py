@@ -641,7 +641,9 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "paystack"),
     )
-    payment_failover_enabled_raw = os.getenv("BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true")
+    payment_failover_enabled_raw = os.getenv(
+        "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
+    )
     billing_settings.ensure_by_key(
         db,
         key="payment_gateway_failover_enabled",
@@ -659,7 +661,9 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="payment_gateway_secondary_provider",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"),
+        value_text=os.getenv(
+            "BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"
+        ),
     )
     billing_settings.ensure_by_key(
         db,

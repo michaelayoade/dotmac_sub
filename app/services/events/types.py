@@ -119,6 +119,7 @@ class Event:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for JSON serialization."""
+
         def _serialize(value: Any) -> Any:
             if isinstance(value, UUID):
                 return str(value)
@@ -137,10 +138,16 @@ class Event:
             "payload": _serialize(self.payload),
             "context": {
                 "actor": self.actor,
-                "subscriber_id": str(self.subscriber_id) if self.subscriber_id else None,
+                "subscriber_id": str(self.subscriber_id)
+                if self.subscriber_id
+                else None,
                 "account_id": str(self.account_id) if self.account_id else None,
-                "subscription_id": str(self.subscription_id) if self.subscription_id else None,
+                "subscription_id": str(self.subscription_id)
+                if self.subscription_id
+                else None,
                 "invoice_id": str(self.invoice_id) if self.invoice_id else None,
-                "service_order_id": str(self.service_order_id) if self.service_order_id else None,
+                "service_order_id": str(self.service_order_id)
+                if self.service_order_id
+                else None,
             },
         }

@@ -446,9 +446,7 @@ def _subscriber_document_config() -> FileUploadConfig:
         allowed_extensions=frozenset(
             {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".doc", ".docx"}
         ),
-        max_size_bytes=int(
-            os.getenv("SUBSCRIBER_DOC_MAX_SIZE", str(10 * 1024 * 1024))
-        ),
+        max_size_bytes=int(os.getenv("SUBSCRIBER_DOC_MAX_SIZE", str(10 * 1024 * 1024))),
         require_magic_bytes=True,
         compute_checksum=True,
     )

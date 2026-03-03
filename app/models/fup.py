@@ -63,21 +63,13 @@ class FupPolicy(Base):
     )
 
     # Traffic accounting window
-    traffic_accounting_start: Mapped[time | None] = mapped_column(
-        Time, nullable=True
-    )
-    traffic_accounting_end: Mapped[time | None] = mapped_column(
-        Time, nullable=True
-    )
+    traffic_accounting_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    traffic_accounting_end: Mapped[time | None] = mapped_column(Time, nullable=True)
     traffic_inverse_interval: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Online time accounting window
-    online_accounting_start: Mapped[time | None] = mapped_column(
-        Time, nullable=True
-    )
-    online_accounting_end: Mapped[time | None] = mapped_column(
-        Time, nullable=True
-    )
+    online_accounting_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    online_accounting_end: Mapped[time | None] = mapped_column(Time, nullable=True)
     online_inverse_interval: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Days of week (stored as array of day numbers 0=Mon .. 6=Sun)
@@ -157,9 +149,7 @@ class FupRule(Base):
         nullable=False,
         default=FupAction.reduce_speed,
     )
-    speed_reduction_percent: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    speed_reduction_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

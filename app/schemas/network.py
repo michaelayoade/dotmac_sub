@@ -211,8 +211,13 @@ class IPAssignmentUpdate(BaseModel):
         fields_set = self.model_fields_set
         if {"ip_version", "ipv4_address_id", "ipv6_address_id"} & fields_set:
             if self.ip_version is None:
-                if self.ipv4_address_id is not None and self.ipv6_address_id is not None:
-                    raise ValueError("Provide only one of ipv4_address_id or ipv6_address_id.")
+                if (
+                    self.ipv4_address_id is not None
+                    and self.ipv6_address_id is not None
+                ):
+                    raise ValueError(
+                        "Provide only one of ipv4_address_id or ipv6_address_id."
+                    )
                 return self
             if self.ip_version == IPVersion.ipv4:
                 if not self.ipv4_address_id or self.ipv6_address_id is not None:

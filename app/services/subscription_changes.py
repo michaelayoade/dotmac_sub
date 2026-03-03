@@ -66,7 +66,9 @@ class SubscriptionChangeRequests(ListResponseMixin):
         existing = (
             db.query(SubscriptionChangeRequest)
             .filter(SubscriptionChangeRequest.subscription_id == subscription.id)
-            .filter(SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending)
+            .filter(
+                SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending
+            )
             .filter(SubscriptionChangeRequest.is_active.is_(True))
             .first()
         )
@@ -122,7 +124,8 @@ class SubscriptionChangeRequests(ListResponseMixin):
 
         if subscription_id:
             query = query.filter(
-                SubscriptionChangeRequest.subscription_id == coerce_uuid(subscription_id)
+                SubscriptionChangeRequest.subscription_id
+                == coerce_uuid(subscription_id)
             )
 
         if account_id:
@@ -149,7 +152,10 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 "status": SubscriptionChangeRequest.status,
             },
         )
-        return cast(list[SubscriptionChangeRequest], apply_pagination(query, limit, offset).all())
+        return cast(
+            list[SubscriptionChangeRequest],
+            apply_pagination(query, limit, offset).all(),
+        )
 
     @staticmethod
     def approve(

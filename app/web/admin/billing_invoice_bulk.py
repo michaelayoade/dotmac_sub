@@ -35,7 +35,9 @@ def _log_bulk_audit_events(
         )
 
 
-@router.post("/invoices/bulk/issue", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/bulk/issue", dependencies=[Depends(require_permission("billing:write"))]
+)
 def invoice_bulk_issue(
     request: Request,
     invoice_ids: str = Form(...),
@@ -61,7 +63,9 @@ def invoice_bulk_issue(
     return JSONResponse({"message": f"Issued {count} invoices", "count": count})
 
 
-@router.post("/invoices/bulk/send", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/bulk/send", dependencies=[Depends(require_permission("billing:write"))]
+)
 def invoice_bulk_send(
     request: Request,
     invoice_ids: str = Form(...),
@@ -84,10 +88,14 @@ def invoice_bulk_send(
         entity_ids=queued_ids,
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
     )
-    return JSONResponse({"message": f"Queued {count} invoice notifications", "count": count})
+    return JSONResponse(
+        {"message": f"Queued {count} invoice notifications", "count": count}
+    )
 
 
-@router.post("/invoices/bulk/void", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/bulk/void", dependencies=[Depends(require_permission("billing:write"))]
+)
 def invoice_bulk_void(
     request: Request,
     invoice_ids: str = Form(...),
@@ -113,7 +121,10 @@ def invoice_bulk_void(
     return JSONResponse({"message": f"Voided {count} invoices", "count": count})
 
 
-@router.post("/invoices/bulk/mark-paid", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/bulk/mark-paid",
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_bulk_mark_paid(
     request: Request,
     invoice_ids: str = Form(...),
@@ -139,7 +150,10 @@ def invoice_bulk_mark_paid(
     return JSONResponse({"message": f"Marked {count} invoices as paid", "count": count})
 
 
-@router.post("/invoices/bulk/generate-pdf", dependencies=[Depends(require_permission("billing:read"))])
+@router.post(
+    "/invoices/bulk/generate-pdf",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_bulk_generate_pdf(
     request: Request,
     invoice_ids: str = Form(...),
@@ -168,7 +182,10 @@ def invoice_bulk_generate_pdf(
     )
 
 
-@router.get("/invoices/bulk/pdf-ready", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/bulk/pdf-ready",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_bulk_pdf_ready(
     invoice_ids: str = Query(""),
     db: Session = Depends(get_db),
@@ -177,21 +194,31 @@ def invoice_bulk_pdf_ready(
     return JSONResponse(payload)
 
 
-@router.get("/invoices/bulk/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/bulk/export.csv",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_bulk_export_csv(
     invoice_ids: str = Query(""),
     db: Session = Depends(get_db),
 ):
     invoices = web_billing_invoice_bulk_service.list_invoices_by_ids(db, invoice_ids)
-    content = web_billing_overview_service.render_invoices_csv(cast(list[Any], invoices))
+    content = web_billing_overview_service.render_invoices_csv(
+        cast(list[Any], invoices)
+    )
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="invoices_selected_export.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="invoices_selected_export.csv"'
+        },
     )
 
 
-@router.get("/invoices/bulk/export.zip", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/bulk/export.zip",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_bulk_export_pdf_zip(
     invoice_ids: str = Query(""),
     db: Session = Depends(get_db),
@@ -200,5 +227,7 @@ def invoice_bulk_export_pdf_zip(
     return StreamingResponse(
         archive_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="invoices_selected_pdfs.zip"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="invoices_selected_pdfs.zip"'
+        },
     )

@@ -12,9 +12,11 @@ from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEn
 
 def get_webhooks_list_data(db: Session) -> dict[str, object]:
     """Return webhook endpoints and 24h delivery statistics."""
-    endpoints = db.execute(
-        select(WebhookEndpoint).order_by(WebhookEndpoint.created_at.desc())
-    ).scalars().all()
+    endpoints = (
+        db.execute(select(WebhookEndpoint).order_by(WebhookEndpoint.created_at.desc()))
+        .scalars()
+        .all()
+    )
 
     active_count = (
         db.scalar(

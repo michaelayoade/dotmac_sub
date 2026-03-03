@@ -15,6 +15,7 @@ router = APIRouter(prefix="/defaults", tags=["defaults"])
 
 class InvoiceDefaultsResponse(BaseModel):
     """Response model for invoice defaults."""
+
     currency: str
     payment_terms_days: int
     issued_at: str
@@ -24,6 +25,7 @@ class InvoiceDefaultsResponse(BaseModel):
 
 class CustomerDefaultsResponse(BaseModel):
     """Response model for customer defaults."""
+
     status: str
     is_active: bool
     country_code: str
@@ -35,6 +37,7 @@ class CustomerDefaultsResponse(BaseModel):
 
 class SubscriptionDefaultsResponse(BaseModel):
     """Response model for subscription defaults."""
+
     billing_cycle: str
     currency: str
     status: str
@@ -44,6 +47,7 @@ class SubscriptionDefaultsResponse(BaseModel):
 
 class CurrencySettingsResponse(BaseModel):
     """Response model for currency settings."""
+
     default_currency: str
     supported_currencies: list[str]
     decimal_places: int
@@ -51,12 +55,14 @@ class CurrencySettingsResponse(BaseModel):
 
 class DueDateCalculationRequest(BaseModel):
     """Request body for due date calculation."""
+
     issued_at: str | None = None
     payment_terms_days: int | None = None
 
 
 class DueDateCalculationResponse(BaseModel):
     """Response for due date calculation."""
+
     issued_at: str
     payment_terms_days: int
     due_at: str
@@ -64,8 +70,7 @@ class DueDateCalculationResponse(BaseModel):
 
 @router.get("/invoice", response_model=InvoiceDefaultsResponse)
 def get_invoice_defaults(
-    db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    db: Session = Depends(get_db), _user=Depends(require_user_auth)
 ):
     """
     Get default values for creating a new invoice.
@@ -80,9 +85,7 @@ def get_invoice_defaults(
 
 @router.get("/customer/{customer_type}", response_model=CustomerDefaultsResponse)
 def get_customer_defaults(
-    customer_type: str,
-    db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    customer_type: str, db: Session = Depends(get_db), _user=Depends(require_user_auth)
 ):
     """
     Get default values for creating a new customer.
@@ -102,8 +105,7 @@ def get_customer_defaults(
 
 @router.get("/subscription", response_model=SubscriptionDefaultsResponse)
 def get_subscription_defaults(
-    db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    db: Session = Depends(get_db), _user=Depends(require_user_auth)
 ):
     """
     Get default values for creating a new subscription.
@@ -117,8 +119,7 @@ def get_subscription_defaults(
 
 @router.get("/currency", response_model=CurrencySettingsResponse)
 def get_currency_settings(
-    db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    db: Session = Depends(get_db), _user=Depends(require_user_auth)
 ):
     """
     Get currency-related settings.
@@ -134,7 +135,7 @@ def get_currency_settings(
 def calculate_due_date(
     request: DueDateCalculationRequest,
     db: Session = Depends(get_db),
-    _user=Depends(require_user_auth)
+    _user=Depends(require_user_auth),
 ):
     """
     Calculate the due date based on issue date and payment terms.

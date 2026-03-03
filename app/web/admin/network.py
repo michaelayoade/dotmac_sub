@@ -12,7 +12,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -43,7 +45,9 @@ def devices_list(
 
 
 @router.get("/devices/search", response_class=HTMLResponse)
-def devices_search(request: Request, search: str = "", db: Session = Depends(get_db)) -> HTMLResponse:
+def devices_search(
+    request: Request, search: str = "", db: Session = Depends(get_db)
+) -> HTMLResponse:
     devices = web_network_core_devices_service.devices_search_data(db, search)
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
@@ -84,8 +88,12 @@ def device_create(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/devices/{device_id}", response_class=HTMLResponse)
-def device_detail(request: Request, device_id: str, db: Session = Depends(get_db)) -> Response:
-    redirect_url = web_network_core_devices_service.resolve_device_redirect(db, device_id)
+def device_detail(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+) -> Response:
+    redirect_url = web_network_core_devices_service.resolve_device_redirect(
+        db, device_id
+    )
     if redirect_url:
         return RedirectResponse(url=redirect_url, status_code=302)
 

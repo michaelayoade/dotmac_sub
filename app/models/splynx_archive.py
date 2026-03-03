@@ -59,9 +59,7 @@ class SplynxArchivedTicketMessage(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    splynx_message_id: Mapped[int] = mapped_column(
-        Integer, unique=True, nullable=False
-    )
+    splynx_message_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("splynx_archived_tickets.id"),
@@ -89,9 +87,7 @@ class SplynxArchivedQuote(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    splynx_quote_id: Mapped[int] = mapped_column(
-        Integer, unique=True, nullable=False
-    )
+    splynx_quote_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )

@@ -2,12 +2,10 @@
 
 import ipaddress
 import logging
-from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
@@ -23,56 +21,22 @@ from app.models.network import (
     IPVersion,
 )
 from app.models.provisioning import (
-    AppointmentStatus,
-    InstallAppointment,
-    ProvisioningRun,
-    ProvisioningRunStatus,
-    ProvisioningStep,
-    ProvisioningStepType,
-    ProvisioningTask,
     ProvisioningVendor,
     ProvisioningWorkflow,
     ServiceOrder,
-    ServiceOrderStatus,
-    ServiceStateTransition,
-    TaskStatus,
 )
 from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import IPAssignmentCreate
-from app.schemas.provisioning import (
-    InstallAppointmentCreate,
-    InstallAppointmentUpdate,
-    ProvisioningRunCreate,
-    ProvisioningRunStart,
-    ProvisioningRunUpdate,
-    ProvisioningStepCreate,
-    ProvisioningStepUpdate,
-    ProvisioningTaskCreate,
-    ProvisioningTaskUpdate,
-    ProvisioningWorkflowCreate,
-    ProvisioningWorkflowUpdate,
-    ServiceOrderCreate,
-    ServiceOrderUpdate,
-    ServiceStateTransitionCreate,
-    ServiceStateTransitionUpdate,
-)
 from app.services import network as network_service
 from app.services import settings_spec
 from app.services.common import (
-    apply_ordering,
-    apply_pagination,
     coerce_uuid,
     validate_enum,
 )
-from app.services.crud import CRUDManager
-from app.services.events import emit_event
-from app.services.events.types import EventType
-from app.services.provisioning_adapters import get_provisioner
-from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.secrets import resolve_secret
-from app.validators import provisioning as provisioning_validators
 
 logger = logging.getLogger(__name__)
+
 
 def _resolve_connector_context(db: Session, config: dict | None) -> dict | None:
     if not config:
@@ -119,7 +83,9 @@ def _parse_ip_value(
     try:
         return ipaddress.ip_address(value)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"{label} must be a valid IP address.") from exc
+        raise HTTPException(
+            status_code=400, detail=f"{label} must be a valid IP address."
+        ) from exc
 
 
 def _pool_prefix_length(pool: IpPool | None) -> int | None:
@@ -236,13 +202,25 @@ def _ensure_ip_assignment_for_version(
     override_pool_id = context.get(f"{version_key}_pool_id")
 
     if assignment:
-        address = assignment.ipv4_address if ip_version == IPVersion.ipv4 else assignment.ipv6_address
-        if override_address_id and address and str(address.id) != str(override_address_id):
+        address = (
+            assignment.ipv4_address
+            if ip_version == IPVersion.ipv4
+            else assignment.ipv6_address
+        )
+        if (
+            override_address_id
+            and address
+            and str(address.id) != str(override_address_id)
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"{version_key} address override does not match existing assignment.",
             )
-        if override_address_value and address and address.address != override_address_value:
+        if (
+            override_address_value
+            and address
+            and address.address != override_address_value
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"{version_key} address override does not match existing assignment.",
@@ -271,7 +249,9 @@ def _ensure_ip_assignment_for_version(
                 detail=f"{version_key} address override does not match address_id.",
             )
         if not address:
-            address = _get_or_create_address_by_value(db, ip_version, manual_value, pool)
+            address = _get_or_create_address_by_value(
+                db, ip_version, manual_value, pool
+            )
 
     if not address:
         if not pool:
@@ -302,7 +282,9 @@ def _ensure_ip_assignment_for_version(
             ip_version=ip_version,
             ipv4_address_id=address.id if ip_version == IPVersion.ipv4 else None,
             ipv6_address_id=address.id if ip_version == IPVersion.ipv6 else None,
-            prefix_length=_pool_prefix_length(pool_to_use := (cast(IpPool | None, address.pool) or pool)),
+            prefix_length=_pool_prefix_length(
+                pool_to_use := (cast(IpPool | None, address.pool) or pool)
+            ),
             gateway=pool_to_use.gateway if pool_to_use else None,
             dns_primary=pool_to_use.dns_primary if pool_to_use else None,
             dns_secondary=pool_to_use.dns_secondary if pool_to_use else None,
@@ -400,7 +382,11 @@ def _extend_provisioning_context(
                 "tr069_acs_server_id": str(tr069_device.acs_server_id),
             }
         )
-        if tr069_device.oui and tr069_device.product_class and tr069_device.serial_number:
+        if (
+            tr069_device.oui
+            and tr069_device.product_class
+            and tr069_device.serial_number
+        ):
             context["genieacs_device_id"] = (
                 f"{tr069_device.oui}-{tr069_device.product_class}-{tr069_device.serial_number}"
             )
@@ -439,12 +425,12 @@ def resolve_workflow_for_service_order(
         except HTTPException:
             logger.warning("Invalid provisioning default_vendor setting value.")
             vendor = None
-    query = db.query(ProvisioningWorkflow).filter(ProvisioningWorkflow.is_active.is_(True))
+    query = db.query(ProvisioningWorkflow).filter(
+        ProvisioningWorkflow.is_active.is_(True)
+    )
     if vendor:
         query = query.filter(ProvisioningWorkflow.vendor == vendor)
     return cast(
         ProvisioningWorkflow | None,
         query.order_by(ProvisioningWorkflow.created_at.asc()).first(),
     )
-
-

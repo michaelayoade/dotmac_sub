@@ -173,7 +173,9 @@ async def csrf_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Check if path needs CSRF protection
-    needs_protection = any(path.startswith(protected) for protected in _CSRF_PROTECTED_PATHS)
+    needs_protection = any(
+        path.startswith(protected) for protected in _CSRF_PROTECTED_PATHS
+    )
 
     if not needs_protection:
         return await call_next(request)
@@ -199,22 +201,30 @@ async def csrf_middleware(request: Request, call_next):
 
         if not cookie_token:
             # No CSRF cookie - reject request
-            return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+            return _csrf_forbidden(
+                "CSRF token missing. Please refresh the page and try again."
+            )
 
         # Check header first (for HTMX/fetch requests)
         header_token = request.headers.get(CSRF_HEADER_NAME)
         if header_token:
             if not secrets.compare_digest(cookie_token, header_token):
-                return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                return _csrf_forbidden(
+                    "CSRF token invalid. Please refresh the page and try again."
+                )
         else:
             # For form submissions, check form data
             content_type = request.headers.get("content-type", "")
-            if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            if (
+                "application/x-www-form-urlencoded" in content_type
+                or "multipart/form-data" in content_type
+            ):
                 # Read body and check token
                 body = await request.body()
 
                 # Parse form data to get CSRF token
                 from urllib.parse import parse_qs
+
                 form_token: str | None = None
                 try:
                     if "multipart/form-data" in content_type:
@@ -223,12 +233,13 @@ async def csrf_middleware(request: Request, call_next):
                         import re
                         from email.parser import BytesParser
                         from email.policy import HTTP
-                        boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
+
+                        boundary_match = re.search(r"boundary=([^\s;]+)", content_type)
                         if boundary_match:
                             boundary = boundary_match.group(1).strip('"')
                             # Construct a valid MIME message for parsing
                             mime_header = f"Content-Type: multipart/form-data; boundary={boundary}\r\n\r\n"
-                            mime_message = mime_header.encode('utf-8') + body
+                            mime_message = mime_header.encode("utf-8") + body
 
                             parser = BytesParser(policy=HTTP)
                             msg = parser.parsebytes(mime_message)
@@ -243,29 +254,40 @@ async def csrf_middleware(request: Request, call_next):
                                     ):
                                         payload = part.get_payload(decode=True)
                                         if isinstance(payload, (bytes, bytearray)):
-                                            form_token = payload.decode("utf-8", errors="ignore").strip()
+                                            form_token = payload.decode(
+                                                "utf-8", errors="ignore"
+                                            ).strip()
                                             break
                                         if isinstance(payload, str) and payload.strip():
                                             form_token = payload.strip()
                                             break
                     else:
-                        form_data = parse_qs(body.decode('utf-8'))
+                        form_data = parse_qs(body.decode("utf-8"))
                         form_token = form_data.get("_csrf_token", [None])[0]
 
                     if not form_token:
-                        return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+                        return _csrf_forbidden(
+                            "CSRF token missing. Please refresh the page and try again."
+                        )
                     if not secrets.compare_digest(cookie_token, form_token):
-                        return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                        return _csrf_forbidden(
+                            "CSRF token invalid. Please refresh the page and try again."
+                        )
                 except Exception:
-                    return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                    return _csrf_forbidden(
+                        "CSRF token invalid. Please refresh the page and try again."
+                    )
 
                 # Reconstruct request with body for downstream handlers
                 async def receive():
                     return {"type": "http.request", "body": body}
+
                 request = Request(scope=request.scope, receive=receive)
             else:
                 # Non-form state-changing requests must use header token.
-                return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+                return _csrf_forbidden(
+                    "CSRF token missing. Please refresh the page and try again."
+                )
 
     response = await call_next(request)
 
@@ -349,6 +371,7 @@ def _to_list(setting: DomainSetting, upper: bool) -> set[str] | list[str]:
 def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
     return any(path.startswith(prefix) for prefix in skip_paths)
 
+
 def _include_api_router(router, dependencies=None):
     app.include_router(router, prefix="/api/v1", dependencies=dependencies)
 
@@ -367,10 +390,18 @@ _include_api_router(search_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(domains_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_provisioning_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_monitoring_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_network_access_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_network_fiber_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(
+    domains_provisioning_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(
+    domains_monitoring_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(
+    domains_network_access_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(
+    domains_network_fiber_router, dependencies=[Depends(require_user_auth)]
+)
 _include_api_router(domains_usage_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(imports_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(audit_router)
@@ -454,6 +485,7 @@ def _start_jobs():
 @app.on_event("startup")
 async def _start_websocket_manager():
     from app.websocket.manager import get_connection_manager
+
     manager = get_connection_manager()
     await manager.connect()
 
@@ -461,5 +493,6 @@ async def _start_websocket_manager():
 @app.on_event("shutdown")
 async def _stop_websocket_manager():
     from app.websocket.manager import get_connection_manager
+
     manager = get_connection_manager()
     await manager.disconnect()

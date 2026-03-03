@@ -32,9 +32,7 @@ router = APIRouter(prefix="/qualification", tags=["qualification"])
     response_model=CoverageAreaRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_coverage_area(
-    payload: CoverageAreaCreate, db: Session = Depends(get_db)
-):
+def create_coverage_area(payload: CoverageAreaCreate, db: Session = Depends(get_db)):
     return qualification_service.coverage_areas.create(db, payload)
 
 
@@ -98,9 +96,7 @@ def check_service_qualification(
     "/checks/{qualification_id}",
     response_model=ServiceQualificationRead,
 )
-def get_service_qualification(
-    qualification_id: str, db: Session = Depends(get_db)
-):
+def get_service_qualification(qualification_id: str, db: Session = Depends(get_db)):
     return qualification_service.service_qualifications.get(db, qualification_id)
 
 

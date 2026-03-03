@@ -1,6 +1,5 @@
 """Admin catalog management web routes."""
 
-
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -24,8 +23,11 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "catalog") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "catalog"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -37,6 +39,7 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
 
 def _get_actor_id(request: Request) -> str | None:
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     return str(current_user.get("subscriber_id")) if current_user else None
 
@@ -95,7 +98,9 @@ def catalog_offers(
 
 
 @router.get("/offers/create", response_class=HTMLResponse)
-def catalog_offers_create(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offers_create(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     offer = web_catalog_offers_service.default_offer_form()
     context = _base_context(request, db, active_page="catalog")
     context.update(web_catalog_offers_service.offer_form_context(db, offer))
@@ -140,7 +145,9 @@ def catalog_offers_create_post(
 
 
 @router.get("/offers/{offer_id}", response_class=HTMLResponse)
-def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offer_detail(
+    request: Request, offer_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         offer = catalog_service.offers.get(db=db, offer_id=offer_id)
     except Exception:
@@ -171,27 +178,35 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
         limit=50,
         offset=0,
     )
-    plan_meta, cleaned_description = web_catalog_offers_service.parse_offer_description_metadata(
-        offer.description
+    plan_meta, cleaned_description = (
+        web_catalog_offers_service.parse_offer_description_metadata(offer.description)
     )
-    plan_kind = str(plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD)
+    plan_kind = str(
+        plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD
+    )
     ip_block_size = plan_meta.get("ip_block_size")
 
     context = _base_context(request, db, active_page="catalog")
-    context.update({
-        "offer": offer,
-        "offer_clean_description": cleaned_description,
-        "offer_plan_kind": plan_kind,
-        "offer_ip_block_size": ip_block_size,
-        "prices": prices,
-        "subscriptions": subscriptions,
-        "activities": build_audit_activities(db, "catalog_offer", str(offer_id), limit=10),
-    })
+    context.update(
+        {
+            "offer": offer,
+            "offer_clean_description": cleaned_description,
+            "offer_plan_kind": plan_kind,
+            "offer_ip_block_size": ip_block_size,
+            "prices": prices,
+            "subscriptions": subscriptions,
+            "activities": build_audit_activities(
+                db, "catalog_offer", str(offer_id), limit=10
+            ),
+        }
+    )
     return templates.TemplateResponse("admin/catalog/offer_detail.html", context)
 
 
 @router.get("/offers/{offer_id}/edit", response_class=HTMLResponse)
-def catalog_offer_edit(request: Request, offer_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offer_edit(
+    request: Request, offer_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         offer = catalog_service.offers.get(db=db, offer_id=offer_id)
     except Exception:
@@ -238,7 +253,9 @@ def catalog_offer_edit_post(
     error = web_catalog_offers_service.validate_offer_form(offer_data)
     if error:
         context = _base_context(request, db, active_page="catalog")
-        context.update(web_catalog_offers_service.offer_form_context(db, offer_data, error))
+        context.update(
+            web_catalog_offers_service.offer_form_context(db, offer_data, error)
+        )
         context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
         return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
@@ -392,9 +409,7 @@ def offer_usage_graph_modal(
         "offer_id": offer_id,
         "graph": graph_data,
     }
-    return templates.TemplateResponse(
-        "admin/catalog/_plan_graph_modal.html", context
-    )
+    return templates.TemplateResponse("admin/catalog/_plan_graph_modal.html", context)
 
 
 @router.get(
@@ -433,14 +448,18 @@ def catalog_subscriptions(
 
 
 @router.get("/subscriptions/new", response_class=HTMLResponse)
-def catalog_subscription_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_subscription_new(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     account_id = request.query_params.get("account_id", "").strip()
     subscriber_id = request.query_params.get("subscriber_id", "").strip()
     subscription = web_catalog_subscriptions_service.default_subscription_form(
         account_id, subscriber_id
     )
     context = _base_context(request, db, active_page="subscriptions")
-    context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
+    context.update(
+        web_catalog_subscriptions_service.subscription_form_context(db, subscription)
+    )
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -460,9 +479,13 @@ def catalog_subscription_create(
     if error:
         context = _base_context(request, db, active_page="subscriptions")
         context.update(
-            web_catalog_subscriptions_service.subscription_form_context(db, subscription, error)
+            web_catalog_subscriptions_service.subscription_form_context(
+                db, subscription, error
+            )
         )
-        return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+        return templates.TemplateResponse(
+            "admin/catalog/subscription_form.html", context
+        )
 
     payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
 
@@ -472,7 +495,9 @@ def catalog_subscription_create(
             db, payload_data, form, request, actor_id
         )
         if subscriber_id:
-            return RedirectResponse(f"/admin/subscribers/{subscriber_id}", status_code=303)
+            return RedirectResponse(
+                f"/admin/subscribers/{subscriber_id}", status_code=303
+            )
         return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
     except ValidationError as exc:
         error = exc.errors()[0]["msg"]
@@ -508,8 +533,12 @@ def catalog_subscription_edit(
 
     subscription = web_catalog_subscriptions_service.edit_form_data(subscription_obj)
     context = _base_context(request, db, active_page="subscriptions")
-    context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
-    context["activities"] = build_audit_activities(db, "subscription", str(subscription_id))
+    context.update(
+        web_catalog_subscriptions_service.subscription_form_context(db, subscription)
+    )
+    context["activities"] = build_audit_activities(
+        db, "subscription", str(subscription_id)
+    )
     context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
@@ -535,7 +564,9 @@ def catalog_subscription_detail(
     context.update(
         {
             "subscription": subscription,
-            "activities": build_audit_activities(db, "subscription", str(subscription_id)),
+            "activities": build_audit_activities(
+                db, "subscription", str(subscription_id)
+            ),
         }
     )
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
@@ -557,10 +588,14 @@ def catalog_subscription_update(
     if error:
         context = _base_context(request, db, active_page="subscriptions")
         context.update(
-            web_catalog_subscriptions_service.subscription_form_context(db, subscription, error)
+            web_catalog_subscriptions_service.subscription_form_context(
+                db, subscription, error
+            )
         )
         context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
-        return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+        return templates.TemplateResponse(
+            "admin/catalog/subscription_form.html", context
+        )
 
     payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
 
@@ -585,7 +620,10 @@ def catalog_subscription_update(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
-@router.post("/subscriptions/bulk/activate", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/activate",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_activate(
     request: Request,
     subscription_ids: str = Form(...),
@@ -604,7 +642,10 @@ def subscription_bulk_activate(
     return JSONResponse({"message": f"Activated {count} subscriptions", "count": count})
 
 
-@router.post("/subscriptions/bulk/suspend", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/suspend",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_suspend(
     request: Request,
     subscription_ids: str = Form(...),
@@ -623,7 +664,10 @@ def subscription_bulk_suspend(
     return JSONResponse({"message": f"Suspended {count} subscriptions", "count": count})
 
 
-@router.post("/subscriptions/bulk/cancel", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_cancel(
     request: Request,
     subscription_ids: str = Form(...),
@@ -671,9 +715,7 @@ def bulk_tariff_change_page(
     """Bulk tariff change wizard."""
     context = _base_context(request, db, active_page="catalog")
     context.update(web_bulk_tariff_change_service.page_context(request, db))
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)
 
 
 @router.post(
@@ -688,12 +730,8 @@ def bulk_tariff_change_preview(
 ) -> HTMLResponse:
     """Preview bulk tariff change results."""
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_bulk_tariff_change_service.preview_context(request, db, form)
-    )
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    context.update(web_bulk_tariff_change_service.preview_context(request, db, form))
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)
 
 
 @router.post(
@@ -708,9 +746,5 @@ def bulk_tariff_change_execute(
 ) -> HTMLResponse:
     """Execute the bulk tariff change."""
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_bulk_tariff_change_service.execute_context(request, db, form)
-    )
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    context.update(web_bulk_tariff_change_service.execute_context(request, db, form))
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)

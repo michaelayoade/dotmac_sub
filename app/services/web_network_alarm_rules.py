@@ -78,7 +78,9 @@ def parse_form_values(form) -> AlarmRuleFormValues:
     }
 
 
-def validate_form_values(values: AlarmRuleFormValues) -> tuple[AlarmRuleNormalized | None, str | None]:
+def validate_form_values(
+    values: AlarmRuleFormValues,
+) -> tuple[AlarmRuleNormalized | None, str | None]:
     """Validate/normalize alarm-rule form fields."""
     threshold_raw = values["threshold_raw"]
     duration_raw = values["duration_raw"]

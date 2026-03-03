@@ -42,7 +42,8 @@ def parse_speedtest_form(form) -> dict[str, object]:
         "subscription_id": str(form.get("subscription_id") or "").strip() or None,
         "network_device_id": str(form.get("network_device_id") or "").strip() or None,
         "pop_site_id": str(form.get("pop_site_id") or "").strip() or None,
-        "source": str(form.get("source") or SpeedTestSource.manual.value).strip() or SpeedTestSource.manual.value,
+        "source": str(form.get("source") or SpeedTestSource.manual.value).strip()
+        or SpeedTestSource.manual.value,
         "target_label": str(form.get("target_label") or "").strip() or None,
         "provider": str(form.get("provider") or "").strip() or None,
         "server_name": str(form.get("server_name") or "").strip() or None,
@@ -75,9 +76,18 @@ def speedtest_form_snapshot(values: dict[str, object]) -> dict[str, object]:
 
 
 def speedtest_form_reference_data(db: Session) -> dict[str, object]:
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
-    subscriptions = db.query(Subscription).order_by(Subscription.created_at.desc()).limit(500).all()
-    devices = db.query(NetworkDevice).order_by(NetworkDevice.name.asc()).limit(500).all()
+    subscribers = (
+        db.query(Subscriber)
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(500)
+        .all()
+    )
+    subscriptions = (
+        db.query(Subscription).order_by(Subscription.created_at.desc()).limit(500).all()
+    )
+    devices = (
+        db.query(NetworkDevice).order_by(NetworkDevice.name.asc()).limit(500).all()
+    )
     pop_sites = db.query(PopSite).order_by(PopSite.name.asc()).limit(500).all()
     return {
         "subscribers": subscribers,
@@ -90,10 +100,19 @@ def speedtest_form_reference_data(db: Session) -> dict[str, object]:
 
 def create_speedtest(db: Session, values: dict[str, object]) -> SpeedTestResult:
     payload = dict(values)
-    for field in ("subscriber_id", "subscription_id", "network_device_id", "pop_site_id"):
+    for field in (
+        "subscriber_id",
+        "subscription_id",
+        "network_device_id",
+        "pop_site_id",
+    ):
         if payload.get(field):
             payload[field] = coerce_uuid(str(payload[field]))
-    payload["source"] = validate_enum(str(payload.get("source") or SpeedTestSource.manual.value), SpeedTestSource, "source")
+    payload["source"] = validate_enum(
+        str(payload.get("source") or SpeedTestSource.manual.value),
+        SpeedTestSource,
+        "source",
+    )
     payload["download_mbps"] = float(payload.get("download_mbps") or 0)
     payload["upload_mbps"] = float(payload.get("upload_mbps") or 0)
     item = SpeedTestResult(**payload)
@@ -198,13 +217,17 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
 
     by_plan: dict[str, dict[str, float]] = {}
     by_location: dict[str, dict[str, float]] = {}
-    by_hour: dict[int, dict[str, float]] = {hour: {"download": 0.0, "upload": 0.0, "count": 0} for hour in range(24)}
+    by_hour: dict[int, dict[str, float]] = {
+        hour: {"download": 0.0, "upload": 0.0, "count": 0} for hour in range(24)
+    }
 
     for item in results:
         plan_name = "Unknown Plan"
         if item.subscription and item.subscription.offer:
             plan_name = item.subscription.offer.name
-        slot = by_plan.setdefault(plan_name, {"download": 0.0, "upload": 0.0, "count": 0})
+        slot = by_plan.setdefault(
+            plan_name, {"download": 0.0, "upload": 0.0, "count": 0}
+        )
         slot["download"] += float(item.download_mbps or 0)
         slot["upload"] += float(item.upload_mbps or 0)
         slot["count"] += 1
@@ -214,7 +237,9 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
             location = item.pop_site.name
         elif item.subscriber and item.subscriber.city:
             location = item.subscriber.city
-        loc_slot = by_location.setdefault(location, {"download": 0.0, "upload": 0.0, "count": 0})
+        loc_slot = by_location.setdefault(
+            location, {"download": 0.0, "upload": 0.0, "count": 0}
+        )
         loc_slot["download"] += float(item.download_mbps or 0)
         loc_slot["upload"] += float(item.upload_mbps or 0)
         loc_slot["count"] += 1
@@ -232,7 +257,9 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
             "avg_download": round(values["download"] / max(1, values["count"]), 2),
             "avg_upload": round(values["upload"] / max(1, values["count"]), 2),
         }
-        for name, values in sorted(by_plan.items(), key=lambda entry: entry[1]["count"], reverse=True)
+        for name, values in sorted(
+            by_plan.items(), key=lambda entry: entry[1]["count"], reverse=True
+        )
     ]
     location_rows = [
         {
@@ -241,14 +268,20 @@ def analytics_page_data(db: Session, *, days: int = 30) -> dict[str, object]:
             "avg_download": round(values["download"] / max(1, values["count"]), 2),
             "avg_upload": round(values["upload"] / max(1, values["count"]), 2),
         }
-        for name, values in sorted(by_location.items(), key=lambda entry: entry[1]["count"], reverse=True)
+        for name, values in sorted(
+            by_location.items(), key=lambda entry: entry[1]["count"], reverse=True
+        )
     ]
     hourly_rows = [
         {
             "hour": hour,
             "count": int(by_hour[hour]["count"]),
-            "avg_download": round(by_hour[hour]["download"] / max(1, by_hour[hour]["count"]), 2),
-            "avg_upload": round(by_hour[hour]["upload"] / max(1, by_hour[hour]["count"]), 2),
+            "avg_download": round(
+                by_hour[hour]["download"] / max(1, by_hour[hour]["count"]), 2
+            ),
+            "avg_upload": round(
+                by_hour[hour]["upload"] / max(1, by_hour[hour]["count"]), 2
+            ),
         }
         for hour in range(24)
     ]
@@ -304,11 +337,15 @@ def list_page_data(
 
     subscriber_filter = str(subscriber_id or "").strip()
     if subscriber_filter:
-        query = query.filter(SpeedTestResult.subscriber_id == coerce_uuid(subscriber_filter))
+        query = query.filter(
+            SpeedTestResult.subscriber_id == coerce_uuid(subscriber_filter)
+        )
 
     device_filter = str(network_device_id or "").strip()
     if device_filter:
-        query = query.filter(SpeedTestResult.network_device_id == coerce_uuid(device_filter))
+        query = query.filter(
+            SpeedTestResult.network_device_id == coerce_uuid(device_filter)
+        )
 
     pop_filter = str(pop_site_id or "").strip()
     if pop_filter:
@@ -316,7 +353,10 @@ def list_page_data(
 
     source_filter = str(source or "").strip().lower()
     if source_filter:
-        query = query.filter(SpeedTestResult.source == validate_enum(source_filter, SpeedTestSource, "source"))
+        query = query.filter(
+            SpeedTestResult.source
+            == validate_enum(source_filter, SpeedTestSource, "source")
+        )
 
     if date_from:
         try:
@@ -336,8 +376,10 @@ def list_page_data(
     search_q = str(search or "").strip().lower()
     if search_q:
         items = [
-            item for item in items
-            if search_q in " ".join(
+            item
+            for item in items
+            if search_q
+            in " ".join(
                 [
                     str(item.target_label or ""),
                     str(item.provider or ""),
@@ -351,13 +393,29 @@ def list_page_data(
         ]
 
     total = len(items)
-    avg_download = round(sum(float(item.download_mbps or 0) for item in items) / total, 2) if total else 0
-    avg_upload = round(sum(float(item.upload_mbps or 0) for item in items) / total, 2) if total else 0
-    avg_latency = round(
-        sum(float(item.latency_ms or 0) for item in items if item.latency_ms is not None)
-        / max(1, sum(1 for item in items if item.latency_ms is not None)),
-        2,
-    ) if total else 0
+    avg_download = (
+        round(sum(float(item.download_mbps or 0) for item in items) / total, 2)
+        if total
+        else 0
+    )
+    avg_upload = (
+        round(sum(float(item.upload_mbps or 0) for item in items) / total, 2)
+        if total
+        else 0
+    )
+    avg_latency = (
+        round(
+            sum(
+                float(item.latency_ms or 0)
+                for item in items
+                if item.latency_ms is not None
+            )
+            / max(1, sum(1 for item in items if item.latency_ms is not None)),
+            2,
+        )
+        if total
+        else 0
+    )
 
     return {
         "results": items,
@@ -391,7 +449,9 @@ def count_underperforming_connections(items: list[SpeedTestResult]) -> int:
         plan_up = float(offer.speed_upload_mbps or 0)
         if plan_down <= 0 and plan_up <= 0:
             continue
-        down_ratio = (float(item.download_mbps or 0) / plan_down) if plan_down > 0 else 1.0
+        down_ratio = (
+            (float(item.download_mbps or 0) / plan_down) if plan_down > 0 else 1.0
+        )
         up_ratio = (float(item.upload_mbps or 0) / plan_up) if plan_up > 0 else 1.0
         if min(down_ratio, up_ratio) < 0.8:
             underperforming += 1

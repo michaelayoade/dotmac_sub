@@ -75,15 +75,21 @@ def _fetch_running_config(olt: OLTDevice) -> str | None:
             if error_indication or error_status:
                 continue
             for var_bind in var_binds:
-                lines.append(f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}")
+                lines.append(
+                    f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}"
+                )
 
         return "\n".join(lines) + "\n"
 
     except ImportError:
-        logger.warning("pysnmp not installed — skipping SNMP config fetch for %s", olt.name)
+        logger.warning(
+            "pysnmp not installed — skipping SNMP config fetch for %s", olt.name
+        )
         return None
     except Exception as e:
-        logger.error("Failed to fetch config from OLT %s (%s): %s", olt.name, olt.mgmt_ip, e)
+        logger.error(
+            "Failed to fetch config from OLT %s (%s): %s", olt.name, olt.mgmt_ip, e
+        )
         return None
 
 

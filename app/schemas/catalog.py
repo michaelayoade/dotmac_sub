@@ -924,6 +924,7 @@ class OfferValidationResponse(BaseModel):
 # NAS CONFIG BACKUP SCHEMAS
 # =============================================================================
 
+
 class NasConfigBackupBase(BaseModel):
     nas_device_id: UUID
     config_content: str
@@ -956,6 +957,7 @@ class NasConfigBackupRead(NasConfigBackupBase):
 # =============================================================================
 # PROVISIONING TEMPLATE SCHEMAS
 # =============================================================================
+
 
 class ProvisioningTemplateBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
@@ -1004,6 +1006,7 @@ class ProvisioningTemplateRead(ProvisioningTemplateBase):
 # =============================================================================
 # PROVISIONING LOG SCHEMAS
 # =============================================================================
+
 
 class ProvisioningLogBase(BaseModel):
     nas_device_id: UUID | None = None

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -39,13 +39,13 @@ def create_subscriber_credential(
     subscriber = cast(
         Subscriber,
         subscriber_service.subscribers.create(
-        db=db,
-        payload=SubscriberCreate(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            is_active=True,
-        ),
+            db=db,
+            payload=SubscriberCreate(
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                is_active=True,
+            ),
         ),
     )
     credential_payload = UserCredentialCreate(
@@ -87,16 +87,21 @@ def create_reseller_user_link(
         if not subscriber:
             raise
         subscriber.reseller_id = reseller_id
-        subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+        subscriber.user_type = getattr(
+            type(subscriber.user_type), "reseller", subscriber.user_type
+        )
         db.flush()
-        return cast(ResellerUser, SimpleNamespace(
-            id=subscriber.id,
-            reseller_id=reseller_id,
-            subscriber_id=subscriber.id,
-            person_id=subscriber.id,
-            is_active=True,
-            created_at=subscriber.created_at,
-        ))
+        return cast(
+            ResellerUser,
+            SimpleNamespace(
+                id=subscriber.id,
+                reseller_id=reseller_id,
+                subscriber_id=subscriber.id,
+                person_id=subscriber.id,
+                is_active=True,
+                created_at=subscriber.created_at,
+            ),
+        )
 
 
 def create_reseller_with_user(
@@ -170,15 +175,18 @@ def list_reseller_users(
     )
     links: list[ResellerUser] = []
     for subscriber in subscribers:
-        link = cast(ResellerUser, SimpleNamespace(
-            id=subscriber.id,
-            reseller_id=subscriber.reseller_id,
-            subscriber_id=subscriber.id,
-            person_id=subscriber.id,
-            is_active=subscriber.is_active,
-            created_at=subscriber.created_at,
-            person=subscriber,
-        ))
+        link = cast(
+            ResellerUser,
+            SimpleNamespace(
+                id=subscriber.id,
+                reseller_id=subscriber.reseller_id,
+                subscriber_id=subscriber.id,
+                person_id=subscriber.id,
+                is_active=subscriber.is_active,
+                created_at=subscriber.created_at,
+                person=subscriber,
+            ),
+        )
         links.append(link)
     return links
 
@@ -246,10 +254,16 @@ def link_existing_subscriber_to_reseller(
     subscriber = db.get(Subscriber, s_uuid)
     if not subscriber:
         return False
-    if subscriber.reseller_id == r_uuid and str(getattr(subscriber.user_type, "value", subscriber.user_type)) == "reseller":
+    if (
+        subscriber.reseller_id == r_uuid
+        and str(getattr(subscriber.user_type, "value", subscriber.user_type))
+        == "reseller"
+    ):
         return False
     subscriber.reseller_id = r_uuid
-    subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+    subscriber.user_type = getattr(
+        type(subscriber.user_type), "reseller", subscriber.user_type
+    )
     db.commit()
     return True
 

@@ -41,9 +41,7 @@ def _calculate_end_date(
         return end_date
 
 
-def _calculate_next_due_date(
-    current_date: date, frequency: PaymentFrequency
-) -> date:
+def _calculate_next_due_date(current_date: date, frequency: PaymentFrequency) -> date:
     """Calculate the next due date based on frequency."""
     if frequency == PaymentFrequency.weekly:
         return current_date + timedelta(weeks=1)
@@ -149,7 +147,9 @@ class PaymentArrangements(ListResponseMixin):
             end_date=end_date,
             next_due_date=start_date,
             status=ArrangementStatus.pending,
-            requested_by_person_id=coerce_uuid(requested_by_person_id) if requested_by_person_id else None,
+            requested_by_person_id=coerce_uuid(requested_by_person_id)
+            if requested_by_person_id
+            else None,
             notes=notes,
         )
         db.add(arrangement)
@@ -229,7 +229,9 @@ class PaymentArrangements(ListResponseMixin):
                 "status": PaymentArrangement.status,
             },
         )
-        return cast(list[PaymentArrangement], apply_pagination(query, limit, offset).all())
+        return cast(
+            list[PaymentArrangement], apply_pagination(query, limit, offset).all()
+        )
 
     @staticmethod
     def approve(
@@ -300,9 +302,7 @@ class PaymentArrangements(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Installment not found")
 
         if installment.status == InstallmentStatus.paid:
-            raise HTTPException(
-                status_code=400, detail="Installment already paid"
-            )
+            raise HTTPException(status_code=400, detail="Installment already paid")
 
         now = datetime.now(UTC)
         installment.status = InstallmentStatus.paid
@@ -318,7 +318,10 @@ class PaymentArrangements(ListResponseMixin):
         next_installment = (
             db.query(PaymentArrangementInstallment)
             .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
-            .filter(PaymentArrangementInstallment.installment_number == installment.installment_number + 1)
+            .filter(
+                PaymentArrangementInstallment.installment_number
+                == installment.installment_number + 1
+            )
             .first()
         )
         if next_installment:
@@ -368,7 +371,9 @@ class PaymentArrangements(ListResponseMixin):
             overdue_count = (
                 db.query(PaymentArrangementInstallment)
                 .filter(PaymentArrangementInstallment.arrangement_id == arrangement.id)
-                .filter(PaymentArrangementInstallment.status == InstallmentStatus.overdue)
+                .filter(
+                    PaymentArrangementInstallment.status == InstallmentStatus.overdue
+                )
                 .count()
             )
             if overdue_count >= 2 and arrangement.status == ArrangementStatus.active:
@@ -401,7 +406,10 @@ class PaymentArrangements(ListResponseMixin):
         if not arrangement:
             raise HTTPException(status_code=404, detail="Payment arrangement not found")
 
-        if arrangement.status in (ArrangementStatus.completed, ArrangementStatus.canceled):
+        if arrangement.status in (
+            ArrangementStatus.completed,
+            ArrangementStatus.canceled,
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot cancel arrangement with status {arrangement.status.value}",
@@ -409,7 +417,9 @@ class PaymentArrangements(ListResponseMixin):
 
         arrangement.status = ArrangementStatus.canceled
         if notes:
-            arrangement.notes = (arrangement.notes + "\n" + notes) if arrangement.notes else notes
+            arrangement.notes = (
+                (arrangement.notes + "\n" + notes) if arrangement.notes else notes
+            )
 
         db.commit()
         db.refresh(arrangement)
@@ -438,7 +448,8 @@ class PaymentArrangementInstallments(ListResponseMixin):
 
         if arrangement_id:
             query = query.filter(
-                PaymentArrangementInstallment.arrangement_id == coerce_uuid(arrangement_id)
+                PaymentArrangementInstallment.arrangement_id
+                == coerce_uuid(arrangement_id)
             )
 
         if status:

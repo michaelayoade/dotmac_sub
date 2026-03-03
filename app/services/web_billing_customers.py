@@ -24,7 +24,12 @@ def subscriber_label(subscriber: Subscriber | None) -> str:
     if getattr(subscriber, "organization", None):
         return subscriber.organization.name or "Subscriber"
     name = " ".join(
-        part for part in [getattr(subscriber, "first_name", ""), getattr(subscriber, "last_name", "")] if part
+        part
+        for part in [
+            getattr(subscriber, "first_name", ""),
+            getattr(subscriber, "last_name", ""),
+        ]
+        if part
     )
     return name or getattr(subscriber, "display_name", None) or "Subscriber"
 
@@ -41,7 +46,11 @@ def customer_label(db: Session, customer_ref: str | None) -> str | None:
         else:
             subscriber = db.get(Subscriber, ref_id)
             if subscriber:
-                label = " ".join(part for part in [subscriber.first_name, subscriber.last_name] if part)
+                label = " ".join(
+                    part
+                    for part in [subscriber.first_name, subscriber.last_name]
+                    if part
+                )
                 return label or None
     except Exception:
         return None

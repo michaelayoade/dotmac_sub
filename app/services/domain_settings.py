@@ -138,7 +138,12 @@ class DomainSettings(ListResponseMixin):
         key: str,
         value_type: SettingValueType,
         value_text: str | None = None,
-        value_json: dict[str, Any] | builtins.list[Any] | bool | int | str | None = None,
+        value_json: dict[str, Any]
+        | builtins.list[Any]
+        | bool
+        | int
+        | str
+        | None = None,
         is_secret: bool = False,
     ):
         if not self.domain:

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # Permission key format: domain:action or domain:entity:action
 # Each part: starts with lowercase letter, contains only lowercase letters, numbers, underscores
-PERMISSION_KEY_PATTERN = re.compile(r'^[a-z][a-z0-9_]*(?:[:.][a-z][a-z0-9_]*){1,2}$')
+PERMISSION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:[:.][a-z][a-z0-9_]*){1,2}$")
 
 
 class RoleBase(BaseModel):
@@ -40,14 +40,14 @@ class PermissionBase(BaseModel):
     description: str | None = None
     is_active: bool = True
 
-    @field_validator('key')
+    @field_validator("key")
     @classmethod
     def validate_key_format(cls, v: str) -> str:
         if not PERMISSION_KEY_PATTERN.match(v):
             raise ValueError(
-                'Permission key must be in format domain:action or domain:entity:action '
-                '(e.g., billing:read, customer:invoice:create). '
-                'Each part must start with a lowercase letter and contain only lowercase letters, numbers, and underscores.'
+                "Permission key must be in format domain:action or domain:entity:action "
+                "(e.g., billing:read, customer:invoice:create). "
+                "Each part must start with a lowercase letter and contain only lowercase letters, numbers, and underscores."
             )
         return v
 
@@ -68,14 +68,14 @@ class PermissionUpdate(BaseModel):
     description: str | None = None
     is_active: bool | None = None
 
-    @field_validator('key')
+    @field_validator("key")
     @classmethod
     def validate_key_format(cls, v: str | None) -> str | None:
         if v is not None and not PERMISSION_KEY_PATTERN.match(v):
             raise ValueError(
-                'Permission key must be in format domain:action or domain:entity:action '
-                '(e.g., billing:read, customer:invoice:create). '
-                'Each part must start with a lowercase letter and contain only lowercase letters, numbers, and underscores.'
+                "Permission key must be in format domain:action or domain:entity:action "
+                "(e.g., billing:read, customer:invoice:create). "
+                "Each part must start with a lowercase letter and contain only lowercase letters, numbers, and underscores."
             )
         return v
 

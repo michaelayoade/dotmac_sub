@@ -59,7 +59,9 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
         customer_name = subscriber.organization.name or "Customer"
     else:
         full_name = f"{getattr(subscriber, 'first_name', '')} {getattr(subscriber, 'last_name', '')}".strip()
-        customer_name = full_name or getattr(subscriber, "display_name", None) or "Customer"
+        customer_name = (
+            full_name or getattr(subscriber, "display_name", None) or "Customer"
+        )
 
     features = [
         {
@@ -96,7 +98,10 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
             features.append(
                 {
                     "type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [fdh.longitude, fdh.latitude]},
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [fdh.longitude, fdh.latitude],
+                    },
                     "properties": {
                         "type": "fdh_cabinet",
                         "name": fdh.name,
@@ -243,7 +248,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 Decimal(str(getattr(inv, "balance_due", 0) or 0))
                 for inv in invoices
                 if inv.status
-                in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+                in (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
             )
             credit_notes = billing_service.credit_notes.list(
                 db=db,
@@ -259,7 +268,8 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             available_credit = sum(
                 Decimal(str(note.total or 0)) - Decimal(str(note.applied_total or 0))
                 for note in credit_notes
-                if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+                if note.status
+                in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
             )
             current_balance = balance_due + available_credit
     except Exception:
@@ -311,7 +321,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     channels = (
         db.query(SubscriberChannel)
         .filter(SubscriberChannel.subscriber_id == subscriber_id)
-        .order_by(SubscriberChannel.is_primary.desc(), SubscriberChannel.created_at.asc())
+        .order_by(
+            SubscriberChannel.is_primary.desc(), SubscriberChannel.created_at.asc()
+        )
         .all()
     )
     contacts: list[dict[str, object]] = []
@@ -394,12 +406,20 @@ def build_subscriber_timeline(db: Session, subscriber_id):
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
     timeline = []
     for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        )
         metadata = getattr(event, "metadata_", None) or {}
         comment_text = str(metadata.get("comment") or "").strip()
         is_todo = bool(metadata.get("is_todo"))
@@ -409,7 +429,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
         if comment_text:
             detail = f"{actor_name} · {comment_text}"
         else:
-            detail = actor_name if not change_summary else f"{actor_name} · {change_summary}"
+            detail = (
+                actor_name if not change_summary else f"{actor_name} · {change_summary}"
+            )
         timeline.append(
             {
                 "id": str(event.id),
@@ -463,7 +485,9 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
     return {
         "subscriber": subscriber,
         **detail_snapshot,
-        "billing_config": _build_billing_config(subscriber, detail_snapshot.get("stats") or {}),
+        "billing_config": _build_billing_config(
+            subscriber, detail_snapshot.get("stats") or {}
+        ),
         "subscriber_user_access": subscriber_user_access,
         "timeline": timeline,
         "offers": offers,
@@ -483,7 +507,9 @@ def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
     next_block_label = "No block scheduled"
     balance_due = float(stats.get("balance_due") or 0)
     if balance_due > 0:
-        delay_days = max(blocking_days, int(getattr(subscriber, "grace_period_days", 0) or 0))
+        delay_days = max(
+            blocking_days, int(getattr(subscriber, "grace_period_days", 0) or 0)
+        )
         next_block_at = datetime.now(UTC) + timedelta(days=delay_days)
         if delay_days <= 0:
             next_block_label = "Immediately"

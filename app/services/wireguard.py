@@ -64,7 +64,7 @@ def _sanitize_interface_name(name: str, max_len: int = 15) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()
     if not slug:
         slug = "wg"
-    return f"wg-{slug[:max_len - 3]}"
+    return f"wg-{slug[: max_len - 3]}"
 
 
 def _get_default_vpn_address(db: Session) -> str:
@@ -358,7 +358,9 @@ class WireGuardServerService:
         )
 
     @staticmethod
-    def to_read_schema(server: WireGuardServer, db: Session | None = None) -> WireGuardServerRead:
+    def to_read_schema(
+        server: WireGuardServer, db: Session | None = None
+    ) -> WireGuardServerRead:
         """Convert model to read schema."""
         peer_count = 0
         if db:
@@ -480,7 +482,11 @@ class WireGuardPeerService:
             )
         if server.vpn_address_v6:
             peer_address_v6 = _allocate_peer_address(
-                db, server, server.vpn_address_v6, payload.peer_address_v6, "peer_address_v6"
+                db,
+                server,
+                server.vpn_address_v6,
+                payload.peer_address_v6,
+                "peer_address_v6",
             )
 
         # Set allowed_ips to peer address if not provided
@@ -590,13 +596,16 @@ class WireGuardPeerService:
                 detail="IPv6 address provided but server has no IPv6 VPN address.",
             )
         if "allowed_ips" in update_data:
-            update_data["allowed_ips"] = _normalize_allowed_ips(update_data["allowed_ips"])
+            update_data["allowed_ips"] = _normalize_allowed_ips(
+                update_data["allowed_ips"]
+            )
 
         for key, value in update_data.items():
             setattr(peer, key, value)
 
         if "metadata_" in update_data:
             from sqlalchemy.orm.attributes import flag_modified
+
             flag_modified(peer, "metadata_")
 
         db.commit()
@@ -611,6 +620,7 @@ class WireGuardPeerService:
     def _auto_deploy(db: Session, server: WireGuardServer) -> None:
         """Auto-deploy WireGuard config if enabled for this server."""
         import logging
+
         logger = logging.getLogger(__name__)
 
         # Check if auto_deploy is enabled
@@ -623,6 +633,7 @@ class WireGuardPeerService:
 
         try:
             from app.services.wireguard_system import WireGuardSystemService
+
             success, msg = WireGuardSystemService.deploy_server(db, server.id)
             if not success:
                 logger.warning(f"Auto-deploy failed: {msg}")
@@ -693,7 +704,9 @@ class WireGuardPeerService:
 
         # Normalise for safe comparisons in callers/tests.
         if peer.provision_token_expires_at is None:
-            raise HTTPException(status_code=500, detail="Provision token expiry missing")
+            raise HTTPException(
+                status_code=500, detail="Provision token expiry missing"
+            )
         return token, _ensure_utc_aware(peer.provision_token_expires_at)
 
     @staticmethod
@@ -788,11 +801,13 @@ class WireGuardPeerService:
         if peer.persistent_keepalive and peer.persistent_keepalive > 0:
             lines.append(f"PersistentKeepalive = {peer.persistent_keepalive}")
 
-        lines.extend([
-            "",
-            "# Your interface settings:",
-            f"# Address = {peer.peer_address}",
-        ])
+        lines.extend(
+            [
+                "",
+                "# Your interface settings:",
+                f"# Address = {peer.peer_address}",
+            ]
+        )
         if peer.peer_address_v6:
             lines.append(f"# Address (IPv6) = {peer.peer_address_v6}")
         if server.mtu:
@@ -810,7 +825,9 @@ class WireGuardPeerService:
         )
 
     @staticmethod
-    def generate_peer_config(db: Session, peer_id: str | uuid.UUID) -> WireGuardPeerConfig:
+    def generate_peer_config(
+        db: Session, peer_id: str | uuid.UUID
+    ) -> WireGuardPeerConfig:
         """Generate WireGuard configuration file for a peer.
 
         Returns:
@@ -853,11 +870,13 @@ class WireGuardPeerService:
             lines.append(f"MTU = {server.mtu}")
 
         # Build [Peer] section (server as peer)
-        lines.extend([
-            "",
-            "[Peer]",
-            f"PublicKey = {server.public_key}",
-        ])
+        lines.extend(
+            [
+                "",
+                "[Peer]",
+                f"PublicKey = {server.public_key}",
+            ]
+        )
 
         # Add preshared key if present
         if peer.preshared_key:
@@ -896,7 +915,9 @@ class WireGuardPeerService:
         )
 
     @staticmethod
-    def to_read_schema(peer: WireGuardPeer, db: Session | None = None) -> WireGuardPeerRead:
+    def to_read_schema(
+        peer: WireGuardPeer, db: Session | None = None
+    ) -> WireGuardPeerRead:
         """Convert model to read schema."""
         server_name = None
 
@@ -939,7 +960,9 @@ class MikroTikScriptService:
     """Service for generating MikroTik RouterOS 7 WireGuard scripts."""
 
     @staticmethod
-    def generate_script(db: Session, peer_id: str | uuid.UUID) -> MikroTikScriptResponse:
+    def generate_script(
+        db: Session, peer_id: str | uuid.UUID
+    ) -> MikroTikScriptResponse:
         """Generate a RouterOS 7 script to configure WireGuard on a MikroTik device.
 
         The script:
@@ -1029,67 +1052,81 @@ class MikroTikScriptService:
             "}",
         ]
         if peer.peer_address_v6:
-            script_lines.extend([
+            script_lines.extend(
+                [
+                    "",
+                    "# Add IPv6 address",
+                    f":if ([:len [/ipv6/address/find interface={iface_name}]] = 0) do={{",
+                    f'    /ipv6/address/add address="{peer.peer_address_v6}" interface="{iface_name}"',
+                    "}",
+                ]
+            )
+        script_lines.extend(
+            [
                 "",
-                "# Add IPv6 address",
-                f":if ([:len [/ipv6/address/find interface={iface_name}]] = 0) do={{",
-                f'    /ipv6/address/add address="{peer.peer_address_v6}" interface="{iface_name}"',
+                "# Add server as peer",
+                f":local serverPeer [/interface/wireguard/peers/find interface={iface_name}]",
+                ":if ([:len $serverPeer] > 0) do={",
+                "    /interface/wireguard/peers/remove $serverPeer",
                 "}",
-            ])
-        script_lines.extend([
-            "",
-            "# Add server as peer",
-            f":local serverPeer [/interface/wireguard/peers/find interface={iface_name}]",
-            ":if ([:len $serverPeer] > 0) do={",
-            "    /interface/wireguard/peers/remove $serverPeer",
-            "}",
-            "",
-            "/interface/wireguard/peers/add \\",
-            f'    interface="{iface_name}" \\',
-            f'    public-key="{server.public_key}" \\',
-            f'    endpoint-address="{host}" \\',
-            f"    endpoint-port={port} \\",
-            f'    allowed-address="{",".join(allowed_addresses)}" \\',
-            f"    persistent-keepalive={peer.persistent_keepalive}s"
-            + (' \\' if preshared_key else ''),
-        ])
+                "",
+                "/interface/wireguard/peers/add \\",
+                f'    interface="{iface_name}" \\',
+                f'    public-key="{server.public_key}" \\',
+                f'    endpoint-address="{host}" \\',
+                f"    endpoint-port={port} \\",
+                f'    allowed-address="{",".join(allowed_addresses)}" \\',
+                f"    persistent-keepalive={peer.persistent_keepalive}s"
+                + (" \\" if preshared_key else ""),
+            ]
+        )
 
         if preshared_key:
             script_lines.append(f'    preshared-key="{preshared_key}"')
 
-        script_lines.extend([
-            "",
-            "# Enable interface",
-            f'/interface/wireguard/enable [find name="{iface_name}"]',
-            "",
-            "# Add static routes via WireGuard interface",
-        ])
+        script_lines.extend(
+            [
+                "",
+                "# Enable interface",
+                f'/interface/wireguard/enable [find name="{iface_name}"]',
+                "",
+                "# Add static routes via WireGuard interface",
+            ]
+        )
 
         # Add route for each allowed address (VPN network + server LAN if configured)
         for idx, addr in enumerate(allowed_addresses):
             if ":" in addr:
-                script_lines.extend([
-                    f':local route6_{idx} [/ipv6/route/find where dst-address="{addr}"]',
-                    f":if ([:len $route6_{idx}] = 0) do={{",
-                    f'    /ipv6/route/add dst-address="{addr}" gateway="{iface_name}"',
-                    "}",
-                ])
+                script_lines.extend(
+                    [
+                        f':local route6_{idx} [/ipv6/route/find where dst-address="{addr}"]',
+                        f":if ([:len $route6_{idx}] = 0) do={{",
+                        f'    /ipv6/route/add dst-address="{addr}" gateway="{iface_name}"',
+                        "}",
+                    ]
+                )
             else:
-                script_lines.extend([
-                    f':local route{idx} [/ip/route/find where dst-address="{addr}"]',
-                    f":if ([:len $route{idx}] = 0) do={{",
-                    f'    /ip/route/add dst-address="{addr}" gateway="{iface_name}"',
-                    "}",
-                ])
+                script_lines.extend(
+                    [
+                        f':local route{idx} [/ip/route/find where dst-address="{addr}"]',
+                        f":if ([:len $route{idx}] = 0) do={{",
+                        f'    /ip/route/add dst-address="{addr}" gateway="{iface_name}"',
+                        "}",
+                    ]
+                )
 
         script_lines.append("")
-        script_lines.append(f':log info "WireGuard interface {iface_name} configured successfully"')
-        script_lines.extend([
-            "",
-            "# Verify configuration",
-            f'/interface/wireguard/print where name="{iface_name}"',
-            f"/interface/wireguard/peers/print where interface={iface_name}",
-        ])
+        script_lines.append(
+            f':log info "WireGuard interface {iface_name} configured successfully"'
+        )
+        script_lines.extend(
+            [
+                "",
+                "# Verify configuration",
+                f'/interface/wireguard/print where name="{iface_name}"',
+                f"/interface/wireguard/peers/print where interface={iface_name}",
+            ]
+        )
 
         script_content = "\n".join(script_lines) + "\n"
         filename = f"wg-{iface_name}-mikrotik.rsc"
@@ -1235,7 +1272,7 @@ class WireGuardConnectionLogService:
             int,
             db.query(WireGuardConnectionLog)
             .filter(WireGuardConnectionLog.connected_at < cutoff)
-            .delete(synchronize_session=False)
+            .delete(synchronize_session=False),
         )
         db.commit()
         return result
@@ -1264,6 +1301,7 @@ class RouterSyncService:
 
         if not password:
             import os
+
             password = os.environ.get("WIREGUARD_ROUTER_API_PASSWORD")
 
         if not password:
@@ -1318,12 +1356,13 @@ class RouterSyncService:
                     allowed_addresses.append(peer.peer_address)
                 if peer.peer_address_v6:
                     allowed_addresses.append(peer.peer_address_v6)
-            allowed_address_value = ",".join(allowed_addresses) if allowed_addresses else ""
+            allowed_address_value = (
+                ",".join(allowed_addresses) if allowed_addresses else ""
+            )
 
             # Check if peer already exists (by public key)
             existing = peers_resource.get(
-                interface=conn["interface_name"],
-                **{"public-key": peer.public_key}
+                interface=conn["interface_name"], **{"public-key": peer.public_key}
             )
 
             if existing:
@@ -1334,7 +1373,7 @@ class RouterSyncService:
                     **{
                         "allowed-address": allowed_address_value,
                         "comment": peer.name,
-                    }
+                    },
                 )
                 pool.disconnect()
                 return True, f"Peer updated on router (id={peer_id})"
@@ -1346,7 +1385,7 @@ class RouterSyncService:
                         "public-key": peer.public_key,
                         "allowed-address": allowed_address_value,
                         "comment": peer.name,
-                    }
+                    },
                 )
                 pool.disconnect()
                 return True, "Peer added to router"
@@ -1390,8 +1429,7 @@ class RouterSyncService:
 
             # Find peer by public key
             existing = peers_resource.get(
-                interface=conn["interface_name"],
-                **{"public-key": peer.public_key}
+                interface=conn["interface_name"], **{"public-key": peer.public_key}
             )
 
             if existing:
@@ -1409,7 +1447,9 @@ class RouterSyncService:
             return False, f"Failed to remove peer from router: {e}"
 
     @staticmethod
-    def sync_all_peers(db: Session, server_id: str | uuid.UUID) -> list[tuple[str, bool, str]]:
+    def sync_all_peers(
+        db: Session, server_id: str | uuid.UUID
+    ) -> list[tuple[str, bool, str]]:
         """Sync all peers for a server to the router.
 
         Returns:

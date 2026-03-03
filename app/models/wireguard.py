@@ -48,7 +48,9 @@ class WireGuardServer(Base):
     description: Mapped[str | None] = mapped_column(Text)
 
     # WireGuard interface settings
-    interface_name: Mapped[str] = mapped_column(String(32), default="wg0")  # Linux interface name
+    interface_name: Mapped[str] = mapped_column(
+        String(32), default="wg0"
+    )  # Linux interface name
     listen_port: Mapped[int] = mapped_column(Integer, default=51820)
 
     # Server keypair (private key may be encrypted at rest)

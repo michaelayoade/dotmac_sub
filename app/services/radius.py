@@ -187,7 +187,10 @@ class RadiusClients(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": RadiusClient.created_at, "client_ip": RadiusClient.client_ip},
+            {
+                "created_at": RadiusClient.created_at,
+                "client_ip": RadiusClient.client_ip,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -298,15 +301,24 @@ def _external_sync_users(
             if not subscription:
                 continue
             username = credential.username
-            conn.execute(text(f"DELETE FROM {radcheck} WHERE username = :u"), {"u": username})  # noqa: S608
-            conn.execute(text(f"DELETE FROM {radreply} WHERE username = :u"), {"u": username})  # noqa: S608
+            conn.execute(
+                text(f"DELETE FROM {radcheck} WHERE username = :u"),  # noqa: S608
+                {"u": username},
+            )
+            conn.execute(
+                text(f"DELETE FROM {radreply} WHERE username = :u"),  # noqa: S608
+                {"u": username},
+            )
             if use_group:
                 conn.execute(
-                    text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}  # noqa: S608
+                    text(f"DELETE FROM {radusergroup} WHERE username = :u"),  # noqa: S608
+                    {"u": username},
                 )
             if credential.secret_hash:
                 conn.execute(
-                    text(f"INSERT INTO {radcheck} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
+                    text(
+                        f"INSERT INTO {radcheck} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"  # noqa: S608
+                    ),
                     {
                         "u": username,
                         "attr": password_attr,
@@ -326,13 +338,17 @@ def _external_sync_users(
 
             if use_group and profile:
                 conn.execute(
-                    text(f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"),  # noqa: S608
+                    text(
+                        f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"  # noqa: S608
+                    ),
                     {"u": username, "g": profile.name, "p": group_priority},
                 )
 
             # Build connection-type-aware RADIUS reply attributes
             reply_attrs = build_radius_reply_attributes(
-                db, subscription, profile=profile,
+                db,
+                subscription,
+                profile=profile,
             )
             seen: set[str] = set()
             for attr_dict in reply_attrs:
@@ -341,7 +357,9 @@ def _external_sync_users(
                     continue
                 seen.add(attr_key)
                 conn.execute(
-                    text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
+                    text(
+                        f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"  # noqa: S608
+                    ),
                     {
                         "u": username,
                         "attr": attr_dict["attribute"],
@@ -374,11 +392,15 @@ def _external_sync_nas(
                 {"ip": device.ip_address},
             )
             conn.execute(
-                text(f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"),  # noqa: S608
+                text(
+                    f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"  # noqa: S608
+                ),
                 {
                     "ip": device.ip_address,
                     "name": device.name,
-                    "type": device.vendor.value if hasattr(device.vendor, "value") else "other",
+                    "type": device.vendor.value
+                    if hasattr(device.vendor, "value")
+                    else "other",
                     "secret": secret,
                     "desc": device.description,
                 },
@@ -430,7 +452,9 @@ class RadiusSyncJobs(ListResponseMixin):
         if payload.connector_config_id:
             config = db.get(ConnectorConfig, payload.connector_config_id)
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "sync_users" not in fields_set:
@@ -496,7 +520,9 @@ class RadiusSyncJobs(ListResponseMixin):
         if "connector_config_id" in data and data["connector_config_id"]:
             config = db.get(ConnectorConfig, data["connector_config_id"])
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         for key, value in data.items():
             setattr(job, key, value)
         db.commit()
@@ -590,7 +616,10 @@ class RadiusSyncJobs(ListResponseMixin):
                         db.query(Subscription)
                         .filter(Subscription.subscriber_id == credential.subscriber_id)
                         .filter(Subscription.status == SubscriptionStatus.active)
-                        .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
+                        .order_by(
+                            Subscription.start_at.desc().nullslast(),
+                            Subscription.created_at.desc(),
+                        )
                         .first()
                     )
                     if not subscription:
@@ -625,7 +654,9 @@ class RadiusSyncJobs(ListResponseMixin):
                 db.commit()
                 details["credentials_scanned"] = len(credentials)
                 if external_config:
-                    details.update(_external_sync_users(db, external_config, credentials))
+                    details.update(
+                        _external_sync_users(db, external_config, credentials)
+                    )
         except Exception as exc:
             db.rollback()
             status = RadiusSyncStatus.failed
@@ -642,7 +673,9 @@ class RadiusSyncJobs(ListResponseMixin):
             run.details = details
             job.last_run_at = finished_at
             db.commit()
-            observe_job("radius_sync", status.value, (finished_at - started_at).total_seconds())
+            observe_job(
+                "radius_sync", status.value, (finished_at - started_at).total_seconds()
+            )
             db.refresh(run)
         return run
 
@@ -705,7 +738,9 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
         db.query(Subscription)
         .filter(Subscription.subscriber_id == credential.subscriber_id)
         .filter(Subscription.status == SubscriptionStatus.active)
-        .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
+        .order_by(
+            Subscription.start_at.desc().nullslast(), Subscription.created_at.desc()
+        )
         .first()
     )
     if not subscription:

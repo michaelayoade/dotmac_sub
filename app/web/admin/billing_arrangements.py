@@ -92,9 +92,7 @@ def payment_arrangements_approve(
     arrangement_id: UUID,
     db: Session = Depends(get_db),
 ):
-    payment_arrangements_service.payment_arrangements.approve(
-        db, str(arrangement_id)
-    )
+    payment_arrangements_service.payment_arrangements.approve(db, str(arrangement_id))
     return RedirectResponse(
         url=f"/admin/billing/payment-arrangements/{arrangement_id}",
         status_code=303,
@@ -110,9 +108,7 @@ def payment_arrangements_cancel(
     arrangement_id: UUID,
     db: Session = Depends(get_db),
 ):
-    payment_arrangements_service.payment_arrangements.cancel(
-        db, str(arrangement_id)
-    )
+    payment_arrangements_service.payment_arrangements.cancel(db, str(arrangement_id))
     return RedirectResponse(
         url=f"/admin/billing/payment-arrangements/{arrangement_id}",
         status_code=303,

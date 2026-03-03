@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -97,7 +96,9 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             {
                 "service_order_id": str(order.id),
                 "status": order.status.value if order.status else None,
-                "subscription_id": str(order.subscription_id) if order.subscription_id else None,
+                "subscription_id": str(order.subscription_id)
+                if order.subscription_id
+                else None,
             },
             service_order_id=order.id,
             subscriber_id=order.subscriber_id,
@@ -115,10 +116,12 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         pending = (
             db.query(sa_func.count(ServiceOrder.id))
             .filter(
-                ServiceOrder.status.in_([
-                    ServiceOrderStatus.draft,
-                    ServiceOrderStatus.submitted,
-                ])
+                ServiceOrder.status.in_(
+                    [
+                        ServiceOrderStatus.draft,
+                        ServiceOrderStatus.submitted,
+                    ]
+                )
             )
             .scalar()
             or 0
@@ -126,10 +129,12 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         in_progress = (
             db.query(sa_func.count(ServiceOrder.id))
             .filter(
-                ServiceOrder.status.in_([
-                    ServiceOrderStatus.scheduled,
-                    ServiceOrderStatus.provisioning,
-                ])
+                ServiceOrder.status.in_(
+                    [
+                        ServiceOrderStatus.scheduled,
+                        ServiceOrderStatus.provisioning,
+                    ]
+                )
             )
             .scalar()
             or 0
@@ -154,7 +159,14 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
         )
 
         # Status funnel chart data
-        funnel_labels = ["Draft", "Submitted", "Scheduled", "Provisioning", "Active", "Failed"]
+        funnel_labels = [
+            "Draft",
+            "Submitted",
+            "Scheduled",
+            "Provisioning",
+            "Active",
+            "Failed",
+        ]
         funnel_keys = [
             ServiceOrderStatus.draft,
             ServiceOrderStatus.submitted,
@@ -163,17 +175,20 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
             ServiceOrderStatus.active,
             ServiceOrderStatus.failed,
         ]
-        funnel_colors = ["#94a3b8", "#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#ef4444"]
-        status_rows = (
-            db.execute(
-                select(ServiceOrder.status, sa_func.count(ServiceOrder.id))
-                .group_by(ServiceOrder.status)
+        funnel_colors = [
+            "#94a3b8",
+            "#3b82f6",
+            "#f59e0b",
+            "#8b5cf6",
+            "#10b981",
+            "#ef4444",
+        ]
+        status_rows = db.execute(
+            select(ServiceOrder.status, sa_func.count(ServiceOrder.id)).group_by(
+                ServiceOrder.status
             )
-            .all()
-        )
-        status_counts = {
-            row[0]: row[1] for row in status_rows
-        }
+        ).all()
+        status_counts = {row[0]: row[1] for row in status_rows}
         chart_data = {
             "labels": funnel_labels,
             "values": [status_counts.get(k, 0) for k in funnel_keys],
@@ -277,7 +292,9 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                 "service_order_id": str(order.id),
                 "from_status": previous_status.value if previous_status else None,
                 "to_status": new_status.value if new_status else None,
-                "subscription_id": str(order.subscription_id) if order.subscription_id else None,
+                "subscription_id": str(order.subscription_id)
+                if order.subscription_id
+                else None,
             }
             context = {
                 "service_order_id": order.id,
@@ -395,9 +412,7 @@ class ProvisioningTasks(CRUDManager[ProvisioningTask]):
                 db, SettingDomain.provisioning, "default_task_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, TaskStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, TaskStatus, "status")
         task = ProvisioningTask(**data)
         db.add(task)
         db.commit()
@@ -427,7 +442,10 @@ class ProvisioningTasks(CRUDManager[ProvisioningTask]):
             query,
             order_by,
             order_dir,
-            {"created_at": ProvisioningTask.created_at, "status": ProvisioningTask.status},
+            {
+                "created_at": ProvisioningTask.created_at,
+                "status": ProvisioningTask.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -550,7 +568,10 @@ class ProvisioningWorkflows(CRUDManager[ProvisioningWorkflow]):
             query,
             order_by,
             order_dir,
-            {"created_at": ProvisioningWorkflow.created_at, "name": ProvisioningWorkflow.name},
+            {
+                "created_at": ProvisioningWorkflow.created_at,
+                "name": ProvisioningWorkflow.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -558,7 +579,9 @@ class ProvisioningWorkflows(CRUDManager[ProvisioningWorkflow]):
     def update(db: Session, workflow_id: str, payload: ProvisioningWorkflowUpdate):
         workflow = db.get(ProvisioningWorkflow, workflow_id)
         if not workflow:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning workflow not found"
+            )
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(workflow, key, value)
         db.commit()
@@ -576,7 +599,9 @@ class ProvisioningSteps(CRUDManager[ProvisioningStep]):
     def create(db: Session, payload: ProvisioningStepCreate):
         workflow = db.get(ProvisioningWorkflow, payload.workflow_id)
         if not workflow:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning workflow not found"
+            )
         step = ProvisioningStep(**payload.model_dump())
         db.add(step)
         db.commit()
@@ -625,7 +650,9 @@ class ProvisioningSteps(CRUDManager[ProvisioningStep]):
         if "workflow_id" in data:
             workflow = db.get(ProvisioningWorkflow, data["workflow_id"])
             if not workflow:
-                raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+                raise HTTPException(
+                    status_code=404, detail="Provisioning workflow not found"
+                )
         for key, value in data.items():
             setattr(step, key, value)
         db.commit()
@@ -641,7 +668,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
     def create(db: Session, payload: ProvisioningRunCreate):
         workflow = db.get(ProvisioningWorkflow, payload.workflow_id)
         if not workflow:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning workflow not found"
+            )
         run = ProvisioningRun(**payload.model_dump())
         db.add(run)
         db.commit()
@@ -672,7 +701,10 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             query,
             order_by,
             order_dir,
-            {"created_at": ProvisioningRun.created_at, "status": ProvisioningRun.status},
+            {
+                "created_at": ProvisioningRun.created_at,
+                "status": ProvisioningRun.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -685,7 +717,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
         if "workflow_id" in data:
             workflow = db.get(ProvisioningWorkflow, data["workflow_id"])
             if not workflow:
-                raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+                raise HTTPException(
+                    status_code=404, detail="Provisioning workflow not found"
+                )
         for key, value in data.items():
             setattr(run, key, value)
         db.commit()
@@ -698,7 +732,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
     ) -> ProvisioningRun:
         workflow = db.get(ProvisioningWorkflow, workflow_id)
         if not workflow or not workflow.is_active:
-            raise HTTPException(status_code=404, detail="Provisioning workflow not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning workflow not found"
+            )
         if payload is None:
             payload = ProvisioningRunStart()
         run = ProvisioningRun(
@@ -715,7 +751,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
 
         context = dict(payload.input_payload or {})
         _extend_provisioning_context(
-            db, str(payload.subscription_id) if payload.subscription_id else None, context
+            db,
+            str(payload.subscription_id) if payload.subscription_id else None,
+            context,
         )
 
         emit_event(
@@ -775,7 +813,9 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             db.query(ProvisioningStep)
             .filter(ProvisioningStep.workflow_id == workflow_id)
             .filter(ProvisioningStep.is_active.is_(True))
-            .order_by(ProvisioningStep.order_index.asc(), ProvisioningStep.created_at.asc())
+            .order_by(
+                ProvisioningStep.order_index.asc(), ProvisioningStep.created_at.asc()
+            )
             .all()
         )
         provisioner = get_provisioner(workflow.vendor)
@@ -831,8 +871,12 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
             "provisioning_run_id": str(run.id),
             "workflow_id": str(run.workflow_id),
             "status": status.value,
-            "service_order_id": str(run.service_order_id) if run.service_order_id else None,
-            "subscription_id": str(run.subscription_id) if run.subscription_id else None,
+            "service_order_id": str(run.service_order_id)
+            if run.service_order_id
+            else None,
+            "subscription_id": str(run.subscription_id)
+            if run.subscription_id
+            else None,
             "error_message": step_error_message,
         }
         if status == ProvisioningRunStatus.success:

@@ -103,7 +103,11 @@ def _resolve_price(db: Session, subscription: Subscription):
             .first()
         )
         if version_price:
-            return version_price.amount, version_price.currency, version_price.billing_cycle
+            return (
+                version_price.amount,
+                version_price.currency,
+                version_price.billing_cycle,
+            )
     offer_price = (
         db.query(OfferPrice)
         .filter(OfferPrice.offer_id == subscription.offer_id)
@@ -158,9 +162,7 @@ def _activate_pending_subscription(
     if not subscription.start_at:
         subscription.start_at = run_at
 
-    logger.info(
-        f"Auto-activated subscription {subscription.id} (pending → active)"
-    )
+    logger.info(f"Auto-activated subscription {subscription.id} (pending → active)")
 
     # Emit activation event with auto_activated flag
     # This flag tells other handlers (like proration) to skip since billing already handled it
@@ -195,8 +197,12 @@ def _emit_invoice_created_event(
             "currency": invoice.currency,
             "subtotal": str(invoice.subtotal) if invoice.subtotal else "0.00",
             "total": str(invoice.total) if invoice.total else "0.00",
-            "billing_period_start": invoice.billing_period_start.isoformat() if invoice.billing_period_start else None,
-            "billing_period_end": invoice.billing_period_end.isoformat() if invoice.billing_period_end else None,
+            "billing_period_start": invoice.billing_period_start.isoformat()
+            if invoice.billing_period_start
+            else None,
+            "billing_period_end": invoice.billing_period_end.isoformat()
+            if invoice.billing_period_end
+            else None,
             "due_at": invoice.due_at.isoformat() if invoice.due_at else None,
             "billing_run_id": run_id,
         },
@@ -223,7 +229,9 @@ def _log_billing_run_audit(
             run_id = None
 
     run_at_value = summary.get("run_at")
-    run_at_iso = run_at_value.isoformat() if isinstance(run_at_value, datetime) else None
+    run_at_iso = (
+        run_at_value.isoformat() if isinstance(run_at_value, datetime) else None
+    )
     metadata = {
         "run_id": run_id,
         "run_at": run_at_iso,
@@ -358,7 +366,9 @@ def run_invoice_cycle(
             continue
         usage_start = max(period_start, start_at)
         usage_end = min(period_end, end_at) if end_at else period_end
-        line_amount = _prorated_amount(amount, period_start, period_end, usage_start, usage_end)
+        line_amount = _prorated_amount(
+            amount, period_start, period_end, usage_start, usage_end
+        )
         if line_amount <= Decimal("0.00"):
             summary["skipped"] += 1
             continue
@@ -377,7 +387,10 @@ def run_invoice_cycle(
         )
         if existing_line_for_period:
             # Ensure next_billing_at is consistent with existing invoice
-            if subscription.next_billing_at is None or subscription.next_billing_at < period_end:
+            if (
+                subscription.next_billing_at is None
+                or subscription.next_billing_at < period_end
+            ):
                 subscription.next_billing_at = period_end
             logger.debug(
                 f"Skipping subscription {subscription.id}: already billed for period "
@@ -441,7 +454,11 @@ def run_invoice_cycle(
             continue
 
         tax_rate_id = _resolve_tax_rate_id(db, subscription)
-        offer_name = subscription.offer.name if subscription.offer else f"Subscription {subscription.id}"
+        offer_name = (
+            subscription.offer.name
+            if subscription.offer
+            else f"Subscription {subscription.id}"
+        )
         description = f"{offer_name} ({period_start.date()} - {period_end.date()})"
         line = InvoiceLine(
             invoice_id=invoice.id,
@@ -544,7 +561,9 @@ def generate_prorated_invoice(
     # Get price info
     amount, currency, cycle = _resolve_price(db, subscription)
     if amount is None:
-        logger.warning(f"No price found for subscription {subscription.id}, skipping proration")
+        logger.warning(
+            f"No price found for subscription {subscription.id}, skipping proration"
+        )
         return None
 
     effective_cycle = cycle or BillingCycle.monthly
@@ -561,7 +580,11 @@ def generate_prorated_invoice(
         return None
 
     # For annual billing, if activation is on Jan 1st, no proration needed
-    if effective_cycle == BillingCycle.annual and period_start.month == 1 and period_start.day == 1:
+    if (
+        effective_cycle == BillingCycle.annual
+        and period_start.month == 1
+        and period_start.day == 1
+    ):
         return None
 
     # Calculate prorated amount
@@ -610,8 +633,14 @@ def generate_prorated_invoice(
     db.flush()
 
     tax_rate_id = _resolve_tax_rate_id(db, subscription)
-    offer_name = subscription.offer.name if subscription.offer else f"Subscription {subscription.id}"
-    description = f"{offer_name} (Prorated: {activation_date.date()} - {period_end.date()})"
+    offer_name = (
+        subscription.offer.name
+        if subscription.offer
+        else f"Subscription {subscription.id}"
+    )
+    description = (
+        f"{offer_name} (Prorated: {activation_date.date()} - {period_end.date()})"
+    )
 
     line = InvoiceLine(
         invoice_id=invoice.id,

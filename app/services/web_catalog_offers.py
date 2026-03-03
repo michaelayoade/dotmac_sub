@@ -51,7 +51,9 @@ PLAN_KINDS = [PLAN_KIND_STANDARD, PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACE
 IP_BLOCK_SIZES = ["/32", "/30", "/29", "/28", "/27", "/26", "/25", "/24"]
 
 
-def parse_offer_description_metadata(description: str | None) -> tuple[dict[str, str | None], str | None]:
+def parse_offer_description_metadata(
+    description: str | None,
+) -> tuple[dict[str, str | None], str | None]:
     text = str(description or "").strip()
     metadata = {"plan_kind": None, "ip_block_size": None}
     if not text:
@@ -79,11 +81,17 @@ def normalize_offer_description(
     ip_block_size: str | None,
 ) -> str | None:
     metadata, cleaned = parse_offer_description_metadata(description)
-    resolved_plan_kind = str(plan_kind or metadata.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
+    resolved_plan_kind = (
+        str(plan_kind or metadata.get("plan_kind") or PLAN_KIND_STANDARD)
+        .strip()
+        .lower()
+    )
     if resolved_plan_kind not in PLAN_KINDS:
         resolved_plan_kind = PLAN_KIND_STANDARD
 
-    resolved_ip_block = str(ip_block_size or metadata.get("ip_block_size") or "").strip() or None
+    resolved_ip_block = (
+        str(ip_block_size or metadata.get("ip_block_size") or "").strip() or None
+    )
     lines: list[str] = []
     if resolved_plan_kind != PLAN_KIND_STANDARD:
         lines.append(f"[plan_kind:{resolved_plan_kind}]")
@@ -172,13 +180,16 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "vat_percent": _form_str(form, "vat_percent").strip(),
         "speed_download_mbps": _form_str(form, "speed_download_mbps").strip(),
         "speed_upload_mbps": _form_str(form, "speed_upload_mbps").strip(),
-        "guaranteed_speed_limit_at": _form_str(form, "guaranteed_speed_limit_at").strip(),
+        "guaranteed_speed_limit_at": _form_str(
+            form, "guaranteed_speed_limit_at"
+        ).strip(),
         "guaranteed_speed": _form_str(form, "guaranteed_speed").strip(),
         "aggregation": _form_str(form, "aggregation").strip(),
         "priority": _form_str(form, "priority").strip(),
         "available_for_services": form.get("available_for_services") == "true",
         "show_on_customer_portal": form.get("show_on_customer_portal") == "true",
-        "plan_category": _form_str(form, "plan_category").strip() or PlanCategory.internet.value,
+        "plan_category": _form_str(form, "plan_category").strip()
+        or PlanCategory.internet.value,
         "hide_on_admin_portal": form.get("hide_on_admin_portal") == "true",
         "service_description": _form_str(form, "service_description").strip(),
         "burst_profile": _form_str(form, "burst_profile").strip(),
@@ -204,7 +215,10 @@ def validate_offer_form(offer: dict[str, object]) -> str | None:
     plan_kind = str(offer.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
     if plan_kind not in PLAN_KINDS:
         return "Plan kind is invalid."
-    if plan_kind == PLAN_KIND_IP_ADDRESS and not str(offer.get("ip_block_size") or "").strip():
+    if (
+        plan_kind == PLAN_KIND_IP_ADDRESS
+        and not str(offer.get("ip_block_size") or "").strip()
+    ):
         return "IP block size is required for IP address plans."
 
     if plan_kind == PLAN_KIND_STANDARD and not offer.get("radius_profile_id"):
@@ -345,7 +359,9 @@ def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
     return created, "created"
 
 
-def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tuple[dict[str, object], list]:
+def offer_edit_form_data(
+    db: Session, offer_id: str, offer: CatalogOffer
+) -> tuple[dict[str, object], list]:
     """Build offer edit form values from persisted offer + related records."""
     links = catalog_service.offer_radius_profiles.list(
         db=db,
@@ -357,7 +373,9 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         offset=0,
     )
     radius_profile_id = links[0].profile_id if links else ""
-    offer_addon_links = catalog_service.offer_addons.list(db=db, offer_id=offer_id, limit=200)
+    offer_addon_links = catalog_service.offer_addons.list(
+        db=db, offer_id=offer_id, limit=200
+    )
     prices = catalog_service.offer_prices.list(
         db=db,
         offer_id=offer_id,
@@ -367,7 +385,9 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         limit=50,
         offset=0,
     )
-    price = next((item for item in prices if item.price_type.value == "recurring"), None)
+    price = next(
+        (item for item in prices if item.price_type.value == "recurring"), None
+    )
     if not price and prices:
         price = prices[0]
     offer_data = {
@@ -377,7 +397,9 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         "access_type": offer.access_type,
         "price_basis": offer.price_basis,
         "billing_cycle": offer.billing_cycle,
-        "billing_mode": offer.billing_mode.value if offer.billing_mode else BillingMode.prepaid.value,
+        "billing_mode": offer.billing_mode.value
+        if offer.billing_mode
+        else BillingMode.prepaid.value,
         "contract_term": offer.contract_term,
         "region_zone_id": offer.region_zone_id or "",
         "usage_allowance_id": offer.usage_allowance_id or "",
@@ -392,13 +414,19 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         "speed_download_mbps": offer.speed_download_mbps or "",
         "speed_upload_mbps": offer.speed_upload_mbps or "",
         "guaranteed_speed_limit_at": offer.guaranteed_speed_limit_at or "",
-        "guaranteed_speed": offer.guaranteed_speed.value if offer.guaranteed_speed else GuaranteedSpeedType.none.value,
+        "guaranteed_speed": offer.guaranteed_speed.value
+        if offer.guaranteed_speed
+        else GuaranteedSpeedType.none.value,
         "aggregation": offer.aggregation or "",
         "priority": offer.priority or "",
         "available_for_services": offer.available_for_services,
         "show_on_customer_portal": offer.show_on_customer_portal,
-        "plan_category": offer.plan_category.value if offer.plan_category else PlanCategory.internet.value,
-        "hide_on_admin_portal": offer.hide_on_admin_portal if offer.hide_on_admin_portal is not None else False,
+        "plan_category": offer.plan_category.value
+        if offer.plan_category
+        else PlanCategory.internet.value,
+        "hide_on_admin_portal": offer.hide_on_admin_portal
+        if offer.hide_on_admin_portal is not None
+        else False,
         "service_description": offer.service_description or "",
         "burst_profile": offer.burst_profile or "",
         "prepaid_period": offer.prepaid_period or "",
@@ -409,10 +437,14 @@ def offer_edit_form_data(db: Session, offer_id: str, offer: CatalogOffer) -> tup
         "plan_kind": PLAN_KIND_STANDARD,
         "ip_block_size": "",
         "price_id": str(price.id) if price else "",
-        "price_type": price.price_type.value if price and price.price_type else "recurring",
+        "price_type": price.price_type.value
+        if price and price.price_type
+        else "recurring",
         "price_amount": price.amount if price else "",
         "price_currency": price.currency if price else "NGN",
-        "price_billing_cycle": price.billing_cycle.value if price and price.billing_cycle else "",
+        "price_billing_cycle": price.billing_cycle.value
+        if price and price.billing_cycle
+        else "",
         "price_unit": price.unit.value if price and price.unit else "",
         "price_description": price.description if price and price.description else "",
     }
@@ -462,7 +494,9 @@ def parse_addon_links_from_form(form: FormData) -> list[dict[str, object]]:
     return addon_configs
 
 
-def build_addon_links_map(offer_addon_links: list | None) -> dict[str, dict[str, object]]:
+def build_addon_links_map(
+    offer_addon_links: list | None,
+) -> dict[str, dict[str, object]]:
     """Build addon links map for the offer form template."""
     addon_links_map: dict[str, dict[str, object]] = {}
     if offer_addon_links:
@@ -485,9 +519,10 @@ def offer_form_context(
 
     Returns all reference data (enums, related entities) needed by the form.
     """
-    default_billing_mode = settings_spec.resolve_value(
-        db, SettingDomain.catalog, "default_billing_mode"
-    ) or BillingMode.prepaid.value
+    default_billing_mode = (
+        settings_spec.resolve_value(db, SettingDomain.catalog, "default_billing_mode")
+        or BillingMode.prepaid.value
+    )
     if not offer.get("billing_mode"):
         offer["billing_mode"] = default_billing_mode
 
@@ -501,20 +536,37 @@ def offer_form_context(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=200, offset=0
     )
     radius_profiles = catalog_service.radius_profiles.list(
-        db=db, vendor=None, is_active=True, order_by="name", order_dir="asc", limit=200, offset=0
+        db=db,
+        vendor=None,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
     )
     policy_sets = catalog_service.policy_sets.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=200, offset=0
     )
     add_ons = catalog_service.add_ons.list(
-        db=db, is_active=True, addon_type=None, order_by="name", order_dir="asc", limit=200, offset=0
+        db=db,
+        is_active=True,
+        addon_type=None,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
     )
 
     addon_links_map = build_addon_links_map(offer_addon_links)
 
     all_offers = catalog_service.offers.list(
-        db=db, status=None, is_active=True,
-        order_by="name", order_dir="asc", limit=500, offset=0,
+        db=db,
+        status=None,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
     )
 
     context: dict[str, object] = {
@@ -569,16 +621,23 @@ def overview_page_data(
     stmt = select(CatalogOffer)
     if search:
         stmt = stmt.where(
-            CatalogOffer.name.ilike(f"%{search}%") | CatalogOffer.code.ilike(f"%{search}%")
+            CatalogOffer.name.ilike(f"%{search}%")
+            | CatalogOffer.code.ilike(f"%{search}%")
         )
     if status:
         stmt = stmt.where(CatalogOffer.status == OfferStatus(status))
     normalized_plan_category = str(plan_category or "").strip().lower()
-    if normalized_plan_category and normalized_plan_category in {pc.value for pc in PlanCategory}:
-        stmt = stmt.where(CatalogOffer.plan_category == PlanCategory(normalized_plan_category))
+    if normalized_plan_category and normalized_plan_category in {
+        pc.value for pc in PlanCategory
+    }:
+        stmt = stmt.where(
+            CatalogOffer.plan_category == PlanCategory(normalized_plan_category)
+        )
     normalized_plan_kind = str(plan_kind or "").strip().lower()
     if normalized_plan_kind in {PLAN_KIND_IP_ADDRESS, PLAN_KIND_DEVICE_REPLACEMENT}:
-        stmt = stmt.where(CatalogOffer.description.ilike(f"%[plan_kind:{normalized_plan_kind}]%"))
+        stmt = stmt.where(
+            CatalogOffer.description.ilike(f"%[plan_kind:{normalized_plan_kind}]%")
+        )
     elif normalized_plan_kind == PLAN_KIND_STANDARD:
         stmt = stmt.where(
             (CatalogOffer.description.is_(None))
@@ -626,7 +685,13 @@ def overview_page_data(
         offer_active_subscription_counts = {str(row[0]): row[1] for row in active_rows}
 
     radius_profiles = catalog_service.radius_profiles.list(
-        db=db, vendor=None, is_active=True, order_by="name", order_dir="asc", limit=200, offset=0
+        db=db,
+        vendor=None,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
     )
 
     return {
@@ -676,12 +741,16 @@ def create_offer_with_audit(
         actor_id=actor_id,
         metadata={
             "name": created_offer.name,
-            "service_type": created_offer.service_type.value if created_offer.service_type else None,
+            "service_type": created_offer.service_type.value
+            if created_offer.service_type
+            else None,
         },
     )
 
     if offer["radius_profile_id"]:
-        upsert_radius_profile_link(db, str(created_offer.id), str(offer["radius_profile_id"]))
+        upsert_radius_profile_link(
+            db, str(created_offer.id), str(offer["radius_profile_id"])
+        )
 
     addon_configs = parse_addon_links_from_form(form)
     if addon_configs:
@@ -725,7 +794,9 @@ def update_offer_with_audit(
     """
     before_snapshot = model_to_dict(existing_offer)
     payload = update_offer_payload(offer_data)
-    updated_offer = catalog_service.offers.update(db=db, offer_id=offer_id, payload=payload)
+    updated_offer = catalog_service.offers.update(
+        db=db, offer_id=offer_id, payload=payload
+    )
     after_snapshot = model_to_dict(updated_offer)
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata = {"changes": changes} if changes else None
@@ -833,14 +904,20 @@ def plan_usage_graph_data(
         active_counts.append(row.active)
 
     # Summary stats
-    total_now = db.scalar(
-        select(func.count(Subscription.id)).where(Subscription.offer_id == offer_id)
-    ) or 0
-    active_now = db.scalar(
-        select(func.count(Subscription.id))
-        .where(Subscription.offer_id == offer_id)
-        .where(Subscription.status == SubscriptionStatus.active)
-    ) or 0
+    total_now = (
+        db.scalar(
+            select(func.count(Subscription.id)).where(Subscription.offer_id == offer_id)
+        )
+        or 0
+    )
+    active_now = (
+        db.scalar(
+            select(func.count(Subscription.id))
+            .where(Subscription.offer_id == offer_id)
+            .where(Subscription.status == SubscriptionStatus.active)
+        )
+        or 0
+    )
     max_total = max(total_counts) if total_counts else 0
     avg_total = round(sum(total_counts) / len(total_counts), 1) if total_counts else 0
 

@@ -8,7 +8,9 @@ from collections.abc import Mapping
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}")
 
 
-def render_template_text(text: str | None, variables: Mapping[str, object] | None = None) -> str:
+def render_template_text(
+    text: str | None, variables: Mapping[str, object] | None = None
+) -> str:
     """Render variable placeholders in text.
 
     Supports both ``{{variable}}`` and ``{variable}`` tokens.
@@ -16,7 +18,10 @@ def render_template_text(text: str | None, variables: Mapping[str, object] | Non
     """
     if not text:
         return ""
-    values = {str(key): "" if value is None else str(value) for key, value in (variables or {}).items()}
+    values = {
+        str(key): "" if value is None else str(value)
+        for key, value in (variables or {}).items()
+    }
 
     def _replace(match: re.Match[str]) -> str:
         key = match.group(1) or match.group(2)

@@ -1,4 +1,3 @@
-import os
 import uuid
 from pathlib import Path
 
@@ -49,24 +48,24 @@ async def save_avatar(file: UploadFile, person_id: str) -> str:
 def delete_avatar(avatar_url: str | None) -> None:
     if not avatar_url:
         return
-    
+
     if avatar_url.startswith(settings.avatar_url_prefix):
         # Extract filename safely
         prefix = settings.avatar_url_prefix + "/"
         if not avatar_url.startswith(prefix):
             raise ValueError("Invalid avatar URL format")
-        filename = avatar_url[len(prefix):]
-        
+        filename = avatar_url[len(prefix) :]
+
         # Build and validate path
         base_path = Path(settings.avatar_upload_dir).resolve()
         file_path = (base_path / filename).resolve()
-        
+
         # Ensure the resolved path is within the upload directory
         try:
             file_path.relative_to(base_path)
         except ValueError:
             raise PermissionError("Path escapes upload directory")
-        
+
         if file_path.exists():
             file_path.unlink()
 

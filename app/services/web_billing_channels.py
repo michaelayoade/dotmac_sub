@@ -101,7 +101,9 @@ def list_payment_channel_accounts_data(db) -> dict[str, object]:
     }
 
 
-def load_payment_channel_account_edit_data(db, mapping_id: str) -> dict[str, object] | None:
+def load_payment_channel_account_edit_data(
+    db, mapping_id: str
+) -> dict[str, object] | None:
     mapping = billing_service.payment_channel_accounts.get(db, mapping_id)
     if not mapping:
         return None

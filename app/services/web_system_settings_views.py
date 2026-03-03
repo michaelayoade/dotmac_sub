@@ -19,8 +19,21 @@ SETTINGS_DOMAIN_GROUPS = {
     "Enforcement": [ENFORCEMENT_DOMAIN],
     "Billing & Payments": ["billing", "collections", "usage"],
     "Notifications": ["notification", "comms"],
-    "Services & Catalog": [BRANDING_DOMAIN, "catalog", "subscriber", "provisioning", "lifecycle"],
-    "Network": ["network", "network_monitoring", "radius", "bandwidth", "gis", "geocoding"],
+    "Services & Catalog": [
+        BRANDING_DOMAIN,
+        "catalog",
+        "subscriber",
+        "provisioning",
+        "lifecycle",
+    ],
+    "Network": [
+        "network",
+        "network_monitoring",
+        "radius",
+        "bandwidth",
+        "gis",
+        "geocoding",
+    ],
     "Operations": ["workflow", "projects", "scheduler", "inventory"],
     "Security & System": ["auth", "audit", "imports"],
 }
@@ -140,7 +153,9 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
                         "default": spec.default,
                     }
                 )
-            sections.append({"title": title, "rows": rows, "settings": rows, "domain": domain.value})
+            sections.append(
+                {"title": title, "rows": rows, "settings": rows, "domain": domain.value}
+            )
 
         return {
             "domain": ENFORCEMENT_DOMAIN,

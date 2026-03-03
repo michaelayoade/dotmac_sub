@@ -78,7 +78,9 @@ def gis_location_create(
 
 
 @router.get("/locations/{location_id}/edit", response_class=HTMLResponse)
-def gis_location_edit(request: Request, location_id: str, db: Session = Depends(get_db)):
+def gis_location_edit(
+    request: Request, location_id: str, db: Session = Depends(get_db)
+):
     location = gis_service.geo_locations.get(db=db, location_id=location_id)
 
     context = _base_context(request, db)
@@ -112,7 +114,9 @@ def gis_location_update(
             notes=notes,
             is_active=is_active,
         )
-        gis_service.geo_locations.update(db=db, location_id=location_id, payload=payload)
+        gis_service.geo_locations.update(
+            db=db, location_id=location_id, payload=payload
+        )
         return RedirectResponse(url="/admin/gis?tab=locations", status_code=303)
     except Exception as e:
         location = gis_service.geo_locations.get(db=db, location_id=location_id)

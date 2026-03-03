@@ -17,6 +17,7 @@ from app.web.request_parsing import parse_form_data
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/resellers", tags=["web-admin-resellers"])
 
+
 def _form_str(form: FormData, key: str, default: str = "") -> str:
     value = form.get(key, default)
     return value if isinstance(value, str) else default
@@ -24,6 +25,7 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -103,7 +105,9 @@ def reseller_create(
             "password": _form_str(form, "user_password").strip(),
             "role": _form_str(form, "user_role").strip() or None,
         }
-        missing = [key for key, value in user_payload.items() if key != "role" and not value]
+        missing = [
+            key for key, value in user_payload.items() if key != "role" and not value
+        ]
         if missing:
             context = _base_context(request, db, active_page="resellers")
             roles = rbac_service.roles.list(
@@ -229,9 +233,7 @@ def reseller_update(
 
 
 @router.get("/{reseller_id}", response_class=HTMLResponse)
-def reseller_detail(
-    reseller_id: str, request: Request, db: Session = Depends(get_db)
-):
+def reseller_detail(reseller_id: str, request: Request, db: Session = Depends(get_db)):
     detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
     if not detail:
         return RedirectResponse(url="/admin/resellers", status_code=303)
@@ -247,7 +249,9 @@ def reseller_user_link(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    subscriber_id = _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
+    subscriber_id = (
+        _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
+    )
     if subscriber_id:
         reseller_svc.link_existing_subscriber_to_reseller(
             db, reseller_id=reseller_id, subscriber_id=subscriber_id
@@ -270,7 +274,13 @@ def reseller_user_create(
         "password": _form_str(form, "password").strip(),
     }
     if not all(
-        [fields["first_name"], fields["last_name"], fields["email"], fields["username"], fields["password"]]
+        [
+            fields["first_name"],
+            fields["last_name"],
+            fields["email"],
+            fields["username"],
+            fields["password"],
+        ]
     ):
         detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
         context = _base_context(request, db, active_page="resellers")

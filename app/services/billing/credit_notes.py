@@ -55,11 +55,15 @@ class CreditNotes(ListResponseMixin):
             if not invoice:
                 raise HTTPException(status_code=404, detail="Invoice not found")
             if invoice.account_id != payload.account_id:
-                raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+                raise HTTPException(
+                    status_code=400, detail="Invoice does not belong to account"
+                )
             if "currency" not in fields_set:
                 data["currency"] = invoice.currency
             elif data["currency"] != invoice.currency:
-                raise HTTPException(status_code=400, detail="Currency does not match invoice")
+                raise HTTPException(
+                    status_code=400, detail="Currency does not match invoice"
+                )
         if "currency" not in fields_set:
             default_currency = settings_spec.resolve_value(
                 db, SettingDomain.billing, "default_currency"
@@ -122,8 +126,7 @@ class CreditNotes(ListResponseMixin):
             query = query.filter(CreditNote.invoice_id == coerce_uuid(invoice_id))
         if status:
             query = query.filter(
-                CreditNote.status
-                == validate_enum(status, CreditNoteStatus, "status")
+                CreditNote.status == validate_enum(status, CreditNoteStatus, "status")
             )
         if is_active is None:
             query = query.filter(CreditNote.is_active.is_(True))
@@ -150,12 +153,18 @@ class CreditNotes(ListResponseMixin):
             if not invoice:
                 raise HTTPException(status_code=404, detail="Invoice not found")
             if invoice.account_id != credit_note.account_id:
-                raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+                raise HTTPException(
+                    status_code=400, detail="Invoice does not belong to account"
+                )
             if "currency" in data:
                 if data["currency"] != invoice.currency:
-                    raise HTTPException(status_code=400, detail="Currency does not match invoice")
+                    raise HTTPException(
+                        status_code=400, detail="Currency does not match invoice"
+                    )
             elif credit_note.currency != invoice.currency:
-                raise HTTPException(status_code=400, detail="Currency does not match invoice")
+                raise HTTPException(
+                    status_code=400, detail="Currency does not match invoice"
+                )
         merged = {
             "subtotal": data.get("subtotal", credit_note.subtotal),
             "tax_total": data.get("tax_total", credit_note.tax_total),
@@ -183,7 +192,9 @@ class CreditNotes(ListResponseMixin):
         if not credit_note:
             raise HTTPException(status_code=404, detail="Credit note not found")
         if credit_note.applied_total > 0:
-            raise HTTPException(status_code=400, detail="Credit note has applied balance")
+            raise HTTPException(
+                status_code=400, detail="Credit note has applied balance"
+            )
         credit_note.status = CreditNoteStatus.void
         db.commit()
         db.refresh(credit_note)
@@ -200,14 +211,22 @@ class CreditNotes(ListResponseMixin):
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if invoice.account_id != credit_note.account_id:
-            raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+            raise HTTPException(
+                status_code=400, detail="Invoice does not belong to account"
+            )
         if credit_note.invoice_id and credit_note.invoice_id != invoice.id:
-            raise HTTPException(status_code=400, detail="Credit note is tied to another invoice")
+            raise HTTPException(
+                status_code=400, detail="Credit note is tied to another invoice"
+            )
         if invoice.currency != credit_note.currency:
-            raise HTTPException(status_code=400, detail="Currency does not match invoice")
+            raise HTTPException(
+                status_code=400, detail="Currency does not match invoice"
+            )
         remaining = round_money(credit_note.total - credit_note.applied_total)
         if remaining <= 0:
-            raise HTTPException(status_code=400, detail="Credit note has no available balance")
+            raise HTTPException(
+                status_code=400, detail="Credit note has no available balance"
+            )
         if invoice.balance_due <= 0:
             raise HTTPException(status_code=400, detail="Invoice has no balance due")
         amount = payload.amount or min(remaining, invoice.balance_due)
@@ -215,9 +234,13 @@ class CreditNotes(ListResponseMixin):
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
         if amount > remaining:
-            raise HTTPException(status_code=400, detail="Amount exceeds credit note balance")
+            raise HTTPException(
+                status_code=400, detail="Amount exceeds credit note balance"
+            )
         if amount > invoice.balance_due:
-            raise HTTPException(status_code=400, detail="Amount exceeds invoice balance")
+            raise HTTPException(
+                status_code=400, detail="Amount exceeds invoice balance"
+            )
         application = CreditNoteApplication(
             credit_note_id=credit_note.id,
             invoice_id=invoice.id,
@@ -313,7 +336,9 @@ class CreditNoteLines(ListResponseMixin):
         if "credit_note_id" in data:
             raise HTTPException(status_code=400, detail="Cannot change credit note")
         if "tax_rate_id" in data:
-            _resolve_tax_rate(db, str(data["tax_rate_id"]) if data["tax_rate_id"] else None)
+            _resolve_tax_rate(
+                db, str(data["tax_rate_id"]) if data["tax_rate_id"] else None
+            )
         quantity = data.get("quantity", line.quantity)
         unit_price = data.get("unit_price", line.unit_price)
         amount = data.get("amount")
@@ -350,7 +375,9 @@ class CreditNoteApplications(ListResponseMixin):
     def get(db: Session, application_id: str):
         application = get_by_id(db, CreditNoteApplication, application_id)
         if not application:
-            raise HTTPException(status_code=404, detail="Credit note application not found")
+            raise HTTPException(
+                status_code=404, detail="Credit note application not found"
+            )
         return application
 
     @staticmethod
@@ -372,6 +399,9 @@ class CreditNoteApplications(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": CreditNoteApplication.created_at, "amount": CreditNoteApplication.amount},
+            {
+                "created_at": CreditNoteApplication.created_at,
+                "amount": CreditNoteApplication.amount,
+            },
         )
         return apply_pagination(query, limit, offset).all()

@@ -33,7 +33,9 @@ from app.models.notification import (
 logger = logging.getLogger(__name__)
 
 
-def _get_setting(db: Session, key: str, env_key: str | None = None, default: str | None = None) -> str | None:
+def _get_setting(
+    db: Session, key: str, env_key: str | None = None, default: str | None = None
+) -> str | None:
     """Get setting from environment or database."""
     if env_key:
         env_value = os.getenv(env_key)
@@ -55,7 +57,9 @@ def _get_setting(db: Session, key: str, env_key: str | None = None, default: str
 def _normalize_phone(phone: str) -> str:
     """Normalize phone number to E.164 format."""
     # Remove common formatting characters
-    normalized = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    normalized = (
+        phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    )
 
     # Ensure it starts with +
     if not normalized.startswith("+"):
@@ -194,7 +198,9 @@ def _send_via_webhook(
         if response.status_code in (200, 201, 202):
             try:
                 data = response.json()
-                external_id = data.get("message_id") or data.get("id") or data.get("sid")
+                external_id = (
+                    data.get("message_id") or data.get("id") or data.get("sid")
+                )
                 return True, external_id, None
             except Exception:
                 return True, None, None
@@ -265,7 +271,9 @@ def send_sms(
 
     elif provider == "africastalking":
         # Africa's Talking requires a username; default to "sandbox" if unset.
-        username = _get_setting(db, "sms_username", "SMS_USERNAME", "sandbox") or "sandbox"
+        username = (
+            _get_setting(db, "sms_username", "SMS_USERNAME", "sandbox") or "sandbox"
+        )
         if not api_key:
             error_message = "Africa's Talking API key not configured"
             logger.error(error_message)
@@ -289,7 +297,9 @@ def send_sms(
 
     # Update notification status
     if notification:
-        notification.status = NotificationStatus.delivered if success else NotificationStatus.failed
+        notification.status = (
+            NotificationStatus.delivered if success else NotificationStatus.failed
+        )
         notification.sent_at = datetime.now(UTC) if success else None
 
         # Create delivery record

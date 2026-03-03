@@ -13,6 +13,7 @@ from app.db import Base
 
 class SubscriptionChangeStatus(enum.Enum):
     """Status for subscription change requests."""
+
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
@@ -26,6 +27,7 @@ class SubscriptionChangeRequest(Base):
     Allows customers to request plan upgrades/downgrades through the portal.
     Requests can be reviewed and approved by administrators.
     """
+
     __tablename__ = "subscription_change_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(

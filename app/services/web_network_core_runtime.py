@@ -18,8 +18,8 @@ from app.models.network_monitoring import (
     DeviceMetric,
     DeviceStatus,
     MetricType,
-    NetworkDeviceSnmpOid,
     NetworkDevice,
+    NetworkDeviceSnmpOid,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,9 @@ def _build_ping_command(host: str) -> list[str]:
     return command
 
 
-def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str | None, bool]:
+def ping_device(
+    db: Session, device_id: str
+) -> tuple[NetworkDevice | None, str | None, bool]:
     """Run a ping probe against a core device and persist the result.
 
     Returns (device, error_message, ping_success).
@@ -93,7 +95,9 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
             device.ping_down_since = now
         if _delay_elapsed(device.ping_down_since, now, delay_minutes):
             device.status = DeviceStatus.offline
-    _record_ping_metric(db, device, now=now, success=ping_success, latency_ms=latency_ms)
+    _record_ping_metric(
+        db, device, now=now, success=ping_success, latency_ms=latency_ms
+    )
     db.flush()
     _recompute_parent_rollup(db, device)
     db.flush()
@@ -126,7 +130,11 @@ def _record_ping_metric(
     """
     if device.id is None:
         return
-    metric_value = int(round(latency_ms)) if (success and latency_ms is not None) else (-1 if not success else 0)
+    metric_value = (
+        int(round(latency_ms))
+        if (success and latency_ms is not None)
+        else (-1 if not success else 0)
+    )
     metric_unit = "ping_ms" if success else "ping_timeout"
     db.add(
         DeviceMetric(
@@ -140,7 +148,9 @@ def _record_ping_metric(
     )
 
 
-def snmp_check_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str | None]:
+def snmp_check_device(
+    db: Session, device_id: str
+) -> tuple[NetworkDevice | None, str | None]:
     """Run SNMP uptime check against a core device and persist the result.
 
     Returns (device, error_message).
@@ -265,7 +275,9 @@ def mark_discovery_failure(db: Session, device: NetworkDevice) -> None:
     db.flush()
 
 
-def _delay_elapsed(down_since: datetime | None, now: datetime, delay_minutes: int) -> bool:
+def _delay_elapsed(
+    down_since: datetime | None, now: datetime, delay_minutes: int
+) -> bool:
     if delay_minutes <= 0:
         return True
     if down_since is None:
@@ -394,7 +406,9 @@ def compute_health(
             .where(DeviceMetric.device_id == device.id)
             .where(DeviceMetric.interface_id == selected_interface.id)
         ).all()
-        interface_metrics_by_type = {metric.metric_type: metric for metric in interface_metrics}
+        interface_metrics_by_type = {
+            metric.metric_type: metric for metric in interface_metrics
+        }
         rx_metric = interface_metrics_by_type.get(MetricType.rx_bps)
         tx_metric = interface_metrics_by_type.get(MetricType.tx_bps)
     else:
@@ -411,7 +425,9 @@ def compute_health(
     }
 
 
-def discover_interfaces_and_health(db: Session, device: NetworkDevice) -> tuple[int, int]:
+def discover_interfaces_and_health(
+    db: Session, device: NetworkDevice
+) -> tuple[int, int]:
     """Run SNMP discovery, persist interfaces + health metrics."""
     from app.services.snmp_discovery import (
         apply_interface_snapshot,
@@ -420,7 +436,9 @@ def discover_interfaces_and_health(db: Session, device: NetworkDevice) -> tuple[
     )
 
     snapshots = collect_interface_snapshot(device)
-    created, updated = apply_interface_snapshot(db, device, snapshots, create_missing=True)
+    created, updated = apply_interface_snapshot(
+        db, device, snapshots, create_missing=True
+    )
     _ensure_interface_traffic_oids(db, device, snapshots)
     health = collect_device_health(device)
     recorded_at = datetime.now(UTC)
@@ -485,13 +503,17 @@ def discover_interfaces_and_health(db: Session, device: NetworkDevice) -> tuple[
     return created, updated
 
 
-def _ensure_interface_traffic_oids(db: Session, device: NetworkDevice, snapshots: list[object]) -> None:
+def _ensure_interface_traffic_oids(
+    db: Session, device: NetworkDevice, snapshots: list[object]
+) -> None:
     """Ensure interface-level in/out traffic OIDs exist for discovered interfaces."""
     if device.id is None:
         return
     existing = set(
         db.scalars(
-            select(NetworkDeviceSnmpOid.oid).where(NetworkDeviceSnmpOid.device_id == device.id)
+            select(NetworkDeviceSnmpOid.oid).where(
+                NetworkDeviceSnmpOid.device_id == device.id
+            )
         ).all()
     )
     for snapshot in snapshots:
@@ -561,16 +583,22 @@ def render_device_status_badge(status_value: str) -> str:
 def render_ping_badge(device: NetworkDevice) -> str:
     """Render HTML badge for device ping status."""
     if not device.ping_enabled:
-        badge_class = "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        badge_class = (
+            "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        )
         label = "Disabled"
     elif device.last_ping_ok:
-        badge_class = "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+        badge_class = (
+            "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+        )
         label = "OK"
     elif device.last_ping_at:
         badge_class = "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
         label = "Failed"
     else:
-        badge_class = "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        badge_class = (
+            "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        )
         label = "Unknown"
     return (
         f'<span class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium {badge_class}">'
@@ -581,16 +609,22 @@ def render_ping_badge(device: NetworkDevice) -> str:
 def render_snmp_badge(device: NetworkDevice) -> str:
     """Render HTML badge for device SNMP status."""
     if not device.snmp_enabled:
-        badge_class = "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        badge_class = (
+            "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        )
         label = "Disabled"
     elif device.last_snmp_ok:
-        badge_class = "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+        badge_class = (
+            "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+        )
         label = "OK"
     elif device.last_snmp_at:
         badge_class = "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400"
         label = "Failed"
     else:
-        badge_class = "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        badge_class = (
+            "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+        )
         label = "Unknown"
     return (
         f'<span class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium {badge_class}">'
@@ -602,7 +636,9 @@ def render_device_health_content(device_health: dict[str, object]) -> str:
     """Render HTML content for device health panel."""
     last_seen = device_health.get("last_seen")
     last_seen_value = (
-        last_seen.strftime("%b %d, %Y %H:%M") if isinstance(last_seen, datetime) else "--"
+        last_seen.strftime("%b %d, %Y %H:%M")
+        if isinstance(last_seen, datetime)
+        else "--"
     )
     return (
         '<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">'

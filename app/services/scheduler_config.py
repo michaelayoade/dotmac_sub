@@ -181,16 +181,8 @@ def get_celery_config() -> dict:
     finally:
         session.close()
 
-    broker = (
-        broker
-        or _env_value("REDIS_URL")
-        or "redis://localhost:6379/0"
-    )
-    backend = (
-        backend
-        or _env_value("REDIS_URL")
-        or "redis://localhost:6379/1"
-    )
+    broker = broker or _env_value("REDIS_URL") or "redis://localhost:6379/0"
+    backend = backend or _env_value("REDIS_URL") or "redis://localhost:6379/1"
     timezone = timezone or "UTC"
     config: dict[str, object] = {
         "broker_url": broker,
@@ -393,7 +385,9 @@ def build_beat_schedule() -> dict:
             "oauth_token_refresh_interval_seconds",
             86400,
         )
-        oauth_refresh_interval_seconds = max(oauth_refresh_interval_seconds, 3600)  # Min: 1 hour
+        oauth_refresh_interval_seconds = max(
+            oauth_refresh_interval_seconds, 3600
+        )  # Min: 1 hour
         _sync_scheduled_task(
             session,
             name="oauth_token_refresh",
@@ -410,7 +404,9 @@ def build_beat_schedule() -> dict:
             raw_seconds = getattr(job, "interval_seconds", None)
             if isinstance(raw_seconds, (int, float, str)):
                 try:
-                    interval_seconds = int(raw_seconds) if raw_seconds is not None else None
+                    interval_seconds = (
+                        int(raw_seconds) if raw_seconds is not None else None
+                    )
                 except (TypeError, ValueError):
                     interval_seconds = None
             else:
@@ -534,7 +530,9 @@ def build_beat_schedule() -> dict:
             "sla_breach_detection_min_interval",
             60,
         )
-        sla_breach_interval_seconds = max(sla_breach_interval_seconds, sla_breach_min_interval)
+        sla_breach_interval_seconds = max(
+            sla_breach_interval_seconds, sla_breach_min_interval
+        )
         _sync_scheduled_task(
             session,
             name="sla_breach_detection",
@@ -552,7 +550,10 @@ def build_beat_schedule() -> dict:
             True,
         )
         wg_log_cleanup_interval = _resolve_int(
-            session, SettingDomain.network, "wireguard_log_cleanup_interval_seconds", 86400
+            session,
+            SettingDomain.network,
+            "wireguard_log_cleanup_interval_seconds",
+            86400,
         )
         wg_log_cleanup_interval = max(wg_log_cleanup_interval, 3600)  # Min: 1 hour
         _sync_scheduled_task(
@@ -577,7 +578,9 @@ def build_beat_schedule() -> dict:
             "wireguard_token_cleanup_interval_seconds",
             3600,
         )
-        wg_token_cleanup_interval = max(wg_token_cleanup_interval, 300)  # Min: 5 minutes
+        wg_token_cleanup_interval = max(
+            wg_token_cleanup_interval, 300
+        )  # Min: 5 minutes
         _sync_scheduled_task(
             session,
             name="wireguard_token_cleanup",
@@ -638,9 +641,14 @@ def build_beat_schedule() -> dict:
             True,
         )
         event_stale_cleanup_interval = _resolve_int(
-            session, SettingDomain.scheduler, "event_stale_cleanup_interval_seconds", 600
+            session,
+            SettingDomain.scheduler,
+            "event_stale_cleanup_interval_seconds",
+            600,
         )
-        event_stale_cleanup_interval = max(event_stale_cleanup_interval, 60)  # Min: 1 minute
+        event_stale_cleanup_interval = max(
+            event_stale_cleanup_interval, 60
+        )  # Min: 1 minute
         _sync_scheduled_task(
             session,
             name="event_stale_cleanup_runner",
@@ -658,9 +666,14 @@ def build_beat_schedule() -> dict:
             True,
         )
         event_old_cleanup_interval = _resolve_int(
-            session, SettingDomain.scheduler, "event_old_cleanup_interval_seconds", 86400
+            session,
+            SettingDomain.scheduler,
+            "event_old_cleanup_interval_seconds",
+            86400,
         )
-        event_old_cleanup_interval = max(event_old_cleanup_interval, 3600)  # Min: 1 hour
+        event_old_cleanup_interval = max(
+            event_old_cleanup_interval, 3600
+        )  # Min: 1 hour
         _sync_scheduled_task(
             session,
             name="event_old_cleanup_runner",
@@ -684,6 +697,7 @@ def build_beat_schedule() -> dict:
         if radius_sync_enabled:
             # Get all active sync jobs and schedule them
             from app.models.radius import RadiusSyncJob
+
             sync_jobs = (
                 session.query(RadiusSyncJob)
                 .filter(RadiusSyncJob.is_active.is_(True))
@@ -697,9 +711,7 @@ def build_beat_schedule() -> dict:
                 }
 
         tasks = (
-            session.query(ScheduledTask)
-            .filter(ScheduledTask.enabled.is_(True))
-            .all()
+            session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )
         for task in tasks:
             if task.schedule_type != ScheduleType.interval:

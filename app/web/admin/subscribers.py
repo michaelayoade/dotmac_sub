@@ -252,6 +252,7 @@ def subscribers_list(
 
     # Get sidebar stats and current user
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -423,6 +424,7 @@ def subscriber_detail(
 
     # Get sidebar stats and current user
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -450,9 +452,15 @@ def subscriber_impersonate(
     auth=Depends(require_permission("subscriber:impersonate")),
 ):
     """Impersonate subscriber and open customer portal."""
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     customer_type = "organization" if subscriber.organization_id else "person"
-    customer_id = str(subscriber.organization_id) if subscriber.organization_id else str(subscriber_id)
+    customer_id = (
+        str(subscriber.organization_id)
+        if subscriber.organization_id
+        else str(subscriber_id)
+    )
 
     try:
         session_token = web_customer_actions_service.create_impersonation_session(
@@ -707,7 +715,11 @@ def subscriber_user_activate_login(
             entity_type="subscriber",
             entity_id=str(subscriber_id),
             actor_id=actor_id,
-            metadata={"login_active": True, "source": "subscriber_detail", "error": str(exc)},
+            metadata={
+                "login_active": True,
+                "source": "subscriber_detail",
+                "error": str(exc),
+            },
             status_code=500,
             is_success=False,
         )
@@ -764,7 +776,11 @@ def subscriber_user_deactivate_login(
             entity_type="subscriber",
             entity_id=str(subscriber_id),
             actor_id=actor_id,
-            metadata={"login_active": False, "source": "subscriber_detail", "error": str(exc)},
+            metadata={
+                "login_active": False,
+                "source": "subscriber_detail",
+                "error": str(exc),
+            },
             status_code=500,
             is_success=False,
         )
@@ -847,7 +863,9 @@ def subscriber_add_comment(
     db: Session = Depends(get_db),
 ):
     """Add a comment to the subscriber activity timeline."""
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -857,7 +875,9 @@ def subscriber_add_comment(
 
     cleaned_comment = comment.strip()
     if not cleaned_comment:
-        return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/subscribers/{subscriber_id}", status_code=303
+        )
 
     actor_id = _actor_id(request)
     organization_id = (
@@ -945,7 +965,9 @@ def subscriber_toggle_comment_todo(
 
     metadata = dict(getattr(event, "metadata_", None) or {})
     if not metadata.get("is_todo"):
-        return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/subscribers/{subscriber_id}", status_code=303
+        )
 
     current_completed = bool(metadata.get("is_completed"))
     metadata["is_completed"] = not current_completed
@@ -981,10 +1003,9 @@ def subscriber_comment_file_download(
     record = db.get(StoredFile, file_id)
     if not record or record.is_deleted:
         raise HTTPException(status_code=404, detail="File not found")
-    if (
-        record.entity_type != "subscriber_comment_attachment"
-        or str(record.entity_id) != str(subscriber_id)
-    ):
+    if record.entity_type != "subscriber_comment_attachment" or str(
+        record.entity_id
+    ) != str(subscriber_id):
         raise HTTPException(status_code=404, detail="File not found")
 
     from app.web.admin import get_current_user
@@ -1001,7 +1022,9 @@ def subscriber_comment_file_download(
     except ObjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="File not found") from exc
 
-    headers = {"Content-Disposition": build_content_disposition(record.original_filename)}
+    headers = {
+        "Content-Disposition": build_content_disposition(record.original_filename)
+    }
     if stream.content_length is not None:
         headers["Content-Length"] = str(stream.content_length)
     return StreamingResponse(
@@ -1021,11 +1044,16 @@ def subscriber_organization_edit(
     subscriber_id: UUID,
     db: Session = Depends(get_db),
 ):
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber.organization_id:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "Organization not found for this subscriber"},
+            {
+                "request": request,
+                "message": "Organization not found for this subscriber",
+            },
             status_code=404,
         )
     organization = subscriber_service.organizations.get(
@@ -1067,7 +1095,9 @@ def subscriber_organization_update(
     org_account_start_date: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber.organization_id:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -1240,7 +1270,9 @@ def geocode_primary_address(
     """Save coordinates to a primary address, creating one from profile address if missing."""
     from app.schemas.subscriber import AddressCreate, AddressUpdate
 
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
@@ -1252,7 +1284,10 @@ def geocode_primary_address(
         limit=100,
         offset=0,
     )
-    primary_address = next((addr for addr in addresses if addr.is_primary), addresses[0] if addresses else None)
+    primary_address = next(
+        (addr for addr in addresses if addr.is_primary),
+        addresses[0] if addresses else None,
+    )
 
     created = False
     if primary_address is None:
@@ -1305,7 +1340,9 @@ def geocode_primary_now(
     """Automatically geocode primary subscriber address and persist coordinates."""
     from app.schemas.subscriber import AddressCreate, AddressUpdate
 
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
@@ -1317,11 +1354,16 @@ def geocode_primary_now(
         limit=100,
         offset=0,
     )
-    primary_address = next((addr for addr in addresses if addr.is_primary), addresses[0] if addresses else None)
+    primary_address = next(
+        (addr for addr in addresses if addr.is_primary),
+        addresses[0] if addresses else None,
+    )
     created = False
     if primary_address is None:
         if not (subscriber.address_line1 or "").strip():
-            raise HTTPException(status_code=400, detail="No address available to geocode")
+            raise HTTPException(
+                status_code=400, detail="No address available to geocode"
+            )
         primary_address = subscriber_service.addresses.create(
             db=db,
             payload=AddressCreate(
@@ -1349,7 +1391,9 @@ def geocode_primary_now(
     lat = resolved.get("latitude")
     lon = resolved.get("longitude")
     if lat is None or lon is None:
-        raise HTTPException(status_code=422, detail="No geocoding result for this address")
+        raise HTTPException(
+            status_code=422, detail="No geocoding result for this address"
+        )
 
     updated = subscriber_service.addresses.update(
         db=db,
@@ -1386,6 +1430,7 @@ def subscriber_deactivate(
     )
     metadata = build_changes_metadata(before, after)
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -1402,7 +1447,9 @@ def subscriber_deactivate(
 
 
 @router.get("/{subscriber_id}/suspend", response_class=HTMLResponse)
-def subscriber_suspend(request: Request, subscriber_id: str, db: Session = Depends(get_db)):
+def subscriber_suspend(
+    request: Request, subscriber_id: str, db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
@@ -1437,7 +1484,9 @@ def subscriber_edit(
     db: Session = Depends(get_db),
 ):
     """Edit subscriber form."""
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1498,6 +1547,7 @@ def subscriber_update(
         )
         metadata = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1517,7 +1567,9 @@ def subscriber_update(
 
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
-        subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+        subscriber = subscriber_service.subscribers.get(
+            db=db, subscriber_id=str(subscriber_id)
+        )
 
         people, organizations = load_subscriber_form_options(db)
 
@@ -1562,7 +1614,9 @@ def subscriber_billing_config_update(
     send_billing_notifications: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if not subscriber:
         return RedirectResponse(url="/admin/subscribers", status_code=303)
 
@@ -1577,7 +1631,9 @@ def subscriber_billing_config_update(
         try:
             return Decimal(value.strip())
         except InvalidOperation as exc:
-            raise HTTPException(status_code=400, detail="Invalid minimum balance") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid minimum balance"
+            ) from exc
 
     payload = SubscriberUpdate(
         billing_day=_to_int(billing_day),
@@ -1615,6 +1671,7 @@ def subscriber_delete(
     """Mark a subscriber as deleted for recovery (soft delete)."""
     try:
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         actor_id = str(current_user.get("subscriber_id")) if current_user else None
         web_subscriber_actions_service.delete_subscriber(
@@ -1650,6 +1707,7 @@ def subscriber_delete(
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
@@ -1677,7 +1735,9 @@ def bulk_status_change(
         status = body.get("status", "")
 
         if not ids:
-            return _htmx_error_response("No subscribers selected", title="Error", reswap="none")
+            return _htmx_error_response(
+                "No subscribers selected", title="Error", reswap="none"
+            )
 
         if status not in ("active", "inactive"):
             return _htmx_error_response("Invalid status", title="Error", reswap="none")
@@ -1714,16 +1774,21 @@ def bulk_delete(
     try:
         ids = body.get("subscriber_ids", [])
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         actor_id = str(current_user.get("subscriber_id")) if current_user else None
 
         if not ids:
-            return _htmx_error_response("No subscribers selected", title="Error", reswap="none")
+            return _htmx_error_response(
+                "No subscribers selected", title="Error", reswap="none"
+            )
 
-        deleted_count, skipped_active = web_subscriber_actions_service.bulk_delete_inactive_subscribers(
-            db=db,
-            subscriber_ids=ids,
-            actor_id=actor_id,
+        deleted_count, skipped_active = (
+            web_subscriber_actions_service.bulk_delete_inactive_subscribers(
+                db=db,
+                subscriber_ids=ids,
+                actor_id=actor_id,
+            )
         )
 
         message_parts = [f"{deleted_count} subscriber(s) moved to recovery queue"]

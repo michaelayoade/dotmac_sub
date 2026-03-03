@@ -14,7 +14,9 @@ def _date_start_for_range(date_range: str | None) -> datetime | None:
     if date_range == "today":
         return datetime(now.year, now.month, now.day, tzinfo=UTC)
     if date_range == "week":
-        return datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=now.weekday())
+        return datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+            days=now.weekday()
+        )
     if date_range == "month":
         return datetime(now.year, now.month, 1, tzinfo=UTC)
     if date_range == "quarter":
@@ -42,11 +44,17 @@ def build_reconciliation_data(
         payment_query = payment_query.filter(Payment.created_at >= start)
     payments = payment_query.order_by(Payment.created_at.desc()).limit(500).all()
 
-    statement_total = sum(Decimal(str(item.get("total_amount", 0) or 0)) for item in history_rows)
+    statement_total = sum(
+        Decimal(str(item.get("total_amount", 0) or 0)) for item in history_rows
+    )
     statement_rows = sum(int(item.get("row_count", 0) or 0) for item in history_rows)
     imported_rows = sum(int(item.get("matched_count", 0) or 0) for item in history_rows)
-    unmatched_rows = sum(int(item.get("unmatched_count", 0) or 0) for item in history_rows)
-    payment_total = sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in payments)
+    unmatched_rows = sum(
+        int(item.get("unmatched_count", 0) or 0) for item in history_rows
+    )
+    payment_total = sum(
+        Decimal(str(getattr(item, "amount", 0) or 0)) for item in payments
+    )
 
     by_external_id: dict[str, list[Payment]] = {}
     for payment in payments:
@@ -58,15 +66,21 @@ def build_reconciliation_data(
         {
             "external_id": key,
             "count": len(group),
-            "total_amount": float(sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group)),
+            "total_amount": float(
+                sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in group)
+            ),
         }
         for key, group in by_external_id.items()
         if len(group) > 1
     ]
     duplicate_candidates.sort(key=lambda item: item["count"], reverse=True)
 
-    unmatched_imports = [item for item in history_rows if int(item.get("unmatched_count", 0) or 0) > 0][:25]
-    partial_imports = [item for item in history_rows if str(item.get("status")) == "partial"][:25]
+    unmatched_imports = [
+        item for item in history_rows if int(item.get("unmatched_count", 0) or 0) > 0
+    ][:25]
+    partial_imports = [
+        item for item in history_rows if str(item.get("status")) == "partial"
+    ][:25]
 
     run = BankReconciliationRun(
         date_range=(date_range or "").strip() or None,
@@ -92,7 +106,10 @@ def build_reconciliation_data(
                 file_name=str(row.get("file_name") or ""),
                 count=int(row.get("unmatched_count", 0) or 0),
                 amount=Decimal(str(row.get("total_amount", 0) or 0)),
-                metadata_={"status": row.get("status"), "occurred_at": str(row.get("occurred_at") or "")},
+                metadata_={
+                    "status": row.get("status"),
+                    "occurred_at": str(row.get("occurred_at") or ""),
+                },
             )
         )
     for row in duplicate_candidates[:25]:

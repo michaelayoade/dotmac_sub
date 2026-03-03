@@ -16,9 +16,7 @@ from app.services.genieacs import GenieACSClient, GenieACSError
 logger = logging.getLogger(__name__)
 
 
-def resolve_genieacs(
-    db: Session, ont: OntUnit
-) -> tuple[GenieACSClient, str] | None:
+def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:
     """Resolve GenieACS client and device ID for an ONT.
 
     Looks up the TR-069 CPE device matching the ONT serial number,

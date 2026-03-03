@@ -21,7 +21,11 @@ _DEFAULT_TIMEOUT = 30.0  # fallback when settings unavailable
 
 def get_nextcloud_talk_timeout(db: Session | None = None) -> float:
     """Get the Nextcloud Talk API timeout from settings."""
-    timeout = resolve_value(db, SettingDomain.comms, "nextcloud_talk_timeout_seconds") if db else None
+    timeout = (
+        resolve_value(db, SettingDomain.comms, "nextcloud_talk_timeout_seconds")
+        if db
+        else None
+    )
     if timeout is None:
         return _DEFAULT_TIMEOUT
     if isinstance(timeout, (int, float)):
@@ -56,7 +60,9 @@ def resolve_talk_client(
             or auth_config.get("app_password")
             or auth_config.get("password")
         )
-        timeout_sec = timeout_sec or config.timeout_sec or auth_config.get("timeout_sec")
+        timeout_sec = (
+            timeout_sec or config.timeout_sec or auth_config.get("timeout_sec")
+        )
 
     if not base_url or not username or not app_password:
         raise HTTPException(
@@ -102,7 +108,9 @@ class NextcloudTalkClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise NextcloudTalkError("Invalid JSON response from Nextcloud Talk") from exc
+            raise NextcloudTalkError(
+                "Invalid JSON response from Nextcloud Talk"
+            ) from exc
 
         if not isinstance(payload, dict) or "ocs" not in payload:
             raise NextcloudTalkError("Invalid OCS response structure")
@@ -140,9 +148,7 @@ class NextcloudTalkClient:
                 exc.response.status_code,
                 exc.response.text,
             )
-            raise NextcloudTalkError(
-                f"HTTP error: {exc.response.status_code}"
-            ) from exc
+            raise NextcloudTalkError(f"HTTP error: {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             logger.error("Nextcloud Talk request error: %s", exc)
             raise NextcloudTalkError(f"Request error: {exc}") from exc

@@ -118,7 +118,9 @@ def update_closure(closure: FiberSpliceClosure, values: dict[str, object]) -> No
     closure.is_active = bool(values.get("is_active"))
 
 
-def commit_closure_update(db: Session, closure: FiberSpliceClosure, values: dict[str, object]) -> None:
+def commit_closure_update(
+    db: Session, closure: FiberSpliceClosure, values: dict[str, object]
+) -> None:
     """Apply form values and flush the closure update."""
     update_closure(closure, values)
     db.flush()
@@ -143,8 +145,7 @@ def detail_page_data(db: Session, closure_id: str) -> dict[str, object] | None:
 def get_tray(db: Session, closure_id: str, tray_id: str) -> FiberSpliceTray | None:
     """Return tray by id under a closure."""
     return db.scalars(
-        select(FiberSpliceTray)
-        .where(
+        select(FiberSpliceTray).where(
             FiberSpliceTray.id == tray_id,
             FiberSpliceTray.closure_id == closure_id,
         )
@@ -178,7 +179,9 @@ def parse_tray_form_values(form: FormData) -> dict[str, object]:
     }
 
 
-def validate_tray_form_values(values: dict[str, object]) -> tuple[int | None, str | None]:
+def validate_tray_form_values(
+    values: dict[str, object],
+) -> tuple[int | None, str | None]:
     """Validate tray number field."""
     try:
         tray_number = int(str(values.get("tray_number_raw") or ""))
@@ -189,7 +192,9 @@ def validate_tray_form_values(values: dict[str, object]) -> tuple[int | None, st
     return tray_number, None
 
 
-def tray_form_data(values: dict[str, object], *, tray_id: str | None = None) -> dict[str, object]:
+def tray_form_data(
+    values: dict[str, object], *, tray_id: str | None = None
+) -> dict[str, object]:
     """Build tray-like data for form re-render after errors."""
     data: dict[str, object] = {
         "tray_number": values.get("tray_number_raw"),
@@ -201,7 +206,9 @@ def tray_form_data(values: dict[str, object], *, tray_id: str | None = None) -> 
     return data
 
 
-def create_tray(db: Session, closure_id: str, values: dict[str, object]) -> FiberSpliceTray:
+def create_tray(
+    db: Session, closure_id: str, values: dict[str, object]
+) -> FiberSpliceTray:
     """Create and persist a tray for the closure."""
     tray_number, error = validate_tray_form_values(values)
     if error:
@@ -224,11 +231,13 @@ def update_tray(tray: FiberSpliceTray, values: dict[str, object]) -> None:
     if error:
         raise ValueError(error)
     tray.tray_number = cast(int, tray_number)
-    tray.name = (str(values.get("name") or "") or None)
-    tray.notes = (str(values.get("notes") or "") or None)
+    tray.name = str(values.get("name") or "") or None
+    tray.notes = str(values.get("notes") or "") or None
 
 
-def commit_tray_update(db: Session, tray: FiberSpliceTray, values: dict[str, object]) -> None:
+def commit_tray_update(
+    db: Session, tray: FiberSpliceTray, values: dict[str, object]
+) -> None:
     """Apply form values and flush the tray update."""
     update_tray(tray, values)
     db.flush()
@@ -255,8 +264,7 @@ def splice_form_dependencies(db: Session, closure_id: str) -> dict[str, object] 
 def get_splice(db: Session, closure_id: str, splice_id: str) -> FiberSplice | None:
     """Return splice by id under a closure."""
     return db.scalars(
-        select(FiberSplice)
-        .where(
+        select(FiberSplice).where(
             FiberSplice.id == splice_id,
             FiberSplice.closure_id == closure_id,
         )
@@ -297,7 +305,9 @@ def parse_splice_form_values(form: FormData) -> dict[str, object]:
     }
 
 
-def validate_splice_form_values(values: dict[str, object]) -> tuple[float | None, str | None]:
+def validate_splice_form_values(
+    values: dict[str, object],
+) -> tuple[float | None, str | None]:
     """Validate splice requirements and parse optional loss value."""
     from_strand_id = str(values.get("from_strand_id") or "")
     to_strand_id = str(values.get("to_strand_id") or "")
@@ -315,7 +325,9 @@ def validate_splice_form_values(values: dict[str, object]) -> tuple[float | None
     return loss_db, None
 
 
-def splice_form_data(values: dict[str, object], *, splice_id: str | None = None) -> dict[str, object]:
+def splice_form_data(
+    values: dict[str, object], *, splice_id: str | None = None
+) -> dict[str, object]:
     """Build splice-like data for form re-render after errors."""
     data: dict[str, object] = {
         "from_strand_id": values.get("from_strand_id"),
@@ -330,7 +342,9 @@ def splice_form_data(values: dict[str, object], *, splice_id: str | None = None)
     return data
 
 
-def create_splice(db: Session, closure_id: str, values: dict[str, object]) -> FiberSplice:
+def create_splice(
+    db: Session, closure_id: str, values: dict[str, object]
+) -> FiberSplice:
     """Create a fiber splice under a closure."""
     loss_db, error = validate_splice_form_values(values)
     if error:
@@ -339,15 +353,21 @@ def create_splice(db: Session, closure_id: str, values: dict[str, object]) -> Fi
         closure_id=cast(UUID, UUID(closure_id)),
         from_strand_id=cast(UUID, UUID(str(values.get("from_strand_id") or ""))),
         to_strand_id=cast(UUID, UUID(str(values.get("to_strand_id") or ""))),
-        tray_id=UUID(tid) if (tid := (str(values.get("tray_id") or "") or "").strip()) else None,
+        tray_id=UUID(tid)
+        if (tid := (str(values.get("tray_id") or "") or "").strip())
+        else None,
         splice_type=(str(values.get("splice_type") or "") or None),
         loss_db=loss_db,
         notes=(str(values.get("notes") or "") or None),
     )
-    return cast(FiberSplice, network_service.fiber_splices.create(db=db, payload=payload))
+    return cast(
+        FiberSplice, network_service.fiber_splices.create(db=db, payload=payload)
+    )
 
 
-def update_splice(db: Session, splice_id: str, values: dict[str, object]) -> FiberSplice:
+def update_splice(
+    db: Session, splice_id: str, values: dict[str, object]
+) -> FiberSplice:
     """Update an existing fiber splice."""
     loss_db, error = validate_splice_form_values(values)
     if error:
@@ -355,7 +375,9 @@ def update_splice(db: Session, splice_id: str, values: dict[str, object]) -> Fib
     payload = FiberSpliceUpdate(
         from_strand_id=cast(UUID, UUID(str(values.get("from_strand_id") or ""))),
         to_strand_id=cast(UUID, UUID(str(values.get("to_strand_id") or ""))),
-        tray_id=UUID(tid) if (tid := (str(values.get("tray_id") or "") or "").strip()) else None,
+        tray_id=UUID(tid)
+        if (tid := (str(values.get("tray_id") or "") or "").strip())
+        else None,
         splice_type=(str(values.get("splice_type") or "") or None),
         loss_db=loss_db,
         notes=(str(values.get("notes") or "") or None),
@@ -363,8 +385,8 @@ def update_splice(db: Session, splice_id: str, values: dict[str, object]) -> Fib
     return cast(
         FiberSplice,
         network_service.fiber_splices.update(
-        db=db,
-        splice_id=splice_id,
-        payload=payload,
+            db=db,
+            splice_id=splice_id,
+            payload=payload,
         ),
     )

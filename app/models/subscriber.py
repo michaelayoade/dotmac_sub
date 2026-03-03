@@ -43,6 +43,7 @@ class ContactMethod(enum.Enum):
 
 class SubscriberStatus(enum.Enum):
     """Account/billing status for subscriber."""
+
     active = "active"
     suspended = "suspended"
     canceled = "canceled"
@@ -76,6 +77,7 @@ class AddressType(enum.Enum):
 
 class ChannelType(enum.Enum):
     """Communication channel types."""
+
     email = "email"
     phone = "phone"
     sms = "sms"
@@ -84,6 +86,7 @@ class ChannelType(enum.Enum):
 
 class Organization(Base):
     """Organization for B2B subscribers."""
+
     __tablename__ = "organizations"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -109,7 +112,9 @@ class Organization(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscribers = relationship(
@@ -127,6 +132,7 @@ class Organization(Base):
 
 class Reseller(Base):
     """Reseller/partner who manages subscribers."""
+
     __tablename__ = "resellers"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -143,7 +149,9 @@ class Reseller(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscribers = relationship("Subscriber", back_populates="reseller")
@@ -157,6 +165,7 @@ class Subscriber(Base):
     - Account info (subscriber number, status)
     - Billing info (payment settings, billing address)
     """
+
     __tablename__ = "subscribers"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -236,8 +245,12 @@ class Subscriber(Base):
 
     # Prepaid/balance settings
     min_balance: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    prepaid_low_balance_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    prepaid_deactivation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    prepaid_low_balance_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    prepaid_deactivation_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     # === Common Fields ===
     notes: Mapped[str | None] = mapped_column(Text)
@@ -250,7 +263,9 @@ class Subscriber(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # === Relationships ===
@@ -262,9 +277,17 @@ class Subscriber(Base):
     reseller = relationship("Reseller", back_populates="subscribers")
     tax_rate = relationship("TaxRate")
 
-    addresses = relationship("Address", back_populates="subscriber", cascade="all, delete-orphan")
-    custom_fields = relationship("SubscriberCustomField", back_populates="subscriber", cascade="all, delete-orphan")
-    channels = relationship("SubscriberChannel", back_populates="subscriber", cascade="all, delete-orphan")
+    addresses = relationship(
+        "Address", back_populates="subscriber", cascade="all, delete-orphan"
+    )
+    custom_fields = relationship(
+        "SubscriberCustomField",
+        back_populates="subscriber",
+        cascade="all, delete-orphan",
+    )
+    channels = relationship(
+        "SubscriberChannel", back_populates="subscriber", cascade="all, delete-orphan"
+    )
 
     # Service relationships
     subscriptions = relationship("Subscription", back_populates="subscriber")
@@ -311,11 +334,14 @@ class Subscriber(Base):
 
 class SubscriberChannel(Base):
     """Additional communication channels for a subscriber."""
+
     __tablename__ = "subscriber_channels"
     __table_args__ = (
         UniqueConstraint(
-            "subscriber_id", "channel_type", "address",
-            name="uq_subscriber_channels_subscriber_type_address"
+            "subscriber_id",
+            "channel_type",
+            "address",
+            name="uq_subscriber_channels_subscriber_type_address",
         ),
     )
 
@@ -331,13 +357,17 @@ class SubscriberChannel(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metadata_: Mapped[dict | None] = mapped_column("metadata", MutableDict.as_mutable(JSON()))
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON())
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="channels")
@@ -345,6 +375,7 @@ class SubscriberChannel(Base):
 
 class SubscriberCustomField(Base):
     """Custom fields for subscribers."""
+
     __tablename__ = "subscriber_custom_fields"
     __table_args__ = (
         UniqueConstraint(
@@ -370,7 +401,9 @@ class SubscriberCustomField(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="custom_fields")
@@ -378,6 +411,7 @@ class SubscriberCustomField(Base):
 
 class Address(Base):
     """Service/installation addresses for subscribers."""
+
     __tablename__ = "addresses"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -408,7 +442,9 @@ class Address(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="addresses")
@@ -426,6 +462,7 @@ class ResellerUser(Base):
     Maps to the active reseller_users table while preserving
     subscriber_id/person_id compatibility across callers.
     """
+
     __tablename__ = "reseller_users"
     __table_args__ = {"extend_existing": True}
 
@@ -433,7 +470,9 @@ class ResellerUser(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     # DB column name is person_id in legacy schemas.
-    subscriber_id: Mapped[uuid.UUID | None] = mapped_column("person_id", UUID(as_uuid=True))
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        "person_id", UUID(as_uuid=True)
+    )
     # Backwards-compatible alias used by older code/tests.
     person_id: Mapped[uuid.UUID | None] = synonym("subscriber_id")
     reseller_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -442,5 +481,7 @@ class ResellerUser(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

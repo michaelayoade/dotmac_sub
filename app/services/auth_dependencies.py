@@ -158,7 +158,9 @@ def require_user_auth(
     roles_value = payload.get("roles")
     scopes_value = payload.get("scopes")
     roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
-    scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    scopes = (
+        [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    )
     actor_id = str(principal_id)
     if request is not None:
         request.state.actor_id = actor_id
@@ -345,6 +347,7 @@ def require_permission(permission_key: str):
 
 def require_any_permission(*permission_keys: str):
     """Require user to have at least one of the specified permissions."""
+
     def _require_any_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),

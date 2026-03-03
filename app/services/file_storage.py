@@ -363,7 +363,9 @@ class UnifiedFileUploadService:
             try:
                 path.relative_to(base_upload_dir)
             except ValueError as exc:
-                raise PermissionError("Access denied: path outside upload directory") from exc
+                raise PermissionError(
+                    "Access denied: path outside upload directory"
+                ) from exc
             if not path.exists():
                 raise ObjectNotFoundError(str(path))
 
@@ -396,7 +398,9 @@ class UnifiedFileUploadService:
         db.add(file)
         db.commit()
         db.refresh(file)
-        logger.info("file_deleted file_id=%s hard_object_delete=%s", file.id, hard_delete_object)
+        logger.info(
+            "file_deleted file_id=%s hard_object_delete=%s", file.id, hard_delete_object
+        )
         return file
 
 

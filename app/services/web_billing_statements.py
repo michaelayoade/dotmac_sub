@@ -43,12 +43,16 @@ def parse_statement_range(
         start_d = end_d - timedelta(days=default_days)
 
     if start_d > end_d:
-        raise HTTPException(status_code=400, detail="start_date must be before end_date")
+        raise HTTPException(
+            status_code=400, detail="start_date must be before end_date"
+        )
 
     start_dt = datetime.combine(start_d, time.min, tzinfo=UTC)
     # Inclusive end date: [start, end+1day)
     end_dt = datetime.combine(end_d + timedelta(days=1), time.min, tzinfo=UTC)
-    return StatementRange(start=start_dt, end=end_dt, start_date=start_d, end_date=end_d)
+    return StatementRange(
+        start=start_dt, end=end_dt, start_date=start_d, end_date=end_d
+    )
 
 
 def _signed_amount(entry: LedgerEntry) -> Decimal:
@@ -126,7 +130,12 @@ def render_statement_csv(
     writer = csv.writer(output)
     writer.writerow(["Account", account_label])
     writer.writerow(["Account ID", str(account_id)])
-    writer.writerow(["Period", f"{date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}"])
+    writer.writerow(
+        [
+            "Period",
+            f"{date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}",
+        ]
+    )
     writer.writerow(["Opening Balance", f"{statement['opening_balance']:.2f}"])
     writer.writerow(["Closing Balance", f"{statement['closing_balance']:.2f}"])
     writer.writerow([])

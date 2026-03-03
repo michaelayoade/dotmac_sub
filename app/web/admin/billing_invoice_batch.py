@@ -1,17 +1,23 @@
 """Admin billing invoice batch routes."""
 
-from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.catalog import BillingCycle
 from app.services import subscriber as subscriber_service
-from app.services import web_billing_invoice_actions as web_billing_invoice_actions_service
+from app.services import (
+    web_billing_invoice_actions as web_billing_invoice_actions_service,
+)
 from app.services import web_billing_invoice_batch as web_billing_invoice_batch_service
 from app.services.auth_dependencies import require_permission
 
@@ -28,7 +34,11 @@ def _parse_billing_cycle(value: str | None) -> BillingCycle | None:
         raise ValueError("Invalid billing cycle") from exc
 
 
-@router.post("/invoices/generate-batch", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/generate-batch",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_generate_batch(
     request: Request,
     billing_cycle: str | None = Form(None),
@@ -48,7 +58,11 @@ def invoice_generate_batch(
     )
 
 
-@router.post("/invoices/batch/{run_id}/retry", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/batch/{run_id}/retry",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_batch_retry(
     request: Request,
     run_id: str,
@@ -60,10 +74,16 @@ def invoice_batch_retry(
         parse_cycle_fn=_parse_billing_cycle,
     )
     query = urlencode({"note": note})
-    return RedirectResponse(url=f"/admin/billing/invoices/batch?{query}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/batch?{query}", status_code=303
+    )
 
 
-@router.get("/invoices/batch", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/batch",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_batch(
     request: Request,
     note: str | None = Query(None),
@@ -82,7 +102,9 @@ def invoice_batch(
         limit=500,
         offset=0,
     )
-    partner_options = [{"id": str(item.id), "name": item.name} for item in active_resellers]
+    partner_options = [
+        {"id": str(item.id), "name": item.name} for item in active_resellers
+    ]
     return templates.TemplateResponse(
         "admin/billing/invoice_batch.html",
         {
@@ -100,7 +122,11 @@ def invoice_batch(
     )
 
 
-@router.post("/invoices/batch/schedule", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/batch/schedule",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def invoice_batch_schedule_update(
     request: Request,
     schedule_enabled: str | None = Form(None),
@@ -126,7 +152,11 @@ def invoice_batch_schedule_update(
     )
 
 
-@router.get("/invoices/batch/history-panel", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/batch/history-panel",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_batch_history_panel(
     request: Request,
     db: Session = Depends(get_db),
@@ -141,7 +171,10 @@ def invoice_batch_history_panel(
     )
 
 
-@router.get("/invoices/batch/history.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/batch/history.csv",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_batch_history_csv(
     request: Request,
     db: Session = Depends(get_db),
@@ -151,11 +184,16 @@ def invoice_batch_history_csv(
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="billing_run_history.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="billing_run_history.csv"'
+        },
     )
 
 
-@router.get("/invoices/batch/{run_id}/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/invoices/batch/{run_id}/export.csv",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_batch_run_csv(
     request: Request,
     run_id: str,
@@ -168,11 +206,16 @@ def invoice_batch_run_csv(
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="billing_run_{run_id}.csv"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="billing_run_{run_id}.csv"'
+        },
     )
 
 
-@router.post("/invoices/generate-batch/preview", dependencies=[Depends(require_permission("billing:read"))])
+@router.post(
+    "/invoices/generate-batch/preview",
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def invoice_generate_batch_preview(
     request: Request,
     billing_cycle: str | None = Form(None),
@@ -192,4 +235,7 @@ def invoice_generate_batch_preview(
         )
         return JSONResponse(payload)
     except Exception as exc:
-        return JSONResponse(web_billing_invoice_batch_service.preview_error_payload(exc), status_code=400)
+        return JSONResponse(
+            web_billing_invoice_batch_service.preview_error_payload(exc),
+            status_code=400,
+        )

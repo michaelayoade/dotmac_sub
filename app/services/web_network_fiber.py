@@ -377,9 +377,7 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
         "fdh_cabinets": {
             "total": db.scalar(select(func.count(FdhCabinet.id))) or 0,
             "active": db.scalar(
-                select(func.count(FdhCabinet.id)).where(
-                    FdhCabinet.is_active.is_(True)
-                )
+                select(func.count(FdhCabinet.id)).where(FdhCabinet.is_active.is_(True))
             )
             or 0,
             "with_location": db.scalar(
@@ -589,9 +587,7 @@ def update_asset_position(
 
     asset: FdhCabinet | FiberSpliceClosure | None
     if asset_type == "fdh_cabinet":
-        asset = db.scalars(
-            select(FdhCabinet).where(FdhCabinet.id == asset_id)
-        ).first()
+        asset = db.scalars(select(FdhCabinet).where(FdhCabinet.id == asset_id)).first()
     elif asset_type == "splice_closure":
         asset = db.scalars(
             select(FiberSpliceClosure).where(FiberSpliceClosure.id == asset_id)
@@ -939,14 +935,12 @@ def _nearby_cabinets(db: Session, lat: float, lng: float, max_km: float):
     max_deg = max_km / 111.0
     if max_deg <= 0:
         return []
-    return (
-        db.scalars(
-            select(FdhCabinet).where(
-                FdhCabinet.is_active.is_(True),
-                FdhCabinet.latitude.isnot(None),
-                FdhCabinet.longitude.isnot(None),
-                FdhCabinet.latitude.between(lat - max_deg, lat + max_deg),
-                FdhCabinet.longitude.between(lng - max_deg, lng + max_deg),
-            )
-        ).all()
-    )
+    return db.scalars(
+        select(FdhCabinet).where(
+            FdhCabinet.is_active.is_(True),
+            FdhCabinet.latitude.isnot(None),
+            FdhCabinet.longitude.isnot(None),
+            FdhCabinet.latitude.between(lat - max_deg, lat + max_deg),
+            FdhCabinet.longitude.between(lng - max_deg, lng + max_deg),
+        )
+    ).all()

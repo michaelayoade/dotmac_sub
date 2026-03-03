@@ -462,10 +462,10 @@ def poll_olt_ont_signals(
 
 _OLT_HEALTH_OIDS: dict[str, dict[str, str]] = {
     "huawei": {
-        "cpu": ".1.3.6.1.4.1.2011.6.3.4.1.2.0",       # hwAvgDuty1min
-        "temperature": ".1.3.6.1.4.1.2011.6.3.4.1.3.0", # hwEntityTemperature
-        "memory": ".1.3.6.1.4.1.2011.6.3.4.1.8.0",      # hwMemoryUtilization
-        "uptime": ".1.3.6.1.2.1.1.3.0",                  # sysUpTime (standard)
+        "cpu": ".1.3.6.1.4.1.2011.6.3.4.1.2.0",  # hwAvgDuty1min
+        "temperature": ".1.3.6.1.4.1.2011.6.3.4.1.3.0",  # hwEntityTemperature
+        "memory": ".1.3.6.1.4.1.2011.6.3.4.1.8.0",  # hwMemoryUtilization
+        "uptime": ".1.3.6.1.2.1.1.3.0",  # sysUpTime (standard)
     },
     "zte": {
         "cpu": ".1.3.6.1.4.1.3902.1082.500.1.2.1.0",
@@ -501,8 +501,23 @@ def _snmpget_value(host: str, oid: str, community: str = "public") -> str | None
     """Perform a single SNMP GET and return the value string, or None."""
     import subprocess
 
-    args = ["snmpget", "-t", "5", "-r", "1", "-m", "", "-v2c", "-c", community, host, oid]
-    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=15)
+    args = [
+        "snmpget",
+        "-t",
+        "5",
+        "-r",
+        "1",
+        "-m",
+        "",
+        "-v2c",
+        "-c",
+        community,
+        host,
+        oid,
+    ]
+    result = subprocess.run(
+        args, capture_output=True, text=True, check=False, timeout=15
+    )
     if result.returncode != 0:
         return None
     output = result.stdout.strip()
@@ -665,30 +680,38 @@ def _push_signal_metrics(db: Session) -> int:
     ).all()
 
     for status_val, count in status_counts:
-        status_str = status_val.value if hasattr(status_val, "value") else str(status_val)
+        status_str = (
+            status_val.value if hasattr(status_val, "value") else str(status_val)
+        )
         lines.append(f'onu_status_total{{status="{status_str}"}} {count} {now_ms}')
 
     # Signal quality counts
     warn_thresh, crit_thresh = get_signal_thresholds(db)
-    warning_count = db.scalar(
-        select(func.count())
-        .select_from(OntUnit)
-        .where(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_rx_signal_dbm.is_not(None),
-            OntUnit.olt_rx_signal_dbm < warn_thresh,
-            OntUnit.olt_rx_signal_dbm >= crit_thresh,
+    warning_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(
+                OntUnit.is_active.is_(True),
+                OntUnit.olt_rx_signal_dbm.is_not(None),
+                OntUnit.olt_rx_signal_dbm < warn_thresh,
+                OntUnit.olt_rx_signal_dbm >= crit_thresh,
+            )
         )
-    ) or 0
-    critical_count = db.scalar(
-        select(func.count())
-        .select_from(OntUnit)
-        .where(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_rx_signal_dbm.is_not(None),
-            OntUnit.olt_rx_signal_dbm < crit_thresh,
+        or 0
+    )
+    critical_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(
+                OntUnit.is_active.is_(True),
+                OntUnit.olt_rx_signal_dbm.is_not(None),
+                OntUnit.olt_rx_signal_dbm < crit_thresh,
+            )
         )
-    ) or 0
+        or 0
+    )
     lines.append(f'onu_signal_low{{severity="warning"}} {warning_count} {now_ms}')
     lines.append(f'onu_signal_low{{severity="critical"}} {critical_count} {now_ms}')
 

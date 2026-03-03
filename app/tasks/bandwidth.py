@@ -4,6 +4,7 @@ Celery tasks for bandwidth data processing.
 These tasks consume the Redis stream produced by the poller service,
 insert samples into PostgreSQL, and push aggregates to VictoriaMetrics.
 """
+
 import asyncio
 import logging
 import os
@@ -59,19 +60,31 @@ def _get_batch_size(db=None) -> int:
 
 def _get_hot_retention_hours(db=None) -> int:
     """Get hot data retention hours from settings."""
-    hours = resolve_value(db, SettingDomain.bandwidth, "hot_retention_hours") if db else None
+    hours = (
+        resolve_value(db, SettingDomain.bandwidth, "hot_retention_hours")
+        if db
+        else None
+    )
     return _parse_int_setting(hours, _DEFAULT_HOT_RETENTION_HOURS)
 
 
 def _get_redis_stream_max_length(db=None) -> int:
     """Get Redis stream max length from settings."""
-    length = resolve_value(db, SettingDomain.bandwidth, "redis_stream_max_length") if db else None
+    length = (
+        resolve_value(db, SettingDomain.bandwidth, "redis_stream_max_length")
+        if db
+        else None
+    )
     return _parse_int_setting(length, _DEFAULT_REDIS_STREAM_MAX_LENGTH)
 
 
 def _get_redis_read_timeout_ms(db=None) -> int:
     """Get Redis read timeout in ms from settings."""
-    timeout = resolve_value(db, SettingDomain.bandwidth, "redis_read_timeout_ms") if db else None
+    timeout = (
+        resolve_value(db, SettingDomain.bandwidth, "redis_read_timeout_ms")
+        if db
+        else None
+    )
     return _parse_int_setting(timeout, _DEFAULT_REDIS_READ_TIMEOUT_MS)
 
 
@@ -144,13 +157,17 @@ def process_bandwidth_stream():
 
             try:
                 sample_at = datetime.fromisoformat(data[b"sample_at"].decode())
-                samples.append(BandwidthSample(
-                    subscription_id=UUID(data[b"subscription_id"].decode()),
-                    device_id=UUID(data[b"nas_device_id"].decode()) if data.get(b"nas_device_id") else None,
-                    rx_bps=int(data[b"rx_bps"]),
-                    tx_bps=int(data[b"tx_bps"]),
-                    sample_at=sample_at,
-                ))
+                samples.append(
+                    BandwidthSample(
+                        subscription_id=UUID(data[b"subscription_id"].decode()),
+                        device_id=UUID(data[b"nas_device_id"].decode())
+                        if data.get(b"nas_device_id")
+                        else None,
+                        rx_bps=int(data[b"rx_bps"]),
+                        tx_bps=int(data[b"tx_bps"]),
+                        sample_at=sample_at,
+                    )
+                )
             except Exception as e:
                 logger.error(f"Failed to parse sample {msg_id}: {e}")
 
@@ -317,13 +334,19 @@ def bulk_insert_samples(
 
     objects = []
     for s in samples:
-        objects.append(BandwidthSample(
-            subscription_id=UUID(s["subscription_id"]) if isinstance(s["subscription_id"], str) else s["subscription_id"],
-            device_id=UUID(s["device_id"]) if s.get("device_id") and isinstance(s["device_id"], str) else s.get("device_id"),
-            rx_bps=int(s["rx_bps"]),
-            tx_bps=int(s["tx_bps"]),
-            sample_at=s["sample_at"],
-        ))
+        objects.append(
+            BandwidthSample(
+                subscription_id=UUID(s["subscription_id"])
+                if isinstance(s["subscription_id"], str)
+                else s["subscription_id"],
+                device_id=UUID(s["device_id"])
+                if s.get("device_id") and isinstance(s["device_id"], str)
+                else s.get("device_id"),
+                rx_bps=int(s["rx_bps"]),
+                tx_bps=int(s["tx_bps"]),
+                sample_at=s["sample_at"],
+            )
+        )
 
     db.bulk_save_objects(objects)
     db.commit()

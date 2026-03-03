@@ -119,7 +119,9 @@ def _validate_credit_note_totals(data: dict):
     if total is not None and total < 0:
         raise HTTPException(status_code=400, detail="Total must be non-negative")
     if applied_total is not None and applied_total < 0:
-        raise HTTPException(status_code=400, detail="Applied total must be non-negative")
+        raise HTTPException(
+            status_code=400, detail="Applied total must be non-negative"
+        )
     if subtotal is not None and tax_total is not None and total is not None:
         if round_money(subtotal + tax_total) > round_money(total):
             raise HTTPException(
@@ -129,7 +131,9 @@ def _validate_credit_note_totals(data: dict):
         raise HTTPException(status_code=400, detail="Applied total exceeds total")
 
 
-def _validate_invoice_line_amount(quantity: Decimal, unit_price: Decimal, amount: Decimal | None):
+def _validate_invoice_line_amount(
+    quantity: Decimal, unit_price: Decimal, amount: Decimal | None
+):
     """Validate and calculate invoice line amount."""
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
@@ -141,7 +145,9 @@ def _validate_invoice_line_amount(quantity: Decimal, unit_price: Decimal, amount
     if amount < 0:
         raise HTTPException(status_code=400, detail="Amount must be non-negative")
     if round_money(amount) != expected:
-        raise HTTPException(status_code=400, detail="Amount must equal quantity * unit price")
+        raise HTTPException(
+            status_code=400, detail="Amount must equal quantity * unit price"
+        )
     return round_money(amount)
 
 
@@ -204,13 +210,18 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
                 if rate:
                     rate_percent = Decimal(str(rate.rate))
                     if line.tax_application != TaxApplication.exempt:
-                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
+                        tax_amount = round_money(
+                            amount * rate_percent / Decimal("100.00")
+                        )
                         if line.tax_application == TaxApplication.inclusive:
                             tax_amount = round_money(
                                 amount
                                 - (
                                     amount
-                                    / (Decimal("1.00") + rate_percent / Decimal("100.00"))
+                                    / (
+                                        Decimal("1.00")
+                                        + rate_percent / Decimal("100.00")
+                                    )
                                 )
                             )
                         tax_total += tax_amount
@@ -235,7 +246,9 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         .scalar()
     )
     credit_amount = round_money(Decimal(str(credit_amount)))
-    invoice.balance_due = max(Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount))
+    invoice.balance_due = max(
+        Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount)
+    )
     if invoice.balance_due <= 0:
         invoice.status = InvoiceStatus.paid
         if not invoice.paid_at:
@@ -244,7 +257,9 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         invoice.status = InvoiceStatus.partially_paid
 
 
-def _validate_payment_channel(db: Session, channel_id: str | None) -> PaymentChannel | None:
+def _validate_payment_channel(
+    db: Session, channel_id: str | None
+) -> PaymentChannel | None:
     if not channel_id:
         return None
     channel = get_by_id(db, PaymentChannel, channel_id)
@@ -322,7 +337,10 @@ def _resolve_collection_account(
     if currency:
         exact = (
             account_query.filter(PaymentChannelAccount.currency == currency)
-            .order_by(PaymentChannelAccount.is_default.desc(), PaymentChannelAccount.priority.desc())
+            .order_by(
+                PaymentChannelAccount.is_default.desc(),
+                PaymentChannelAccount.priority.desc(),
+            )
             .first()
         )
         if exact:
@@ -331,7 +349,10 @@ def _resolve_collection_account(
             )
     fallback = (
         account_query.filter(PaymentChannelAccount.currency.is_(None))
-        .order_by(PaymentChannelAccount.is_default.desc(), PaymentChannelAccount.priority.desc())
+        .order_by(
+            PaymentChannelAccount.is_default.desc(),
+            PaymentChannelAccount.priority.desc(),
+        )
         .first()
     )
     if fallback:
@@ -371,13 +392,18 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
                 if rate:
                     rate_percent = Decimal(str(rate.rate))
                     if line.tax_application != TaxApplication.exempt:
-                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
+                        tax_amount = round_money(
+                            amount * rate_percent / Decimal("100.00")
+                        )
                         if line.tax_application == TaxApplication.inclusive:
                             tax_amount = round_money(
                                 amount
                                 - (
                                     amount
-                                    / (Decimal("1.00") + rate_percent / Decimal("100.00"))
+                                    / (
+                                        Decimal("1.00")
+                                        + rate_percent / Decimal("100.00")
+                                    )
                                 )
                             )
                         tax_total += tax_amount
@@ -398,7 +424,9 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
     applied_total = round_money(Decimal(str(applied_total)))
     credit_note.applied_total = applied_total
     if applied_total > credit_note.total:
-        raise HTTPException(status_code=400, detail="Applied total exceeds credit note total")
+        raise HTTPException(
+            status_code=400, detail="Applied total exceeds credit note total"
+        )
     if credit_note.status not in {CreditNoteStatus.draft, CreditNoteStatus.void}:
         if applied_total <= 0:
             credit_note.status = CreditNoteStatus.issued
@@ -408,7 +436,9 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
             credit_note.status = CreditNoteStatus.applied
 
 
-def _validate_payment_linkages(db: Session, account_id: str, invoice_id: str | None, payment_method_id: str | None):
+def _validate_payment_linkages(
+    db: Session, account_id: str, invoice_id: str | None, payment_method_id: str | None
+):
     """Validate payment relationships to account, invoice, and method."""
     _validate_account(db, account_id)
     if invoice_id:
@@ -416,7 +446,9 @@ def _validate_payment_linkages(db: Session, account_id: str, invoice_id: str | N
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if str(invoice.account_id) != account_id:
-            raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+            raise HTTPException(
+                status_code=400, detail="Invoice does not belong to account"
+            )
     if payment_method_id:
         method = get_by_id(db, PaymentMethod, payment_method_id)
         if not method:
@@ -437,7 +469,9 @@ def _validate_payment_provider(db: Session, provider_id: str | None):
     return provider
 
 
-def _validate_ledger_linkages(db: Session, account_id: str, invoice_id: str | None, payment_id: str | None):
+def _validate_ledger_linkages(
+    db: Session, account_id: str, invoice_id: str | None, payment_id: str | None
+):
     """Validate ledger entry relationships to account, invoice, and payment."""
     _validate_account(db, account_id)
     if invoice_id:
@@ -445,10 +479,14 @@ def _validate_ledger_linkages(db: Session, account_id: str, invoice_id: str | No
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if str(invoice.account_id) != account_id:
-            raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+            raise HTTPException(
+                status_code=400, detail="Invoice does not belong to account"
+            )
     if payment_id:
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         if str(payment.account_id) != account_id:
-            raise HTTPException(status_code=400, detail="Payment does not belong to account")
+            raise HTTPException(
+                status_code=400, detail="Payment does not belong to account"
+            )

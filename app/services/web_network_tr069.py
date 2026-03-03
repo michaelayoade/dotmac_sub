@@ -41,7 +41,8 @@ def parse_acs_form(form) -> dict[str, object]:
     return {
         "name": str(form.get("name") or "").strip(),
         "base_url": str(form.get("base_url") or "").strip(),
-        "is_active": str(form.get("is_active") or "true").strip().lower() in ("1", "true", "on", "yes"),
+        "is_active": str(form.get("is_active") or "true").strip().lower()
+        in ("1", "true", "on", "yes"),
         "notes": str(form.get("notes") or "").strip() or None,
     }
 
@@ -54,7 +55,9 @@ def validate_acs_values(values: dict[str, object]) -> str | None:
     return None
 
 
-def acs_form_snapshot(values: dict[str, object], *, acs_id: str | None = None) -> dict[str, object]:
+def acs_form_snapshot(
+    values: dict[str, object], *, acs_id: str | None = None
+) -> dict[str, object]:
     data = dict(values)
     if acs_id:
         data["id"] = acs_id
@@ -136,21 +139,27 @@ def tr069_dashboard_data(
     if not selected_server_id and servers:
         selected_server_id = str(servers[0].id)
 
-    devices = tr069_service.cpe_devices.list(
-        db=db,
-        acs_server_id=selected_server_id,
-        is_active=None,
-        order_by="serial_number",
-        order_dir="asc",
-        limit=5000,
-        offset=0,
-    ) if selected_server_id else []
+    devices = (
+        tr069_service.cpe_devices.list(
+            db=db,
+            acs_server_id=selected_server_id,
+            is_active=None,
+            order_by="serial_number",
+            order_dir="asc",
+            limit=5000,
+            offset=0,
+        )
+        if selected_server_id
+        else []
+    )
 
     search_q = str(search or "").strip().lower()
     if search_q:
         devices = [
-            item for item in devices
-            if search_q in " ".join(
+            item
+            for item in devices
+            if search_q
+            in " ".join(
                 [
                     str(item.serial_number or ""),
                     str(item.oui or ""),
@@ -165,16 +174,16 @@ def tr069_dashboard_data(
 
     linked_cpe_ids = [item.cpe_device_id for item in devices if item.cpe_device_id]
     linked_cpes = (
-        db.query(CPEDevice)
-        .filter(CPEDevice.id.in_(linked_cpe_ids))
-        .all()
+        db.query(CPEDevice).filter(CPEDevice.id.in_(linked_cpe_ids)).all()
         if linked_cpe_ids
         else []
     )
     cpe_by_id = {str(cpe.id): cpe for cpe in linked_cpes}
 
     for device in devices:
-        setattr(device, "linked_cpe", cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None)
+        device.linked_cpe = (
+            cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
+        )
 
     jobs = tr069_service.jobs.list(
         db=db,
@@ -187,10 +196,7 @@ def tr069_dashboard_data(
     )
 
     managed_cpes = (
-        db.query(CPEDevice)
-        .order_by(CPEDevice.created_at.desc())
-        .limit(1000)
-        .all()
+        db.query(CPEDevice).order_by(CPEDevice.created_at.desc()).limit(1000).all()
     )
 
     now = datetime.now(UTC)
@@ -216,7 +222,9 @@ def tr069_dashboard_data(
             "devices": len(devices),
             "unlinked": sum(1 for item in devices if not item.cpe_device_id),
             "seen_24h": sum(1 for item in devices if _seen_recently(item)),
-            "jobs_failed": sum(1 for item in jobs if item.status == Tr069JobStatus.failed),
+            "jobs_failed": sum(
+                1 for item in jobs if item.status == Tr069JobStatus.failed
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),
@@ -226,4 +234,6 @@ def tr069_dashboard_data(
 
 
 def sync_server(db: Session, *, acs_server_id: str) -> dict[str, int]:
-    return tr069_service.cpe_devices.sync_from_genieacs(db=db, acs_server_id=acs_server_id)
+    return tr069_service.cpe_devices.sync_from_genieacs(
+        db=db, acs_server_id=acs_server_id
+    )

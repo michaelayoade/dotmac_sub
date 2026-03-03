@@ -45,17 +45,49 @@ def _base_pppoe_attributes(
     ]
     if profile:
         if profile.ip_pool_name:
-            attrs.append({"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name})
+            attrs.append(
+                {"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name}
+            )
         if profile.ipv6_pool_name:
-            attrs.append({"attribute": "Delegated-IPv6-Prefix-Pool", "op": ":=", "value": profile.ipv6_pool_name})
+            attrs.append(
+                {
+                    "attribute": "Delegated-IPv6-Prefix-Pool",
+                    "op": ":=",
+                    "value": profile.ipv6_pool_name,
+                }
+            )
         if profile.session_timeout:
-            attrs.append({"attribute": "Session-Timeout", "op": ":=", "value": str(profile.session_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Session-Timeout",
+                    "op": ":=",
+                    "value": str(profile.session_timeout),
+                }
+            )
         if profile.idle_timeout:
-            attrs.append({"attribute": "Idle-Timeout", "op": ":=", "value": str(profile.idle_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Idle-Timeout",
+                    "op": ":=",
+                    "value": str(profile.idle_timeout),
+                }
+            )
         if profile.simultaneous_use:
-            attrs.append({"attribute": "Simultaneous-Use", "op": ":=", "value": str(profile.simultaneous_use)})
+            attrs.append(
+                {
+                    "attribute": "Simultaneous-Use",
+                    "op": ":=",
+                    "value": str(profile.simultaneous_use),
+                }
+            )
     if subscription.ipv4_address:
-        attrs.append({"attribute": "Framed-IP-Address", "op": ":=", "value": subscription.ipv4_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IP-Address",
+                "op": ":=",
+                "value": subscription.ipv4_address,
+            }
+        )
     return attrs
 
 
@@ -69,13 +101,33 @@ def _base_dhcp_attributes(
     ]
     if profile:
         if profile.ip_pool_name:
-            attrs.append({"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name})
+            attrs.append(
+                {"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name}
+            )
         if profile.session_timeout:
-            attrs.append({"attribute": "Session-Timeout", "op": ":=", "value": str(profile.session_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Session-Timeout",
+                    "op": ":=",
+                    "value": str(profile.session_timeout),
+                }
+            )
     if subscription.ipv4_address:
-        attrs.append({"attribute": "Framed-IP-Address", "op": ":=", "value": subscription.ipv4_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IP-Address",
+                "op": ":=",
+                "value": subscription.ipv4_address,
+            }
+        )
     if subscription.mac_address:
-        attrs.append({"attribute": "Calling-Station-Id", "op": ":=", "value": subscription.mac_address})
+        attrs.append(
+            {
+                "attribute": "Calling-Station-Id",
+                "op": ":=",
+                "value": subscription.mac_address,
+            }
+        )
     return attrs
 
 
@@ -95,19 +147,53 @@ def _base_ipoe_attributes(
     ]
     if profile:
         if profile.ip_pool_name:
-            attrs.append({"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name})
+            attrs.append(
+                {"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name}
+            )
         if profile.vlan_id:
             attrs.append({"attribute": "Tunnel-Type", "op": ":=", "value": "VLAN"})
-            attrs.append({"attribute": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"})
-            attrs.append({"attribute": "Tunnel-Private-Group-Id", "op": ":=", "value": str(profile.vlan_id)})
+            attrs.append(
+                {"attribute": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"}
+            )
+            attrs.append(
+                {
+                    "attribute": "Tunnel-Private-Group-Id",
+                    "op": ":=",
+                    "value": str(profile.vlan_id),
+                }
+            )
         if profile.inner_vlan_id:
-            attrs.append({"attribute": "Tunnel-Private-Group-Id", "op": "+=", "value": str(profile.inner_vlan_id)})
+            attrs.append(
+                {
+                    "attribute": "Tunnel-Private-Group-Id",
+                    "op": "+=",
+                    "value": str(profile.inner_vlan_id),
+                }
+            )
         if profile.session_timeout:
-            attrs.append({"attribute": "Session-Timeout", "op": ":=", "value": str(profile.session_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Session-Timeout",
+                    "op": ":=",
+                    "value": str(profile.session_timeout),
+                }
+            )
     if subscription.ipv4_address:
-        attrs.append({"attribute": "Framed-IP-Address", "op": ":=", "value": subscription.ipv4_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IP-Address",
+                "op": ":=",
+                "value": subscription.ipv4_address,
+            }
+        )
     if subscription.mac_address:
-        attrs.append({"attribute": "Calling-Station-Id", "op": ":=", "value": subscription.mac_address})
+        attrs.append(
+            {
+                "attribute": "Calling-Station-Id",
+                "op": ":=",
+                "value": subscription.mac_address,
+            }
+        )
     return attrs
 
 
@@ -120,12 +206,30 @@ def _base_static_attributes(
         {"attribute": "Service-Type", "op": ":=", "value": _SERVICE_TYPE_FRAMED},
     ]
     if subscription.ipv4_address:
-        attrs.append({"attribute": "Framed-IP-Address", "op": ":=", "value": subscription.ipv4_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IP-Address",
+                "op": ":=",
+                "value": subscription.ipv4_address,
+            }
+        )
     if subscription.ipv6_address:
-        attrs.append({"attribute": "Framed-IPv6-Prefix", "op": ":=", "value": subscription.ipv6_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IPv6-Prefix",
+                "op": ":=",
+                "value": subscription.ipv6_address,
+            }
+        )
     if profile:
         if profile.session_timeout:
-            attrs.append({"attribute": "Session-Timeout", "op": ":=", "value": str(profile.session_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Session-Timeout",
+                    "op": ":=",
+                    "value": str(profile.session_timeout),
+                }
+            )
     return attrs
 
 
@@ -144,20 +248,54 @@ def _base_hotspot_attributes(
     ]
     if profile:
         if profile.ip_pool_name:
-            attrs.append({"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name})
+            attrs.append(
+                {"attribute": "Framed-Pool", "op": ":=", "value": profile.ip_pool_name}
+            )
         if profile.session_timeout:
-            attrs.append({"attribute": "Session-Timeout", "op": ":=", "value": str(profile.session_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Session-Timeout",
+                    "op": ":=",
+                    "value": str(profile.session_timeout),
+                }
+            )
         if profile.idle_timeout:
-            attrs.append({"attribute": "Idle-Timeout", "op": ":=", "value": str(profile.idle_timeout)})
+            attrs.append(
+                {
+                    "attribute": "Idle-Timeout",
+                    "op": ":=",
+                    "value": str(profile.idle_timeout),
+                }
+            )
         if profile.simultaneous_use:
-            attrs.append({"attribute": "Simultaneous-Use", "op": ":=", "value": str(profile.simultaneous_use)})
+            attrs.append(
+                {
+                    "attribute": "Simultaneous-Use",
+                    "op": ":=",
+                    "value": str(profile.simultaneous_use),
+                }
+            )
         # MikroTik hotspot-specific: advertise the profile name as the group
         if profile.name:
-            attrs.append({"attribute": "Mikrotik-Group", "op": ":=", "value": profile.name})
+            attrs.append(
+                {"attribute": "Mikrotik-Group", "op": ":=", "value": profile.name}
+            )
     if subscription.ipv4_address:
-        attrs.append({"attribute": "Framed-IP-Address", "op": ":=", "value": subscription.ipv4_address})
+        attrs.append(
+            {
+                "attribute": "Framed-IP-Address",
+                "op": ":=",
+                "value": subscription.ipv4_address,
+            }
+        )
     if subscription.mac_address:
-        attrs.append({"attribute": "Calling-Station-Id", "op": ":=", "value": subscription.mac_address})
+        attrs.append(
+            {
+                "attribute": "Calling-Station-Id",
+                "op": ":=",
+                "value": subscription.mac_address,
+            }
+        )
     return attrs
 
 
@@ -180,25 +318,47 @@ def _append_vendor_attributes(
     if not profile:
         return
     # MikroTik Rate-Limit (applies to PPPoE and hotspot mainly)
-    if connection_type in (ConnectionType.pppoe, ConnectionType.hotspot, ConnectionType.ipoe):
+    if connection_type in (
+        ConnectionType.pppoe,
+        ConnectionType.hotspot,
+        ConnectionType.ipoe,
+    ):
         from app.services.enforcement import _build_mikrotik_rate_limit
+
         rate_limit = _build_mikrotik_rate_limit(profile)
         if rate_limit:
-            attrs.append({"attribute": "Mikrotik-Rate-Limit", "op": ":=", "value": rate_limit})
+            attrs.append(
+                {"attribute": "Mikrotik-Rate-Limit", "op": ":=", "value": rate_limit}
+            )
 
     if profile.mikrotik_address_list:
-        attrs.append({"attribute": "Mikrotik-Address-List", "op": ":=", "value": profile.mikrotik_address_list})
+        attrs.append(
+            {
+                "attribute": "Mikrotik-Address-List",
+                "op": ":=",
+                "value": profile.mikrotik_address_list,
+            }
+        )
 
     # VLAN attributes for PPPoE (if specified on profile)
     if connection_type == ConnectionType.pppoe and profile.vlan_id:
         attrs.append({"attribute": "Tunnel-Type", "op": ":=", "value": "VLAN"})
-        attrs.append({"attribute": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"})
-        attrs.append({"attribute": "Tunnel-Private-Group-Id", "op": ":=", "value": str(profile.vlan_id)})
+        attrs.append(
+            {"attribute": "Tunnel-Medium-Type", "op": ":=", "value": "IEEE-802"}
+        )
+        attrs.append(
+            {
+                "attribute": "Tunnel-Private-Group-Id",
+                "op": ":=",
+                "value": str(profile.vlan_id),
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
 # Connection type resolution
 # ---------------------------------------------------------------------------
+
 
 def resolve_connection_type(
     db: Session,
@@ -274,6 +434,7 @@ def _rule_matches(rule: NasConnectionRule, subscription: Subscription) -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def _append_option82_attributes(
     db: Session,
     attrs: list[dict[str, str]],
@@ -290,6 +451,7 @@ def _append_option82_attributes(
         return
 
     from app.models.catalog import AccessCredential
+
     credential = (
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
@@ -303,17 +465,21 @@ def _append_option82_attributes(
     if not credential:
         return
     if credential.circuit_id:
-        attrs.append({
-            "attribute": "Agent-Circuit-Id",
-            "op": ":=",
-            "value": credential.circuit_id,
-        })
+        attrs.append(
+            {
+                "attribute": "Agent-Circuit-Id",
+                "op": ":=",
+                "value": credential.circuit_id,
+            }
+        )
     if credential.remote_id:
-        attrs.append({
-            "attribute": "Agent-Remote-Id",
-            "op": ":=",
-            "value": credential.remote_id,
-        })
+        attrs.append(
+            {
+                "attribute": "Agent-Remote-Id",
+                "op": ":=",
+                "value": credential.remote_id,
+            }
+        )
 
 
 def build_radius_reply_attributes(
@@ -354,6 +520,7 @@ def build_radius_reply_attributes(
     # Append any custom attributes from the profile
     if profile:
         from app.models.catalog import RadiusAttribute
+
         custom_attrs = (
             db.query(RadiusAttribute)
             .filter(RadiusAttribute.profile_id == profile.id)
@@ -362,16 +529,20 @@ def build_radius_reply_attributes(
         seen = {a["attribute"].lower() for a in attrs}
         for attr in custom_attrs:
             if attr.attribute.lower() not in seen:
-                attrs.append({
-                    "attribute": attr.attribute,
-                    "op": attr.operator or ":=",
-                    "value": attr.value,
-                })
+                attrs.append(
+                    {
+                        "attribute": attr.attribute,
+                        "op": attr.operator or ":=",
+                        "value": attr.value,
+                    }
+                )
                 seen.add(attr.attribute.lower())
 
     logger.debug(
         "Built %d RADIUS attributes for subscription %s (type=%s).",
-        len(attrs), subscription.id, connection_type.value,
+        len(attrs),
+        subscription.id,
+        connection_type.value,
     )
     return attrs
 
@@ -438,8 +609,8 @@ def _mikrotik_commands(
             if prof_name:
                 parts.append(f'profile="{prof_name}"')
             if ip:
-                parts.append(f'remote-address={ip}')
-            parts.append('service=pppoe')
+                parts.append(f"remote-address={ip}")
+            parts.append("service=pppoe")
             commands.append(" ".join(parts))
         elif action == "delete":
             commands.append(f'/ppp secret remove [find name="{login}"]')
@@ -451,21 +622,26 @@ def _mikrotik_commands(
 
     elif connection_type == ConnectionType.dhcp:
         if action == "create" and ip:
-            parts = [f'/ip dhcp-server lease add address={ip}']
+            parts = [f"/ip dhcp-server lease add address={ip}"]
             if mac:
-                parts.append(f'mac-address={mac}')
+                parts.append(f"mac-address={mac}")
             if profile and profile.mikrotik_rate_limit:
                 from app.services.enforcement import _build_mikrotik_rate_limit
+
                 rate = _build_mikrotik_rate_limit(profile)
                 if rate:
-                    parts.append(f'rate-limit={_sanitize_routeros_value(rate)}')
+                    parts.append(f"rate-limit={_sanitize_routeros_value(rate)}")
             commands.append(" ".join(parts))
         elif action == "delete" and ip:
-            commands.append(f'/ip dhcp-server lease remove [find address={ip}]')
+            commands.append(f"/ip dhcp-server lease remove [find address={ip}]")
         elif action == "suspend" and ip:
-            commands.append(f'/ip dhcp-server lease set [find address={ip}] disabled=yes')
+            commands.append(
+                f"/ip dhcp-server lease set [find address={ip}] disabled=yes"
+            )
         elif action == "unsuspend" and ip:
-            commands.append(f'/ip dhcp-server lease set [find address={ip}] disabled=no')
+            commands.append(
+                f"/ip dhcp-server lease set [find address={ip}] disabled=no"
+            )
 
     elif connection_type == ConnectionType.hotspot:
         if action == "create":
@@ -473,7 +649,7 @@ def _mikrotik_commands(
             if prof_name:
                 parts.append(f'profile="{prof_name}"')
             if ip:
-                parts.append(f'address={ip}')
+                parts.append(f"address={ip}")
             commands.append(" ".join(parts))
         elif action == "delete":
             commands.append(f'/ip hotspot user remove [find name="{login}"]')
@@ -486,21 +662,21 @@ def _mikrotik_commands(
     elif connection_type == ConnectionType.static:
         if action == "suspend" and ip:
             commands.append(
-                f'/ip firewall address-list add list=blocked-subscribers address={ip}'
+                f"/ip firewall address-list add list=blocked-subscribers address={ip}"
             )
         elif action == "unsuspend" and ip:
             commands.append(
-                f'/ip firewall address-list remove [find list=blocked-subscribers address={ip}]'
+                f"/ip firewall address-list remove [find list=blocked-subscribers address={ip}]"
             )
 
     elif connection_type == ConnectionType.ipoe:
         if action == "create" and ip:
-            parts = [f'/ip dhcp-server lease add address={ip}']
+            parts = [f"/ip dhcp-server lease add address={ip}"]
             if mac:
-                parts.append(f'mac-address={mac}')
-            parts.append('use-src-mac=yes')
+                parts.append(f"mac-address={mac}")
+            parts.append("use-src-mac=yes")
             commands.append(" ".join(parts))
         elif action == "delete" and ip:
-            commands.append(f'/ip dhcp-server lease remove [find address={ip}]')
+            commands.append(f"/ip dhcp-server lease remove [find address={ip}]")
 
     return commands

@@ -30,7 +30,9 @@ def get_webhook_form_data(db: Session, endpoint_id: str | None = None):
 
     subscribed_events = []
     if endpoint:
-        subscribed_events = [sub.event_type.value for sub in endpoint.subscriptions if sub.is_active]
+        subscribed_events = [
+            sub.event_type.value for sub in endpoint.subscriptions if sub.is_active
+        ]
 
     return {
         "endpoint": endpoint,

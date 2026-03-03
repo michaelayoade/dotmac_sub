@@ -22,6 +22,7 @@ from app.models.wireguard import WireGuardPeer, WireGuardServer
 
 def get_configuration_counts(db: Session) -> dict[str, int]:
     """Return section counts for the admin configuration overview page."""
+
     def _count(model) -> int:
         return db.scalar(select(func.count()).select_from(model)) or 0
 

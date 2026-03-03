@@ -35,7 +35,9 @@ def change_requests_page_data(
     bulk_status: str | None,
     skipped: str | None,
 ) -> dict[str, object]:
-    requests = change_request_service.list_requests(db, status=FiberChangeRequestStatus.pending)
+    requests = change_request_service.list_requests(
+        db, status=FiberChangeRequestStatus.pending
+    )
     conflicts = {
         str(req.id): web_network_fiber_service.has_change_request_conflict(db, req)
         for req in requests
@@ -69,7 +71,9 @@ def change_request_detail_page_data(
         "conflict": conflict,
         "pending": change_request.status == FiberChangeRequestStatus.pending,
         "error": error,
-        "activities": build_audit_activities(db, "fiber_change_request", request_id, limit=10),
+        "activities": build_audit_activities(
+            db, "fiber_change_request", request_id, limit=10
+        ),
     }
 
 
@@ -82,7 +86,10 @@ def approve_change_request(
     force_apply: bool,
 ) -> tuple[bool, str | None]:
     change_request = change_request_service.get_request(db, request_id)
-    if web_network_fiber_service.has_change_request_conflict(db, change_request) and not force_apply:
+    if (
+        web_network_fiber_service.has_change_request_conflict(db, change_request)
+        and not force_apply
+    ):
         return False, "conflict"
     change_request_service.approve_request(
         db,
@@ -122,7 +129,10 @@ def bulk_approve_change_requests(
     approved_request_ids: list[str] = []
     for request_id in request_ids:
         change_request = change_request_service.get_request(db, request_id)
-        if web_network_fiber_service.has_change_request_conflict(db, change_request) and not force_apply:
+        if (
+            web_network_fiber_service.has_change_request_conflict(db, change_request)
+            and not force_apply
+        ):
             skipped += 1
             continue
         change_request_service.approve_request(
@@ -135,7 +145,9 @@ def bulk_approve_change_requests(
     return {"skipped": skipped, "approved_request_ids": approved_request_ids}
 
 
-def update_asset_position_data(db: Session, body: dict[str, object]) -> tuple[dict[str, object], int]:
+def update_asset_position_data(
+    db: Session, body: dict[str, object]
+) -> tuple[dict[str, object], int]:
     asset_type = body.get("type")
     asset_id = body.get("id")
     latitude_raw = body.get("latitude")

@@ -20,7 +20,9 @@ _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -32,7 +34,11 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 
-@router.get("/monitoring", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/monitoring",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def monitoring_page(request: Request, db: Session = Depends(get_db)):
     page_data = web_network_monitoring_service.monitoring_page_data(
         db,
@@ -49,7 +55,11 @@ def monitoring_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/network/monitoring/index.html", context)
 
 
-@router.get("/alarms", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/alarms",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def alarms_page(
     request: Request,
     severity: str | None = None,
@@ -66,7 +76,11 @@ def alarms_page(
     return templates.TemplateResponse("admin/network/monitoring/alarms.html", context)
 
 
-@router.get("/alarms/rules/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/alarms/rules/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def alarms_rules_new(request: Request, db: Session = Depends(get_db)):
     options = web_network_alarm_rules_service.form_options(db)
     context = _base_context(request, db, active_page="monitoring")
@@ -77,10 +91,16 @@ def alarms_rules_new(request: Request, db: Session = Depends(get_db)):
             **options,
         }
     )
-    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+    return templates.TemplateResponse(
+        "admin/network/monitoring/rule_form.html", context
+    )
 
 
-@router.post("/alarms/rules/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:write"))])
+@router.post(
+    "/alarms/rules/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
 def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     values = web_network_alarm_rules_service.parse_form_values(form)
@@ -102,4 +122,6 @@ def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
             "error": error or "Please correct the highlighted fields.",
         }
     )
-    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+    return templates.TemplateResponse(
+        "admin/network/monitoring/rule_form.html", context
+    )

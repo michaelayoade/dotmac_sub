@@ -38,7 +38,9 @@ def get_scheduler_overview_data(
     }
 
 
-def get_scheduler_task_detail_data(db: Session, task_id: str) -> dict[str, object] | None:
+def get_scheduler_task_detail_data(
+    db: Session, task_id: str
+) -> dict[str, object] | None:
     """Return task detail data including computed next run time."""
     task = scheduler_service.scheduled_tasks.get(db, task_id)
     if not task:

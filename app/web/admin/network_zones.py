@@ -32,7 +32,11 @@ def _base_context(
     }
 
 
-@router.get("/zones", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/zones",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def zones_list(
     request: Request, status: str | None = None, db: Session = Depends(get_db)
 ) -> HTMLResponse:
@@ -43,7 +47,11 @@ def zones_list(
     return templates.TemplateResponse("admin/network/zones/index.html", context)
 
 
-@router.get("/zones/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/zones/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Show new zone form."""
     form_context = web_network_zones_service.build_form_context(
@@ -56,7 +64,11 @@ def zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     return templates.TemplateResponse("admin/network/zones/form.html", context)
 
 
-@router.post("/zones", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/zones",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def zone_create(request: Request, db: Session = Depends(get_db)) -> Response:
     """Create a new zone."""
     form = parse_form_data_sync(request)
@@ -77,7 +89,11 @@ def zone_create(request: Request, db: Session = Depends(get_db)) -> Response:
     return RedirectResponse(f"/admin/network/zones/{zone.id}", status_code=303)
 
 
-@router.get("/zones/{zone_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/zones/{zone_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def zone_detail(
     request: Request,
     zone_id: str,
@@ -96,7 +112,11 @@ def zone_detail(
     return templates.TemplateResponse("admin/network/zones/detail.html", context)
 
 
-@router.get("/zones/{zone_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/zones/{zone_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def zone_edit(
     request: Request,
     zone_id: str,
@@ -120,7 +140,11 @@ def zone_edit(
     return templates.TemplateResponse("admin/network/zones/form.html", context)
 
 
-@router.post("/zones/{zone_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/zones/{zone_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def zone_update(
     request: Request,
     zone_id: str,

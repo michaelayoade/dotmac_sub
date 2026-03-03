@@ -25,15 +25,23 @@ def build_contacts_index_context(
     if entity_type == "organization" and status:
         status = None
 
-    people_query = db.query(Subscriber).filter(Subscriber.user_type != UserType.system_user)
+    people_query = db.query(Subscriber).filter(
+        Subscriber.user_type != UserType.system_user
+    )
     if status:
         normalized_status = status.strip().lower()
         if normalized_status in {"active", "customer", "subscriber", "lead", "contact"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.active)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.active
+            )
         elif normalized_status in {"inactive", "suspended"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.suspended)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.suspended
+            )
         elif normalized_status in {"delinquent", "canceled"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus(normalized_status))
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus(normalized_status)
+            )
 
     if search:
         search_filter = f"%{search}%"
@@ -79,7 +87,10 @@ def build_contacts_index_context(
 
     if entity_type != "organization":
         people = (
-            people_query.order_by(Subscriber.created_at.desc()).limit(list_limit).offset(0).all()
+            people_query.order_by(Subscriber.created_at.desc())
+            .limit(list_limit)
+            .offset(0)
+            .all()
         )
         for person in people:
             contacts.append(
@@ -90,7 +101,9 @@ def build_contacts_index_context(
                     "email": person.email,
                     "phone": person.phone,
                     "status": person.status.value if person.status else "active",
-                    "organization": person.organization.name if person.organization else None,
+                    "organization": person.organization.name
+                    if person.organization
+                    else None,
                     "is_active": person.is_active,
                     "created_at": person.created_at,
                     "raw": person,
@@ -101,7 +114,12 @@ def build_contacts_index_context(
         orgs_query = db.query(Organization)
         if search:
             orgs_query = orgs_query.filter(Organization.name.ilike(f"%{search}%"))
-        orgs = orgs_query.order_by(Organization.created_at.desc()).limit(list_limit).offset(0).all()
+        orgs = (
+            orgs_query.order_by(Organization.created_at.desc())
+            .limit(list_limit)
+            .offset(0)
+            .all()
+        )
         for organization in orgs:
             contacts.append(
                 {
@@ -187,7 +205,10 @@ def build_customers_index_context(
         if search:
             people_query = people_query.filter(Subscriber.email.ilike(f"%{search}%"))
         people = (
-            people_query.order_by(Subscriber.created_at.desc()).limit(list_limit).offset(list_offset).all()
+            people_query.order_by(Subscriber.created_at.desc())
+            .limit(list_limit)
+            .offset(list_offset)
+            .all()
         )
         for person in people:
             customers.append(
@@ -238,7 +259,9 @@ def build_customers_index_context(
             .filter(Subscriber.user_type != UserType.system_user)
         )
         if search:
-            people_count_query = people_count_query.filter(Subscriber.email.ilike(f"%{search}%"))
+            people_count_query = people_count_query.filter(
+                Subscriber.email.ilike(f"%{search}%")
+            )
         people_total = people_count_query.scalar() or 0
 
     if customer_type != "person":

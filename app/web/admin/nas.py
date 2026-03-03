@@ -67,7 +67,6 @@ def _device_form_values(params: dict[str, Any]) -> dict[str, Any]:
     return {key: params.get(key) for key in DEVICE_FORM_KEYS}
 
 
-
 # ============== NAS Dashboard ==============
 
 
@@ -178,7 +177,9 @@ def device_create(
     result = web_nas_service.create_device(request, db, form_values)
     if result.redirect_url:
         return RedirectResponse(result.redirect_url, status_code=303)
-    return templates.TemplateResponse("admin/network/nas/device_form.html", result.context)
+    return templates.TemplateResponse(
+        "admin/network/nas/device_form.html", result.context
+    )
 
 
 @router.get("/devices/{device_id}", response_class=HTMLResponse)
@@ -278,7 +279,9 @@ def device_update(
     result = web_nas_service.update_device(request, db, device_id, form_values)
     if result.redirect_url:
         return RedirectResponse(result.redirect_url, status_code=303)
-    return templates.TemplateResponse("admin/network/nas/device_form.html", result.context)
+    return templates.TemplateResponse(
+        "admin/network/nas/device_form.html", result.context
+    )
 
 
 @router.post("/devices/{device_id}/delete")
@@ -495,21 +498,29 @@ def template_create(
     result = web_nas_service.create_template(request, db, form_values)
     if result.redirect_url:
         return RedirectResponse(result.redirect_url, status_code=303)
-    return templates.TemplateResponse("admin/network/nas/template_form.html", result.context)
+    return templates.TemplateResponse(
+        "admin/network/nas/template_form.html", result.context
+    )
 
 
 @router.get("/templates/{template_id}", response_class=HTMLResponse)
 def template_detail(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Provisioning template detail page."""
-    context = web_nas_service.template_detail_context(request, db, template_id=template_id)
+    context = web_nas_service.template_detail_context(
+        request, db, template_id=template_id
+    )
 
     return templates.TemplateResponse("admin/network/nas/template_detail.html", context)
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
-def template_form_edit(request: Request, template_id: str, db: Session = Depends(get_db)):
+def template_form_edit(
+    request: Request, template_id: str, db: Session = Depends(get_db)
+):
     """Edit provisioning template form."""
-    context = web_nas_service.template_form_context(request, db, template_id=template_id)
+    context = web_nas_service.template_form_context(
+        request, db, template_id=template_id
+    )
     return templates.TemplateResponse("admin/network/nas/template_form.html", context)
 
 
@@ -546,7 +557,9 @@ def template_update(
     )
     if result.redirect_url:
         return RedirectResponse(result.redirect_url, status_code=303)
-    return templates.TemplateResponse("admin/network/nas/template_form.html", result.context)
+    return templates.TemplateResponse(
+        "admin/network/nas/template_form.html", result.context
+    )
 
 
 @router.post("/templates/{template_id}/delete")

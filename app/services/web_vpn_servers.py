@@ -158,7 +158,9 @@ def apply_metadata(
     flag_modified(server, "metadata_")
 
 
-def maybe_deploy_server(db: Session, server: WireGuardServer, *, auto_deploy: bool) -> None:
+def maybe_deploy_server(
+    db: Session, server: WireGuardServer, *, auto_deploy: bool
+) -> None:
     """Deploy server when auto_deploy is enabled and keys exist."""
     if not auto_deploy or not server.public_key:
         return
@@ -273,12 +275,14 @@ def build_dashboard_data(
     servers_with_counts: list[dict[str, object]] = []
     for s in all_servers:
         peer_count = wg_service.wg_servers.get_peer_count(db, s.id)
-        servers_with_counts.append({
-            "server": s,
-            "peer_count": peer_count,
-            "is_selected": str(s.id) == str(server.id),
-            "needs_setup": not s.public_key,
-        })
+        servers_with_counts.append(
+            {
+                "server": s,
+                "peer_count": peer_count,
+                "is_selected": str(s.id) == str(server.id),
+                "needs_setup": not s.public_key,
+            }
+        )
 
     return {
         "all_servers": all_servers,
@@ -734,7 +738,9 @@ def sync_peer_stats_from_interface(
             continue
         latest_handshake = status.get("latest_handshake")
         if isinstance(latest_handshake, (int, float)) and latest_handshake:
-            peer.last_handshake_at = datetime.fromtimestamp(float(latest_handshake), tz=UTC)
+            peer.last_handshake_at = datetime.fromtimestamp(
+                float(latest_handshake), tz=UTC
+            )
         endpoint = status.get("endpoint")
         endpoint_ip = _endpoint_to_ip(endpoint if isinstance(endpoint, str) else None)
         if endpoint_ip:

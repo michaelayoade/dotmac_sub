@@ -97,9 +97,7 @@ def detail_page_data(db: Session, zone_id: str) -> dict[str, object] | None:
     # Associated infrastructure counts
     ont_count = (
         db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(OntUnit.zone_id == zone.id)
+            select(func.count()).select_from(OntUnit).where(OntUnit.zone_id == zone.id)
         )
         or 0
     )

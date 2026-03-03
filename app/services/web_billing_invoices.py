@@ -26,14 +26,18 @@ from app.schemas.billing import (
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
-from app.services import web_billing_customers as web_billing_customers_service
 from app.services import numbering
-from app.services.audit_helpers import extract_changes, format_changes
-from app.services.audit_helpers import build_changes_metadata
+from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import (
+    build_changes_metadata,
+    extract_changes,
+    format_changes,
+)
 
 logger = logging.getLogger(__name__)
 PROFORMA_TAG = "[PROFORMA]"
 PROFORMA_PREFIX = "PF-"
+
 
 class InvoiceLineItem(TypedDict):
     description: str
@@ -73,7 +77,7 @@ def apply_proforma_form_values(
         return clean_number, clean_memo
 
     if clean_number and clean_number.upper().startswith(PROFORMA_PREFIX):
-        clean_number = clean_number[len(PROFORMA_PREFIX):].strip() or None
+        clean_number = clean_number[len(PROFORMA_PREFIX) :].strip() or None
     if clean_memo and PROFORMA_TAG in clean_memo:
         clean_memo = clean_memo.replace(PROFORMA_TAG, "").strip() or None
     return clean_number, clean_memo
@@ -124,7 +128,9 @@ def convert_proforma_to_final(db: Session, *, invoice_id: str) -> Invoice:
         invoice_number=invoice_number,
         memo=cleaned_memo,
         is_proforma=False,
-        status=InvoiceStatus.issued if invoice.status == InvoiceStatus.draft else invoice.status,
+        status=InvoiceStatus.issued
+        if invoice.status == InvoiceStatus.draft
+        else invoice.status,
         issued_at=invoice.issued_at or datetime.now(UTC),
     )
     billing_service.invoices.update(db=db, invoice_id=invoice_id, payload=payload)
@@ -202,14 +208,18 @@ def parse_create_line_items(
             {
                 "description": description.strip(),
                 "quantity": parse_decimal(quantity_raw, "quantity", Decimal("1")),
-                "unit_price": parse_decimal(unit_price_raw, "unit_price", Decimal("0.00")),
+                "unit_price": parse_decimal(
+                    unit_price_raw, "unit_price", Decimal("0.00")
+                ),
                 "tax_rate_id": UUID(tax_rate_raw) if tax_rate_raw else None,
             }
         )
     return line_items
 
 
-def create_invoice_lines(db: Session, *, invoice_id: UUID, line_items: list[InvoiceLineItem]) -> None:
+def create_invoice_lines(
+    db: Session, *, invoice_id: UUID, line_items: list[InvoiceLineItem]
+) -> None:
     """Create invoice lines from parsed line item dictionaries."""
     for item in line_items:
         billing_service.invoice_lines.create(
@@ -236,7 +246,9 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
     return billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
 
 
-def maybe_send_invoice_notification(db: Session, *, invoice, send_notification: str | None) -> None:
+def maybe_send_invoice_notification(
+    db: Session, *, invoice, send_notification: str | None
+) -> None:
     """Send invoice email notification when requested."""
     if not send_notification or not invoice or not invoice.account:
         return
@@ -290,11 +302,15 @@ def create_invoice_from_form(
     """Process invoice-create web form and return created invoice."""
     resolved_account_id = account_id
     if not resolved_account_id and customer_ref:
-        customer_accounts = web_billing_customers_service.accounts_for_customer(db, customer_ref)
+        customer_accounts = web_billing_customers_service.accounts_for_customer(
+            db, customer_ref
+        )
         if len(customer_accounts) == 1:
             resolved_account_id = str(customer_accounts[0]["id"])
         elif len(customer_accounts) > 1:
-            raise ValueError("Please select a billing account for the selected customer.")
+            raise ValueError(
+                "Please select a billing account for the selected customer."
+            )
         else:
             raise ValueError("No billing account found for the selected customer.")
 
@@ -432,7 +448,9 @@ def create_invoice_line_from_form(
     billing_service.invoice_lines.create(db, payload)
 
 
-def apply_line_items_json_update(db: Session, *, invoice_id, before_invoice, line_items_json: str | None) -> None:
+def apply_line_items_json_update(
+    db: Session, *, invoice_id, before_invoice, line_items_json: str | None
+) -> None:
     """Apply line item create/update/delete mutations from JSON payload."""
     if not line_items_json or not line_items_json.strip():
         return
@@ -502,7 +520,9 @@ def load_credit_notes_for_account(db: Session, *, account_id):
         .where(CreditNote.account_id == account_id)
         .where(CreditNote.is_active.is_(True))
         .where(
-            CreditNote.status.in_([CreditNoteStatus.issued, CreditNoteStatus.partially_applied])
+            CreditNote.status.in_(
+                [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
+            )
         )
         .order_by(CreditNote.created_at.desc())
     )
@@ -526,39 +546,58 @@ def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
         limit=10,
         offset=0,
     )
-    actor_ids = {str(event.actor_id) for event in audit_events if getattr(event, "actor_id", None)}
+    actor_ids = {
+        str(event.actor_id)
+        for event in audit_events
+        if getattr(event, "actor_id", None)
+    }
     people = {}
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.scalars(select(Subscriber).where(Subscriber.id.in_(actor_ids))).all()
+            for person in db.scalars(
+                select(Subscriber).where(Subscriber.id.in_(actor_ids))
+            ).all()
         }
     activities = []
     for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        )
         metadata = getattr(event, "metadata_", None) or {}
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
         activities.append(
             {
                 "title": (event.action or "Activity").replace("_", " ").title(),
-                "description": f"{actor_name}" + (f" · {change_summary}" if change_summary else ""),
+                "description": f"{actor_name}"
+                + (f" · {change_summary}" if change_summary else ""),
                 "occurred_at": event.occurred_at,
             }
         )
     return activities
 
 
-def load_invoice_detail_data(db: Session, *, invoice_id: str) -> dict[str, object] | None:
+def load_invoice_detail_data(
+    db: Session, *, invoice_id: str
+) -> dict[str, object] | None:
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     if not invoice:
         return None
-    pdf_export = billing_invoice_pdf_service.get_latest_export(db, invoice_id=invoice_id)
+    pdf_export = billing_invoice_pdf_service.get_latest_export(
+        db, invoice_id=invoice_id
+    )
     return {
         "invoice": invoice,
         "tax_rates": load_tax_rates(db),
-        "credit_notes": load_credit_notes_for_account(db, account_id=invoice.account_id),
+        "credit_notes": load_credit_notes_for_account(
+            db, account_id=invoice.account_id
+        ),
         "activities": build_invoice_activities(db, invoice_id=invoice_id),
         "pdf_export": pdf_export,
         "is_proforma": is_proforma_invoice(invoice),

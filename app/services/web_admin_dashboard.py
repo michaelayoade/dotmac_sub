@@ -57,30 +57,46 @@ def _is_user_actor(actor_type) -> bool:
 def _build_health_thresholds(db: Session) -> dict:
     """Resolve network/server health thresholds from settings."""
     return {
-        "disk_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_disk_warn_pct"
-        )),
-        "disk_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_disk_crit_pct"
-        )),
-        "mem_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_mem_warn_pct"
-        )),
-        "mem_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_mem_crit_pct"
-        )),
-        "load_warn": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_load_warn"
-        )),
-        "load_crit": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_load_crit"
-        )),
-        "network_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "network_health_warn_pct"
-        )),
-        "network_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "network_health_crit_pct"
-        )),
+        "disk_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_disk_warn_pct"
+            )
+        ),
+        "disk_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_disk_crit_pct"
+            )
+        ),
+        "mem_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_mem_warn_pct"
+            )
+        ),
+        "mem_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_mem_crit_pct"
+            )
+        ),
+        "load_warn": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_load_warn"
+            )
+        ),
+        "load_crit": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_load_crit"
+            )
+        ),
+        "network_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "network_health_warn_pct"
+            )
+        ),
+        "network_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "network_health_crit_pct"
+            )
+        ),
     }
 
 
@@ -125,12 +141,14 @@ def _build_recent_activities(
         message = f"{actor_name} {action_label} {entity_label}"
         detail = change_summary or entity_label
 
-        recent_activities.append({
-            "type": activity_type,
-            "message": message,
-            "detail": detail,
-            "time": time_str,
-        })
+        recent_activities.append(
+            {
+                "type": activity_type,
+                "message": message,
+                "detail": detail,
+                "time": time_str,
+            }
+        )
     return recent_activities
 
 
@@ -161,9 +179,7 @@ def dashboard(request: Request, db: Session):
     )
     ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
     ont_active = (
-        db.query(func.count(OntUnit.id))
-        .filter(OntUnit.is_active.is_(True))
-        .scalar()
+        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
         or 0
     )
     # Fall back to monitoring devices if no OLTs are defined
@@ -261,9 +277,9 @@ def dashboard(request: Request, db: Session):
     if actor_ids:
         subscribers_lookup = {
             str(subscriber.id): subscriber
-            for subscriber in db.query(Subscriber).filter(
-                Subscriber.id.in_(actor_ids)
-            ).all()
+            for subscriber in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
 
     recent_activities = _build_recent_activities(recent_activity, subscribers_lookup)
@@ -303,7 +319,9 @@ def dashboard(request: Request, db: Session):
 def dashboard_server_health_partial(request: Request, db: Session):
     server_health = system_health_service.get_system_health()
     thresholds = _build_health_thresholds(db)
-    server_health_status = system_health_service.evaluate_health(server_health, thresholds)
+    server_health_status = system_health_service.evaluate_health(
+        server_health, thresholds
+    )
     return templates.TemplateResponse(
         "admin/dashboard/_server_health.html",
         {

@@ -116,7 +116,9 @@ def list_surveys(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = comms_service.surveys.list(db, is_active, order_by, order_dir, limit, offset)
+    items = comms_service.surveys.list(
+        db, is_active, order_by, order_dir, limit, offset
+    )
     return list_response(items, limit, offset)
 
 
@@ -156,6 +158,11 @@ def list_survey_responses(
     db: Session = Depends(get_db),
 ):
     items = comms_service.survey_responses.list(
-        db, survey_id=survey_id, order_by=order_by, order_dir=order_dir, limit=limit, offset=offset
+        db,
+        survey_id=survey_id,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=limit,
+        offset=offset,
     )
     return list_response(items, limit, offset)

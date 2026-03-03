@@ -32,7 +32,9 @@ router = APIRouter()
     dependencies=[Depends(require_permission("auth:admin"))],
     tags=["user-credentials"],
 )
-def create_user_credential(payload: UserCredentialCreate, db: Session = Depends(get_db)):
+def create_user_credential(
+    payload: UserCredentialCreate, db: Session = Depends(get_db)
+):
     return auth_service.user_credentials.create(db, payload)
 
 

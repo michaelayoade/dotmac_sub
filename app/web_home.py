@@ -24,5 +24,9 @@ def home(request: Request, db: Session = Depends(get_db)):
     )
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "title": "DotMac Subs - Subscription Management Platform", "subscribers": subscribers},
+        {
+            "request": request,
+            "title": "DotMac Subs - Subscription Management Platform",
+            "subscribers": subscribers,
+        },
     )

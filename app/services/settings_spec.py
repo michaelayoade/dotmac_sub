@@ -486,7 +486,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="PREPAID_WARNING_BODY",
         value_type=SettingValueType.string,
         default="Your prepaid balance is below the minimum threshold ({threshold}). "
-                "Current balance: {balance}. Please top up to avoid suspension.",
+        "Current balance: {balance}. Please top up to avoid suspension.",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -501,7 +501,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="PREPAID_DEACTIVATION_BODY",
         value_type=SettingValueType.string,
         default="Your prepaid balance has been exhausted and service has been deactivated. "
-                "Please contact support to restore service.",
+        "Please contact support to restore service.",
     ),
     SettingSpec(
         domain=SettingDomain.catalog,
@@ -2150,9 +2150,17 @@ def resolve_value(db, domain: SettingDomain, key: str) -> object | None:
         parsed = _coerce_int_value(value)
         if parsed is None:
             parsed = spec.default if isinstance(spec.default, int) else None
-        if spec.min_value is not None and parsed is not None and parsed < spec.min_value:
+        if (
+            spec.min_value is not None
+            and parsed is not None
+            and parsed < spec.min_value
+        ):
             parsed = spec.default if isinstance(spec.default, int) else None
-        if spec.max_value is not None and parsed is not None and parsed > spec.max_value:
+        if (
+            spec.max_value is not None
+            and parsed is not None
+            and parsed > spec.max_value
+        ):
             parsed = spec.default if isinstance(spec.default, int) else None
         value = parsed
 
@@ -2163,9 +2171,7 @@ def resolve_value(db, domain: SettingDomain, key: str) -> object | None:
     return value
 
 
-def resolve_values_atomic(
-    db, domain: SettingDomain, keys: list[str]
-) -> dict[str, Any]:
+def resolve_values_atomic(db, domain: SettingDomain, keys: list[str]) -> dict[str, Any]:
     """Read multiple settings atomically to prevent race conditions.
 
     This function retrieves multiple settings in a single database query,
@@ -2225,9 +2231,17 @@ def resolve_values_atomic(
             parsed = _coerce_int_value(value)
             if parsed is None:
                 parsed = spec.default if isinstance(spec.default, int) else None
-            if spec.min_value is not None and parsed is not None and parsed < spec.min_value:
+            if (
+                spec.min_value is not None
+                and parsed is not None
+                and parsed < spec.min_value
+            ):
                 parsed = spec.default if isinstance(spec.default, int) else None
-            if spec.max_value is not None and parsed is not None and parsed > spec.max_value:
+            if (
+                spec.max_value is not None
+                and parsed is not None
+                and parsed > spec.max_value
+            ):
                 parsed = spec.default if isinstance(spec.default, int) else None
             value = parsed
 
@@ -2281,7 +2295,9 @@ def coerce_value(spec: SettingSpec, raw: object) -> tuple[object | None, str | N
     return raw, None
 
 
-def normalize_for_db(spec: SettingSpec, value: object) -> tuple[str | None, object | None]:
+def normalize_for_db(
+    spec: SettingSpec, value: object
+) -> tuple[str | None, object | None]:
     if spec.value_type == SettingValueType.boolean:
         bool_value = bool(value)
         return ("true" if bool_value else "false"), None

@@ -18,18 +18,17 @@ def get_roles_page_data(
     """Return paginated roles and role-user counts."""
     offset = (page - 1) * per_page
 
-    roles = db.execute(
-        select(Role)
-        .order_by(Role.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    ).scalars().all()
+    roles = (
+        db.execute(
+            select(Role).order_by(Role.created_at.desc()).offset(offset).limit(per_page)
+        )
+        .scalars()
+        .all()
+    )
 
     total = (
         db.scalar(
-            select(func.count())
-            .select_from(Role)
-            .where(Role.is_active.is_(True))
+            select(func.count()).select_from(Role).where(Role.is_active.is_(True))
         )
         or 0
     )
@@ -62,12 +61,16 @@ def get_permissions_page_data(
     """Return paginated permissions list and active total."""
     offset = (page - 1) * per_page
 
-    permissions = db.execute(
-        select(Permission)
-        .order_by(Permission.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    ).scalars().all()
+    permissions = (
+        db.execute(
+            select(Permission)
+            .order_by(Permission.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+        .scalars()
+        .all()
+    )
 
     total = (
         db.scalar(

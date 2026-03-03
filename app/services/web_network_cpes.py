@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 _CPE_META_KEYS = ("winbox_host", "api_host", "api_port", "api_user")
 
 
-def parse_cpe_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], str | None]:
+def parse_cpe_notes_metadata(
+    notes: str | None,
+) -> tuple[dict[str, str | None], str | None]:
     text = str(notes or "").strip()
     metadata = dict.fromkeys(_CPE_META_KEYS)
     if not text:
@@ -30,7 +32,7 @@ def parse_cpe_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], 
         for key in _CPE_META_KEYS:
             token = f"[{key}:"
             if lowered.startswith(token) and lowered.endswith("]"):
-                metadata[key] = stripped[len(token):-1].strip() or None
+                metadata[key] = stripped[len(token) : -1].strip() or None
                 matched = True
                 break
         if not matched:
@@ -76,7 +78,8 @@ def parse_cpe_form(form) -> dict[str, object]:
         "subscriber_id": str(form.get("subscriber_id") or "").strip(),
         "subscription_id": str(form.get("subscription_id") or "").strip() or None,
         "service_address_id": str(form.get("service_address_id") or "").strip() or None,
-        "device_type": str(form.get("device_type") or "").strip() or DeviceType.ont.value,
+        "device_type": str(form.get("device_type") or "").strip()
+        or DeviceType.ont.value,
         "status": str(form.get("status") or "").strip() or DeviceStatus.active.value,
         "serial_number": str(form.get("serial_number") or "").strip() or None,
         "model": str(form.get("model") or "").strip() or None,
@@ -91,7 +94,9 @@ def parse_cpe_form(form) -> dict[str, object]:
     }
 
 
-def cpe_form_snapshot(values: dict[str, object], *, cpe_id: str | None = None) -> dict[str, object]:
+def cpe_form_snapshot(
+    values: dict[str, object], *, cpe_id: str | None = None
+) -> dict[str, object]:
     data = dict(values)
     if cpe_id:
         data["id"] = cpe_id
@@ -104,7 +109,9 @@ def cpe_form_snapshot_from_model(cpe) -> dict[str, object]:
         "id": str(cpe.id),
         "subscriber_id": str(cpe.subscriber_id),
         "subscription_id": str(cpe.subscription_id) if cpe.subscription_id else "",
-        "service_address_id": str(cpe.service_address_id) if cpe.service_address_id else "",
+        "service_address_id": str(cpe.service_address_id)
+        if cpe.service_address_id
+        else "",
         "device_type": cpe.device_type.value,
         "status": cpe.status.value,
         "serial_number": cpe.serial_number or "",
@@ -132,9 +139,13 @@ def create_cpe(db, values: dict[str, object]):
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
-        normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
+        normalized["service_address_id"] = coerce_uuid(
+            str(values.get("service_address_id"))
+        )
     normalized["device_type"] = validate_enum(
-        str(values.get("device_type") or DeviceType.ont.value), DeviceType, "device_type"
+        str(values.get("device_type") or DeviceType.ont.value),
+        DeviceType,
+        "device_type",
     )
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
@@ -161,9 +172,13 @@ def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
-        normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
+        normalized["service_address_id"] = coerce_uuid(
+            str(values.get("service_address_id"))
+        )
     normalized["device_type"] = validate_enum(
-        str(values.get("device_type") or DeviceType.ont.value), DeviceType, "device_type"
+        str(values.get("device_type") or DeviceType.ont.value),
+        DeviceType,
+        "device_type",
     )
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
@@ -187,8 +202,15 @@ def get_cpe(db, *, cpe_id: str):
     return network_service.cpe_devices.get(db=db, device_id=cpe_id)
 
 
-def cpe_form_reference_data(db, *, subscriber_id: str | None = None) -> dict[str, object]:
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
+def cpe_form_reference_data(
+    db, *, subscriber_id: str | None = None
+) -> dict[str, object]:
+    subscribers = (
+        db.query(Subscriber)
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(500)
+        .all()
+    )
     selected_subscriber_id = str(subscriber_id or "").strip()
     subscriptions: list[Subscription] = []
     addresses: list[Address] = []
@@ -245,7 +267,8 @@ def build_cpe_list_data(
         devices = [
             d
             for d in devices
-            if search_q in " ".join(
+            if search_q
+            in " ".join(
                 [
                     str(d.serial_number or ""),
                     str(d.vendor or ""),
@@ -257,15 +280,24 @@ def build_cpe_list_data(
             ).lower()
         ]
     vendors = sorted({str(d.vendor) for d in devices if d.vendor})
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
+    subscribers = (
+        db.query(Subscriber)
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(500)
+        .all()
+    )
     return {
         "cpes": devices,
         "vendors": vendors,
         "subscribers": subscribers,
         "stats": {
             "total": len(devices),
-            "active": sum(1 for d in devices if d.status.value == DeviceStatus.active.value),
-            "mikrotik": sum(1 for d in devices if "mikrotik" in str(d.vendor or "").lower()),
+            "active": sum(
+                1 for d in devices if d.status.value == DeviceStatus.active.value
+            ),
+            "mikrotik": sum(
+                1 for d in devices if "mikrotik" in str(d.vendor or "").lower()
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),

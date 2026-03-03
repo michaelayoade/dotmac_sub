@@ -344,7 +344,9 @@ def upsert_smtp_sender(
             DomainSettingUpdate(
                 value_type=value_type,
                 value_text=value_text,
-                value_json=cast(dict[str, Any] | list[Any] | bool | int | str | None, value_json),
+                value_json=cast(
+                    dict[str, Any] | list[Any] | bool | int | str | None, value_json
+                ),
                 is_secret=is_secret,
                 is_active=True,
             ),

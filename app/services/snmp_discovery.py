@@ -15,6 +15,7 @@ from app.models.network_monitoring import (
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class InterfaceSnapshot:
     index: str
@@ -24,7 +25,9 @@ class InterfaceSnapshot:
     speed_mbps: int | None
 
 
-def _snmpwalk_args(device: NetworkDevice, command: str = "snmpwalk", bulk: bool = False) -> list[str]:
+def _snmpwalk_args(
+    device: NetworkDevice, command: str = "snmpwalk", bulk: bool = False
+) -> list[str]:
     host = device.mgmt_ip or device.hostname
     if not host:
         raise ValueError("Missing management IP/hostname for SNMP walk.")
@@ -87,8 +90,12 @@ def _run_snmp_command(args: list[str], timeout: int) -> list[str]:
         timeout=timeout,
     )
     if os.getenv("SNMP_DEBUG") == "1":
-        stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        stdout_lines = [
+            line.strip() for line in result.stdout.splitlines() if line.strip()
+        ]
+        stderr_lines = [
+            line.strip() for line in result.stderr.splitlines() if line.strip()
+        ]
         logger.info(
             "SNMP debug: cmd=%s rc=%s stdout=%s stderr=%s",
             " ".join(args),
@@ -198,12 +205,16 @@ def collect_device_health(device: NetworkDevice) -> dict[str, float | int | None
     if cpu_values:
         cpu_percent = sum(cpu_values) / len(cpu_values)
     elif "mikrotik" in vendor:
-        mikrotik_cpu = _parse_int(_parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.10.0")))
+        mikrotik_cpu = _parse_int(
+            _parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.10.0"))
+        )
         if mikrotik_cpu is not None:
             cpu_percent = float(mikrotik_cpu)
 
     try:
-        storage_types = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.25.2.3.1.2"))
+        storage_types = _parse_walk(
+            _run_snmpbulkwalk(device, ".1.3.6.1.2.1.25.2.3.1.2")
+        )
         storage_size = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.25.2.3.1.5"))
         storage_used = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.25.2.3.1.6"))
         for index, storage_type in storage_types.items():
@@ -218,8 +229,12 @@ def collect_device_health(device: NetworkDevice) -> dict[str, float | int | None
         memory_percent = None
 
     if memory_percent is None and "mikrotik" in vendor:
-        total_mem = _parse_int(_parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.6.0")))
-        free_mem = _parse_int(_parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.8.0")))
+        total_mem = _parse_int(
+            _parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.6.0"))
+        )
+        free_mem = _parse_int(
+            _parse_scalar(_run_snmpwalk(device, ".1.3.6.1.4.1.14988.1.1.3.8.0"))
+        )
         if total_mem and free_mem is not None and total_mem > 0:
             used = total_mem - free_mem
             memory_percent = (used / total_mem) * 100.0
@@ -289,7 +304,9 @@ def collect_interface_snapshot(device: NetworkDevice) -> list[InterfaceSnapshot]
             if not description:
                 description = right.strip() or None
         high_speed = _parse_speed(speed.get(index)) if speed else None
-        bps_speed = _parse_speed(speed_bps.get(index), scale=1_000_000) if speed_bps else None
+        bps_speed = (
+            _parse_speed(speed_bps.get(index), scale=1_000_000) if speed_bps else None
+        )
         resolved_speed = high_speed if high_speed and high_speed > 0 else bps_speed
         snapshots.append(
             InterfaceSnapshot(

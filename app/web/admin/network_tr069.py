@@ -18,7 +18,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -113,7 +115,9 @@ def tr069_acs_create(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/tr069/acs/{acs_id}/edit", response_class=HTMLResponse)
-def tr069_acs_edit(request: Request, acs_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def tr069_acs_edit(
+    request: Request, acs_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         server = web_network_tr069_service.get_acs_server(db, acs_id=acs_id)
     except Exception:
@@ -142,7 +146,9 @@ def tr069_acs_update(request: Request, acs_id: str, db: Session = Depends(get_db
         context = _base_context(request, db, active_page="tr069")
         context.update(
             {
-                "acs": web_network_tr069_service.acs_form_snapshot(values, acs_id=acs_id),
+                "acs": web_network_tr069_service.acs_form_snapshot(
+                    values, acs_id=acs_id
+                ),
                 "action_url": f"/admin/network/tr069/acs/{acs_id}",
                 "error": error,
             }
@@ -150,12 +156,16 @@ def tr069_acs_update(request: Request, acs_id: str, db: Session = Depends(get_db
         return templates.TemplateResponse("admin/network/tr069/acs_form.html", context)
 
     try:
-        server = web_network_tr069_service.update_acs_server(db, acs_id=acs_id, values=values)
+        server = web_network_tr069_service.update_acs_server(
+            db, acs_id=acs_id, values=values
+        )
     except Exception as exc:
         context = _base_context(request, db, active_page="tr069")
         context.update(
             {
-                "acs": web_network_tr069_service.acs_form_snapshot(values, acs_id=acs_id),
+                "acs": web_network_tr069_service.acs_form_snapshot(
+                    values, acs_id=acs_id
+                ),
                 "action_url": f"/admin/network/tr069/acs/{acs_id}",
                 "error": str(exc),
             }
@@ -200,7 +210,9 @@ def tr069_sync_acs(acs_id: str, db: Session = Depends(get_db)) -> RedirectRespon
 
 
 @router.post("/tr069/devices/{device_id}/link")
-def tr069_link_device(device_id: str, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+def tr069_link_device(
+    device_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
     form = parse_form_data_sync(request)
     cpe_device_id = str(form.get("cpe_device_id") or "").strip() or None
     acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
@@ -224,12 +236,16 @@ def tr069_link_device(device_id: str, request: Request, db: Session = Depends(ge
 
 
 @router.post("/tr069/devices/{device_id}/action")
-def tr069_device_action(device_id: str, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+def tr069_device_action(
+    device_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
     form = parse_form_data_sync(request)
     action = str(form.get("action") or "").strip()
     acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
     try:
-        job = web_network_tr069_service.queue_device_job(db, tr069_device_id=device_id, action=action)
+        job = web_network_tr069_service.queue_device_job(
+            db, tr069_device_id=device_id, action=action
+        )
         message = quote_plus(f"Action queued: {job.command}")
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",

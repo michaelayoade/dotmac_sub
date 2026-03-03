@@ -53,11 +53,13 @@ def legal_documents_list(
 def legal_document_new(request: Request, db: Session = Depends(get_db)):
     """New legal document form."""
     context = _base_context(request, db)
-    context.update({
-        "document": None,
-        "document_types": web_legal_service.document_type_options(),
-        "action": "create",
-    })
+    context.update(
+        {
+            "document": None,
+            "document_types": web_legal_service.document_type_options(),
+            "action": "create",
+        }
+    )
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
@@ -92,12 +94,14 @@ def legal_document_create(
         )
     except Exception as e:
         context = _base_context(request, db)
-        context.update({
-            "document": None,
-            "document_types": web_legal_service.document_type_options(),
-            "action": "create",
-            "error": str(e),
-        })
+        context.update(
+            {
+                "document": None,
+                "document_types": web_legal_service.document_type_options(),
+                "action": "create",
+                "error": str(e),
+            }
+        )
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
         )
@@ -135,11 +139,13 @@ def legal_document_edit(
         )
 
     context = _base_context(request, db)
-    context.update({
-        "document": document,
-        "document_types": web_legal_service.document_type_options(),
-        "action": "edit",
-    })
+    context.update(
+        {
+            "document": document,
+            "document_types": web_legal_service.document_type_options(),
+            "action": "edit",
+        }
+    )
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
@@ -186,12 +192,14 @@ def legal_document_update(
     except Exception as e:
         document = legal_service.legal_documents.get(db=db, document_id=document_id)
         context = _base_context(request, db)
-        context.update({
-            "document": document,
-            "document_types": web_legal_service.document_type_options(),
-            "action": "edit",
-            "error": str(e),
-        })
+        context.update(
+            {
+                "document": document,
+                "document_types": web_legal_service.document_type_options(),
+                "action": "edit",
+                "error": str(e),
+            }
+        )
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
         )

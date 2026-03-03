@@ -1,4 +1,3 @@
-
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -39,7 +38,10 @@ class KPIConfigs(ListResponseMixin):
         else:
             query = query.filter(KPIConfig.is_active == is_active)
         query = apply_ordering(
-            query, order_by, order_dir, {"created_at": KPIConfig.created_at, "key": KPIConfig.key}
+            query,
+            order_by,
+            order_dir,
+            {"created_at": KPIConfig.created_at, "key": KPIConfig.key},
         )
         return apply_pagination(query, limit, offset).all()
 

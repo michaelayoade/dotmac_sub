@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from difflib import unified_diff
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from difflib import unified_diff
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OltConfigBackup, OltConfigBackupType
+from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
 from app.services.audit_helpers import (
@@ -55,7 +55,9 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
     }
 
 
-def validate_values(db: Session, values: dict[str, object], *, current_olt: OLTDevice | None = None) -> str | None:
+def validate_values(
+    db: Session, values: dict[str, object], *, current_olt: OLTDevice | None = None
+) -> str | None:
     """Validate required fields and uniqueness."""
     if not values.get("name"):
         return "Name is required"
@@ -86,7 +88,9 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     return OLTDeviceUpdate.model_validate(values)
 
 
-def create_olt(db: Session, values: dict[str, object]) -> tuple[OLTDevice | None, str | None]:
+def create_olt(
+    db: Session, values: dict[str, object]
+) -> tuple[OLTDevice | None, str | None]:
     """Create OLT and normalize integrity errors."""
     try:
         olt = network_service.olt_devices.create(db=db, payload=create_payload(values))
@@ -97,7 +101,9 @@ def create_olt(db: Session, values: dict[str, object]) -> tuple[OLTDevice | None
         return None, integrity_error_message(exc)
 
 
-def update_olt(db: Session, olt_id: str, values: dict[str, object]) -> tuple[OLTDevice | None, str | None]:
+def update_olt(
+    db: Session, olt_id: str, values: dict[str, object]
+) -> tuple[OLTDevice | None, str | None]:
     """Update OLT and normalize integrity errors."""
     try:
         olt = network_service.olt_devices.update(
@@ -245,7 +251,9 @@ def compare_olt_backups(
     if not backup1 or not backup2:
         raise HTTPException(status_code=404, detail="One or both backups not found")
     if backup1.olt_device_id != backup2.olt_device_id:
-        raise HTTPException(status_code=400, detail="Backups must belong to the same OLT")
+        raise HTTPException(
+            status_code=400, detail="Backups must belong to the same OLT"
+        )
 
     text1 = read_backup_content(backup1)
     text2 = read_backup_content(backup2)
@@ -260,8 +268,12 @@ def compare_olt_backups(
             lineterm="",
         )
     )
-    added_lines = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
-    removed_lines = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+    added_lines = sum(
+        1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
+    )
+    removed_lines = sum(
+        1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
+    )
     diff_payload: dict[str, object] = {
         "unified_diff": "\n".join(diff_lines),
         "added_lines": added_lines,
@@ -315,7 +327,9 @@ def fetch_running_config(olt: OLTDevice) -> str | None:
             if error_indication or error_status:
                 continue
             for var_bind in var_binds:
-                lines.append(f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}")
+                lines.append(
+                    f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}"
+                )
         if len(lines) <= 4:
             return None
         return "\n".join(lines) + "\n"

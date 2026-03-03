@@ -19,7 +19,9 @@ def apply_optional_ilike(query, filters: dict):
     return query
 
 
-def apply_active_state(query, column, is_active: bool | None, *, default_active: bool = True):
+def apply_active_state(
+    query, column, is_active: bool | None, *, default_active: bool = True
+):
     """Apply standard active-state filtering against a model column."""
     if is_active is None:
         if default_active:

@@ -41,8 +41,6 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
     return OntActions.set_wifi_password(db, ont_id, password)
 
 
-def toggle_lan_port(
-    db: Session, ont_id: str, port: int, enabled: bool
-) -> ActionResult:
+def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:
     """Toggle a LAN port and return result."""
     return OntActions.toggle_lan_port(db, ont_id, port, enabled)

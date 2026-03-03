@@ -16,7 +16,9 @@ from app.models.auth import AuthProvider, MFAMethodType, SessionStatus
 
 
 class UserCredentialBase(BaseModel):
-    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
+    subscriber_id: UUID = Field(
+        validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     provider: AuthProvider = AuthProvider.local
     username: str | None = Field(default=None, max_length=150)
     radius_server_id: UUID | None = None
@@ -35,7 +37,9 @@ class UserCredentialCreate(UserCredentialBase):
     def _validate_local_credentials(self) -> UserCredentialCreate:
         if self.provider == AuthProvider.local:
             if not self.username or not self.password_hash:
-                raise ValueError("Local credentials require username and password_hash.")
+                raise ValueError(
+                    "Local credentials require username and password_hash."
+                )
         return self
 
 
@@ -80,7 +84,9 @@ class UserCredentialRead(UserCredentialBase):
 
 
 class MFAMethodBase(BaseModel):
-    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
+    subscriber_id: UUID = Field(
+        validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     method_type: MFAMethodType
     label: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
@@ -121,7 +127,9 @@ class MFAMethodRead(MFAMethodBase):
 
 
 class SessionBase(BaseModel):
-    subscriber_id: UUID = Field(validation_alias=AliasChoices("subscriber_id", "person_id"))
+    subscriber_id: UUID = Field(
+        validation_alias=AliasChoices("subscriber_id", "person_id")
+    )
     status: SessionStatus = SessionStatus.active
     token_hash: str = Field(min_length=1, max_length=255)
     ip_address: str | None = Field(default=None, max_length=64)

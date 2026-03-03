@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import ipaddress
+import json
 import socket
 import urllib.parse
 from typing import cast
@@ -248,7 +248,9 @@ def build_embedded_connector_data(
     probe_checked = False
     if perform_check and is_http:
         probe_checked = True
-        health_status, health_http_status, health_message = _probe_embedded_url_health(base_url)
+        health_status, health_http_status, health_message = _probe_embedded_url_health(
+            base_url
+        )
     else:
         health_message = (
             "Connector URL is not configured or invalid. Set a full http(s) base URL to embed this integration."
@@ -274,7 +276,9 @@ def _probe_embedded_url_health(url: str) -> tuple[str, int | None, str]:
             for addrinfo in addrinfos:
                 ip = ipaddress.ip_address(addrinfo[4][0])
                 if ip.is_private or ip.is_loopback or ip.is_link_local:
-                    raise ValueError("SSRF blocked: target resolves to internal address")
+                    raise ValueError(
+                        "SSRF blocked: target resolves to internal address"
+                    )
         response = httpx.get(url, timeout=6.0, follow_redirects=True)
     except Exception as exc:
         return (
@@ -429,7 +433,9 @@ def create_job(
         target_id=cast(UUID, _parse_uuid(target_id, "target_id")),
         name=name.strip(),
         job_type=validate_enum(job_type, IntegrationJobType, "job_type"),
-        schedule_type=validate_enum(schedule_type, IntegrationScheduleType, "schedule_type"),
+        schedule_type=validate_enum(
+            schedule_type, IntegrationScheduleType, "schedule_type"
+        ),
         interval_minutes=interval_value,
         notes=notes.strip() if notes else None,
         is_active=is_active,
@@ -625,7 +631,9 @@ def create_provider(
 
     payload = PaymentProviderCreate(
         name=name.strip(),
-        provider_type=validate_enum(provider_type, PaymentProviderType, "provider_type"),
+        provider_type=validate_enum(
+            provider_type, PaymentProviderType, "provider_type"
+        ),
         connector_config_id=_parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),

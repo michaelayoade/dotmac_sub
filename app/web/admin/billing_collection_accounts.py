@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.billing import CollectionAccountUpdate
 from app.services import billing as billing_service
-from app.services import web_billing_collection_accounts as web_billing_collection_accounts_service
+from app.services import (
+    web_billing_collection_accounts as web_billing_collection_accounts_service,
+)
 from app.services.auth_dependencies import require_permission
 from app.services.billing import configuration as billing_config_service
 
@@ -40,7 +42,9 @@ def collection_accounts_list(
     show_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    state = web_billing_collection_accounts_service.list_data(db, show_inactive=show_inactive)
+    state = web_billing_collection_accounts_service.list_data(
+        db, show_inactive=show_inactive
+    )
     return templates.TemplateResponse(
         "admin/billing/collection_accounts.html",
         {
@@ -77,9 +81,13 @@ def collection_accounts_create(
             notes=notes,
             is_active=is_active,
         )
-        return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)
+        return RedirectResponse(
+            url="/admin/billing/collection-accounts", status_code=303
+        )
     except Exception as exc:
-        state = web_billing_collection_accounts_service.list_data(db, show_inactive=False)
+        state = web_billing_collection_accounts_service.list_data(
+            db, show_inactive=False
+        )
         return templates.TemplateResponse(
             "admin/billing/collection_accounts.html",
             {
@@ -96,8 +104,12 @@ def collection_accounts_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:write"))],
 )
-def collection_accounts_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
-    state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
+def collection_accounts_edit(
+    request: Request, account_id: UUID, db: Session = Depends(get_db)
+):
+    state = web_billing_collection_accounts_service.edit_data(
+        db, account_id=str(account_id)
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -145,9 +157,13 @@ def collection_accounts_update(
             notes=notes,
             is_active=is_active,
         )
-        return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)
+        return RedirectResponse(
+            url="/admin/billing/collection-accounts", status_code=303
+        )
     except Exception as exc:
-        state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
+        state = web_billing_collection_accounts_service.edit_data(
+            db, account_id=str(account_id)
+        )
         return templates.TemplateResponse(
             "admin/billing/collection_account_form.html",
             {

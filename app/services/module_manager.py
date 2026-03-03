@@ -209,7 +209,9 @@ def module_manager_page_state(db: Session) -> dict[str, Any]:
             feature_entries.append(
                 {
                     "name": feature_name,
-                    "label": FEATURE_LABELS.get(feature_name, feature_name.replace("_", " ").title()),
+                    "label": FEATURE_LABELS.get(
+                        feature_name, feature_name.replace("_", " ").title()
+                    ),
                     "enabled": bool(features.get(feature_name, True)),
                 }
             )

@@ -16,7 +16,6 @@ from app.models.subscriber import Organization, Subscriber, UserType
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
 
-
 INVITE_AUDIT_ACTION = "customer_user_invite"
 RESET_AUDIT_ACTION = "customer_user_reset_link"
 LOGIN_TOGGLE_AUDIT_ACTION = "customer_user_login_toggle"
@@ -43,7 +42,9 @@ def _invite_expiry_minutes(db: Session) -> int:
     return parsed if parsed > 0 else 60
 
 
-def _resolve_org_primary_contact(db: Session, organization_id: str) -> Subscriber | None:
+def _resolve_org_primary_contact(
+    db: Session, organization_id: str
+) -> Subscriber | None:
     org_uuid = UUID(str(organization_id))
     organization = db.get(Organization, org_uuid)
     if organization and organization.primary_login_subscriber_id:
@@ -90,7 +91,9 @@ def resolve_customer_user_target(
         email = (subscriber.email or "").strip()
         if not email:
             raise ValueError("Customer has no email address")
-        return CustomerUserTarget(subscriber=subscriber, email=email, source="subscriber_email")
+        return CustomerUserTarget(
+            subscriber=subscriber, email=email, source="subscriber_email"
+        )
 
     if customer_type == "organization":
         primary = _resolve_org_primary_contact(db, customer_id)
@@ -99,7 +102,9 @@ def resolve_customer_user_target(
         email = (primary.email or "").strip()
         if not email:
             raise ValueError("Organization primary contact has no email")
-        return CustomerUserTarget(subscriber=primary, email=email, source="primary_contact_email")
+        return CustomerUserTarget(
+            subscriber=primary, email=email, source="primary_contact_email"
+        )
 
     raise ValueError("Unsupported customer type")
 
@@ -209,7 +214,9 @@ def _build_user_access_state(
     invite_expiry_minutes = _invite_expiry_minutes(db)
     invite_available_at = None
     if last_invite and last_invite.occurred_at:
-        invite_available_at = last_invite.occurred_at + timedelta(minutes=invite_expiry_minutes)
+        invite_available_at = last_invite.occurred_at + timedelta(
+            minutes=invite_expiry_minutes
+        )
 
     now = _now()
     reset_since = now - timedelta(hours=1)
@@ -229,13 +236,14 @@ def _build_user_access_state(
         "organization_id": str(page.organization_id) if page.organization_id else None,
         "primary_login_subscriber_id": str(primary.id) if primary else None,
         "primary_login_subscriber_name": (
-            primary.display_name
-            or f"{primary.first_name} {primary.last_name}".strip()
+            primary.display_name or f"{primary.first_name} {primary.last_name}".strip()
             if primary
             else None
         ),
         "is_primary_login_subscriber": bool(primary and primary.id == page.id),
-        "can_set_primary_login": bool(page.organization_id and (page.email or "").strip()),
+        "can_set_primary_login": bool(
+            page.organization_id and (page.email or "").strip()
+        ),
         "email": target.email,
         "email_source": target.source,
         "has_credential": credential is not None,
@@ -294,7 +302,9 @@ def deactivate_customer_login(
     return target
 
 
-def deactivate_subscriber_login(db: Session, *, subscriber_id: str) -> CustomerUserTarget:
+def deactivate_subscriber_login(
+    db: Session, *, subscriber_id: str
+) -> CustomerUserTarget:
     target = resolve_subscriber_user_target(db, subscriber_id=subscriber_id)
     web_system_user_mutations_service.set_local_login_active(
         db,

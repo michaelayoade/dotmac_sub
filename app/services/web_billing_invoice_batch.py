@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import csv
+import io
 from datetime import UTC, datetime
 from decimal import Decimal
-import io
 from uuid import UUID
 
 from app.models.billing import BillingRunSchedule, BillingRunStatus
@@ -79,22 +79,30 @@ def preview_batch(
     if separate_by_partner:
         from app.models.subscriber import Reseller, Subscriber
 
-        account_ids = [s.get("account_id") for s in subscriptions if s.get("account_id")]
+        account_ids = [
+            s.get("account_id") for s in subscriptions if s.get("account_id")
+        ]
         subscribers = (
-            db.query(Subscriber)
-            .filter(Subscriber.id.in_(account_ids))
-            .all()
+            db.query(Subscriber).filter(Subscriber.id.in_(account_ids)).all()
             if account_ids
             else []
         )
         subscriber_by_id = {str(item.id): item for item in subscribers}
         reseller_ids = {
-            str(item.reseller_id) for item in subscribers if getattr(item, "reseller_id", None)
+            str(item.reseller_id)
+            for item in subscribers
+            if getattr(item, "reseller_id", None)
         }
-        reseller_by_id = {
-            str(item.id): item
-            for item in db.query(Reseller).filter(Reseller.id.in_(reseller_ids)).all()
-        } if reseller_ids else {}
+        reseller_by_id = (
+            {
+                str(item.id): item
+                for item in db.query(Reseller)
+                .filter(Reseller.id.in_(reseller_ids))
+                .all()
+            }
+            if reseller_ids
+            else {}
+        )
 
         grouped: dict[str, dict[str, object]] = {}
         for sub in subscriptions:
@@ -116,9 +124,15 @@ def preview_batch(
                     "total_amount": Decimal("0.00"),
                 }
             amount = Decimal(str(sub.get("amount", 0) or 0))
-            grouped[partner_key]["subscription_count"] = int(grouped[partner_key]["subscription_count"]) + 1
-            grouped[partner_key]["invoice_count"] = int(grouped[partner_key]["invoice_count"]) + 1
-            grouped[partner_key]["total_amount"] = Decimal(str(grouped[partner_key]["total_amount"])) + amount
+            grouped[partner_key]["subscription_count"] = (
+                int(grouped[partner_key]["subscription_count"]) + 1
+            )
+            grouped[partner_key]["invoice_count"] = (
+                int(grouped[partner_key]["invoice_count"]) + 1
+            )
+            grouped[partner_key]["total_amount"] = (
+                Decimal(str(grouped[partner_key]["total_amount"])) + amount
+            )
 
         partner_preview = [
             {
@@ -129,7 +143,11 @@ def preview_batch(
                 "total_amount": float(item["total_amount"]),
                 "total_amount_formatted": f"NGN {Decimal(str(item['total_amount'])):,.2f}",
             }
-            for item in sorted(grouped.values(), key=lambda row: float(row["total_amount"]), reverse=True)
+            for item in sorted(
+                grouped.values(),
+                key=lambda row: float(row["total_amount"]),
+                reverse=True,
+            )
         ]
 
     return {
@@ -169,7 +187,9 @@ def run_batch_with_date(
             run_at=_parse_run_date(billing_date),
         )
         run_at = summary.get("run_at")
-        run_at_text = run_at.strftime("%Y-%m-%d") if isinstance(run_at, datetime) else "today"
+        run_at_text = (
+            run_at.strftime("%Y-%m-%d") if isinstance(run_at, datetime) else "today"
+        )
         return (
             f"Batch run completed for {run_at_text}. "
             f"Invoices created: {summary.get('invoices_created', 0)} · "
@@ -236,7 +256,11 @@ def list_recent_runs(db, *, limit: int = 20) -> list[dict[str, object]]:
                 else (
                     "Transactions have been created"
                     if _run_status_text(run.status) == "Success"
-                    else ("Run is currently processing" if _run_status_text(run.status) == "Running" else "—")
+                    else (
+                        "Run is currently processing"
+                        if _run_status_text(run.status) == "Running"
+                        else "—"
+                    )
                 )
             ),
             "error": run.error,
@@ -273,7 +297,9 @@ def get_run_row(db, *, run_id: str) -> dict[str, object] | None:
             else (
                 "Transactions have been created"
                 if status_text == "Success"
-                else ("Run is currently processing" if status_text == "Running" else "—")
+                else (
+                    "Run is currently processing" if status_text == "Running" else "—"
+                )
             )
         ),
         "error": run.error,
@@ -366,7 +392,11 @@ def _coerce_schedule_config(raw: object) -> dict[str, object]:
 
 
 def get_billing_run_schedule(db) -> dict[str, object]:
-    schedule = db.query(BillingRunSchedule).order_by(BillingRunSchedule.created_at.desc()).first()
+    schedule = (
+        db.query(BillingRunSchedule)
+        .order_by(BillingRunSchedule.created_at.desc())
+        .first()
+    )
     if schedule:
         return _coerce_schedule_config(
             {
@@ -424,7 +454,11 @@ def save_billing_run_schedule(
             "partner_ids": parsed_partner_ids,
         }
     )
-    schedule = db.query(BillingRunSchedule).order_by(BillingRunSchedule.created_at.desc()).first()
+    schedule = (
+        db.query(BillingRunSchedule)
+        .order_by(BillingRunSchedule.created_at.desc())
+        .first()
+    )
     if not schedule:
         schedule = BillingRunSchedule()
         db.add(schedule)

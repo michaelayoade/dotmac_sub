@@ -73,7 +73,11 @@ def new_context(
     subscriber_id: str | None = None,
 ) -> dict[str, Any]:
     context = _base_context(request, db)
-    context.update(ws_service.wireless_surveys.build_form_context(db, None, lat, lon, subscriber_id))
+    context.update(
+        ws_service.wireless_surveys.build_form_context(
+            db, None, lat, lon, subscriber_id
+        )
+    )
     return context
 
 
@@ -122,14 +126,18 @@ def create_survey(
 def detail_context(request: Request, db: Session, *, survey_id: str) -> dict[str, Any]:
     context = _base_context(request, db)
     context.update(ws_service.wireless_surveys.build_detail_context(db, survey_id))
-    context["activities"] = build_audit_activities(db, "site_survey", str(survey_id), limit=10)
+    context["activities"] = build_audit_activities(
+        db, "site_survey", str(survey_id), limit=10
+    )
     return context
 
 
 def edit_context(request: Request, db: Session, *, survey_id: str) -> dict[str, Any]:
     survey = ws_service.wireless_surveys.get(db, survey_id)
     context = _base_context(request, db)
-    context.update(ws_service.wireless_surveys.build_form_context(db, survey, None, None, None))
+    context.update(
+        ws_service.wireless_surveys.build_form_context(db, survey, None, None, None)
+    )
     return context
 
 
@@ -259,7 +267,9 @@ def analyze_los(
     from_point_id: str,
     to_point_id: str,
 ) -> str:
-    los_path = ws_service.survey_los.analyze_path(db, survey_id, from_point_id, to_point_id)
+    los_path = ws_service.survey_los.analyze_path(
+        db, survey_id, from_point_id, to_point_id
+    )
     log_audit_event(
         db=db,
         request=request,

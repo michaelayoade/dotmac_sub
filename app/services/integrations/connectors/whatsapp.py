@@ -51,14 +51,13 @@ def _read_templates(db: Session) -> list[dict[str, Any]]:
     return []
 
 
-
-
 def _read_timeout_seconds(db: Session) -> int:
     raw = resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds")
     try:
         return int(str(raw)) if raw is not None else 10
     except (TypeError, ValueError):
         return 10
+
 
 def load_whatsapp_config(db: Session) -> dict[str, Any]:
     """Load normalized WhatsApp connector settings."""

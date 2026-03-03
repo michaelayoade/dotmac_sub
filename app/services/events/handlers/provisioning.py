@@ -49,20 +49,26 @@ class ProvisioningHandler:
         """Sync RADIUS credentials for the subscription's subscriber."""
         try:
             from app.models.catalog import Subscription
+
             subscription = db.get(Subscription, coerce_uuid(subscription_id))
             if not subscription:
                 return
             from app.services.radius import sync_account_credentials_to_radius
-            count = sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
+
+            count = sync_account_credentials_to_radius(
+                db, str(subscription.subscriber_id)
+            )
             if count:
                 logger.info(
                     "Synced %d RADIUS credentials for subscription %s activation.",
-                    count, subscription_id,
+                    count,
+                    subscription_id,
                 )
         except Exception as exc:
             logger.warning(
                 "RADIUS credential sync failed for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _push_nas_provisioning(self, db: Session, subscription_id: str) -> None:
@@ -83,7 +89,11 @@ class ProvisioningHandler:
                 return
             profile = _resolve_effective_profile(db, subscription)
             commands = build_nas_provisioning_commands(
-                db, subscription, nas_device, profile=profile, action="create",
+                db,
+                subscription,
+                nas_device,
+                profile=profile,
+                action="create",
             )
             if not commands:
                 return
@@ -93,20 +103,26 @@ class ProvisioningHandler:
                 except Exception as cmd_exc:
                     logger.warning(
                         "NAS command failed for subscription %s: %s (cmd: %s)",
-                        subscription_id, cmd_exc, cmd,
+                        subscription_id,
+                        cmd_exc,
+                        cmd,
                     )
             logger.info(
                 "Pushed %d NAS provisioning commands for subscription %s.",
-                len(commands), subscription_id,
+                len(commands),
+                subscription_id,
             )
         except Exception as exc:
             logger.warning(
                 "NAS provisioning failed for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _handle_service_order_assigned(self, db: Session, event: Event) -> None:
-        service_order_id = event.service_order_id or event.payload.get("service_order_id")
+        service_order_id = event.service_order_id or event.payload.get(
+            "service_order_id"
+        )
         if not service_order_id:
             logger.warning(
                 "Skipping provisioning run: missing service_order_id in event payload."
@@ -138,7 +154,9 @@ class ProvisioningHandler:
                 existing.status.value,
             )
             return
-        workflow = provisioning_service.resolve_workflow_for_service_order(db, service_order)
+        workflow = provisioning_service.resolve_workflow_for_service_order(
+            db, service_order
+        )
         if not workflow:
             logger.warning(
                 "Skipping provisioning run for service order %s: no active workflow found.",

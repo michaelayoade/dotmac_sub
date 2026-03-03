@@ -809,9 +809,15 @@ class BankReconciliationRun(Base):
     imported_rows: Mapped[int] = mapped_column(Integer, default=0)
     unmatched_rows: Mapped[int] = mapped_column(Integer, default=0)
     system_payment_count: Mapped[int] = mapped_column(Integer, default=0)
-    statement_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
-    payment_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
-    difference_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    statement_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
+    payment_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
+    difference_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

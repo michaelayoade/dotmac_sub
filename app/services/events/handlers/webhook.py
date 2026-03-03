@@ -90,9 +90,7 @@ class WebhookHandler:
         # Map to webhook event type
         webhook_event_type = EVENT_TYPE_TO_WEBHOOK.get(event.event_type)
         if webhook_event_type is None:
-            logger.debug(
-                f"No webhook event type mapping for {event.event_type.value}"
-            )
+            logger.debug(f"No webhook event type mapping for {event.event_type.value}")
             return
 
         # Find active subscriptions for this event type

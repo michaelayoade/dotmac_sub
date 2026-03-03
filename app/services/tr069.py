@@ -130,7 +130,10 @@ class CpeDevices(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": Tr069CpeDevice.created_at, "serial_number": Tr069CpeDevice.serial_number},
+            {
+                "created_at": Tr069CpeDevice.created_at,
+                "serial_number": Tr069CpeDevice.serial_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -200,7 +203,8 @@ class CpeDevices(ListResponseMixin):
             connection_url = client.extract_parameter_value(
                 device_data, "Device.ManagementServer.ConnectionRequestURL"
             ) or client.extract_parameter_value(
-                device_data, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL"
+                device_data,
+                "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
             )
 
             # Extract last inform time
@@ -208,7 +212,9 @@ class CpeDevices(ListResponseMixin):
             last_inform_at = None
             if last_inform:
                 try:
-                    last_inform_at = datetime.fromisoformat(last_inform.replace("Z", "+00:00"))
+                    last_inform_at = datetime.fromisoformat(
+                        last_inform.replace("Z", "+00:00")
+                    )
                 except (ValueError, AttributeError):
                     pass
 
@@ -269,7 +275,10 @@ class Sessions(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": Tr069Session.created_at, "started_at": Tr069Session.started_at},
+            {
+                "created_at": Tr069Session.created_at,
+                "started_at": Tr069Session.started_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -427,7 +436,7 @@ class Jobs(ListResponseMixin):
         if job.status not in (Tr069JobStatus.queued, Tr069JobStatus.failed):
             raise HTTPException(
                 status_code=400,
-                detail=f"Job cannot be executed in {job.status.value} status"
+                detail=f"Job cannot be executed in {job.status.value} status",
             )
 
         device = db.get(Tr069CpeDevice, job.device_id)
@@ -449,9 +458,7 @@ class Jobs(ListResponseMixin):
 
             # Build GenieACS device ID
             genieacs_device_id = client.build_device_id(
-                device.oui or "",
-                device.product_class or "",
-                device.serial_number or ""
+                device.oui or "", device.product_class or "", device.serial_number or ""
             )
 
             # Build task based on command
@@ -498,7 +505,7 @@ class Jobs(ListResponseMixin):
         if job.status != Tr069JobStatus.queued:
             raise HTTPException(
                 status_code=400,
-                detail=f"Only queued jobs can be canceled, current status: {job.status.value}"
+                detail=f"Only queued jobs can be canceled, current status: {job.status.value}",
             )
 
         job.status = Tr069JobStatus.canceled

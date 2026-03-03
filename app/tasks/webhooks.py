@@ -109,9 +109,7 @@ def deliver_webhook(self, delivery_id: str):
         try:
             resolved_addresses = socket.getaddrinfo(hostname, None)
         except socket.gaierror as exc:
-            raise ValueError(
-                f"Webhook hostname resolution failed: {hostname}"
-            ) from exc
+            raise ValueError(f"Webhook hostname resolution failed: {hostname}") from exc
 
         for resolved in resolved_addresses:
             resolved_ip = ipaddress.ip_address(resolved[4][0])
@@ -151,20 +149,18 @@ def deliver_webhook(self, delivery_id: str):
             delivery.attempt_count += 1
             error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
             delivery.error = error_msg
-            logger.warning(
-                f"Webhook delivery failed to {endpoint.url}: {error_msg}"
-            )
+            logger.warning(f"Webhook delivery failed to {endpoint.url}: {error_msg}")
 
             # Retry if we have attempts remaining
             if delivery.attempt_count < MAX_RETRIES:
-                retry_delay = RETRY_DELAYS[min(delivery.attempt_count - 1, len(RETRY_DELAYS) - 1)]
+                retry_delay = RETRY_DELAYS[
+                    min(delivery.attempt_count - 1, len(RETRY_DELAYS) - 1)
+                ]
                 session.commit()
                 raise self.retry(countdown=retry_delay)
             else:
                 delivery.status = WebhookDeliveryStatus.failed
-                logger.error(
-                    f"Webhook delivery exhausted retries to {endpoint.url}"
-                )
+                logger.error(f"Webhook delivery exhausted retries to {endpoint.url}")
 
         session.commit()
 

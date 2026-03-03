@@ -84,7 +84,9 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
     }
 
 
-def parse_subscription_form(form: FormData, *, subscription_id: str | None = None) -> dict[str, object]:
+def parse_subscription_form(
+    form: FormData, *, subscription_id: str | None = None
+) -> dict[str, object]:
     """Parse subscription form payload from request form."""
     data = {
         "account_id": _form_str(form, "account_id").strip(),
@@ -106,13 +108,17 @@ def parse_subscription_form(form: FormData, *, subscription_id: str | None = Non
         "unit_price": _form_str(form, "unit_price").strip(),
         "discount": form.get("discount") == "true",
         "discount_value": _form_str(form, "discount_value").strip(),
-        "discount_type": _normalize_discount_type(_form_str(form, "discount_type").strip()),
+        "discount_type": _normalize_discount_type(
+            _form_str(form, "discount_type").strip()
+        ),
         "service_status_raw": _form_str(form, "service_status_raw").strip(),
         "login": _form_str(form, "login").strip(),
         "ipv4_address": _form_str(form, "ipv4_address").strip(),
         "ipv6_address": _form_str(form, "ipv6_address").strip(),
         "mac_address": _form_str(form, "mac_address").strip(),
-        "provisioning_nas_device_id": _form_str(form, "provisioning_nas_device_id").strip(),
+        "provisioning_nas_device_id": _form_str(
+            form, "provisioning_nas_device_id"
+        ).strip(),
         "radius_profile_id": _form_str(form, "radius_profile_id").strip(),
     }
     if subscription_id:
@@ -156,7 +162,9 @@ def resolve_account_id(db: Session, subscription: dict[str, object]) -> str | No
     return None
 
 
-def validate_subscription_form(subscription: dict[str, object], *, for_create: bool) -> str | None:
+def validate_subscription_form(
+    subscription: dict[str, object], *, for_create: bool
+) -> str | None:
     """Validate required subscription form fields."""
     if for_create:
         if not subscription.get("account_id") and not subscription.get("subscriber_id"):
@@ -208,7 +216,9 @@ def build_payload_data(subscription: dict[str, object]) -> dict[str, object]:
     return payload_data
 
 
-def apply_create_quick_options(payload_data: dict[str, object], form: FormData) -> tuple[bool, bool, bool]:
+def apply_create_quick_options(
+    payload_data: dict[str, object], form: FormData
+) -> tuple[bool, bool, bool]:
     """Apply create quick options and return flags."""
     activate_immediately = form.get("activate_immediately") == "1"
     generate_invoice = form.get("generate_invoice") == "1"
@@ -227,7 +237,9 @@ def create_subscription(db: Session, payload_data: dict[str, object]):
     )
 
 
-def update_subscription(db: Session, subscription_id: str, payload_data: dict[str, object]):
+def update_subscription(
+    db: Session, subscription_id: str, payload_data: dict[str, object]
+):
     """Update subscription."""
     return catalog_service.subscriptions.update(
         db=db,
@@ -298,14 +310,24 @@ def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
         "subscriber_id": str(subscription_obj.subscriber_id),
         "offer_id": str(subscription_obj.offer_id),
         "status": subscription_obj.status.value if subscription_obj.status else "",
-        "billing_mode": subscription_obj.billing_mode.value if subscription_obj.billing_mode else "",
-        "contract_term": subscription_obj.contract_term.value if subscription_obj.contract_term else "",
-        "start_at": subscription_obj.start_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.start_at else "",
-        "end_at": subscription_obj.end_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.end_at else "",
+        "billing_mode": subscription_obj.billing_mode.value
+        if subscription_obj.billing_mode
+        else "",
+        "contract_term": subscription_obj.contract_term.value
+        if subscription_obj.contract_term
+        else "",
+        "start_at": subscription_obj.start_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.start_at
+        else "",
+        "end_at": subscription_obj.end_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.end_at
+        else "",
         "next_billing_at": subscription_obj.next_billing_at.strftime("%Y-%m-%dT%H:%M")
         if subscription_obj.next_billing_at
         else "",
-        "canceled_at": subscription_obj.canceled_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.canceled_at else "",
+        "canceled_at": subscription_obj.canceled_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.canceled_at
+        else "",
         "cancel_reason": subscription_obj.cancel_reason or "",
         "splynx_service_id": subscription_obj.splynx_service_id or "",
         "router_id": subscription_obj.router_id or "",
@@ -316,7 +338,9 @@ def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
         "discount": subscription_obj.discount,
         "discount_value": subscription_obj.discount_value or "",
         "discount_type": _normalize_discount_type(
-            subscription_obj.discount_type.value if subscription_obj.discount_type else ""
+            subscription_obj.discount_type.value
+            if subscription_obj.discount_type
+            else ""
         ),
         "service_status_raw": subscription_obj.service_status_raw or "",
         "login": subscription_obj.login or "",
@@ -326,7 +350,9 @@ def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
         "provisioning_nas_device_id": str(subscription_obj.provisioning_nas_device_id)
         if subscription_obj.provisioning_nas_device_id
         else "",
-        "radius_profile_id": str(subscription_obj.radius_profile_id) if subscription_obj.radius_profile_id else "",
+        "radius_profile_id": str(subscription_obj.radius_profile_id)
+        if subscription_obj.radius_profile_id
+        else "",
     }
 
 
@@ -335,7 +361,9 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
     if not subscriber_id:
         return ""
     try:
-        subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+        subscriber = subscriber_service.subscribers.get(
+            db=db, subscriber_id=subscriber_id
+        )
         if subscriber.organization:
             label = str(subscriber.organization.name or "")
         else:
@@ -361,9 +389,10 @@ def subscription_form_context(
     Returns all reference data (accounts, offers, NAS devices, RADIUS profiles,
     enum value lists, settings) needed by the form.
     """
-    default_billing_mode = settings_spec.resolve_value(
-        db, SettingDomain.catalog, "default_billing_mode"
-    ) or BillingMode.prepaid.value
+    default_billing_mode = (
+        settings_spec.resolve_value(db, SettingDomain.catalog, "default_billing_mode")
+        or BillingMode.prepaid.value
+    )
     if not subscription.get("billing_mode"):
         subscription["billing_mode"] = default_billing_mode
 
@@ -389,9 +418,7 @@ def subscription_form_context(
     )
 
     nas_stmt = (
-        select(NasDevice)
-        .where(NasDevice.is_active.is_(True))
-        .order_by(NasDevice.name)
+        select(NasDevice).where(NasDevice.is_active.is_(True)).order_by(NasDevice.name)
     )
     nas_devices = db.scalars(nas_stmt).all()
 
@@ -402,7 +429,9 @@ def subscription_form_context(
     )
     radius_profiles = db.scalars(rp_stmt).all()
 
-    subscriber_id = subscription.get("subscriber_id") if isinstance(subscription, dict) else None
+    subscriber_id = (
+        subscription.get("subscriber_id") if isinstance(subscription, dict) else None
+    )
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
 
     context: dict[str, object] = {
@@ -418,13 +447,16 @@ def subscription_form_context(
         "subscriber_label": subscriber_label,
         "billing_mode_help_text": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_help_text"
-        ) or "Overrides tariff default.",
+        )
+        or "Overrides tariff default.",
         "billing_mode_prepaid_notice": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_prepaid_notice"
-        ) or "Balance enforcement applies.",
+        )
+        or "Balance enforcement applies.",
         "billing_mode_postpaid_notice": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
-        ) or "This subscription follows dunning steps.",
+        )
+        or "This subscription follows dunning steps.",
     }
     if error:
         context["error"] = error
@@ -537,7 +569,10 @@ def create_subscription_with_audit(
         entity_type="subscription",
         entity_id=str(created.id),
         actor_id=actor_id,
-        metadata={"offer_id": str(created.offer_id), "account_id": str(created.subscriber_id)},
+        metadata={
+            "offer_id": str(created.offer_id),
+            "account_id": str(created.subscriber_id),
+        },
     )
 
     if generate_invoice and created.subscriber_id:

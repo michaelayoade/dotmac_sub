@@ -73,7 +73,9 @@ def build_weathermap_data(db: Session) -> dict[str, object]:
         .all()
     )
 
-    metrics_by_device: dict[str, dict[str, float]] = defaultdict(lambda: {"rx_bps": 0.0, "tx_bps": 0.0})
+    metrics_by_device: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"rx_bps": 0.0, "tx_bps": 0.0}
+    )
     for row in metric_rows:
         key = str(row.device_id)
         if row.metric_type == MetricType.rx_bps:
@@ -158,7 +160,11 @@ def build_weathermap_data(db: Session) -> dict[str, object]:
         if source_id not in pos_by_id or target_id not in pos_by_id:
             continue
         m = metrics_by_device.get(target_id)
-        total = float((m or {}).get("rx_bps", 0.0) + (m or {}).get("tx_bps", 0.0)) if m else None
+        total = (
+            float((m or {}).get("rx_bps", 0.0) + (m or {}).get("tx_bps", 0.0))
+            if m
+            else None
+        )
         state = _link_state(total)
         sx, sy = pos_by_id[source_id]
         tx, ty = pos_by_id[target_id]

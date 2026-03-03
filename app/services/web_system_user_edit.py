@@ -46,13 +46,17 @@ def build_edit_state(db: Session, *, subscriber: SystemUser) -> dict[str, object
         "user": subscriber,
         "roles": db.execute(
             select(Role).where(Role.is_active.is_(True)).order_by(Role.name.asc())
-        ).scalars().all(),
+        )
+        .scalars()
+        .all(),
         "current_role_ids": set(),
         "all_permissions": db.execute(
             select(Permission)
             .where(Permission.is_active.is_(True))
             .order_by(Permission.key.asc())
-        ).scalars().all(),
+        )
+        .scalars()
+        .all(),
         "direct_permission_ids": set(),
     }
 
@@ -92,9 +96,11 @@ def apply_user_edit(
     ).update({"username": email.strip()})
 
     desired_role_ids = set(role_ids)
-    existing_roles = db.query(SystemUserRole).filter(
-        SystemUserRole.system_user_id == subscriber.id
-    ).all()
+    existing_roles = (
+        db.query(SystemUserRole)
+        .filter(SystemUserRole.system_user_id == subscriber.id)
+        .all()
+    )
     existing_role_map = {str(link.role_id): link for link in existing_roles}
 
     for role_id_str, role_link in existing_role_map.items():
@@ -132,16 +138,20 @@ def apply_user_edit(
         if new_password != confirm_password:
             raise ValueError("Passwords do not match.")
 
-        updated = db.query(UserCredential).filter(
-            UserCredential.system_user_id == subscriber.id,
-            UserCredential.provider == AuthProvider.local,
-            UserCredential.is_active.is_(True),
-        ).update(
-            {
-                "password_hash": hash_password(new_password),
-                "must_change_password": require_password_change,
-                "password_updated_at": datetime.now(UTC),
-            }
+        updated = (
+            db.query(UserCredential)
+            .filter(
+                UserCredential.system_user_id == subscriber.id,
+                UserCredential.provider == AuthProvider.local,
+                UserCredential.is_active.is_(True),
+            )
+            .update(
+                {
+                    "password_hash": hash_password(new_password),
+                    "must_change_password": require_password_change,
+                    "password_updated_at": datetime.now(UTC),
+                }
+            )
         )
         if not updated:
             db.add(

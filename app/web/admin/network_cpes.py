@@ -17,7 +17,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -29,7 +31,11 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 
-@router.get("/cpes", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/cpes",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def cpe_list(
     request: Request,
     search: str | None = None,
@@ -50,7 +56,11 @@ def cpe_list(
     return templates.TemplateResponse("admin/network/cpes/index.html", context)
 
 
-@router.get("/cpes/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/cpes/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def cpe_new(
     request: Request,
     subscriber_id: str | None = None,
@@ -59,16 +69,24 @@ def cpe_new(
     context = _base_context(request, db, active_page="cpes")
     context.update(
         {
-            "cpe": web_network_cpes_service.cpe_form_snapshot({"subscriber_id": subscriber_id or ""}),
+            "cpe": web_network_cpes_service.cpe_form_snapshot(
+                {"subscriber_id": subscriber_id or ""}
+            ),
             "action_url": "/admin/network/cpes",
-            **web_network_cpes_service.cpe_form_reference_data(db, subscriber_id=subscriber_id),
+            **web_network_cpes_service.cpe_form_reference_data(
+                db, subscriber_id=subscriber_id
+            ),
             "error": None,
         }
     )
     return templates.TemplateResponse("admin/network/cpes/form.html", context)
 
 
-@router.post("/cpes", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/cpes",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def cpe_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     values = web_network_cpes_service.parse_cpe_form(form)
@@ -103,6 +121,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
         return templates.TemplateResponse("admin/network/cpes/form.html", context)
 
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -116,8 +135,14 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(f"/admin/network/cpes/{cpe.id}", status_code=303)
 
 
-@router.get("/cpes/{cpe_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def cpe_edit(request: Request, cpe_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+@router.get(
+    "/cpes/{cpe_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def cpe_edit(
+    request: Request, cpe_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         cpe = web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
     except Exception:
@@ -141,7 +166,11 @@ def cpe_edit(request: Request, cpe_id: str, db: Session = Depends(get_db)) -> HT
     return templates.TemplateResponse("admin/network/cpes/form.html", context)
 
 
-@router.post("/cpes/{cpe_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/cpes/{cpe_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     try:
         web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
@@ -158,7 +187,9 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
         context = _base_context(request, db, active_page="cpes")
         context.update(
             {
-                "cpe": web_network_cpes_service.cpe_form_snapshot(values, cpe_id=cpe_id),
+                "cpe": web_network_cpes_service.cpe_form_snapshot(
+                    values, cpe_id=cpe_id
+                ),
                 "action_url": f"/admin/network/cpes/{cpe_id}",
                 **web_network_cpes_service.cpe_form_reference_data(
                     db, subscriber_id=str(values.get("subscriber_id") or "")
@@ -173,7 +204,9 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
         context = _base_context(request, db, active_page="cpes")
         context.update(
             {
-                "cpe": web_network_cpes_service.cpe_form_snapshot(values, cpe_id=cpe_id),
+                "cpe": web_network_cpes_service.cpe_form_snapshot(
+                    values, cpe_id=cpe_id
+                ),
                 "action_url": f"/admin/network/cpes/{cpe_id}",
                 **web_network_cpes_service.cpe_form_reference_data(
                     db, subscriber_id=str(values.get("subscriber_id") or "")
@@ -184,6 +217,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
         return templates.TemplateResponse("admin/network/cpes/form.html", context)
 
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -197,7 +231,10 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     return RedirectResponse(f"/admin/network/cpes/{cpe.id}", status_code=303)
 
 
-@router.post("/cpes/{cpe_id}/test-api", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/cpes/{cpe_id}/test-api",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     try:
         cpe = web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
@@ -231,7 +268,11 @@ def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse
     )
 
 
-@router.get("/cpes/{cpe_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/cpes/{cpe_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def cpe_detail(
     request: Request,
     cpe_id: str,

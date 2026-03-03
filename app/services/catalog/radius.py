@@ -40,9 +40,7 @@ class RadiusProfiles(CRUDManager[RadiusProfile]):
                 db, SettingDomain.catalog, "default_nas_vendor"
             )
             if default_vendor:
-                data["vendor"] = validate_enum(
-                    default_vendor, NasVendor, "vendor"
-                )
+                data["vendor"] = validate_enum(default_vendor, NasVendor, "vendor")
         profile = RadiusProfile(**data)
         db.add(profile)
         db.commit()
@@ -197,7 +195,9 @@ class OfferRadiusProfiles(CRUDManager[OfferRadiusProfile]):
     def update(db: Session, link_id: str, payload: OfferRadiusProfileUpdate):
         link = db.get(OfferRadiusProfile, link_id)
         if not link:
-            raise HTTPException(status_code=404, detail="Offer RADIUS profile link not found")
+            raise HTTPException(
+                status_code=404, detail="Offer RADIUS profile link not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         if "offer_id" in data:
             offer = db.get(CatalogOffer, data["offer_id"])

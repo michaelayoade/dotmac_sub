@@ -82,7 +82,9 @@ def _render_invoice_html(invoice: Invoice) -> str:
         rows = "<tr><td colspan='4'>No line items</td></tr>"
 
     account_name = html.escape(_display_account_name(invoice))
-    account_email = html.escape((getattr(invoice.account, "email", None) or "").strip() or "N/A")
+    account_email = html.escape(
+        (getattr(invoice.account, "email", None) or "").strip() or "N/A"
+    )
     invoice_number = html.escape(invoice.invoice_number or str(invoice.id))
     memo = html.escape((invoice.memo or "").strip() or "-")
 
@@ -113,12 +115,12 @@ def _render_invoice_html(invoice: Invoice) -> str:
     <div>
       <p class=\"h1\">Invoice</p>
       <p class=\"muted\">Invoice #: {invoice_number}</p>
-      <p class=\"muted\">Status: {html.escape(invoice.status.value if invoice.status else 'draft')}</p>
+      <p class=\"muted\">Status: {html.escape(invoice.status.value if invoice.status else "draft")}</p>
     </div>
     <div class=\"muted\" style=\"text-align:right\">
       <div>Issued: {_format_date(invoice.issued_at)}</div>
       <div>Due: {_format_date(invoice.due_at)}</div>
-      <div>Currency: {html.escape(invoice.currency or 'NGN')}</div>
+      <div>Currency: {html.escape(invoice.currency or "NGN")}</div>
     </div>
   </div>
 
@@ -181,7 +183,13 @@ def _build_simple_pdf(lines: list[str]) -> bytes:
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
         b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
     )
-    objects.append(b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream")
+    objects.append(
+        b"<< /Length "
+        + str(len(content)).encode("ascii")
+        + b" >>\nstream\n"
+        + content
+        + b"\nendstream"
+    )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     pdf = bytearray()
@@ -260,7 +268,9 @@ def _is_export_fresh(invoice: Invoice, export: InvoicePdfExport) -> bool:
     return True
 
 
-def is_export_cache_valid(db: Session, invoice: Invoice, export: InvoicePdfExport | None) -> bool:
+def is_export_cache_valid(
+    db: Session, invoice: Invoice, export: InvoicePdfExport | None
+) -> bool:
     if not export:
         return False
     if not _is_export_fresh(invoice, export):
@@ -377,7 +387,9 @@ def get_cache_dashboard_stats(db: Session) -> dict[str, Any]:
     )
     unique_invoice_ids = {str(row.invoice_id) for row in completed}
     total_size_bytes = sum(int(row.file_size_bytes or 0) for row in completed)
-    oldest_cached = min((row.completed_at for row in completed if row.completed_at), default=None)
+    oldest_cached = min(
+        (row.completed_at for row in completed if row.completed_at), default=None
+    )
 
     durations = [
         (row.completed_at - row.created_at).total_seconds()
@@ -404,7 +416,9 @@ def get_cache_dashboard_stats(db: Session) -> dict[str, Any]:
 
 
 def _invalidate_export_file(db: Session, export: InvoicePdfExport) -> None:
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
     export.file_path = None
@@ -447,7 +461,9 @@ def clear_cache(
     date_to: datetime | None = None,
     account_id: str | None = None,
 ) -> dict[str, int]:
-    query = db.query(InvoicePdfExport).join(Invoice, Invoice.id == InvoicePdfExport.invoice_id)
+    query = db.query(InvoicePdfExport).join(
+        Invoice, Invoice.id == InvoicePdfExport.invoice_id
+    )
     query = query.filter(InvoicePdfExport.status == InvoicePdfExportStatus.completed)
     if date_from:
         query = query.filter(InvoicePdfExport.completed_at >= date_from)
@@ -468,9 +484,15 @@ def clear_cache(
 
 
 def export_file_exists(db: Session, export: InvoicePdfExport | None) -> bool:
-    if not export or export.status != InvoicePdfExportStatus.completed or not export.file_path:
+    if (
+        not export
+        or export.status != InvoicePdfExportStatus.completed
+        or not export.file_path
+    ):
         return False
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         try:
             file_uploads.stream_file(record)
@@ -495,9 +517,14 @@ def maybe_finalize_stalled_export(
         return None
 
     should_process_inline = False
-    if export.status == InvoicePdfExportStatus.completed and not export_file_exists(db, export):
+    if export.status == InvoicePdfExportStatus.completed and not export_file_exists(
+        db, export
+    ):
         should_process_inline = True
-    elif export.status in (InvoicePdfExportStatus.queued, InvoicePdfExportStatus.processing):
+    elif export.status in (
+        InvoicePdfExportStatus.queued,
+        InvoicePdfExportStatus.processing,
+    ):
         marker = export.updated_at or export.created_at
         if marker:
             age_seconds = (datetime.now(UTC) - marker).total_seconds()
@@ -563,7 +590,9 @@ def stream_export(db: Session, export: InvoicePdfExport) -> StreamResult:
     if local_path.exists():
         return _stream_local_file(local_path)
 
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         return file_uploads.stream_file(record)
 
@@ -590,7 +619,11 @@ def process_export(export_id: str) -> dict[str, Any]:
             export.error = "Invoice not found"
             export.completed_at = datetime.now(UTC)
             db.commit()
-            return {"status": "failed", "reason": "invoice_not_found", "export_id": export_id}
+            return {
+                "status": "failed",
+                "reason": "invoice_not_found",
+                "export_id": export_id,
+            }
 
         # Load related data used by renderer.
         _ = invoice.account
@@ -600,7 +633,9 @@ def process_export(export_id: str) -> dict[str, Any]:
             db, "invoice_pdf_export", str(export.id)
         )
         if existing_record:
-            file_uploads.soft_delete(db=db, file=existing_record, hard_delete_object=True)
+            file_uploads.soft_delete(
+                db=db, file=existing_record, hard_delete_object=True
+            )
 
         pdf_bytes = _build_pdf_bytes(invoice)
         uploaded = file_uploads.upload(

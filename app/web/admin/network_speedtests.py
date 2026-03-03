@@ -16,7 +16,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -73,13 +75,17 @@ def speedtests_new(request: Request, db: Session = Depends(get_db)) -> HTMLRespo
 
 @router.post("/speedtests", response_class=HTMLResponse)
 def speedtests_create(request: Request, db: Session = Depends(get_db)):
-    values = web_network_speedtests_service.parse_speedtest_form(parse_form_data_sync(request))
+    values = web_network_speedtests_service.parse_speedtest_form(
+        parse_form_data_sync(request)
+    )
     error = web_network_speedtests_service.validate_speedtest_values(values)
     if error:
         context = _base_context(request, db, active_page="speedtests")
         context.update(
             {
-                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(values),
+                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(
+                    values
+                ),
                 "action_url": "/admin/network/speedtests",
                 "error": error,
                 **web_network_speedtests_service.speedtest_form_reference_data(db),
@@ -93,7 +99,9 @@ def speedtests_create(request: Request, db: Session = Depends(get_db)):
         context = _base_context(request, db, active_page="speedtests")
         context.update(
             {
-                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(values),
+                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(
+                    values
+                ),
                 "action_url": "/admin/network/speedtests",
                 "error": str(exc),
                 **web_network_speedtests_service.speedtest_form_reference_data(db),

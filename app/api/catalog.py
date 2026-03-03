@@ -132,7 +132,9 @@ def delete_region_zone(zone_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     tags=["usage-allowances"],
 )
-def create_usage_allowance(payload: UsageAllowanceCreate, db: Session = Depends(get_db)):
+def create_usage_allowance(
+    payload: UsageAllowanceCreate, db: Session = Depends(get_db)
+):
     return catalog_service.usage_allowances.create(db, payload)
 
 
@@ -340,9 +342,7 @@ def list_add_ons(
     response_model=AddOnRead,
     tags=["add-ons"],
 )
-def update_add_on(
-    add_on_id: str, payload: AddOnUpdate, db: Session = Depends(get_db)
-):
+def update_add_on(add_on_id: str, payload: AddOnUpdate, db: Session = Depends(get_db)):
     return catalog_service.add_ons.update(db, add_on_id, payload)
 
 
@@ -618,9 +618,7 @@ def create_subscription_add_on(
     response_model=SubscriptionAddOnRead,
     tags=["subscription-add-ons"],
 )
-def get_subscription_add_on(
-    subscription_add_on_id: str, db: Session = Depends(get_db)
-):
+def get_subscription_add_on(subscription_add_on_id: str, db: Session = Depends(get_db)):
     return catalog_service.subscription_add_ons.get(db, subscription_add_on_id)
 
 

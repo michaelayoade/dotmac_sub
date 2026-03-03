@@ -53,7 +53,9 @@ def vpn_index(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Unified VPN dashboard for WireGuard and OpenVPN management."""
-    data = web_vpn_management_service.build_unified_dashboard_data(db, server_id=server_id)
+    data = web_vpn_management_service.build_unified_dashboard_data(
+        db, server_id=server_id
+    )
 
     if web_vpn_management_service.should_schedule_health_scan(db):
         run_vpn_health_scan.delay()
@@ -62,7 +64,9 @@ def vpn_index(
         "admin/network/vpn/index.html",
         {
             **_base_context(request, db, "vpn"),
-            "protocol": protocol if protocol in {"wireguard", "openvpn"} else "wireguard",
+            "protocol": protocol
+            if protocol in {"wireguard", "openvpn"}
+            else "wireguard",
             "server": data["wireguard"]["server"],
             "servers": data["wireguard"]["servers_with_counts"],
             "needs_setup": data["wireguard"]["needs_setup"],
@@ -645,7 +649,9 @@ def vpn_client_wizard_form(
         "admin/network/vpn/client_wizard.html",
         {
             **_base_context(request, db, "vpn"),
-            "protocol": protocol if protocol in {"wireguard", "openvpn"} else "wireguard",
+            "protocol": protocol
+            if protocol in {"wireguard", "openvpn"}
+            else "wireguard",
             "servers": servers,
             "selected_server_id": server_id or "",
             "errors": [],
@@ -668,7 +674,9 @@ def vpn_client_wizard_submit(
 ) -> HTMLResponse:
     """Create VPN client and generate configuration output."""
     servers = wg_service.wg_servers.list(db, limit=100)
-    selected_protocol = protocol if protocol in {"wireguard", "openvpn"} else "wireguard"
+    selected_protocol = (
+        protocol if protocol in {"wireguard", "openvpn"} else "wireguard"
+    )
     errors: list[str] = []
     result = None
 

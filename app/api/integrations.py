@@ -65,7 +65,9 @@ def delete_integration_target(target_id: str, db: Session = Depends(get_db)):
     response_model=IntegrationJobRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_integration_job(payload: IntegrationJobCreate, db: Session = Depends(get_db)):
+def create_integration_job(
+    payload: IntegrationJobCreate, db: Session = Depends(get_db)
+):
     return integration_service.integration_jobs.create(db, payload)
 
 
@@ -87,7 +89,15 @@ def list_integration_jobs(
     db: Session = Depends(get_db),
 ):
     return integration_service.integration_jobs.list_response(
-        db, target_id, job_type, schedule_type, is_active, order_by, order_dir, limit, offset
+        db,
+        target_id,
+        job_type,
+        schedule_type,
+        is_active,
+        order_by,
+        order_dir,
+        limit,
+        offset,
     )
 
 

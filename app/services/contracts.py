@@ -2,8 +2,8 @@
 
 from datetime import UTC, datetime
 
-from fastapi import HTTPException
 import nh3
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.contracts import ContractSignature
@@ -133,7 +133,8 @@ class ContractSignatures:
 
     @staticmethod
     def get_contract_template(
-        db: Session, document_type: LegalDocumentType = LegalDocumentType.terms_of_service
+        db: Session,
+        document_type: LegalDocumentType = LegalDocumentType.terms_of_service,
     ) -> LegalDocument | None:
         """Get the current published contract template.
 
@@ -151,7 +152,6 @@ class ContractSignatures:
             .filter(LegalDocument.is_published.is_(True))
             .first()
         )
-
 
     @staticmethod
     def get_contract_context(

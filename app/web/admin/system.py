@@ -85,6 +85,7 @@ router = APIRouter(prefix="/system", tags=["web-admin-system"])
 
 def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -118,6 +119,7 @@ def system_health_page(request: Request, db: Session = Depends(get_db)):
 def _workflow_context(request: Request, db: Session, error: str | None = None):
     """Build context for workflow page - simplified after CRM cleanup."""
     from app.web.admin import get_current_user, get_sidebar_stats
+
     context = {
         "request": request,
         "active_page": "workflow",
@@ -129,7 +131,12 @@ def _workflow_context(request: Request, db: Session, error: str | None = None):
         context["error"] = error
     return context
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def system_overview(request: Request, db: Session = Depends(get_db)):
     """System settings overview."""
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -148,7 +155,11 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/modules", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/modules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def modules_manager_page(request: Request, db: Session = Depends(get_db)):
     """Main module manager with module and feature toggles."""
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -168,7 +179,9 @@ def modules_manager_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/modules", dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/modules", dependencies=[Depends(require_permission("system:settings:write"))]
+)
 def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     """Persist module manager toggles."""
     form = parse_form_data_sync(request)
@@ -176,11 +189,15 @@ def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     feature_payload: dict[str, bool] = {}
 
     for module_name in module_manager_service.MODULE_KEY_MAP:
-        module_payload[module_name] = str(form.get(f"module__{module_name}") or "").lower() == "true"
+        module_payload[module_name] = (
+            str(form.get(f"module__{module_name}") or "").lower() == "true"
+        )
 
     for feature_map in module_manager_service.MODULE_FEATURE_MAP.values():
         for feature_name in feature_map:
-            feature_payload[feature_name] = str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+            feature_payload[feature_name] = (
+                str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+            )
 
     module_manager_service.update_module_flags(db, payload=module_payload)
     module_manager_service.update_feature_flags(db, payload=feature_payload)
@@ -200,7 +217,11 @@ def system_import_wizard(request: Request, db: Session = Depends(get_db)):
     rollback_error = request.query_params.get("rollback_error")
     job_notice = request.query_params.get("job_notice")
     active_job_id = request.query_params.get("job_id")
-    active_job = web_system_import_wizard_service.get_job(db, active_job_id) if active_job_id else None
+    active_job = (
+        web_system_import_wizard_service.get_job(db, active_job_id)
+        if active_job_id
+        else None
+    )
     return templates.TemplateResponse(
         "admin/system/import_wizard.html",
         {
@@ -232,7 +253,9 @@ def system_import_template_csv(
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename=\"import_template_{module}.csv\"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="import_template_{module}.csv"'
+        },
     )
 
 
@@ -284,6 +307,7 @@ def system_import_wizard_submit(
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     current_user = get_current_user(request)
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "").strip()
@@ -294,7 +318,9 @@ def system_import_wizard_submit(
     payload_file = cast(UploadFile | None, form.get("payload_file"))
     file_bytes: bytes | None = None
     if payload_file is not None and payload_file.filename:
-        source_name = source_name if source_name.strip() != "manual" else payload_file.filename
+        source_name = (
+            source_name if source_name.strip() != "manual" else payload_file.filename
+        )
         file_bytes = payload_file.file.read()
     dry_run = form.get("dry_run")
     column_mapping: dict[str, str] = {}
@@ -322,7 +348,9 @@ def system_import_wizard_submit(
                 {
                     "job_id": job_id,
                     "module": module,
-                    "module_label": web_system_import_wizard_service.ENTITY_CONFIG.get(module, {}).get("label", module),
+                    "module_label": web_system_import_wizard_service.ENTITY_CONFIG.get(
+                        module, {}
+                    ).get("label", module),
                     "source_name": source_name,
                     "status": "queued",
                     "queued_at": datetime.now(UTC).isoformat(),
@@ -343,7 +371,9 @@ def system_import_wizard_submit(
                 dry_run=dry_run is not None,
                 column_mapping=column_mapping,
                 csv_delimiter=csv_delimiter,
-                file_bytes_b64=b64encode(file_bytes).decode("ascii") if file_bytes is not None else None,
+                file_bytes_b64=b64encode(file_bytes).decode("ascii")
+                if file_bytes is not None
+                else None,
                 notify_email=(current_user.get("email") or "").strip() or None,
             )
             notice = quote_plus(
@@ -385,7 +415,9 @@ def system_import_wizard_submit(
                 },
                 **state,
             },
-            status_code=200 if result.get("status") in {"success", "dry_run", "partial"} else 400,
+            status_code=200
+            if result.get("status") in {"success", "dry_run", "partial"}
+            else 400,
         )
     except Exception as exc:
         state = web_system_import_wizard_service.build_page_state(db)
@@ -456,11 +488,19 @@ def system_export_tool(
     selected_include_headers = True
 
     if selected_template_id:
-        template_data = web_system_export_tool_service.get_export_template(db, selected_template_id)
+        template_data = web_system_export_tool_service.get_export_template(
+            db, selected_template_id
+        )
         if template_data:
-            config = template_data.get("config") if isinstance(template_data.get("config"), dict) else {}
+            config = (
+                template_data.get("config")
+                if isinstance(template_data.get("config"), dict)
+                else {}
+            )
             selected_module = str(config.get("module") or selected_module).strip()
-            selected_fields = [str(field) for field in config.get("selected_fields") or []]
+            selected_fields = [
+                str(field) for field in config.get("selected_fields") or []
+            ]
             selected_delimiter = str(config.get("delimiter") or ",")
             selected_export_format = str(config.get("export_format") or "csv")
             selected_date_from = str(config.get("date_from") or "").strip() or None
@@ -470,11 +510,15 @@ def system_export_tool(
 
     try:
         available_fields = web_system_export_tool_service.module_fields(selected_module)
-        status_options = web_system_export_tool_service.module_status_options(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(
+            selected_module
+        )
     except Exception:
         selected_module = "subscribers"
         available_fields = web_system_export_tool_service.module_fields(selected_module)
-        status_options = web_system_export_tool_service.module_status_options(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(
+            selected_module
+        )
 
     return templates.TemplateResponse(
         "admin/system/export_tool.html",
@@ -487,14 +531,20 @@ def system_export_tool(
             "module_options": web_system_export_tool_service.module_options(),
             "delimiter_options": web_system_export_tool_service.DELIMITER_OPTIONS,
             "export_format_options": web_system_export_tool_service.EXPORT_FORMAT_OPTIONS,
-            "export_templates": web_system_export_tool_service.list_export_templates(db),
+            "export_templates": web_system_export_tool_service.list_export_templates(
+                db
+            ),
             "selected_template_id": selected_template_id,
             "selected_module": selected_module,
             "available_fields": available_fields,
             "status_options": status_options,
             "frequency_options": web_system_export_tool_service.SCHEDULE_FREQUENCY_OPTIONS,
-            "export_schedules": web_system_export_tool_service.list_export_schedules(db),
-            "export_jobs": web_system_export_tool_service.list_export_jobs(db, limit=20),
+            "export_schedules": web_system_export_tool_service.list_export_schedules(
+                db
+            ),
+            "export_jobs": web_system_export_tool_service.list_export_jobs(
+                db, limit=20
+            ),
             "selected_fields": selected_fields or available_fields,
             "selected_delimiter": selected_delimiter,
             "selected_export_format": selected_export_format,
@@ -519,7 +569,9 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
 
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv")
     date_from = str(form.get("date_from") or "").strip() or None
@@ -570,18 +622,23 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
             notice = quote_plus(
                 f"Large export queued ({row_count} rows). Download link will be emailed when ready."
             )
-            return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+            return RedirectResponse(
+                f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+                status_code=303,
+            )
 
-        content, media_type, extension, row_count = web_system_export_tool_service.export_content(
-            db,
-            module=module,
-            selected_fields=selected_fields,
-            delimiter=delimiter,
-            export_format=export_format,
-            date_from=date_from,
-            date_to=date_to,
-            status=status,
-            include_headers=include_headers,
+        content, media_type, extension, row_count = (
+            web_system_export_tool_service.export_content(
+                db,
+                module=module,
+                selected_fields=selected_fields,
+                delimiter=delimiter,
+                export_format=export_format,
+                date_from=date_from,
+                date_to=date_to,
+                status=status,
+                include_headers=include_headers,
+            )
         )
         timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         filename = f"export_{module}_{row_count}_{timestamp}.{extension}"
@@ -607,14 +664,18 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
     except Exception as exc:
         error = quote_plus(str(exc))
         module_q = quote_plus(module)
-        return RedirectResponse(f"/admin/system/export?module={module_q}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={module_q}&error={error}", status_code=303
+        )
 
 
 @router.get(
     "/export/jobs/{job_id}/download",
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def system_export_job_download(request: Request, job_id: str, db: Session = Depends(get_db)):
+def system_export_job_download(
+    request: Request, job_id: str, db: Session = Depends(get_db)
+):
     from fastapi.responses import FileResponse
 
     from app.web.admin import get_current_user
@@ -646,7 +707,9 @@ def system_export_job_download(request: Request, job_id: str, db: Session = Depe
         entity_id=job_id,
         metadata={"filename": filename},
     )
-    return FileResponse(path=str(resolved), filename=filename, media_type="application/octet-stream")
+    return FileResponse(
+        path=str(resolved), filename=filename, media_type="application/octet-stream"
+    )
 
 
 @router.post(
@@ -657,7 +720,9 @@ def system_export_create_template(request: Request, db: Session = Depends(get_db
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     template_name = str(form.get("template_name") or "").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv")
     date_from = str(form.get("date_from") or "").strip() or None
@@ -685,7 +750,10 @@ def system_export_create_template(request: Request, db: Session = Depends(get_db
         )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -700,12 +768,20 @@ def system_export_delete_template(
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     try:
-        web_system_export_tool_service.delete_export_template(db, template_id=template_id)
+        web_system_export_tool_service.delete_export_template(
+            db, template_id=template_id
+        )
         notice = quote_plus("Export template removed.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -715,7 +791,9 @@ def system_export_delete_template(
 def system_export_create_schedule(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv").strip().lower()
     date_from = str(form.get("date_from") or "").strip() or None
@@ -726,7 +804,9 @@ def system_export_create_schedule(request: Request, db: Session = Depends(get_db
     recipient_email = str(form.get("recipient_email") or "").strip()
     frequency = str(form.get("frequency") or "weekly").strip().lower()
     custom_interval_raw = str(form.get("custom_interval_hours") or "").strip()
-    custom_interval_hours = int(custom_interval_raw) if custom_interval_raw.isdigit() else None
+    custom_interval_hours = (
+        int(custom_interval_raw) if custom_interval_raw.isdigit() else None
+    )
 
     try:
         web_system_export_tool_service.create_export_schedule(
@@ -745,10 +825,16 @@ def system_export_create_schedule(request: Request, db: Session = Depends(get_db
             custom_interval_hours=custom_interval_hours,
         )
         notice = quote_plus("Scheduled export created.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -770,10 +856,16 @@ def system_export_toggle_schedule(
             enabled=enabled,
         )
         notice = quote_plus("Scheduled export updated.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -788,12 +880,20 @@ def system_export_delete_schedule(
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     try:
-        web_system_export_tool_service.delete_export_schedule(db, schedule_id=schedule_id)
+        web_system_export_tool_service.delete_export_schedule(
+            db, schedule_id=schedule_id
+        )
         notice = quote_plus("Scheduled export removed.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -805,7 +905,9 @@ def system_import_wizard_rollback(
     db: Session = Depends(get_db),
 ):
     try:
-        result = web_system_import_wizard_service.rollback_import(db, import_id=import_id)
+        result = web_system_import_wizard_service.rollback_import(
+            db, import_id=import_id
+        )
         notice = quote_plus(
             f"Import {import_id} rolled back: {result['rolled_back_rows']} rows removed."
         )
@@ -821,7 +923,11 @@ def system_import_wizard_rollback(
         )
 
 
-@router.get("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_list(
     request: Request,
     search: str | None = None,
@@ -866,6 +972,7 @@ def users_list(
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/users/index.html",
         {
@@ -882,7 +989,11 @@ def users_list(
     )
 
 
-@router.get("/users/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/search",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_search(
     request: Request,
     search: str | None = None,
@@ -917,7 +1028,11 @@ def users_search(
     )
 
 
-@router.get("/users/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/filter",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_filter(
     request: Request,
     search: str | None = None,
@@ -1026,7 +1141,9 @@ def user_profile_update(
     return templates.TemplateResponse("admin/system/profile.html", context)
 
 
-@router.post("/users/bulk/user-type", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/user-type", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_set_user_type(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1049,7 +1166,9 @@ def users_bulk_set_user_type(
     }
 
 
-@router.post("/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_delete(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1069,7 +1188,9 @@ def users_bulk_delete(
     }
 
 
-@router.post("/users/bulk/invite", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/invite", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_invite(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1089,7 +1210,11 @@ def users_bulk_invite(
     }
 
 
-@router.get("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/{user_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1117,7 +1242,11 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/users/{user_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1148,11 +1277,15 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/users/{user_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_edit_submit(
     request: Request,
     user_id: str,
-    form_data = Depends(parse_form_data),
+    form_data=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -1190,13 +1323,17 @@ def user_edit_submit(
             direct_permission_ids=direct_permission_ids,
             new_password=new_password,
             confirm_password=confirm_password,
-            require_password_change=web_system_common_service.form_bool(require_password_change),
+            require_password_change=web_system_common_service.form_bool(
+                require_password_change
+            ),
             is_admin=web_system_common_service.is_admin_request(request),
             actor_id=getattr(request.state, "actor_id", None),
         )
     except Exception as exc:
         db.rollback()
-        edit_data = web_system_user_edit_service.build_edit_state(db, subscriber=system_user)
+        edit_data = web_system_user_edit_service.build_edit_state(
+            db, subscriber=system_user
+        )
         return templates.TemplateResponse(
             "admin/system/users/edit.html",
             {
@@ -1207,7 +1344,9 @@ def user_edit_submit(
                 "all_permissions": edit_data["all_permissions"],
                 "direct_permission_ids": edit_data["direct_permission_ids"],
                 "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
-                "can_update_password": web_system_common_service.is_admin_request(request),
+                "can_update_password": web_system_common_service.is_admin_request(
+                    request
+                ),
                 "active_page": "users",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -1219,29 +1358,49 @@ def user_edit_submit(
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/activate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/activate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_activate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(db, user_id=user_id, is_active=True)
+    web_system_user_mutations_service.set_user_active(
+        db, user_id=user_id, is_active=True
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/deactivate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/deactivate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(db, user_id=user_id, is_active=False)
+    web_system_user_mutations_service.set_user_active(
+        db, user_id=user_id, is_active=False
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/disable-mfa", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/disable-mfa",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
     web_system_user_mutations_service.disable_user_mfa(db, user_id=user_id)
     return Response(status_code=204)
 
 
-@router.post("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/reset-password",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_reset_password(request: Request, user_id: str, db: Session = Depends(get_db)):
     try:
         note = web_system_user_mutations_service.send_password_reset_link_for_user(
@@ -1264,13 +1423,21 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.get("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/reset-password",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_reset_password_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on reset-password action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_db)):
     try:
         note = web_system_user_mutations_service.send_user_invite_for_user(
@@ -1293,13 +1460,21 @@ def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_d
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.get("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_send_invite_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on invite action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_create(
     request: Request,
     first_name: str = Form(...),
@@ -1312,17 +1487,21 @@ def user_create(
 ):
     system_user = None
     try:
-        system_user, _ = web_system_user_mutations_service.create_user_with_role_and_password(
-            db,
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            role_id=role_id,
-            user_type="system_user",
+        system_user, _ = (
+            web_system_user_mutations_service.create_user_with_role_and_password(
+                db,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                role_id=role_id,
+                user_type="system_user",
+            )
         )
     except IntegrityError as exc:
         db.rollback()
-        return web_system_common_service.error_banner(web_system_common_service.humanize_integrity_error(exc))
+        return web_system_common_service.error_banner(
+            web_system_common_service.humanize_integrity_error(exc)
+        )
 
     note = "User created. Ask the user to reset their password."
     if send_invite and system_user is not None:
@@ -1337,24 +1516,36 @@ def user_create(
     )
 
 
-@router.delete("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.delete(
+    "/users/{user_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
     system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
     if not system_user:
         raise HTTPException(status_code=404, detail="User not found")
     if system_user.is_active:
-        return web_system_common_service.blocked_delete_response(request, [], detail="Deactivate user before deleting.")
+        return web_system_common_service.blocked_delete_response(
+            request, [], detail="Deactivate user before deleting."
+        )
     try:
         web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
     except IntegrityError:
         db.rollback()
-        return web_system_common_service.blocked_delete_response(request, [], detail="User cannot be deleted due to linked records.")
+        return web_system_common_service.blocked_delete_response(
+            request, [], detail="User cannot be deleted due to linked records."
+        )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
     return RedirectResponse(url="/admin/system/users", status_code=303)
 
 
-@router.get("/roles", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/roles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def roles_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1369,6 +1560,7 @@ def roles_list(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles.html",
         {
@@ -1382,10 +1574,15 @@ def roles_list(
     )
 
 
-@router.get("/roles/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.get(
+    "/roles/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_system_form_views_service.get_role_new_form_context(db)
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles_form.html",
         {
@@ -1399,7 +1596,11 @@ def role_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/roles", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.post(
+    "/roles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_create(
     request: Request,
     name: str = Form(...),
@@ -1426,6 +1627,7 @@ def role_create(
             permission_ids=permission_ids,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/roles_form.html",
             {
@@ -1445,7 +1647,11 @@ def role_create(
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.get("/roles/{role_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.get(
+    "/roles/{role_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
     try:
         form_data = web_system_role_forms_service.get_role_edit_data(db, role_id)
@@ -1456,6 +1662,7 @@ def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles_form.html",
         {
@@ -1474,7 +1681,11 @@ def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/roles/{role_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.post(
+    "/roles/{role_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_update(
     request: Request,
     role_id: str,
@@ -1503,6 +1714,7 @@ def role_update(
             permission_ids=permission_ids,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/roles_form.html",
             {
@@ -1522,13 +1734,21 @@ def role_update(
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.post("/roles/{role_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:delete"))])
+@router.post(
+    "/roles/{role_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:delete"))],
+)
 def role_delete(request: Request, role_id: str, db: Session = Depends(get_db)):
     rbac_service.roles.delete(db, role_id)
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.get("/permissions", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:read"))])
+@router.get(
+    "/permissions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:read"))],
+)
 def permissions_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1542,6 +1762,7 @@ def permissions_list(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions.html",
         {
@@ -1555,10 +1776,15 @@ def permissions_list(
     )
 
 
-@router.get("/permissions/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.get(
+    "/permissions/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_system_form_views_service.get_permission_new_form_context()
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions_form.html",
         {
@@ -1572,7 +1798,11 @@ def permission_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/permissions", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.post(
+    "/permissions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_create(
     request: Request,
     key: str = Form(...),
@@ -1595,6 +1825,7 @@ def permission_create(
             submit_label="Create Permission",
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/permissions_form.html",
             {
@@ -1611,8 +1842,14 @@ def permission_create(
     return RedirectResponse(url="/admin/system/permissions", status_code=303)
 
 
-@router.get("/permissions/{permission_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
-def permission_edit(request: Request, permission_id: str, db: Session = Depends(get_db)):
+@router.get(
+    "/permissions/{permission_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
+def permission_edit(
+    request: Request, permission_id: str, db: Session = Depends(get_db)
+):
     form_context = web_system_form_views_service.get_permission_edit_form_context(
         db,
         permission_id,
@@ -1624,6 +1861,7 @@ def permission_edit(request: Request, permission_id: str, db: Session = Depends(
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions_form.html",
         {
@@ -1637,7 +1875,11 @@ def permission_edit(request: Request, permission_id: str, db: Session = Depends(
     )
 
 
-@router.post("/permissions/{permission_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.post(
+    "/permissions/{permission_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_update(
     request: Request,
     permission_id: str,
@@ -1661,6 +1903,7 @@ def permission_update(
             submit_label="Save Changes",
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/permissions_form.html",
             {
@@ -1677,7 +1920,11 @@ def permission_update(
     return RedirectResponse(url="/admin/system/permissions", status_code=303)
 
 
-@router.post("/permissions/{permission_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:delete"))])
+@router.post(
+    "/permissions/{permission_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:delete"))],
+)
 def permission_delete(
     request: Request, permission_id: str, db: Session = Depends(get_db)
 ):
@@ -1686,7 +1933,9 @@ def permission_delete(
 
 
 @router.get("/api-keys", response_class=HTMLResponse)
-def api_keys_list(request: Request, new_key: str | None = None, db: Session = Depends(get_db)):
+def api_keys_list(
+    request: Request, new_key: str | None = None, db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
@@ -1746,8 +1995,7 @@ def api_key_create(
 
         # Return to list with the new key shown
         return RedirectResponse(
-            url=f"/admin/system/api-keys?new_key={raw_key}",
-            status_code=303
+            url=f"/admin/system/api-keys?new_key={raw_key}", status_code=303
         )
     except Exception as e:
         context = {
@@ -1767,9 +2015,14 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
 
-@router.get("/webhooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/webhooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def webhooks_list(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     page_data = web_system_webhooks_service.get_webhooks_list_data(db)
 
     context = {
@@ -1783,7 +2036,11 @@ def webhooks_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/webhooks.html", context)
 
 
-@router.get("/webhooks/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.get(
+    "/webhooks/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_new(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1799,7 +2056,11 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.post("/webhooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/webhooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_create(
     request: Request,
     name: str = Form(...),
@@ -1834,7 +2095,11 @@ def webhook_create(
         return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.get("/webhooks/{endpoint_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.get(
+    "/webhooks/{endpoint_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1856,7 +2121,11 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
     return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.post("/webhooks/{endpoint_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/webhooks/{endpoint_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_update(
     request: Request,
     endpoint_id: str,
@@ -1881,7 +2150,9 @@ def webhook_update(
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
-        form_data = web_system_webhook_forms_service.get_webhook_form_data(db, endpoint_id)
+        form_data = web_system_webhook_forms_service.get_webhook_form_data(
+            db, endpoint_id
+        )
         context = {
             "request": request,
             "active_page": "webhooks",
@@ -1896,7 +2167,11 @@ def webhook_update(
         return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.get("/audit", response_class=HTMLResponse, dependencies=[Depends(require_permission("audit:read"))])
+@router.get(
+    "/audit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("audit:read"))],
+)
 def audit_log(
     request: Request,
     actor_id: str | None = None,
@@ -1926,6 +2201,7 @@ def audit_log(
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/audit.html",
         {
@@ -1942,7 +2218,11 @@ def audit_log(
     )
 
 
-@router.get("/scheduler", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/scheduler",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def scheduler_overview(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1957,6 +2237,7 @@ def scheduler_overview(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/scheduler.html",
         {
@@ -1970,12 +2251,20 @@ def scheduler_overview(
     )
 
 
-@router.get("/scheduler/{task_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
-def scheduler_task_detail(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.get(
+    "/scheduler/{task_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def scheduler_task_detail(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """View scheduled task details."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    detail_data = web_system_scheduler_service.get_scheduler_task_detail_data(db, task_id)
+    detail_data = web_system_scheduler_service.get_scheduler_task_detail_data(
+        db, task_id
+    )
     if not detail_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1998,51 +2287,89 @@ def scheduler_task_detail(request: Request, task_id: str, db: Session = Depends(
     )
 
 
-@router.post("/scheduler/{task_id}/enable", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_enable(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/enable",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_enable(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Enable a scheduled task."""
     from app.schemas.scheduler import ScheduledTaskUpdate
-    scheduler_service.scheduled_tasks.update(db, task_id, ScheduledTaskUpdate(enabled=True))
+
+    scheduler_service.scheduled_tasks.update(
+        db, task_id, ScheduledTaskUpdate(enabled=True)
+    )
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/disable", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_disable(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/disable",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_disable(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Disable a scheduled task."""
     from app.schemas.scheduler import ScheduledTaskUpdate
-    scheduler_service.scheduled_tasks.update(db, task_id, ScheduledTaskUpdate(enabled=False))
+
+    scheduler_service.scheduled_tasks.update(
+        db, task_id, ScheduledTaskUpdate(enabled=False)
+    )
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/run", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/scheduler/{task_id}/run",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def scheduler_task_run(request: Request, task_id: str, db: Session = Depends(get_db)):
     """Manually trigger a scheduled task."""
     scheduler_service.enqueue_by_id(db, task_id)
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_delete(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_delete(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Delete a scheduled task."""
     scheduler_service.scheduled_tasks.delete(db, task_id)
     return RedirectResponse(url="/admin/system/scheduler", status_code=303)
 
 
-@router.get("/workflow", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/workflow",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def workflow_overview(request: Request, db: Session = Depends(get_db)):
     """Workflow and SLA configuration overview."""
     context = _workflow_context(request, db)
     return templates.TemplateResponse("admin/system/workflow.html", context)
 
 
-@router.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def settings_overview(
     request: Request,
     domain: str | None = None,
     db: Session = Depends(get_db),
 ):
     """System settings management."""
-    settings_context = web_system_settings_views_service.build_settings_context(db, domain)
+    settings_context = web_system_settings_views_service.build_settings_context(
+        db, domain
+    )
     context = web_system_settings_views_service.build_settings_page_context(
         request,
         db,
@@ -2054,19 +2381,25 @@ def settings_overview(
     )
 
 
-@router.post("/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def settings_update(
     request: Request,
     domain: str | None = Form(None),
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     """Update system settings for a domain."""
     domain_value = domain or form.get("domain")
-    settings_context, errors = web_system_settings_forms_service.process_settings_update(
-        db=db,
-        domain_value=domain_value,
-        form=form,
+    settings_context, errors = (
+        web_system_settings_forms_service.process_settings_update(
+            db=db,
+            domain_value=domain_value,
+            form=form,
+        )
     )
     context = web_system_settings_views_service.build_settings_page_context(
         request,
@@ -2146,7 +2479,9 @@ def settings_branding_update(
                 file_data=file_bytes,
                 content_type=incoming_file.content_type,
                 filename=incoming_file.filename,
-                uploaded_by=(get_admin_current_user(request) or {}).get("subscriber_id"),
+                uploaded_by=(get_admin_current_user(request) or {}).get(
+                    "subscriber_id"
+                ),
             )
             next_value = branding_storage_service.branding_url_for_file(file_record.id)
         else:
@@ -2219,16 +2554,22 @@ def settings_branding_update(
                 upload = file_upload_service.get_branding_upload()
                 upload.delete_by_url(current_value, "/static/branding/")
 
-        return RedirectResponse(url="/admin/system/settings?domain=branding", status_code=303)
+        return RedirectResponse(
+            url="/admin/system/settings?domain=branding", status_code=303
+        )
     except Exception as exc:
-        settings_context = web_system_settings_views_service.build_settings_context(db, "branding")
+        settings_context = web_system_settings_views_service.build_settings_context(
+            db, "branding"
+        )
         context = web_system_settings_views_service.build_settings_page_context(
             request,
             db,
             settings_context=settings_context,
             extra={"errors": [str(exc)]},
         )
-        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
+        return templates.TemplateResponse(
+            "admin/system/settings.html", context, status_code=400
+        )
 
 
 @router.post(
@@ -2272,14 +2613,18 @@ def settings_smtp_sender_upsert(
             status_code=303,
         )
     except Exception as exc:
-        settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+        settings_context = web_system_settings_views_service.build_settings_context(
+            db, "notification"
+        )
         context = web_system_settings_views_service.build_settings_page_context(
             request,
             db,
             settings_context=settings_context,
             extra={"errors": [str(exc)]},
         )
-        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
+        return templates.TemplateResponse(
+            "admin/system/settings.html", context, status_code=400
+        )
 
 
 @router.post(
@@ -2292,7 +2637,9 @@ def settings_smtp_sender_set_default(
     db: Session = Depends(get_db),
 ):
     email_service.set_default_smtp_sender_key(db, sender_key)
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/settings?domain=notification#smtp-senders", status_code=303
+    )
 
 
 @router.post(
@@ -2307,10 +2654,14 @@ def settings_smtp_sender_delete(sender_key: str, db: Session = Depends(get_db)):
     current_default = email_service.get_default_smtp_sender_key(db)
     if current_default == normalized:
         if remaining:
-            email_service.set_default_smtp_sender_key(db, str(remaining[0].get("sender_key", "default")))
+            email_service.set_default_smtp_sender_key(
+                db, str(remaining[0].get("sender_key", "default"))
+            )
         else:
             email_service.set_default_smtp_sender_key(db, "default")
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/settings?domain=notification#smtp-senders", status_code=303
+    )
 
 
 @router.post(
@@ -2327,7 +2678,9 @@ def settings_smtp_sender_test(
     config = email_service.get_smtp_config(db, sender_key=normalized)
     ok, error = email_service.test_smtp_connection(config, db=db)
     message = "SMTP connection successful." if ok else (error or "SMTP test failed.")
-    settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+    settings_context = web_system_settings_views_service.build_settings_context(
+        db, "notification"
+    )
     context = web_system_settings_views_service.build_settings_page_context(
         request,
         db,
@@ -2356,7 +2709,9 @@ def settings_smtp_sender_activities(
         field_name = f"activity_{activity_key}"
         sender = form.get(field_name)
         email_service.upsert_smtp_activity_mapping(db, activity_key, sender)
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/settings?domain=notification#smtp-senders", status_code=303
+    )
 
 
 @router.post(
@@ -2366,11 +2721,13 @@ def settings_smtp_sender_activities(
 )
 def settings_bank_account_create(
     request: Request,
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     try:
-        payload = web_system_billing_forms_service.build_bank_account_create_payload(form)
+        payload = web_system_billing_forms_service.build_bank_account_create_payload(
+            form
+        )
         billing_service.bank_accounts.create(db, payload)
         return RedirectResponse(
             url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
@@ -2398,11 +2755,13 @@ def settings_bank_account_create(
 def settings_bank_account_update(
     request: Request,
     bank_account_id: UUID,
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     try:
-        payload = web_system_billing_forms_service.build_bank_account_update_payload(form)
+        payload = web_system_billing_forms_service.build_bank_account_update_payload(
+            form
+        )
         billing_service.bank_accounts.update(db, str(bank_account_id), payload)
         return RedirectResponse(
             url="/admin/system/settings?domain=billing#bank-accounts", status_code=303

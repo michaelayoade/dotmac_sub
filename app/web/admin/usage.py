@@ -23,6 +23,7 @@ router = APIRouter(prefix="/catalog/usage", tags=["web-admin-usage"])
 
 def _base_context(request: Request, db: Session, active_page: str, usage_tab: str = ""):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -43,7 +44,9 @@ def _base_context(request: Request, db: Session, active_page: str, usage_tab: st
 def usage_dashboard_index(request: Request, db: Session = Depends(get_db)):
     """Usage dashboard overview with stats."""
     page_data = web_usage_service.get_dashboard_data(db)
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="dashboard")
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="dashboard"
+    )
     context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/index.html", context)
 
@@ -57,9 +60,13 @@ def usage_dashboard_index(request: Request, db: Session = Depends(get_db)):
 def fup_calculator(request: Request, db: Session = Depends(get_db)):
     """FUP (Fair Usage Policy) calculator for testing usage and throttling scenarios."""
     page_data = web_usage_service.get_calculator_data(db)
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="calculator")
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="calculator"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/catalog/usage/fup_calculator.html", context)
+    return templates.TemplateResponse(
+        "admin/catalog/usage/fup_calculator.html", context
+    )
 
 
 # =============================================================================
@@ -82,7 +89,9 @@ def usage_records_list(
         page=page,
         per_page=per_page,
     )
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="records")
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="records"
+    )
     context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/records.html", context)
 
@@ -109,7 +118,9 @@ def usage_charges_list(
         page=page,
         per_page=per_page,
     )
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="charges")
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="charges"
+    )
     context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/charges.html", context)
 
@@ -118,11 +129,17 @@ def usage_charges_list(
 def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(get_db)):
     """Post a single usage charge."""
     try:
-        usage_service.usage_charges.post(db=db, charge_id=charge_id, payload=UsageChargePostRequest())
+        usage_service.usage_charges.post(
+            db=db, charge_id=charge_id, payload=UsageChargePostRequest()
+        )
     except Exception:
         logger.exception("Failed to post usage charge %s", charge_id)
-        return RedirectResponse("/admin/catalog/usage/charges?error=post_failed", status_code=303)
-    return RedirectResponse("/admin/catalog/usage/charges?success=posted", status_code=303)
+        return RedirectResponse(
+            "/admin/catalog/usage/charges?error=post_failed", status_code=303
+        )
+    return RedirectResponse(
+        "/admin/catalog/usage/charges?success=posted", status_code=303
+    )
 
 
 @router.post("/charges/bulk-post", response_class=HTMLResponse)
@@ -162,7 +179,9 @@ def rating_runs_list(
         page=page,
         per_page=per_page,
     )
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="rating")
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="rating"
+    )
     context.update(page_data)
     return templates.TemplateResponse("admin/catalog/usage/rating.html", context)
 
@@ -176,7 +195,9 @@ def rating_run_trigger(
     """Trigger a new rating run."""
     period_start_raw = form.get("period_start")
     period_end_raw = form.get("period_end")
-    period_start_str = period_start_raw.strip() if isinstance(period_start_raw, str) else ""
+    period_start_str = (
+        period_start_raw.strip() if isinstance(period_start_raw, str) else ""
+    )
     period_end_str = period_end_raw.strip() if isinstance(period_end_raw, str) else ""
     dry_run = form.get("dry_run") == "true"
 
@@ -185,13 +206,17 @@ def rating_run_trigger(
 
     if period_start_str:
         try:
-            period_start = datetime.strptime(period_start_str, "%Y-%m-%d").replace(tzinfo=UTC)
+            period_start = datetime.strptime(period_start_str, "%Y-%m-%d").replace(
+                tzinfo=UTC
+            )
         except ValueError:
             pass
 
     if period_end_str:
         try:
-            period_end = datetime.strptime(period_end_str, "%Y-%m-%d").replace(tzinfo=UTC)
+            period_end = datetime.strptime(period_end_str, "%Y-%m-%d").replace(
+                tzinfo=UTC
+            )
         except ValueError:
             pass
 
@@ -236,9 +261,13 @@ def rating_run_detail(request: Request, run_id: str, db: Session = Depends(get_d
         period_end=run.period_end,
     )
 
-    context = _base_context(request, db, active_page="catalog-usage", usage_tab="rating")
-    context.update({
-        "run": run,
-        "run_charges": run_charges,
-    })
+    context = _base_context(
+        request, db, active_page="catalog-usage", usage_tab="rating"
+    )
+    context.update(
+        {
+            "run": run,
+            "run_charges": run_charges,
+        }
+    )
     return templates.TemplateResponse("admin/catalog/usage/rating_detail.html", context)

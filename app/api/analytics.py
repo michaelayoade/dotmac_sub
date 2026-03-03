@@ -17,7 +17,9 @@ from app.services.response import list_response
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
-@router.post("/kpi-configs", response_model=KPIConfigRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/kpi-configs", response_model=KPIConfigRead, status_code=status.HTTP_201_CREATED
+)
 def create_kpi_config(payload: KPIConfigCreate, db: Session = Depends(get_db)):
     return analytics_service.kpi_configs.create(db, payload)
 
@@ -54,7 +56,11 @@ def delete_kpi_config(config_id: str, db: Session = Depends(get_db)):
     analytics_service.kpi_configs.delete(db, config_id)
 
 
-@router.post("/kpi-aggregates", response_model=KPIAggregateRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/kpi-aggregates",
+    response_model=KPIAggregateRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_kpi_aggregate(payload: KPIAggregateCreate, db: Session = Depends(get_db)):
     return analytics_service.kpi_aggregates.create(db, payload)
 

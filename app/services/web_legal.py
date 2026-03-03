@@ -135,10 +135,16 @@ def build_document_update_payload(
 
 def read_and_validate_upload(file: UploadFile) -> tuple[bytes, str, str]:
     if file.content_type not in ALLOWED_UPLOAD_CONTENT_TYPES:
-        raise ValueError("File type not allowed. Allowed types: PDF, HTML, TXT, DOC, DOCX")
+        raise ValueError(
+            "File type not allowed. Allowed types: PDF, HTML, TXT, DOC, DOCX"
+        )
 
     content = file.file.read()
     if len(content) > MAX_UPLOAD_SIZE_BYTES:
         raise ValueError("File size exceeds 10MB limit")
 
-    return content, (file.filename or "document"), file.content_type or "application/octet-stream"
+    return (
+        content,
+        (file.filename or "document"),
+        file.content_type or "application/octet-stream",
+    )

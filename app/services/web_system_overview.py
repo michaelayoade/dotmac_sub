@@ -26,17 +26,23 @@ def get_dashboard_stats(db: Session) -> dict[str, object]:
     user_stats = get_user_stats(db)
 
     # Role count
-    role_count = db.scalar(
-        select(func.count()).select_from(Role).where(Role.is_active.is_(True))
-    ) or 0
+    role_count = (
+        db.scalar(
+            select(func.count()).select_from(Role).where(Role.is_active.is_(True))
+        )
+        or 0
+    )
 
     # Active API keys
-    api_key_count = db.scalar(
-        select(func.count())
-        .select_from(ApiKey)
-        .where(ApiKey.is_active.is_(True))
-        .where(ApiKey.revoked_at.is_(None))
-    ) or 0
+    api_key_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(ApiKey)
+            .where(ApiKey.is_active.is_(True))
+            .where(ApiKey.revoked_at.is_(None))
+        )
+        or 0
+    )
 
     # System health summary (quick check, no thresholds)
     try:
@@ -60,10 +66,7 @@ def get_dashboard_stats(db: Session) -> dict[str, object]:
 
     # Recent audit events (last 10)
     recent_audits = (
-        db.query(AuditEvent)
-        .order_by(AuditEvent.occurred_at.desc())
-        .limit(10)
-        .all()
+        db.query(AuditEvent).order_by(AuditEvent.occurred_at.desc()).limit(10).all()
     )
 
     return {

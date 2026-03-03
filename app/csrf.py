@@ -36,7 +36,9 @@ def _is_https_request(request: Request | None) -> bool:
     return request.url.scheme == "https"
 
 
-def set_csrf_cookie(response: Response, token: str, request: Request | None = None) -> None:
+def set_csrf_cookie(
+    response: Response, token: str, request: Request | None = None
+) -> None:
     """Set CSRF token in a secure cookie."""
     secure_cookie = settings.secure_cookies and _is_https_request(request)
     response.set_cookie(
@@ -82,5 +84,5 @@ class CSRFValidationError(HTTPException):
     def __init__(self):
         super().__init__(
             status_code=403,
-            detail="CSRF token validation failed. Please refresh the page and try again."
+            detail="CSRF token validation failed. Please refresh the page and try again.",
         )

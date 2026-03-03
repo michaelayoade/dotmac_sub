@@ -230,4 +230,3 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
     stats = {"total": len(olts), "active": sum(1 for o in olts if o.is_active)}
 
     return {"olts": olts, "olt_stats": olt_stats, "stats": stats}
-

@@ -31,7 +31,9 @@ _IG_PUBLISH_SCOPES = {"instagram_content_publish"}
 _IG_BASIC_SCOPES = {"instagram_basic"}
 
 
-def _ensure_token_scopes(token: OAuthToken | None, required_scopes: set[str], context: str) -> None:
+def _ensure_token_scopes(
+    token: OAuthToken | None, required_scopes: set[str], context: str
+) -> None:
     if not token or not token.scopes:
         return
     if not isinstance(token.scopes, (list, tuple, set)):
@@ -39,7 +41,9 @@ def _ensure_token_scopes(token: OAuthToken | None, required_scopes: set[str], co
     granted = {str(scope) for scope in token.scopes}
     missing = required_scopes - granted
     if missing:
-        raise ValueError(f"Missing required Meta permissions for {context}: {sorted(missing)}")
+        raise ValueError(
+            f"Missing required Meta permissions for {context}: {sorted(missing)}"
+        )
 
 
 async def _request_with_retry(
@@ -54,7 +58,9 @@ async def _request_with_retry(
 ) -> httpx.Response:
     retries = 0
     while True:
-        response = await client.request(method, url, data=data, params=params, timeout=timeout)
+        response = await client.request(
+            method, url, data=data, params=params, timeout=timeout
+        )
         if response.status_code in {429} or response.status_code >= 500:
             if retries >= max_retries:
                 return response
@@ -69,6 +75,7 @@ async def _request_with_retry(
             retries += 1
             continue
         return response
+
 
 def _get_meta_graph_base_url(db: Session) -> str:
     version = resolve_value(db, SettingDomain.comms, "meta_graph_api_version")
@@ -166,7 +173,9 @@ async def create_page_post(
         payload["link"] = link
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
+        response = await _request_with_retry(
+            client, "POST", url, data=payload, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -216,7 +225,9 @@ async def create_page_photo_post(
         payload["caption"] = caption
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
+        response = await _request_with_retry(
+            client, "POST", url, data=payload, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -265,7 +276,9 @@ async def reply_to_comment(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
+        response = await _request_with_retry(
+            client, "POST", url, data=payload, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -311,7 +324,9 @@ async def get_post_comments(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
+        response = await _request_with_retry(
+            client, "GET", url, params=params, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -339,7 +354,9 @@ async def get_page_posts(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
+        response = await _request_with_retry(
+            client, "GET", url, params=params, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -567,7 +584,9 @@ async def reply_to_instagram_comment(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "POST", url, data=payload, timeout=30.0)
+        response = await _request_with_retry(
+            client, "POST", url, data=payload, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -613,7 +632,9 @@ async def get_instagram_media_comments(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
+        response = await _request_with_retry(
+            client, "GET", url, params=params, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -641,7 +662,9 @@ async def get_instagram_media(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await _request_with_retry(client, "GET", url, params=params, timeout=30.0)
+        response = await _request_with_retry(
+            client, "GET", url, params=params, timeout=30.0
+        )
         response.raise_for_status()
         result = cast(dict[str, Any], response.json())
 
@@ -670,14 +693,16 @@ def get_connected_pages(db: Session) -> list[dict[str, Any]]:
     pages = []
     for token in tokens:
         metadata = token.metadata_ or {}
-        pages.append({
-            "page_id": token.external_account_id,
-            "name": token.external_account_name,
-            "category": metadata.get("category"),
-            "picture": metadata.get("picture"),
-            "token_expires_at": token.token_expires_at,
-            "needs_refresh": token.should_refresh(),
-        })
+        pages.append(
+            {
+                "page_id": token.external_account_id,
+                "name": token.external_account_name,
+                "category": metadata.get("category"),
+                "picture": metadata.get("picture"),
+                "token_expires_at": token.token_expires_at,
+                "needs_refresh": token.should_refresh(),
+            }
+        )
 
     return pages
 
@@ -699,12 +724,14 @@ def get_connected_instagram_accounts(db: Session) -> list[dict[str, Any]]:
     accounts = []
     for token in tokens:
         metadata = token.metadata_ or {}
-        accounts.append({
-            "account_id": token.external_account_id,
-            "username": token.external_account_name,
-            "profile_picture_url": metadata.get("profile_picture_url"),
-            "token_expires_at": token.token_expires_at,
-            "needs_refresh": token.should_refresh(),
-        })
+        accounts.append(
+            {
+                "account_id": token.external_account_id,
+                "username": token.external_account_name,
+                "profile_picture_url": metadata.get("profile_picture_url"),
+                "token_expires_at": token.token_expires_at,
+                "needs_refresh": token.should_refresh(),
+            }
+        )
 
     return accounts

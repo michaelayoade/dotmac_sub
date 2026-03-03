@@ -43,9 +43,12 @@ class QueueMapping(Base):
     When the poller reads queue stats from a NAS device, it uses this mapping
     to associate the queue name with the correct subscription.
     """
+
     __tablename__ = "queue_mappings"
     __table_args__ = (
-        UniqueConstraint("nas_device_id", "queue_name", name="uq_queue_mappings_device_queue"),
+        UniqueConstraint(
+            "nas_device_id", "queue_name", name="uq_queue_mappings_device_queue"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -66,7 +69,7 @@ class QueueMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC)
+        onupdate=lambda: datetime.now(UTC),
     )
 
     nas_device = relationship("NasDevice")

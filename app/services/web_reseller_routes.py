@@ -145,11 +145,15 @@ def reseller_fiber_map(request: Request, db: Session):
     features = []
 
     # FDH Cabinets
-    fdh_cabinets = db.query(FdhCabinet).filter(
-        FdhCabinet.is_active.is_(True),
-        FdhCabinet.latitude.isnot(None),
-        FdhCabinet.longitude.isnot(None)
-    ).all()
+    fdh_cabinets = (
+        db.query(FdhCabinet)
+        .filter(
+            FdhCabinet.is_active.is_(True),
+            FdhCabinet.latitude.isnot(None),
+            FdhCabinet.longitude.isnot(None),
+        )
+        .all()
+    )
     splitter_counts: dict[UUID, int] = {}
     if fdh_cabinets:
         fdh_ids = [fdh.id for fdh in fdh_cabinets]
@@ -163,24 +167,33 @@ def reseller_fiber_map(request: Request, db: Session):
                 splitter_counts[fdh_id] = int(count)
     for fdh in fdh_cabinets:
         splitter_count = splitter_counts.get(fdh.id, 0)
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [fdh.longitude, fdh.latitude]},
-            "properties": {
-                "id": str(fdh.id),
-                "type": "fdh_cabinet",
-                "name": fdh.name,
-                "code": fdh.code,
-                "splitter_count": splitter_count,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [fdh.longitude, fdh.latitude],
+                },
+                "properties": {
+                    "id": str(fdh.id),
+                    "type": "fdh_cabinet",
+                    "name": fdh.name,
+                    "code": fdh.code,
+                    "splitter_count": splitter_count,
+                },
+            }
+        )
 
     # Splice Closures
-    closures = db.query(FiberSpliceClosure).filter(
-        FiberSpliceClosure.is_active.is_(True),
-        FiberSpliceClosure.latitude.isnot(None),
-        FiberSpliceClosure.longitude.isnot(None)
-    ).all()
+    closures = (
+        db.query(FiberSpliceClosure)
+        .filter(
+            FiberSpliceClosure.is_active.is_(True),
+            FiberSpliceClosure.latitude.isnot(None),
+            FiberSpliceClosure.longitude.isnot(None),
+        )
+        .all()
+    )
     splice_counts: dict[UUID, int] = {}
     tray_counts: dict[UUID, int] = {}
     if closures:
@@ -202,49 +215,70 @@ def reseller_fiber_map(request: Request, db: Session):
     for closure in closures:
         splice_count = splice_counts.get(closure.id, 0)
         tray_count = tray_counts.get(closure.id, 0)
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [closure.longitude, closure.latitude]},
-            "properties": {
-                "id": str(closure.id),
-                "type": "splice_closure",
-                "name": closure.name,
-                "splice_count": splice_count,
-                "tray_count": tray_count,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [closure.longitude, closure.latitude],
+                },
+                "properties": {
+                    "id": str(closure.id),
+                    "type": "splice_closure",
+                    "name": closure.name,
+                    "splice_count": splice_count,
+                    "tray_count": tray_count,
+                },
+            }
+        )
 
     # Fiber Segments
     segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
-    segment_geoms = db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom)).filter(
-        FiberSegment.is_active.is_(True),
-        FiberSegment.route_geom.isnot(None),
-    ).all()
+    segment_geoms = (
+        db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom))
+        .filter(
+            FiberSegment.is_active.is_(True),
+            FiberSegment.route_geom.isnot(None),
+        )
+        .all()
+    )
     for segment, geojson_str in segment_geoms:
         if not geojson_str:
             continue
         geom = json.loads(geojson_str)
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "id": str(segment.id),
-                "type": "fiber_segment",
-                "name": segment.name,
-                "segment_type": segment.segment_type.value if segment.segment_type else None,
-                "cable_type": segment.cable_type.value if segment.cable_type else None,
-                "fiber_count": segment.fiber_count,
-                "length_m": segment.length_m,
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "id": str(segment.id),
+                    "type": "fiber_segment",
+                    "name": segment.name,
+                    "segment_type": segment.segment_type.value
+                    if segment.segment_type
+                    else None,
+                    "cable_type": segment.cable_type.value
+                    if segment.cable_type
+                    else None,
+                    "fiber_count": segment.fiber_count,
+                    "length_m": segment.length_m,
+                },
+            }
+        )
 
     geojson_data = {"type": "FeatureCollection", "features": features}
 
     # Stats
     stats = {
-        "fdh_cabinets": db.query(func.count(FdhCabinet.id)).filter(FdhCabinet.is_active.is_(True)).scalar(),
-        "splice_closures": db.query(func.count(FiberSpliceClosure.id)).filter(FiberSpliceClosure.is_active.is_(True)).scalar(),
-        "splitters": db.query(func.count(Splitter.id)).filter(Splitter.is_active.is_(True)).scalar(),
+        "fdh_cabinets": db.query(func.count(FdhCabinet.id))
+        .filter(FdhCabinet.is_active.is_(True))
+        .scalar(),
+        "splice_closures": db.query(func.count(FiberSpliceClosure.id))
+        .filter(FiberSpliceClosure.is_active.is_(True))
+        .scalar(),
+        "splitters": db.query(func.count(Splitter.id))
+        .filter(Splitter.is_active.is_(True))
+        .scalar(),
         "total_splices": db.query(func.count(FiberSplice.id)).scalar(),
         "segments": len(segments),
     }
@@ -268,19 +302,27 @@ def reseller_fiber_map(request: Request, db: Session):
 
     cost_settings: dict[str, Any] = {
         "drop_cable_per_meter": _as_float(
-            settings_spec.resolve_value(db, SettingDomain.network, "fiber_drop_cable_cost_per_meter"),
+            settings_spec.resolve_value(
+                db, SettingDomain.network, "fiber_drop_cable_cost_per_meter"
+            ),
             2.50,
         ),
         "labor_per_meter": _as_float(
-            settings_spec.resolve_value(db, SettingDomain.network, "fiber_labor_cost_per_meter"),
+            settings_spec.resolve_value(
+                db, SettingDomain.network, "fiber_labor_cost_per_meter"
+            ),
             1.50,
         ),
         "ont_device": _as_float(
-            settings_spec.resolve_value(db, SettingDomain.network, "fiber_ont_device_cost"),
+            settings_spec.resolve_value(
+                db, SettingDomain.network, "fiber_ont_device_cost"
+            ),
             85.00,
         ),
         "installation_base": _as_float(
-            settings_spec.resolve_value(db, SettingDomain.network, "fiber_installation_base_fee"),
+            settings_spec.resolve_value(
+                db, SettingDomain.network, "fiber_installation_base_fee"
+            ),
             50.00,
         ),
         "currency": _as_str(

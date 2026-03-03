@@ -31,6 +31,7 @@ def parse_form_data_sync(request: Request):
 
     return _parse_form_data_sync(request)
 
+
 DEVICE_AUDIT_EXCLUDE_FIELDS = {
     "ssh_password",
     "api_password",
@@ -155,7 +156,9 @@ def device_form_context(
 
     if device:
         selected_radius_pool_ids = radius_pool_ids_from_tags(device.tags)
-        selected_partner_org_ids = prefixed_values_from_tags(device.tags, "partner_org:")
+        selected_partner_org_ids = prefixed_values_from_tags(
+            device.tags, "partner_org:"
+        )
         enhanced_fields = extract_enhanced_fields(device.tags)
         pop_site_label = nas_service.pop_site_label(device)
 
@@ -191,7 +194,9 @@ def create_device(
                 device=None,
                 errors=errors,
                 form_data=parse_form_data_sync(request),
-                pop_site_label=nas_service.pop_site_label_by_id(db, form_data.get("pop_site_id")),
+                pop_site_label=nas_service.pop_site_label_by_id(
+                    db, form_data.get("pop_site_id")
+                ),
                 selected_radius_pool_ids=form_data.get("radius_pool_ids", []),
                 selected_partner_org_ids=form_data.get("partner_org_ids", []),
                 enhanced_fields={},
@@ -223,7 +228,9 @@ def create_device(
                 device=None,
                 errors=error_list,
                 form_data=parse_form_data_sync(request),
-                pop_site_label=nas_service.pop_site_label_by_id(db, form_data.get("pop_site_id")),
+                pop_site_label=nas_service.pop_site_label_by_id(
+                    db, form_data.get("pop_site_id")
+                ),
                 selected_radius_pool_ids=form_data.get("radius_pool_ids", []),
                 selected_partner_org_ids=form_data.get("partner_org_ids", []),
                 enhanced_fields={},
@@ -293,7 +300,9 @@ def update_device(
         if not isinstance(payload, NasDeviceUpdate):
             raise ValueError("Invalid payload type: expected NasDeviceUpdate")
         updated_device = nas_service.NasDevices.update(db, device_id, payload)
-        after_snapshot = model_to_dict(updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS)
+        after_snapshot = model_to_dict(
+            updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS
+        )
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata = {"changes": changes} if changes else None
         log_audit_event(
@@ -419,7 +428,9 @@ def test_mikrotik_api(
     device_id: str,
 ) -> str:
     try:
-        message = nas_service.refresh_mikrotik_status_for_device(db, device_id=device_id)
+        message = nas_service.refresh_mikrotik_status_for_device(
+            db, device_id=device_id
+        )
         status = "success"
     except Exception as exc:
         message = str(exc)
@@ -594,7 +605,9 @@ def create_template(
 
     try:
         if not isinstance(payload, ProvisioningTemplateCreate):
-            raise ValueError("Invalid payload type: expected ProvisioningTemplateCreate")
+            raise ValueError(
+                "Invalid payload type: expected ProvisioningTemplateCreate"
+            )
         template, metadata = nas_service.create_provisioning_template_with_metadata(
             db,
             payload=payload,
@@ -608,7 +621,9 @@ def create_template(
             actor_id=_actor_id(request),
             metadata=metadata,
         )
-        return NasActionResult(redirect_url=f"/admin/network/nas/templates/{template.id}")
+        return NasActionResult(
+            redirect_url=f"/admin/network/nas/templates/{template.id}"
+        )
     except Exception as exc:
         error_list = errors or []
         error_list = [*error_list, str(exc)]
@@ -665,11 +680,15 @@ def update_template(
 
     try:
         if not isinstance(payload, ProvisioningTemplateUpdate):
-            raise ValueError("Invalid payload type: expected ProvisioningTemplateUpdate")
-        updated_template, metadata = nas_service.update_provisioning_template_with_metadata(
-            db,
-            template_id=template_id,
-            payload=payload,
+            raise ValueError(
+                "Invalid payload type: expected ProvisioningTemplateUpdate"
+            )
+        updated_template, metadata = (
+            nas_service.update_provisioning_template_with_metadata(
+                db,
+                template_id=template_id,
+                payload=payload,
+            )
         )
         log_audit_event(
             db=db,
@@ -680,7 +699,9 @@ def update_template(
             actor_id=_actor_id(request),
             metadata=metadata,
         )
-        return NasActionResult(redirect_url=f"/admin/network/nas/templates/{template_id}")
+        return NasActionResult(
+            redirect_url=f"/admin/network/nas/templates/{template_id}"
+        )
     except Exception as exc:
         error_list = errors or []
         error_list = [*error_list, str(exc)]

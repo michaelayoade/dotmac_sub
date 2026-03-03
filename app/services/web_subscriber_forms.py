@@ -7,8 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider
-from app.models.subscriber import Organization
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Organization, Subscriber
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import auth as auth_service
@@ -59,7 +58,7 @@ def resolve_customer_ref(
     paren_match = re.search(r"\(([^()]+)\)\s*$", search_term)
     if paren_match:
         inner = paren_match.group(1).strip()
-        outer = search_term[:paren_match.start()].strip()
+        outer = search_term[: paren_match.start()].strip()
         if inner:
             candidate_terms.append(inner)
         if outer:
@@ -168,7 +167,9 @@ def create_subscriber_with_optional_login(
             raise ValueError("Customer already has a portal login.")
 
     payload = SubscriberUpdate(
-        organization_id=organization_uuid if subscriber_type == "organization" else None,
+        organization_id=organization_uuid
+        if subscriber_type == "organization"
+        else None,
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
         category=subscriber_category.strip().lower() if subscriber_category else None,
         notes=notes.strip() if notes else None,
@@ -225,7 +226,9 @@ def resolve_new_form_prefill(
     prefill_label = ""
     if subscriber_id:
         try:
-            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+            subscriber = subscriber_service.subscribers.get(
+                db=db, subscriber_id=subscriber_id
+            )
             prefill_ref = f"person:{subscriber.id}"
             prefill_label = f"{subscriber.first_name} {subscriber.last_name}".strip()
             if subscriber.email:

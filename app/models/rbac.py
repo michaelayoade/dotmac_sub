@@ -23,7 +23,9 @@ class Role(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     permissions = relationship("RolePermission", back_populates="role")
@@ -45,7 +47,9 @@ class Permission(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     roles = relationship("RolePermission", back_populates="permission")
@@ -54,7 +58,9 @@ class Permission(Base):
 class RolePermission(Base):
     __tablename__ = "role_permissions"
     __table_args__ = (
-        UniqueConstraint("role_id", "permission_id", name="uq_role_permissions_role_permission"),
+        UniqueConstraint(
+            "role_id", "permission_id", name="uq_role_permissions_role_permission"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -74,7 +80,9 @@ class RolePermission(Base):
 class SubscriberRole(Base):
     __tablename__ = "subscriber_roles"
     __table_args__ = (
-        UniqueConstraint("subscriber_id", "role_id", name="uq_subscriber_roles_subscriber_role"),
+        UniqueConstraint(
+            "subscriber_id", "role_id", name="uq_subscriber_roles_subscriber_role"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -105,7 +113,9 @@ class SubscriberPermission(Base):
     __tablename__ = "subscriber_permissions"
     __table_args__ = (
         UniqueConstraint(
-            "subscriber_id", "permission_id", name="uq_subscriber_permissions_subscriber_permission"
+            "subscriber_id",
+            "permission_id",
+            name="uq_subscriber_permissions_subscriber_permission",
         ),
     )
 
@@ -131,7 +141,9 @@ class SubscriberPermission(Base):
 class SystemUserRole(Base):
     __tablename__ = "system_user_roles"
     __table_args__ = (
-        UniqueConstraint("system_user_id", "role_id", name="uq_system_user_roles_user_role"),
+        UniqueConstraint(
+            "system_user_id", "role_id", name="uq_system_user_roles_user_role"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -154,7 +166,9 @@ class SystemUserPermission(Base):
     __tablename__ = "system_user_permissions"
     __table_args__ = (
         UniqueConstraint(
-            "system_user_id", "permission_id", name="uq_system_user_permissions_user_permission"
+            "system_user_id",
+            "permission_id",
+            name="uq_system_user_permissions_user_permission",
         ),
     )
 

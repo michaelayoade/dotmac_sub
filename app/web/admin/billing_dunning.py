@@ -46,7 +46,11 @@ def _log_bulk_audit_events(
         )
 
 
-@router.get("/dunning", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/dunning",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def billing_dunning(
     request: Request,
     page: int = 1,
@@ -69,7 +73,10 @@ def billing_dunning(
     )
 
 
-@router.post("/dunning/{case_id}/pause", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/dunning/{case_id}/pause",
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def dunning_pause(request: Request, case_id: str, db: Session = Depends(get_db)):
     processed_ids = web_billing_dunning_service.execute_action(
         db,
@@ -90,7 +97,10 @@ def dunning_pause(request: Request, case_id: str, db: Session = Depends(get_db))
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
-@router.post("/dunning/{case_id}/resume", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/dunning/{case_id}/resume",
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def dunning_resume(request: Request, case_id: str, db: Session = Depends(get_db)):
     processed_ids = web_billing_dunning_service.execute_action(
         db,
@@ -111,7 +121,10 @@ def dunning_resume(request: Request, case_id: str, db: Session = Depends(get_db)
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
-@router.post("/dunning/{case_id}/close", dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/dunning/{case_id}/close",
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db)):
     processed_ids = web_billing_dunning_service.execute_action(
         db,
@@ -132,8 +145,12 @@ def dunning_close(request: Request, case_id: str, db: Session = Depends(get_db))
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
-@router.post("/dunning/bulk/pause", dependencies=[Depends(require_permission("billing:write"))])
-def dunning_bulk_pause(request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)):
+@router.post(
+    "/dunning/bulk/pause", dependencies=[Depends(require_permission("billing:write"))]
+)
+def dunning_bulk_pause(
+    request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
@@ -153,8 +170,12 @@ def dunning_bulk_pause(request: Request, case_ids: str = Form(...), db: Session 
     return RedirectResponse(url="/admin/billing/dunning", status_code=303)
 
 
-@router.post("/dunning/bulk/resume", dependencies=[Depends(require_permission("billing:write"))])
-def dunning_bulk_resume(request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)):
+@router.post(
+    "/dunning/bulk/resume", dependencies=[Depends(require_permission("billing:write"))]
+)
+def dunning_bulk_resume(
+    request: Request, case_ids: str = Form(...), db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)

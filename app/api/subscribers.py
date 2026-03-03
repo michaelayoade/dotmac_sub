@@ -188,7 +188,14 @@ def list_subscribers(
     db: Session = Depends(get_db),
 ):
     return subscriber_service.subscribers.list_response(
-        db, person_id, organization_id, subscriber_type, order_by, order_dir, limit, offset
+        db,
+        person_id,
+        organization_id,
+        subscriber_type,
+        order_by,
+        order_dir,
+        limit,
+        offset,
     )
 
 
@@ -341,7 +348,5 @@ def update_subscriber_custom_field(
     tags=["subscriber-custom-fields"],
     dependencies=[Depends(require_permission("subscriber:write"))],
 )
-def delete_subscriber_custom_field(
-    custom_field_id: str, db: Session = Depends(get_db)
-):
+def delete_subscriber_custom_field(custom_field_id: str, db: Session = Depends(get_db)):
     subscriber_service.subscriber_custom_fields.delete(db, custom_field_id)

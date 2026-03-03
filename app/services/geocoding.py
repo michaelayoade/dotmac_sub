@@ -105,7 +105,9 @@ def geocode_address(db: Session, data: dict) -> dict:
         data["latitude"] = float(str(first.get("lat") or ""))
         data["longitude"] = float(str(first.get("lon") or ""))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="Invalid geocoding response") from exc
+        raise HTTPException(
+            status_code=502, detail="Invalid geocoding response"
+        ) from exc
     return data
 
 

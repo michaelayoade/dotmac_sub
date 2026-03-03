@@ -31,13 +31,17 @@ class SmartDefaultsService:
             .filter(
                 DomainSetting.domain == domain,
                 DomainSetting.key == key,
-                DomainSetting.is_active.is_(True)
+                DomainSetting.is_active.is_(True),
             )
             .first()
         )
 
         if setting:
-            value = setting.value_json if setting.value_json is not None else setting.value_text
+            value = (
+                setting.value_json
+                if setting.value_json is not None
+                else setting.value_text
+            )
             SettingsCache.set(domain.value, key, value)
             return value
 
@@ -60,7 +64,9 @@ class SmartDefaultsService:
         """
         # Get settings from billing domain
         currency = self._get_setting(SettingDomain.billing, "default_currency", "NGN")
-        payment_terms_days = self._get_setting(SettingDomain.billing, "default_payment_terms_days", 30)
+        payment_terms_days = self._get_setting(
+            SettingDomain.billing, "default_payment_terms_days", 30
+        )
 
         # Ensure payment_terms_days is an integer
         if isinstance(payment_terms_days, str):
@@ -77,7 +83,7 @@ class SmartDefaultsService:
             "payment_terms_days": payment_terms_days,
             "issued_at": today.isoformat(),
             "due_at": due_date.isoformat(),
-            "status": "draft"
+            "status": "draft",
         }
 
     def get_customer_defaults(self, customer_type: str = "person") -> dict[str, Any]:
@@ -91,22 +97,28 @@ class SmartDefaultsService:
             Dictionary containing default values for customer fields.
         """
         # Get default country from settings
-        default_country = self._get_setting(SettingDomain.billing, "default_country_code", "NG")
-        default_locale = self._get_setting(SettingDomain.billing, "default_locale", "en-NG")
+        default_country = self._get_setting(
+            SettingDomain.billing, "default_country_code", "NG"
+        )
+        default_locale = self._get_setting(
+            SettingDomain.billing, "default_locale", "en-NG"
+        )
 
         defaults = {
             "status": "active",
             "is_active": True,
             "country_code": default_country,
-            "locale": default_locale
+            "locale": default_locale,
         }
 
         if customer_type == "person":
-            defaults.update({
-                "gender": "unknown",
-                "email_verified": False,
-                "marketing_opt_in": False
-            })
+            defaults.update(
+                {
+                    "gender": "unknown",
+                    "email_verified": False,
+                    "marketing_opt_in": False,
+                }
+            )
         elif customer_type == "organization":
             # Organization-specific defaults
             pass
@@ -120,7 +132,9 @@ class SmartDefaultsService:
         Returns:
             Dictionary containing default values for subscription fields.
         """
-        billing_cycle = self._get_setting(SettingDomain.catalog, "default_billing_cycle", "monthly")
+        billing_cycle = self._get_setting(
+            SettingDomain.catalog, "default_billing_cycle", "monthly"
+        )
         currency = self._get_setting(SettingDomain.billing, "default_currency", "NGN")
 
         today = date.today()
@@ -130,13 +144,11 @@ class SmartDefaultsService:
             "currency": currency,
             "status": "pending",
             "start_date": today.isoformat(),
-            "auto_renew": True
+            "auto_renew": True,
         }
 
     def calculate_due_date(
-        self,
-        issued_at: date | None = None,
-        payment_terms_days: int | None = None
+        self, issued_at: date | None = None, payment_terms_days: int | None = None
     ) -> date:
         """
         Calculate the due date based on issue date and payment terms.
@@ -153,9 +165,7 @@ class SmartDefaultsService:
 
         if payment_terms_days is None:
             payment_terms_days = self._get_setting(
-                SettingDomain.billing,
-                "default_payment_terms_days",
-                30
+                SettingDomain.billing, "default_payment_terms_days", 30
             )
             if isinstance(payment_terms_days, str):
                 payment_terms_days = int(payment_terms_days)
@@ -200,8 +210,12 @@ class SmartDefaultsService:
             - supported_currencies: List of supported currency codes
             - decimal_places: Number of decimal places for amounts
         """
-        default_currency = self._get_setting(SettingDomain.billing, "default_currency", "NGN")
-        supported = self._get_setting(SettingDomain.billing, "supported_currencies", ["NGN", "USD", "EUR", "GBP"])
+        default_currency = self._get_setting(
+            SettingDomain.billing, "default_currency", "NGN"
+        )
+        supported = self._get_setting(
+            SettingDomain.billing, "supported_currencies", ["NGN", "USD", "EUR", "GBP"]
+        )
 
         if isinstance(supported, str):
             supported = [c.strip() for c in supported.split(",")]
@@ -209,7 +223,7 @@ class SmartDefaultsService:
         return {
             "default_currency": default_currency,
             "supported_currencies": supported,
-            "decimal_places": 2
+            "decimal_places": 2,
         }
 
 

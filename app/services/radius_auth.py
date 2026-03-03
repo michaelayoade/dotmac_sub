@@ -50,7 +50,9 @@ def authenticate(
     try:
         dictionary = Dictionary(dict_path)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="Radius dictionary not available") from exc
+        raise HTTPException(
+            status_code=500, detail="Radius dictionary not available"
+        ) from exc
     client = Client(
         server=server.host,
         secret=secret.encode("utf-8"),

@@ -33,8 +33,7 @@ class BillingRuns(ListResponseMixin):
         query = db.query(BillingRun)
         if status:
             query = query.filter(
-                BillingRun.status
-                == validate_enum(status, BillingRunStatus, "status")
+                BillingRun.status == validate_enum(status, BillingRunStatus, "status")
             )
         query = apply_ordering(
             query,

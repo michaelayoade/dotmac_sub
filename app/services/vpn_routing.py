@@ -21,7 +21,9 @@ def _get_blocked_lan_subnet_networks() -> list:
     raw = os.getenv("VPN_BLOCKED_LAN_SUBNETS") or os.getenv("DOCKER_NETWORK_CIDRS")
     cidrs = []
     if raw:
-        cidrs.extend([item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()])
+        cidrs.extend(
+            [item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()]
+        )
     if not cidrs:
         cidrs = ["172.20.0.0/16"]
     blocked = []
@@ -38,6 +40,7 @@ def _is_blocked_lan_subnet(network) -> bool:
         if network.overlaps(blocked):
             return True
     return False
+
 
 def ensure_vpn_ready(
     db: Session, wireguard_server_id: str | UUID | None
@@ -276,9 +279,7 @@ def configure_peer_lan_routing(
 
     # Get server
     server = (
-        db.query(WireGuardServer)
-        .filter(WireGuardServer.id == peer.server_id)
-        .first()
+        db.query(WireGuardServer).filter(WireGuardServer.id == peer.server_id).first()
     )
     if not server:
         return False, "Server not found"

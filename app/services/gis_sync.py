@@ -109,9 +109,7 @@ class GeoSync(ListResponseMixin):
                 continue
             seen_ids.add(pop.id)
             existing = (
-                db.query(GeoLocation)
-                .filter(GeoLocation.pop_site_id == pop.id)
-                .first()
+                db.query(GeoLocation).filter(GeoLocation.pop_site_id == pop.id).first()
             )
             if existing:
                 existing.name = pop.name

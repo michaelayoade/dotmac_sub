@@ -85,10 +85,14 @@ class CoverageArea(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
-    qualifications = relationship("ServiceQualification", back_populates="coverage_area")
+    qualifications = relationship(
+        "ServiceQualification", back_populates="coverage_area"
+    )
 
 
 class ServiceQualification(Base):
@@ -121,9 +125,7 @@ class ServiceQualification(Base):
 
     coverage_area = relationship("CoverageArea", back_populates="qualifications")
     address = relationship("Address")
-    buildout_requests = relationship(
-        "BuildoutRequest", back_populates="qualification"
-    )
+    buildout_requests = relationship("BuildoutRequest", back_populates="qualification")
 
 
 class BuildoutRequest(Base):
@@ -151,10 +153,14 @@ class BuildoutRequest(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
-    qualification = relationship("ServiceQualification", back_populates="buildout_requests")
+    qualification = relationship(
+        "ServiceQualification", back_populates="buildout_requests"
+    )
     coverage_area = relationship("CoverageArea")
     address = relationship("Address")
     project = relationship("BuildoutProject", back_populates="request", uselist=False)
@@ -188,7 +194,9 @@ class BuildoutProject(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     request = relationship("BuildoutRequest", back_populates="project")
@@ -220,7 +228,9 @@ class BuildoutMilestone(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     project = relationship("BuildoutProject", back_populates="milestones")

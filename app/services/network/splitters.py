@@ -100,7 +100,9 @@ class Splitters(CRUDManager[Splitter]):
             fdh_cabinet_id = fdh_id
         query = db.query(Splitter)
         query = apply_optional_ilike(query, {Splitter.name: name})
-        query = apply_optional_equals(query, {Splitter.fdh_id: coerce_uuid(fdh_cabinet_id)})
+        query = apply_optional_equals(
+            query, {Splitter.fdh_id: coerce_uuid(fdh_cabinet_id)}
+        )
         query = apply_active_state(query, Splitter.is_active, is_active)
         query = apply_ordering(
             query,
@@ -141,17 +143,23 @@ class SplitterPorts(CRUDManager[SplitterPort]):
         is_active: bool | None = None,
     ):
         query = db.query(SplitterPort)
-        query = apply_optional_equals(query, {SplitterPort.splitter_id: coerce_uuid(splitter_id)})
+        query = apply_optional_equals(
+            query, {SplitterPort.splitter_id: coerce_uuid(splitter_id)}
+        )
         if port_type:
             query = query.filter(
-                SplitterPort.port_type == validate_enum(port_type, SplitterPortType, "port_type")
+                SplitterPort.port_type
+                == validate_enum(port_type, SplitterPortType, "port_type")
             )
         query = apply_active_state(query, SplitterPort.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": SplitterPort.created_at, "port_number": SplitterPort.port_number},
+            {
+                "created_at": SplitterPort.created_at,
+                "port_number": SplitterPort.port_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -175,7 +183,9 @@ class SplitterPorts(CRUDManager[SplitterPort]):
             try:
                 splitter_uuid = UUID(splitter_id)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail="Invalid splitter_id") from exc
+                raise HTTPException(
+                    status_code=400, detail="Invalid splitter_id"
+                ) from exc
 
         ports_query = db.query(SplitterPort).filter(SplitterPort.is_active.is_(True))
         if splitter_uuid:
@@ -184,11 +194,15 @@ class SplitterPorts(CRUDManager[SplitterPort]):
 
         assigned_query = (
             db.query(SplitterPortAssignment.splitter_port_id)
-            .join(SplitterPort, SplitterPort.id == SplitterPortAssignment.splitter_port_id)
+            .join(
+                SplitterPort, SplitterPort.id == SplitterPortAssignment.splitter_port_id
+            )
             .filter(SplitterPortAssignment.active.is_(True))
         )
         if splitter_uuid:
-            assigned_query = assigned_query.filter(SplitterPort.splitter_id == splitter_uuid)
+            assigned_query = assigned_query.filter(
+                SplitterPort.splitter_id == splitter_uuid
+            )
         assigned_ports = assigned_query.distinct().count()
 
         return {
@@ -229,7 +243,9 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def resolve_subscriber_id(subscriber_id: str | None, account_id: str | None) -> str | None:
+    def resolve_subscriber_id(
+        subscriber_id: str | None, account_id: str | None
+    ) -> str | None:
         """Backwards-compat alias resolution for API callers."""
         return subscriber_id or account_id
 
@@ -276,7 +292,9 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         return super().get(db, assignment_id)
 
     @classmethod
-    def update(cls, db: Session, assignment_id: str, payload: SplitterPortAssignmentUpdate):
+    def update(
+        cls, db: Session, assignment_id: str, payload: SplitterPortAssignmentUpdate
+    ):
         return super().update(db, assignment_id, payload)
 
     @classmethod

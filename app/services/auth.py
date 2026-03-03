@@ -97,7 +97,6 @@ def _get_redis_client() -> redis.Redis | None:
         return None
 
 
-
 def _ensure_subscriber(db: Session, subscriber_id: str):
     subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
     if not subscriber:
@@ -334,9 +333,7 @@ class Sessions(ListResponseMixin):
                 db, SettingDomain.auth, "default_session_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, SessionStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, SessionStatus, "status")
         session = AuthSession(**data)
         db.add(session)
         db.commit()
@@ -370,8 +367,7 @@ class Sessions(ListResponseMixin):
             )
         if status:
             query = query.filter(
-                AuthSession.status
-                == validate_enum(status, SessionStatus, "status")
+                AuthSession.status == validate_enum(status, SessionStatus, "status")
             )
         query = apply_ordering(
             query,
@@ -420,7 +416,9 @@ class ApiKeys(ListResponseMixin):
         window_seconds = _auth_int_setting(
             db, "api_key_rate_window_seconds", _API_KEY_WINDOW_SECONDS
         )
-        max_per_window = _auth_int_setting(db, "api_key_rate_max", _API_KEY_MAX_PER_WINDOW)
+        max_per_window = _auth_int_setting(
+            db, "api_key_rate_max", _API_KEY_MAX_PER_WINDOW
+        )
         redis_client = _get_redis_client()
         if not redis_client:
             raise HTTPException(

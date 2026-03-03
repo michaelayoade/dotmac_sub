@@ -32,9 +32,7 @@ def list_scheduled_tasks(
     response_model=ScheduledTaskRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_scheduled_task(
-    payload: ScheduledTaskCreate, db: Session = Depends(get_db)
-):
+def create_scheduled_task(payload: ScheduledTaskCreate, db: Session = Depends(get_db)):
     return scheduler_service.scheduled_tasks.create(db, payload)
 
 

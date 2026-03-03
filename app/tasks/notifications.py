@@ -46,10 +46,7 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
                 ),
             )
         )
-        .filter(
-            (Notification.send_at.is_(None))
-            | (Notification.send_at <= now)
-        )
+        .filter((Notification.send_at.is_(None)) | (Notification.send_at <= now))
         .order_by(Notification.created_at.asc())
         .limit(batch_size)
         .all()
@@ -89,10 +86,14 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
                 )
                 success = bool(result.get("ok"))
                 if not success:
-                    notification.last_error = str(result.get("response") or "whatsapp_send_failed")
+                    notification.last_error = str(
+                        result.get("response") or "whatsapp_send_failed"
+                    )
             else:
                 success = False
-                notification.last_error = f"unsupported_channel:{notification.channel.value}"
+                notification.last_error = (
+                    f"unsupported_channel:{notification.channel.value}"
+                )
         except Exception as exc:
             success = False
             notification.last_error = str(exc)

@@ -146,21 +146,29 @@ def invalidate_session(session_token: str) -> None:
     delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
 
 
-def login(db: Session, username: str, password: str, request: Request, remember: bool) -> dict:
+def login(
+    db: Session, username: str, password: str, request: Request, remember: bool
+) -> dict:
     result = auth_flow_service.auth_flow.login(db, username, password, request, None)
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result.get("mfa_token")}
     access_token = result.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
     return _session_from_access_token(db, access_token, username, remember)
 
 
-def verify_mfa(db: Session, mfa_token: str, code: str, request: Request, remember: bool) -> dict:
+def verify_mfa(
+    db: Session, mfa_token: str, code: str, request: Request, remember: bool
+) -> dict:
     result = auth_flow_service.auth_flow.mfa_verify(db, mfa_token, code, request)
     access_token = result.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code"
+        )
     return _session_from_access_token(db, access_token, None, remember)
 
 
@@ -174,21 +182,31 @@ def _session_from_access_token(
     subscriber_id = payload.get("sub")
     session_id = payload.get("session_id")
     if not subscriber_id or not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
+        )
 
     auth_session = db.get(AuthSession, coerce_uuid(session_id))
     if not auth_session or auth_session.status != SessionStatus.active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
+        )
     if auth_session.expires_at and auth_session.expires_at <= _now():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
+        )
 
     reseller_user = _get_reseller_user(db, str(subscriber_id))
     if not reseller_user:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
+        )
 
     subscriber = db.get(Subscriber, reseller_user.subscriber_id)
     if not subscriber:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found"
+        )
 
     session_token = _create_session(
         username=username or subscriber.email,
@@ -197,7 +215,10 @@ def _session_from_access_token(
         remember=remember,
         db=db,
     )
-    return {"session_token": session_token, "reseller_id": str(reseller_user.reseller_id)}
+    return {
+        "session_token": session_token,
+        "reseller_id": str(reseller_user.reseller_id),
+    }
 
 
 def get_context(db: Session, session_token: str | None) -> dict | None:
@@ -215,7 +236,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         return None
 
     current_user = {
-        "name": subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip(),
+        "name": subscriber.display_name
+        or f"{subscriber.first_name} {subscriber.last_name}".strip(),
         "email": subscriber.email,
         "initials": _initials(subscriber),
     }
@@ -230,7 +252,9 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     }
 
 
-def refresh_session(session_token: str | None, db: Session | None = None) -> dict | None:
+def refresh_session(
+    session_token: str | None, db: Session | None = None
+) -> dict | None:
     if not session_token:
         return None
     session = _get_session(session_token)
@@ -405,7 +429,9 @@ def create_customer_imsubscriberation_session(
 ) -> str:
     account = db.get(Subscriber, coerce_uuid(account_id))
     if not account or str(account.reseller_id) != str(reseller_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found"
+        )
 
     selected_subscription_id = None
     active_subs = catalog_service.subscriptions.list(
@@ -451,4 +477,6 @@ def create_customer_impersonation_session(
     return_to: str,
 ) -> str:
     """Backwards-compat wrapper for a historical typo in the function name."""
-    return create_customer_imsubscriberation_session(db, reseller_id, account_id, return_to)
+    return create_customer_imsubscriberation_session(
+        db, reseller_id, account_id, return_to
+    )

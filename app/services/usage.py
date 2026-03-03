@@ -113,7 +113,9 @@ def _resolve_or_create_quota_bucket(
     if bucket:
         return bucket
     allowance = _resolve_allowance(subscription)
-    included_gb, _ = _prorate_allowance(allowance, subscription, period_start, period_end)
+    included_gb, _ = _prorate_allowance(
+        allowance, subscription, period_start, period_end
+    )
     bucket = QuotaBucket(
         subscription_id=subscription.id,
         period_start=period_start,
@@ -138,7 +140,12 @@ def _emit_usage_events(
     warning_enabled = settings_spec.resolve_value(
         db, SettingDomain.usage, "usage_warning_enabled"
     )
-    if warning_enabled is not None and str(warning_enabled).lower() in {"0", "false", "no", "off"}:
+    if warning_enabled is not None and str(warning_enabled).lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
         return
     included = Decimal(str(bucket.included_gb or 0))
     if included <= 0:
@@ -228,7 +235,11 @@ def _resolve_or_create_invoice(
     default_status = settings_spec.resolve_value(
         db, SettingDomain.billing, "default_invoice_status"
     )
-    status_value = validate_enum(default_status, InvoiceStatus, "status") if default_status else InvoiceStatus.draft
+    status_value = (
+        validate_enum(default_status, InvoiceStatus, "status")
+        if default_status
+        else InvoiceStatus.draft
+    )
     invoice = Invoice(
         account_id=account_id,
         status=status_value,
@@ -243,6 +254,7 @@ def _resolve_or_create_invoice(
     db.add(invoice)
     db.flush()
     return invoice
+
 
 class QuotaBuckets(ListResponseMixin):
     @staticmethod
@@ -276,7 +288,10 @@ class QuotaBuckets(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": QuotaBucket.created_at, "period_start": QuotaBucket.period_start},
+            {
+                "created_at": QuotaBucket.created_at,
+                "period_start": QuotaBucket.period_start,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -422,7 +437,10 @@ class UsageRecords(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": UsageRecord.created_at, "recorded_at": UsageRecord.recorded_at},
+            {
+                "created_at": UsageRecord.created_at,
+                "recorded_at": UsageRecord.recorded_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -474,8 +492,7 @@ class UsageCharges(ListResponseMixin):
             query = query.filter(UsageCharge.subscriber_id == subscriber_id)
         if status:
             query = query.filter(
-                UsageCharge.status
-                == validate_enum(status, UsageChargeStatus, "status")
+                UsageCharge.status == validate_enum(status, UsageChargeStatus, "status")
             )
         if period_start is not None:
             query = query.filter(UsageCharge.period_start == period_start)
@@ -485,7 +502,10 @@ class UsageCharges(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": UsageCharge.created_at, "period_start": UsageCharge.period_start},
+            {
+                "created_at": UsageCharge.created_at,
+                "period_start": UsageCharge.period_start,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

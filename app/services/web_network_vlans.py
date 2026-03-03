@@ -7,17 +7,34 @@ from app.services import catalog as catalog_service
 from app.services import network as network_service
 
 PURPOSE_DISPLAY: dict[str, dict[str, str]] = {
-    "internet": {"label": "Internet", "classes": "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"},
-    "management": {"label": "Management", "classes": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"},
-    "tr069": {"label": "TR-069", "classes": "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400"},
-    "iptv": {"label": "IPTV", "classes": "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"},
-    "voip": {"label": "VoIP", "classes": "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400"},
-    "other": {"label": "Other", "classes": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"},
+    "internet": {
+        "label": "Internet",
+        "classes": "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+    },
+    "management": {
+        "label": "Management",
+        "classes": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300",
+    },
+    "tr069": {
+        "label": "TR-069",
+        "classes": "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400",
+    },
+    "iptv": {
+        "label": "IPTV",
+        "classes": "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
+    },
+    "voip": {
+        "label": "VoIP",
+        "classes": "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",
+    },
+    "other": {
+        "label": "Other",
+        "classes": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300",
+    },
 }
 
 VLAN_PURPOSE_CHOICES: list[dict[str, str]] = [
-    {"value": p.value, "label": PURPOSE_DISPLAY[p.value]["label"]}
-    for p in VlanPurpose
+    {"value": p.value, "label": PURPOSE_DISPLAY[p.value]["label"]} for p in VlanPurpose
 ]
 
 

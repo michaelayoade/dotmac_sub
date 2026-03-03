@@ -77,7 +77,9 @@ class UserCredential(Base):
         UUID(as_uuid=True), ForeignKey("radius_servers.id")
     )
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
-    password_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

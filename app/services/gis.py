@@ -134,7 +134,7 @@ class GeoLocations(CRUDManager[GeoLocation]):
                 ST_DWithin(
                     func.ST_Transform(GeoLocation.geom, 3857),
                     func.ST_Transform(point, 3857),
-                    radius_meters
+                    radius_meters,
                 )
             )
             .order_by(ST_Distance(GeoLocation.geom, point))
@@ -266,9 +266,7 @@ class GeoAreas(CRUDManager[GeoArea]):
             return False
 
         point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-        result = db.query(
-            ST_Contains(area.geom, point)
-        ).scalar()
+        result = db.query(ST_Contains(area.geom, point)).scalar()
         return bool(result)
 
     @staticmethod

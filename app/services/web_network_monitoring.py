@@ -188,9 +188,7 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
     offline_results = _vm_range_query(
         'onu_status_total{status="offline"}', start, now, step
     )
-    low_signal_results = _vm_range_query(
-        'sum(onu_signal_low)', start, now, step
-    )
+    low_signal_results = _vm_range_query("sum(onu_signal_low)", start, now, step)
 
     def _extract_series(results: list[dict[str, Any]]) -> dict[str, list]:
         """Extract timestamps and values from a range query result."""
@@ -215,7 +213,9 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
     has_data = bool(online["values"] or offline["values"] or low_signal["values"])
 
     return {
-        "timestamps": online["timestamps"] or offline["timestamps"] or low_signal["timestamps"],
+        "timestamps": online["timestamps"]
+        or offline["timestamps"]
+        or low_signal["timestamps"],
         "online": online["values"],
         "offline": offline["values"],
         "low_signal": low_signal["values"],
@@ -412,9 +412,7 @@ _ACTION_DISPLAY: dict[str, str] = {
 }
 
 
-def _get_network_activity_feed(
-    db: Session, limit: int = 15
-) -> list[dict[str, Any]]:
+def _get_network_activity_feed(db: Session, limit: int = 15) -> list[dict[str, Any]]:
     """Fetch recent audit events for network-related entities."""
     from app.models.audit import AuditEvent
 
@@ -428,15 +426,19 @@ def _get_network_activity_feed(
 
     items: list[dict[str, Any]] = []
     for ev in events:
-        action_label = _ACTION_DISPLAY.get(ev.action, ev.action.replace("_", " ").title())
-        items.append({
-            "title": f"{ev.entity_type.replace('_', ' ').title()} {action_label}",
-            "entity_type": ev.entity_type,
-            "entity_id": ev.entity_id,
-            "action": ev.action,
-            "occurred_at": ev.occurred_at,
-            "actor_type": ev.actor_type.value if ev.actor_type else "system",
-            "is_success": ev.is_success,
-        })
+        action_label = _ACTION_DISPLAY.get(
+            ev.action, ev.action.replace("_", " ").title()
+        )
+        items.append(
+            {
+                "title": f"{ev.entity_type.replace('_', ' ').title()} {action_label}",
+                "entity_type": ev.entity_type,
+                "entity_id": ev.entity_id,
+                "action": ev.action,
+                "occurred_at": ev.occurred_at,
+                "actor_type": ev.actor_type.value if ev.actor_type else "system",
+                "is_success": ev.is_success,
+            }
+        )
 
     return items

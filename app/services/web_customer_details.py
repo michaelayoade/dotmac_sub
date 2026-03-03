@@ -54,7 +54,9 @@ def _list_subscriptions_for_accounts(db: Session, accounts):
     return subscriptions
 
 
-def _format_contact_channel(subscriber: Subscriber, channel: SubscriberChannel) -> dict[str, object]:
+def _format_contact_channel(
+    subscriber: Subscriber, channel: SubscriberChannel
+) -> dict[str, object]:
     return {
         "id": str(channel.id),
         "first_name": subscriber.first_name or "",
@@ -84,17 +86,29 @@ def _build_activity_items(db: Session, entity_type: str, entity_id: str):
         limit=10,
         offset=0,
     )
-    actor_ids = {str(event.actor_id) for event in audit_events if getattr(event, "actor_id", None)}
+    actor_ids = {
+        str(event.actor_id)
+        for event in audit_events
+        if getattr(event, "actor_id", None)
+    }
     people = {}
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
     activity_items = []
     for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        )
         metadata = getattr(event, "metadata_", None) or {}
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
@@ -134,7 +148,8 @@ def _build_common_financials(db: Session, account_ids):
     balance_due = sum(
         float(getattr(inv, "balance_due", 0) or 0)
         for inv in invoices
-        if inv.status in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+        if inv.status
+        in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
     )
 
     total_invoiced = 0
@@ -282,7 +297,10 @@ def _build_map_payload(primary_address, customer_name: str):
                             "type": "Feature",
                             "geometry": {
                                 "type": "Point",
-                                "coordinates": [primary_address.longitude, primary_address.latitude],
+                                "coordinates": [
+                                    primary_address.longitude,
+                                    primary_address.latitude,
+                                ],
                             },
                             "properties": {
                                 "type": "customer",
@@ -346,7 +364,9 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     payments = finance_data["payments"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
-    active_subscriptions = sum(1 for sub in subscriptions if sub.status == SubscriptionStatus.active)
+    active_subscriptions = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
@@ -358,10 +378,17 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         addresses = _build_person_fallback_address(db, customer)
 
     primary_address = next(
-        (a for a in addresses if getattr(a, "is_primary", False) and (a.address_line1 or "").strip()),
+        (
+            a
+            for a in addresses
+            if getattr(a, "is_primary", False) and (a.address_line1 or "").strip()
+        ),
         next(
             (a for a in addresses if getattr(a, "is_primary", False)),
-            next((a for a in addresses if (a.address_line1 or "").strip()), addresses[0] if addresses else None),
+            next(
+                (a for a in addresses if (a.address_line1 or "").strip()),
+                addresses[0] if addresses else None,
+            ),
         ),
     )
     map_data, geocode_target = _build_map_payload(
@@ -376,9 +403,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         .count()
     )
     total_subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.id == customer.id)
-        .count()
+        db.query(Subscriber).filter(Subscriber.id == customer.id).count()
     )
 
     notifications = []
@@ -399,7 +424,9 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
                 limit=100,
                 offset=0,
             )
-            notifications = [n for n in all_notifications if n.recipient in recipients][:5]
+            notifications = [n for n in all_notifications if n.recipient in recipients][
+                :5
+            ]
     except Exception:
         notifications = []
 
@@ -413,10 +440,12 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "total_contacts": len(contacts),
     }
     try:
-        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
-            db,
-            customer_type="person",
-            customer_id=customer_id,
+        customer_user_access = (
+            web_customer_user_access_service.build_customer_user_access_state(
+                db,
+                customer_type="person",
+                customer_id=customer_id,
+            )
         )
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
@@ -492,7 +521,9 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
     payments = finance_data["payments"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
-    active_subscriptions = sum(1 for sub in subscriptions if sub.status == SubscriptionStatus.active)
+    active_subscriptions = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
@@ -513,15 +544,18 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         .count()
     )
     total_subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .count()
+        db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).count()
     )
 
     notifications = []
     try:
         recipients = []
-        org_people = db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).limit(10).all()
+        org_people = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id == org_uuid)
+            .limit(10)
+            .all()
+        )
         for person in org_people:
             if person.email:
                 recipients.append(person.email)
@@ -538,7 +572,9 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
                 limit=100,
                 offset=0,
             )
-            notifications = [n for n in all_notifications if n.recipient in recipients][:5]
+            notifications = [n for n in all_notifications if n.recipient in recipients][
+                :5
+            ]
     except Exception:
         notifications = []
 
@@ -552,10 +588,12 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "total_contacts": len(contacts),
     }
     try:
-        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
-            db,
-            customer_type="organization",
-            customer_id=customer_id,
+        customer_user_access = (
+            web_customer_user_access_service.build_customer_user_access_state(
+                db,
+                customer_type="organization",
+                customer_id=customer_id,
+            )
         )
     except Exception as exc:
         customer_user_access = {"error": str(exc)}

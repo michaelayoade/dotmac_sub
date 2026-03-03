@@ -125,9 +125,7 @@ class CPEDevices(CRUDManager[CPEDevice]):
                 db, SettingDomain.network, "default_device_status"
             )
             if default_status:
-                data["status"] = _validate_enum(
-                    default_status, DeviceStatus, "status"
-                )
+                data["status"] = _validate_enum(default_status, DeviceStatus, "status")
         device = CPEDevice(**data)
         db.add(device)
         db.commit()
@@ -207,17 +205,13 @@ class Ports(CRUDManager[Port]):
                 db, SettingDomain.network, "default_port_type"
             )
             if default_type:
-                data["port_type"] = _validate_enum(
-                    default_type, PortType, "port_type"
-                )
+                data["port_type"] = _validate_enum(default_type, PortType, "port_type")
         if "status" not in fields_set:
             default_status = settings_spec.resolve_value(
                 db, SettingDomain.network, "default_port_status"
             )
             if default_status:
-                data["status"] = _validate_enum(
-                    default_status, PortStatus, "status"
-                )
+                data["status"] = _validate_enum(default_status, PortStatus, "status")
         port = Port(**data)
         db.add(port)
         db.commit()
@@ -251,9 +245,13 @@ class Ports(CRUDManager[Port]):
         if olt_id:
             query = query.filter(Port.device_id == coerce_uuid(olt_id))
         if port_type:
-            query = query.filter(Port.port_type == _validate_enum(port_type, PortType, "port_type"))
+            query = query.filter(
+                Port.port_type == _validate_enum(port_type, PortType, "port_type")
+            )
         if status:
-            query = query.filter(Port.status == _validate_enum(status, PortStatus, "status"))
+            query = query.filter(
+                Port.status == _validate_enum(status, PortStatus, "status")
+            )
         if is_active is True:
             query = query.filter(Port.status != PortStatus.disabled)
         elif is_active is False:
@@ -262,7 +260,11 @@ class Ports(CRUDManager[Port]):
             query,
             order_by,
             order_dir,
-            {"created_at": Port.created_at, "name": Port.name, "port_number": Port.port_number},
+            {
+                "created_at": Port.created_at,
+                "name": Port.name,
+                "port_number": Port.port_number,
+            },
         )
         return _apply_pagination(query, limit, offset).all()
 
@@ -341,7 +343,11 @@ class PortVlans(CRUDManager[PortVlan]):
             query,
             order_by,
             order_dir,
-            {"created_at": PortVlan.created_at, "port_id": PortVlan.port_id, "vlan_id": PortVlan.vlan_id},
+            {
+                "created_at": PortVlan.created_at,
+                "port_id": PortVlan.port_id,
+                "vlan_id": PortVlan.vlan_id,
+            },
         )
         return _apply_pagination(query, limit, offset).all()
 

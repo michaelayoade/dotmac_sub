@@ -25,15 +25,33 @@ _DEV = "Device"
 
 PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     "system": {
-        "Manufacturer": [f"{_DEV}.DeviceInfo.Manufacturer", f"{_IGD}.DeviceInfo.Manufacturer"],
+        "Manufacturer": [
+            f"{_DEV}.DeviceInfo.Manufacturer",
+            f"{_IGD}.DeviceInfo.Manufacturer",
+        ],
         "Model": [f"{_DEV}.DeviceInfo.ModelName", f"{_IGD}.DeviceInfo.ModelName"],
-        "Firmware": [f"{_DEV}.DeviceInfo.SoftwareVersion", f"{_IGD}.DeviceInfo.SoftwareVersion"],
-        "Hardware": [f"{_DEV}.DeviceInfo.HardwareVersion", f"{_IGD}.DeviceInfo.HardwareVersion"],
-        "Serial": [f"{_DEV}.DeviceInfo.SerialNumber", f"{_IGD}.DeviceInfo.SerialNumber"],
+        "Firmware": [
+            f"{_DEV}.DeviceInfo.SoftwareVersion",
+            f"{_IGD}.DeviceInfo.SoftwareVersion",
+        ],
+        "Hardware": [
+            f"{_DEV}.DeviceInfo.HardwareVersion",
+            f"{_IGD}.DeviceInfo.HardwareVersion",
+        ],
+        "Serial": [
+            f"{_DEV}.DeviceInfo.SerialNumber",
+            f"{_IGD}.DeviceInfo.SerialNumber",
+        ],
         "Uptime": [f"{_DEV}.DeviceInfo.UpTime", f"{_IGD}.DeviceInfo.UpTime"],
         "CPU Usage": [f"{_DEV}.DeviceInfo.ProcessStatus.CPUUsage"],
-        "Memory Total": [f"{_DEV}.DeviceInfo.MemoryStatus.Total", f"{_IGD}.DeviceInfo.MemoryStatus.Total"],
-        "Memory Free": [f"{_DEV}.DeviceInfo.MemoryStatus.Free", f"{_IGD}.DeviceInfo.MemoryStatus.Free"],
+        "Memory Total": [
+            f"{_DEV}.DeviceInfo.MemoryStatus.Total",
+            f"{_IGD}.DeviceInfo.MemoryStatus.Total",
+        ],
+        "Memory Free": [
+            f"{_DEV}.DeviceInfo.MemoryStatus.Free",
+            f"{_IGD}.DeviceInfo.MemoryStatus.Free",
+        ],
     },
     "wan": {
         "Connection Type": [
@@ -116,7 +134,9 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
 }
 
 # Ethernet port object paths (we enumerate ports 1-4)
-_ETH_PORT_PATHS_IGD = "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.{i}."
+_ETH_PORT_PATHS_IGD = (
+    "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.{i}."
+)
 _ETH_PORT_PATHS_DEV = "Device.Ethernet.Interface.{i}."
 _ETH_FIELDS = ["Enable", "Status", "MaxBitRate", "DuplexMode", "MACAddress"]
 
@@ -282,7 +302,9 @@ class OntTR069:
                 free = int(mem_free)
                 if total > 0:
                     used_pct = ((total - free) / total) * 100
-                    summary.system["Memory Usage"] = f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    summary.system["Memory Usage"] = (
+                        f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    )
             except (ValueError, TypeError):
                 pass
 

@@ -63,9 +63,9 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = request_id
         token = _extract_bearer_token(request)
-        actor_id = getattr(request.state, "actor_id", None) or _extract_actor_id_from_jwt(
-            token
-        )
+        actor_id = getattr(
+            request.state, "actor_id", None
+        ) or _extract_actor_id_from_jwt(token)
         start = time.monotonic()
         status_code = 500
         try:

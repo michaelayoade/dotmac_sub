@@ -9,13 +9,16 @@ from app.services import web_customer_auth as web_customer_auth_service
 
 router = APIRouter(prefix="/portal/auth", tags=["web-customer-auth"])
 
+
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
     """Get the current customer from request cookies."""
     return web_customer_auth_service.get_current_customer_from_request(request, db)
 
 
 @router.get("/login", response_class=HTMLResponse)
-def customer_login_page(request: Request, error: str | None = None, next: str | None = None):
+def customer_login_page(
+    request: Request, error: str | None = None, next: str | None = None
+):
     """Display the customer login page."""
     return web_customer_auth_service.customer_login_page(request, error, next)
 

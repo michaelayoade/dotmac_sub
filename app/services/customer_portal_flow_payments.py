@@ -90,9 +90,7 @@ def verify_and_record_payment(
         tx = flutterwave_svc.verify_transaction(db, reference)
 
         if tx.get("status") != "successful":
-            raise ValueError(
-                f"Payment was not successful (status: {tx.get('status')})"
-            )
+            raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
 
         metadata = tx.get("meta") or {}
         invoice_id = metadata.get("invoice_id")
@@ -104,9 +102,7 @@ def verify_and_record_payment(
         tx = verify_transaction(db, reference)
 
         if tx.get("status") != "success":
-            raise ValueError(
-                f"Payment was not successful (status: {tx.get('status')})"
-            )
+            raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
 
         metadata = tx.get("metadata") or {}
         invoice_id = metadata.get("invoice_id")

@@ -61,7 +61,11 @@ def reseller_login_submit(
         if not isinstance(session_token, str) or not session_token:
             raise RuntimeError("Missing session token")
         response = RedirectResponse(url="/reseller/dashboard", status_code=303)
-        max_age = reseller_portal.get_remember_max_age(db) if remember else reseller_portal.get_session_max_age(db)
+        max_age = (
+            reseller_portal.get_remember_max_age(db)
+            if remember
+            else reseller_portal.get_session_max_age(db)
+        )
         response.set_cookie(
             key=reseller_portal.SESSION_COOKIE_NAME,
             value=session_token,
@@ -74,7 +78,10 @@ def reseller_login_submit(
     except RuntimeError:
         return templates.TemplateResponse(
             "reseller/auth/login.html",
-            {"request": request, "error": "Session service unavailable. Please try again."},
+            {
+                "request": request,
+                "error": "Session service unavailable. Please try again.",
+            },
             status_code=503,
         )
     except Exception as exc:
@@ -121,13 +128,18 @@ def reseller_mfa_submit(
             httponly=True,
             secure=True,
             samesite="lax",
-            max_age=reseller_portal.get_remember_max_age(db) if remember else reseller_portal.get_session_max_age(db),
+            max_age=reseller_portal.get_remember_max_age(db)
+            if remember
+            else reseller_portal.get_session_max_age(db),
         )
         return response
     except RuntimeError:
         return templates.TemplateResponse(
             "reseller/auth/mfa.html",
-            {"request": request, "error": "Session service unavailable. Please try again."},
+            {
+                "request": request,
+                "error": "Session service unavailable. Please try again.",
+            },
             status_code=503,
         )
     except Exception:
@@ -161,7 +173,11 @@ def reseller_refresh(request: Request):
         if not session:
             return Response(status_code=401)
 
-        max_age = reseller_portal.get_remember_max_age(db) if session.get("remember") else reseller_portal.get_session_max_age(db)
+        max_age = (
+            reseller_portal.get_remember_max_age(db)
+            if session.get("remember")
+            else reseller_portal.get_session_max_age(db)
+        )
     finally:
         db.close()
 

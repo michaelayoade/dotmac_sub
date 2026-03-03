@@ -24,7 +24,6 @@ from app.services.dynamic_filters import (
     parse_filter_payload,
 )
 
-
 USER_TYPE_OPTIONS = [("system_user", "System User")]
 USER_TYPE_LABELS = {key: label for key, label in USER_TYPE_OPTIONS}
 USER_DOCTYPE = "User"
@@ -173,17 +172,27 @@ def _last_login_expression():
 
 
 USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
-    "first_name": FilterFieldSpec(field="first_name", expression=SystemUser.first_name, field_type="text"),
-    "last_name": FilterFieldSpec(field="last_name", expression=SystemUser.last_name, field_type="text"),
-    "display_name": FilterFieldSpec(field="display_name", expression=SystemUser.display_name, field_type="text"),
-    "email": FilterFieldSpec(field="email", expression=SystemUser.email, field_type="text"),
+    "first_name": FilterFieldSpec(
+        field="first_name", expression=SystemUser.first_name, field_type="text"
+    ),
+    "last_name": FilterFieldSpec(
+        field="last_name", expression=SystemUser.last_name, field_type="text"
+    ),
+    "display_name": FilterFieldSpec(
+        field="display_name", expression=SystemUser.display_name, field_type="text"
+    ),
+    "email": FilterFieldSpec(
+        field="email", expression=SystemUser.email, field_type="text"
+    ),
     "user_type": FilterFieldSpec(
         field="user_type",
         expression=SystemUser.user_type,
         field_type="select",
         options={item[0] for item in USER_TYPE_OPTIONS},
     ),
-    "is_active": FilterFieldSpec(field="is_active", expression=SystemUser.is_active, field_type="boolean"),
+    "is_active": FilterFieldSpec(
+        field="is_active", expression=SystemUser.is_active, field_type="boolean"
+    ),
     "status": FilterFieldSpec(
         field="status",
         field_type="select",
@@ -203,9 +212,15 @@ USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
         operators={"=", "!=", "is", "is not"},
         builder=_mfa_filter_expression,
     ),
-    "created_at": FilterFieldSpec(field="created_at", expression=SystemUser.created_at, field_type="datetime"),
-    "updated_at": FilterFieldSpec(field="updated_at", expression=SystemUser.updated_at, field_type="datetime"),
-    "last_login": FilterFieldSpec(field="last_login", expression=_last_login_expression(), field_type="datetime"),
+    "created_at": FilterFieldSpec(
+        field="created_at", expression=SystemUser.created_at, field_type="datetime"
+    ),
+    "updated_at": FilterFieldSpec(
+        field="updated_at", expression=SystemUser.updated_at, field_type="datetime"
+    ),
+    "last_login": FilterFieldSpec(
+        field="last_login", expression=_last_login_expression(), field_type="datetime"
+    ),
 }
 
 
@@ -274,7 +289,9 @@ def get_user_stats(db: Session) -> dict[str, int]:
     return {"total": total, "active": active, "admins": admins, "pending": pending}
 
 
-def _legacy_filters(*, search: str | None, role_id: str | None, status: str | None) -> FilterQuery:
+def _legacy_filters(
+    *, search: str | None, role_id: str | None, status: str | None
+) -> FilterQuery:
     and_rows: list[FilterCondition] = []
     or_rows: list[FilterCondition] = []
 
@@ -312,7 +329,9 @@ def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
     role_options = [{"value": str(role.id), "label": role.name} for role in roles]
 
     options_map: dict[str, list[dict[str, str]]] = {
-        "user_type": [{"value": value, "label": label} for value, label in USER_TYPE_OPTIONS],
+        "user_type": [
+            {"value": value, "label": label} for value, label in USER_TYPE_OPTIONS
+        ],
         "status": [
             {"value": "active", "label": "Active"},
             {"value": "inactive", "label": "Inactive"},
@@ -347,9 +366,9 @@ def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
     schema: list[dict[str, object]] = []
     for field_name, spec in USER_FILTER_SPECS.items():
         operators = (
-            sorted(list(spec.operators))
+            sorted(spec.operators)
             if spec.operators is not None
-            else sorted(list(DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, {"="})))
+            else sorted(DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, {"="}))
         )
         schema.append(
             {
@@ -357,7 +376,10 @@ def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
                 "label": labels.get(field_name, field_name.replace("_", " ").title()),
                 "type": spec.field_type,
                 "operators": [
-                    {"value": operator, "label": OPERATOR_LABELS.get(operator, operator)}
+                    {
+                        "value": operator,
+                        "label": OPERATOR_LABELS.get(operator, operator),
+                    }
                     for operator in operators
                     if operator in OPERATOR_LABELS
                 ],
@@ -406,19 +428,27 @@ def list_users(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
-    users_rows = db.execute(
-        stmt.order_by(sort_clause, SystemUser.first_name.asc())
-        .offset(offset)
-        .limit(limit)
-    ).scalars().all()
+    users_rows = (
+        db.execute(
+            stmt.order_by(sort_clause, SystemUser.first_name.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
 
     user_ids = [row.id for row in users_rows]
     if not user_ids:
         return [], total
 
-    credentials = db.execute(
-        select(UserCredential).where(UserCredential.system_user_id.in_(user_ids))
-    ).scalars().all()
+    credentials = (
+        db.execute(
+            select(UserCredential).where(UserCredential.system_user_id.in_(user_ids))
+        )
+        .scalars()
+        .all()
+    )
 
     credential_info: dict = {}
     for credential in credentials:
@@ -472,7 +502,9 @@ def list_users(
                 "name": name,
                 "email": row.email,
                 "roles": role_map.get(row.id, []),
-                "user_type": row.user_type.value if row.user_type else UserType.system_user.value,
+                "user_type": row.user_type.value
+                if row.user_type
+                else UserType.system_user.value,
                 "user_type_label": user_type_label(row.user_type),
                 "is_active": bool(row.is_active),
                 "mfa_enabled": row.id in mfa_enabled,

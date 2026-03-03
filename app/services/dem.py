@@ -29,7 +29,9 @@ def _tile_name(latitude: float, longitude: float) -> tuple[str, int, int]:
     return tile, lat_floor, lon_floor
 
 
-def _tile_indexes(latitude: float, longitude: float, lat_floor: int, lon_floor: int) -> tuple[int, int]:
+def _tile_indexes(
+    latitude: float, longitude: float, lat_floor: int, lon_floor: int
+) -> tuple[int, int]:
     row = int(round((lat_floor + 1 - latitude) * SRTM_SAMPLES_PER_DEGREE))
     col = int(round((longitude - lon_floor) * SRTM_SAMPLES_PER_DEGREE))
     row = _clamp(row, 0, SRTM_SAMPLES_PER_DEGREE)
@@ -79,7 +81,9 @@ def _read_value_from_zip(path: str, row: int, col: int, tile: str) -> int | None
     return _read_value_from_bytes(data, row, col)
 
 
-def get_elevation(latitude: float, longitude: float, data_dir: str | None = None) -> dict:
+def get_elevation(
+    latitude: float, longitude: float, data_dir: str | None = None
+) -> dict:
     data_root = data_dir or settings.dem_data_dir
     tile, lat_floor, lon_floor = _tile_name(latitude, longitude)
     row, col = _tile_indexes(latitude, longitude, lat_floor, lon_floor)

@@ -107,7 +107,9 @@ def delete_geo_location(location_id: str, db: Session = Depends(get_db)):
 )
 def find_nearby_locations(
     latitude: float = Query(..., ge=-90, le=90, description="Center point latitude"),
-    longitude: float = Query(..., ge=-180, le=180, description="Center point longitude"),
+    longitude: float = Query(
+        ..., ge=-180, le=180, description="Center point longitude"
+    ),
     radius: float = Query(..., gt=0, le=100000, description="Search radius in meters"),
     location_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
@@ -191,7 +193,9 @@ def list_geo_areas(
     response_model=GeoAreaRead,
     tags=["gis-areas"],
 )
-def update_geo_area(area_id: str, payload: GeoAreaUpdate, db: Session = Depends(get_db)):
+def update_geo_area(
+    area_id: str, payload: GeoAreaUpdate, db: Session = Depends(get_db)
+):
     return gis_service.geo_areas.update(db, area_id, payload)
 
 
@@ -217,7 +221,12 @@ def check_area_contains_point(
 ):
     """Check if a point is contained within a GeoArea polygon."""
     result = gis_service.geo_areas.contains_point(db, area_id, latitude, longitude)
-    return {"area_id": area_id, "latitude": latitude, "longitude": longitude, "contained": result}
+    return {
+        "area_id": area_id,
+        "latitude": latitude,
+        "longitude": longitude,
+        "contained": result,
+    }
 
 
 @router.get(
@@ -298,7 +307,9 @@ def list_geo_layers(
     response_model=GeoLayerRead,
     tags=["gis-layers"],
 )
-def update_geo_layer(layer_id: str, payload: GeoLayerUpdate, db: Session = Depends(get_db)):
+def update_geo_layer(
+    layer_id: str, payload: GeoLayerUpdate, db: Session = Depends(get_db)
+):
     return gis_service.geo_layers.update(db, layer_id, payload)
 
 

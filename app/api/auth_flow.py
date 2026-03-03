@@ -183,9 +183,7 @@ def logout(
 ) -> Response:
     return cast(
         Response,
-        auth_flow_service.auth_flow.logout_response(
-            db, payload.refresh_token, request
-        ),
+        auth_flow_service.auth_flow.logout_response(db, payload.refresh_token, request),
     )
 
 

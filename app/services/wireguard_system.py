@@ -29,7 +29,11 @@ class WireGuardSystemService:
     @staticmethod
     def _command_prefix() -> list[str]:
         """Optional command prefix for host netns access from containers."""
-        use_nsenter = os.environ.get("WIREGUARD_USE_NSENTER", "").lower() in {"1", "true", "yes"}
+        use_nsenter = os.environ.get("WIREGUARD_USE_NSENTER", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         if use_nsenter and shutil.which("nsenter"):
             return ["nsenter", "-t", "1", "-n"]
         return []
@@ -45,7 +49,9 @@ class WireGuardSystemService:
         Returns:
             Complete wg-quick configuration file content
         """
-        server = db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        server = (
+            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        )
         if not server:
             raise ValueError(f"Server {server_id} not found")
 
@@ -85,14 +91,16 @@ class WireGuardSystemService:
             lines.append(f"MTU = {server.mtu}")
 
         # Add PostUp/PostDown for enabling IP forwarding
-        lines.extend([
-            "",
-            "# Enable IP forwarding",
-            "PostUp = sysctl -w net.ipv4.ip_forward=1",
-            "PostUp = sysctl -w net.ipv6.conf.all.forwarding=1",
-            "PostDown = sysctl -w net.ipv4.ip_forward=0",
-            "PostDown = sysctl -w net.ipv6.conf.all.forwarding=0",
-        ])
+        lines.extend(
+            [
+                "",
+                "# Enable IP forwarding",
+                "PostUp = sysctl -w net.ipv4.ip_forward=1",
+                "PostUp = sysctl -w net.ipv6.conf.all.forwarding=1",
+                "PostDown = sysctl -w net.ipv4.ip_forward=0",
+                "PostDown = sysctl -w net.ipv6.conf.all.forwarding=0",
+            ]
+        )
 
         routes: list[str] = []
         if server.metadata_:
@@ -122,12 +130,14 @@ class WireGuardSystemService:
         )
 
         for peer in peers:
-            lines.extend([
-                "",
-                f"# Peer: {peer.name}",
-                "[Peer]",
-                f"PublicKey = {peer.public_key}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    f"# Peer: {peer.name}",
+                    "[Peer]",
+                    f"PublicKey = {peer.public_key}",
+                ]
+            )
 
             # Add preshared key if exists
             if peer.preshared_key:
@@ -135,7 +145,9 @@ class WireGuardSystemService:
                     psk = decrypt_private_key(peer.preshared_key)
                     lines.append(f"PresharedKey = {psk}")
                 except Exception:
-                    logger.warning(f"Failed to decrypt preshared key for peer {peer.id}")
+                    logger.warning(
+                        f"Failed to decrypt preshared key for peer {peer.id}"
+                    )
 
             # Build AllowedIPs
             allowed_ips = []
@@ -145,7 +157,10 @@ class WireGuardSystemService:
                     allowed_ips.append(f"{peer.peer_address}/32")
                 else:
                     allowed_ips.append(peer.peer_address)
-            if peer.peer_address_v6 and str(peer.peer_address_v6).strip().lower() != "none":
+            if (
+                peer.peer_address_v6
+                and str(peer.peer_address_v6).strip().lower() != "none"
+            ):
                 if "/" not in peer.peer_address_v6:
                     allowed_ips.append(f"{peer.peer_address_v6}/128")
                 else:
@@ -154,7 +169,9 @@ class WireGuardSystemService:
             # Add any additional allowed IPs (e.g., LAN networks behind the peer)
             if peer.allowed_ips:
                 allowed_ips.extend(
-                    ip for ip in peer.allowed_ips if ip and str(ip).strip().lower() != "none"
+                    ip
+                    for ip in peer.allowed_ips
+                    if ip and str(ip).strip().lower() != "none"
                 )
 
             if allowed_ips:
@@ -183,7 +200,9 @@ class WireGuardSystemService:
         Returns:
             Path to the written config file
         """
-        server = db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        server = (
+            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        )
         if not server:
             raise ValueError(f"Server {server_id} not found")
 
@@ -330,7 +349,9 @@ class WireGuardSystemService:
         Returns:
             Tuple of (success, message)
         """
-        server = db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        server = (
+            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        )
         if not server:
             return False, f"Server {server_id} not found"
 
@@ -364,7 +385,10 @@ class WireGuardSystemService:
             return success, msg
         else:
             # Server is inactive, config is written but interface stays down
-            return True, f"Config written to {WireGuardSystemService.get_config_path(server)}"
+            return (
+                True,
+                f"Config written to {WireGuardSystemService.get_config_path(server)}",
+            )
 
     @staticmethod
     def undeploy_server(db: Session, server_id: UUID) -> tuple[bool, str]:
@@ -373,7 +397,9 @@ class WireGuardSystemService:
         Returns:
             Tuple of (success, message)
         """
-        server = db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        server = (
+            db.query(WireGuardServer).filter(WireGuardServer.id == server_id).first()
+        )
         if not server:
             return False, f"Server {server_id} not found"
 
@@ -433,10 +459,14 @@ class WireGuardSystemService:
                             "preshared_key": parts[1] if parts[1] != "(none)" else None,
                             "endpoint": parts[2] if parts[2] != "(none)" else None,
                             "allowed_ips": parts[3].split(",") if parts[3] else [],
-                            "latest_handshake": int(parts[4]) if parts[4] != "0" else None,
+                            "latest_handshake": int(parts[4])
+                            if parts[4] != "0"
+                            else None,
                             "rx_bytes": int(parts[5]),
                             "tx_bytes": int(parts[6]),
-                            "persistent_keepalive": int(parts[7]) if parts[7] != "off" else 0,
+                            "persistent_keepalive": int(parts[7])
+                            if parts[7] != "off"
+                            else 0,
                         }
                         peers.append(peer)
 

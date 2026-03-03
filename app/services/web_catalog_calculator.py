@@ -53,8 +53,12 @@ def calculator_page_data(db) -> dict[str, object]:
                 "name": offer.name,
                 "code": offer.code or "",
                 "service_type": offer.service_type.value if offer.service_type else "",
-                "billing_cycle": offer.billing_cycle.value if offer.billing_cycle else "",
-                "usage_allowance_id": str(offer.usage_allowance_id) if offer.usage_allowance_id else "",
+                "billing_cycle": offer.billing_cycle.value
+                if offer.billing_cycle
+                else "",
+                "usage_allowance_id": str(offer.usage_allowance_id)
+                if offer.usage_allowance_id
+                else "",
                 "with_vat": offer.with_vat,
                 "vat_percent": float(offer.vat_percent) if offer.vat_percent else 0,
                 "prices": [
@@ -62,7 +66,9 @@ def calculator_page_data(db) -> dict[str, object]:
                         "price_type": p.price_type.value if p.price_type else "",
                         "amount": float(p.amount) if p.amount else 0,
                         "currency": p.currency or "NGN",
-                        "billing_cycle": p.billing_cycle.value if p.billing_cycle else "",
+                        "billing_cycle": p.billing_cycle.value
+                        if p.billing_cycle
+                        else "",
                     }
                     for p in prices
                 ],
@@ -90,7 +96,9 @@ def calculator_page_data(db) -> dict[str, object]:
                         "price_type": p.price_type.value if p.price_type else "",
                         "amount": float(p.amount) if p.amount else 0,
                         "currency": p.currency or "NGN",
-                        "billing_cycle": p.billing_cycle.value if p.billing_cycle else "",
+                        "billing_cycle": p.billing_cycle.value
+                        if p.billing_cycle
+                        else "",
                     }
                     for p in prices
                 ],

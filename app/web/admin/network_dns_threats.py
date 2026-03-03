@@ -14,7 +14,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -69,7 +71,9 @@ def dns_threats_new(request: Request, db: Session = Depends(get_db)) -> HTMLResp
 
 @router.post("/dns-threats", response_class=HTMLResponse)
 def dns_threats_create(request: Request, db: Session = Depends(get_db)):
-    values = web_network_dns_threats_service.parse_event_form(parse_form_data_sync(request))
+    values = web_network_dns_threats_service.parse_event_form(
+        parse_form_data_sync(request)
+    )
     error = web_network_dns_threats_service.validate_event_values(values)
     if error:
         context = _base_context(request, db, active_page="dns-threats")
@@ -81,7 +85,9 @@ def dns_threats_create(request: Request, db: Session = Depends(get_db)):
                 **web_network_dns_threats_service.event_form_reference_data(db),
             }
         )
-        return templates.TemplateResponse("admin/network/dns_threats/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/dns_threats/form.html", context
+        )
 
     try:
         event = web_network_dns_threats_service.create_event(db, values)
@@ -95,7 +101,9 @@ def dns_threats_create(request: Request, db: Session = Depends(get_db)):
                 **web_network_dns_threats_service.event_form_reference_data(db),
             }
         )
-        return templates.TemplateResponse("admin/network/dns_threats/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/dns_threats/form.html", context
+        )
 
     from app.web.admin import get_current_user
 

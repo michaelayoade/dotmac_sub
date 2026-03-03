@@ -15,4 +15,3 @@ class IntegrationHookHandler:
             event_type=event.event_type.value,
             payload=event.to_dict(),
         )
-

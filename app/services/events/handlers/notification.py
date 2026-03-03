@@ -69,9 +69,7 @@ class NotificationHandler:
         )
 
         if not template:
-            logger.debug(
-                f"No active notification template for code {template_code}"
-            )
+            logger.debug(f"No active notification template for code {template_code}")
             return
 
         # Get recipient from event context
@@ -97,8 +95,7 @@ class NotificationHandler:
         db.add(notification)
 
         logger.info(
-            f"Queued notification for event {event.event_type.value} "
-            f"to {recipient}"
+            f"Queued notification for event {event.event_type.value} to {recipient}"
         )
 
     def _resolve_recipient(self, db: Session, event: Event) -> str | None:

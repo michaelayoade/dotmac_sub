@@ -57,10 +57,7 @@ def _get_olt_health(olt_name: str) -> dict[str, Any]:
             )
             resp.raise_for_status()
             data = resp.json()
-            if (
-                isinstance(data, dict)
-                and data.get("status") == "success"
-            ):
+            if isinstance(data, dict) and data.get("status") == "success":
                 results = data.get("data", {}).get("result", [])
                 if results and results[0].get("value"):
                     val = float(results[0]["value"][1])
@@ -570,7 +567,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             if hasattr(link, "splitter_port") and link.splitter_port:
                 sp = link.splitter_port
                 if hasattr(sp, "splitter") and sp.splitter:
-                    network_path["splitter_name"] = sp.splitter.name or str(sp.splitter.id)[:8]
+                    network_path["splitter_name"] = (
+                        sp.splitter.name or str(sp.splitter.id)[:8]
+                    )
 
     # Subscriber and subscription info
     subscriber_info: dict[str, object] = {}
@@ -587,7 +586,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         subscription = assignment.subscription
         subscriber_info["subscription_id"] = str(subscription.id)
         subscriber_info["plan_name"] = (
-            subscription.offer.name if hasattr(subscription, "offer") and subscription.offer else None
+            subscription.offer.name
+            if hasattr(subscription, "offer") and subscription.offer
+            else None
         )
         subscriber_info["subscription_status"] = (
             subscription.status.value if subscription.status else "unknown"
@@ -822,7 +823,9 @@ def backup_overview_page_data(
     status_filter = (status or "all").strip().lower()
     device_type_filter = (device_type or "all").strip().lower()
 
-    nas_devices = list(db.scalars(select(NasDevice).order_by(NasDevice.name.asc())).all())
+    nas_devices = list(
+        db.scalars(select(NasDevice).order_by(NasDevice.name.asc())).all()
+    )
     for device in nas_devices:
         latest = db.execute(
             select(NasConfigBackup)
@@ -854,7 +857,9 @@ def backup_overview_page_data(
                 "device_name": device.name,
                 "device_type": "nas",
                 "group": device.pop_site.name if device.pop_site else "-",
-                "vendor": device.vendor.value if getattr(device, "vendor", None) else None,
+                "vendor": device.vendor.value
+                if getattr(device, "vendor", None)
+                else None,
                 "model": device.model,
                 "ip_address": device.management_ip or device.ip_address or "-",
                 "port": device.management_port or "-",
@@ -862,7 +867,9 @@ def backup_overview_page_data(
                 "last_message": last_message,
                 "backup_status": backup_status,
                 "device_url": f"/admin/network/nas/devices/{device.id}",
-                "backup_url": f"/admin/network/nas/backups/{latest.id}" if latest else None,
+                "backup_url": f"/admin/network/nas/backups/{latest.id}"
+                if latest
+                else None,
                 "history_url": f"/admin/network/nas/devices/{device.id}/backups",
             }
         )
@@ -919,7 +926,8 @@ def backup_overview_page_data(
         rows = [
             row
             for row in rows
-            if term in " ".join(
+            if term
+            in " ".join(
                 str(value or "").lower()
                 for value in (
                     row["device_name"],
@@ -950,9 +958,15 @@ def backup_overview_page_data(
     return {
         "rows": rows,
         "stats": stats,
-        "status_filter": status_filter if status_filter in {"success", "stale", "failed"} else "all",
-        "device_type_filter": device_type_filter if device_type_filter in {"nas", "olt"} else "all",
+        "status_filter": status_filter
+        if status_filter in {"success", "stale", "failed"}
+        else "all",
+        "device_type_filter": device_type_filter
+        if device_type_filter in {"nas", "olt"}
+        else "all",
         "search_filter": search or "",
         "stale_hours": max(stale_hours, 1),
-        "sort_filter": sort if sort in {"last_backup_asc", "last_backup_desc"} else "last_backup_asc",
+        "sort_filter": sort
+        if sort in {"last_backup_asc", "last_backup_desc"}
+        else "last_backup_asc",
     }

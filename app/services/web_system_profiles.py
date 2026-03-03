@@ -35,12 +35,16 @@ def get_profile_data(db: Session, person_id: str | UUID | None) -> dict[str, Any
             "api_key_count": 0,
         }
 
-    credential = db.execute(
-        select(UserCredential)
-        .where(UserCredential.system_user_id == person.id)
-        .where(UserCredential.is_active.is_(True))
-        .limit(1)
-    ).scalars().first()
+    credential = (
+        db.execute(
+            select(UserCredential)
+            .where(UserCredential.system_user_id == person.id)
+            .where(UserCredential.is_active.is_(True))
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
 
     mfa_enabled = bool(
         db.scalar(
@@ -93,30 +97,42 @@ def update_profile(
     return person
 
 
-def get_user_detail_data(db: Session, user_id: str | UUID | None) -> dict[str, Any] | None:
+def get_user_detail_data(
+    db: Session, user_id: str | UUID | None
+) -> dict[str, Any] | None:
     """Return data needed for the user detail page."""
     user = get_subscriber(db, user_id)
     if not user:
         return None
 
-    roles = db.execute(
-        select(Role)
-        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
-        .where(SystemUserRole.system_user_id == user.id)
-        .where(Role.is_active.is_(True))
-        .order_by(Role.name.asc())
-    ).scalars().all()
+    roles = (
+        db.execute(
+            select(Role)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .where(SystemUserRole.system_user_id == user.id)
+            .where(Role.is_active.is_(True))
+            .order_by(Role.name.asc())
+        )
+        .scalars()
+        .all()
+    )
 
-    credential = db.execute(
-        select(UserCredential)
-        .where(UserCredential.system_user_id == user.id)
-        .where(UserCredential.is_active.is_(True))
-        .limit(1)
-    ).scalars().first()
+    credential = (
+        db.execute(
+            select(UserCredential)
+            .where(UserCredential.system_user_id == user.id)
+            .where(UserCredential.is_active.is_(True))
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
 
-    mfa_methods = db.execute(
-        select(MFAMethod).where(MFAMethod.system_user_id == user.id)
-    ).scalars().all()
+    mfa_methods = (
+        db.execute(select(MFAMethod).where(MFAMethod.system_user_id == user.id))
+        .scalars()
+        .all()
+    )
 
     return {
         "user": user,
@@ -126,17 +142,21 @@ def get_user_detail_data(db: Session, user_id: str | UUID | None) -> dict[str, A
     }
 
 
-def get_user_edit_data(db: Session, user_id: str | UUID | None) -> dict[str, Any] | None:
+def get_user_edit_data(
+    db: Session, user_id: str | UUID | None
+) -> dict[str, Any] | None:
     """Return data needed for the user edit page."""
     user = get_subscriber(db, user_id)
     if not user:
         return None
 
-    roles = db.execute(
-        select(Role)
-        .where(Role.is_active.is_(True))
-        .order_by(Role.name.asc())
-    ).scalars().all()
+    roles = (
+        db.execute(
+            select(Role).where(Role.is_active.is_(True)).order_by(Role.name.asc())
+        )
+        .scalars()
+        .all()
+    )
 
     current_role_ids = {
         str(role_id)
@@ -147,11 +167,15 @@ def get_user_edit_data(db: Session, user_id: str | UUID | None) -> dict[str, Any
         ).scalars()
     }
 
-    all_permissions = db.execute(
-        select(Permission)
-        .where(Permission.is_active.is_(True))
-        .order_by(Permission.key.asc())
-    ).scalars().all()
+    all_permissions = (
+        db.execute(
+            select(Permission)
+            .where(Permission.is_active.is_(True))
+            .order_by(Permission.key.asc())
+        )
+        .scalars()
+        .all()
+    )
 
     direct_permission_ids = {
         str(permission_id)

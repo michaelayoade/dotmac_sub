@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-import csv
-import io
 from typing import cast
 from uuid import UUID
 
@@ -36,7 +36,12 @@ IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
         "date": ("date", "transaction_date", "value_date", "posted_at"),
     },
     "zenith_bank": {
-        "account_number": ("account_number", "beneficiary_account", "acct_no", "account_no"),
+        "account_number": (
+            "account_number",
+            "beneficiary_account",
+            "acct_no",
+            "account_no",
+        ),
         "account_id": ("account_id",),
         "amount": ("amount", "credit_amount", "credit", "value"),
         "currency": ("currency",),
@@ -168,7 +173,9 @@ def resolve_payment_method_id(
             method_type=method_type_enum,
             label=label,
         )
-        method = cast(PaymentMethod, billing_service.payment_methods.create(db, payload))
+        method = cast(
+            PaymentMethod, billing_service.payment_methods.create(db, payload)
+        )
         return method.id
     return UUID(selection)
 
@@ -252,7 +259,9 @@ def build_create_payload(
         ]
     return PaymentCreate(
         account_id=account_id,
-        collection_account_id=UUID(collection_account_id) if collection_account_id else None,
+        collection_account_id=UUID(collection_account_id)
+        if collection_account_id
+        else None,
         amount=amount,
         currency=currency.strip().upper(),
         status=PaymentStatus(status) if status else PaymentStatus.pending,
@@ -289,7 +298,9 @@ def update_invoice_allocation_if_changed(
     requested_invoice_id: str | None,
 ) -> bool:
     """Replace allocations when requested invoice differs from current."""
-    invoice_changed = bool(requested_invoice_id and requested_invoice_id != current_invoice_id)
+    invoice_changed = bool(
+        requested_invoice_id and requested_invoice_id != current_invoice_id
+    )
     if not invoice_changed:
         return False
     for alloc in list(payment_obj.allocations):
@@ -371,7 +382,9 @@ def import_payments(
                     errors.append(f"Row {idx + 1}: Account not found: {account_id_str}")
                     continue
                 if not pair_inactive_customers and not bool(account.is_active):
-                    errors.append(f"Row {idx + 1}: Account is inactive: {account_id_str}")
+                    errors.append(
+                        f"Row {idx + 1}: Account is inactive: {account_id_str}"
+                    )
                     continue
                 account_id = account.id
             else:
@@ -416,7 +429,9 @@ def import_payments(
                             PaymentMethodCreate(
                                 account_id=account_id,
                                 method_type=selected_method_type,
-                                label=selected_method_type.value.replace("_", " ").title(),
+                                label=selected_method_type.value.replace(
+                                    "_", " "
+                                ).title(),
                             ),
                         ),
                     )
@@ -454,10 +469,18 @@ def build_payments_list_data(
     unallocated_only: bool = False,
 ) -> dict[str, object]:
     """Build list/stat data for payments page."""
+
     def _build_status_totals(filtered_subquery) -> dict[str, dict[str, float | int]]:  # type: ignore[no-untyped-def]
         summary: dict[str, dict[str, float | int]] = {
             key: {"count": 0, "amount": 0.0}
-            for key in ("succeeded", "pending", "failed", "refunded", "partially_refunded", "canceled")
+            for key in (
+                "succeeded",
+                "pending",
+                "failed",
+                "refunded",
+                "partially_refunded",
+                "canceled",
+            )
         }
         rows = db.execute(
             select(
@@ -467,7 +490,11 @@ def build_payments_list_data(
             ).group_by(filtered_subquery.c.status)
         ).all()
         for status_value, count_value, amount_value in rows:
-            key = status_value.value if hasattr(status_value, "value") else str(status_value)
+            key = (
+                status_value.value
+                if hasattr(status_value, "value")
+                else str(status_value)
+            )
             if key not in summary:
                 summary[key] = {"count": 0, "amount": 0.0}
             summary[key]["count"] = int(count_value or 0)
@@ -496,7 +523,9 @@ def build_payments_list_data(
         if account_ids:
             scoped = scoped.where(Payment.account_id.in_(account_ids))
         if selected_partner_id:
-            scoped = scoped.where(Payment.account.has(Subscriber.reseller_id == selected_partner_id))
+            scoped = scoped.where(
+                Payment.account.has(Subscriber.reseller_id == selected_partner_id)
+            )
         if status:
             try:
                 status_enum = PaymentStatus(status)
@@ -523,7 +552,9 @@ def build_payments_list_data(
             if date_range == "today":
                 start = datetime(now.year, now.month, now.day, tzinfo=UTC)
             elif date_range == "week":
-                start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=now.weekday())
+                start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+                    days=now.weekday()
+                )
             elif date_range == "month":
                 start = datetime(now.year, now.month, 1, tzinfo=UTC)
             else:
@@ -536,10 +567,14 @@ def build_payments_list_data(
         method_type = None
         if payment.payment_method and payment.payment_method.method_type:
             raw_method = payment.payment_method.method_type
-            method_type = raw_method.value if hasattr(raw_method, "value") else str(raw_method)
+            method_type = (
+                raw_method.value if hasattr(raw_method, "value") else str(raw_method)
+            )
         elif payment.payment_channel and payment.payment_channel.channel_type:
             raw_channel = payment.payment_channel.channel_type
-            method_type = raw_channel.value if hasattr(raw_channel, "value") else str(raw_channel)
+            method_type = (
+                raw_channel.value if hasattr(raw_channel, "value") else str(raw_channel)
+            )
         else:
             method_type = "other"
 
@@ -569,14 +604,24 @@ def build_payments_list_data(
     if customer_ref:
         account_ids = [
             UUID(item["id"])
-            for item in web_billing_customers_service.accounts_for_customer(db, customer_ref)
+            for item in web_billing_customers_service.accounts_for_customer(
+                db, customer_ref
+            )
         ]
 
     payments: list[Payment] = []
     total = 0
     status_totals = {
         key: {"count": 0, "amount": 0.0}
-        for key in ("succeeded", "pending", "failed", "refunded", "partially_refunded", "canceled", "all")
+        for key in (
+            "succeeded",
+            "pending",
+            "failed",
+            "refunded",
+            "partially_refunded",
+            "canceled",
+            "all",
+        )
     }
     if account_ids or not customer_filtered:
         filtered_subquery = _apply_payment_filters(
@@ -585,7 +630,9 @@ def build_payments_list_data(
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
 
-        base_stmt = _apply_payment_filters(select(Payment)).order_by(Payment.created_at.desc())
+        base_stmt = _apply_payment_filters(select(Payment)).order_by(
+            Payment.created_at.desc()
+        )
         payments = list(db.scalars(base_stmt.offset(offset).limit(per_page)).all())
         for payment in payments:
             _enrich_payment_row(payment)
@@ -603,14 +650,10 @@ def build_payments_list_data(
     )
     total_balance = sum((getattr(account, "balance", 0) or 0) for account in accounts)
     active_count = sum(
-        1
-        for account in accounts
-        if account.status == SubscriberStatus.active
+        1 for account in accounts if account.status == SubscriberStatus.active
     )
     suspended_count = sum(
-        1
-        for account in accounts
-        if account.status == SubscriberStatus.suspended
+        1 for account in accounts if account.status == SubscriberStatus.suspended
     )
     partner_options = [
         {"id": str(item.id), "name": item.name}
@@ -630,7 +673,9 @@ def build_payments_list_data(
         "active_count": active_count,
         "suspended_count": suspended_count,
         "customer_ref": customer_ref,
-        "selected_partner_id": str(selected_partner_id) if selected_partner_id else None,
+        "selected_partner_id": str(selected_partner_id)
+        if selected_partner_id
+        else None,
         "partner_options": partner_options,
         "status": status,
         "method": method,
@@ -668,7 +713,9 @@ def render_payments_csv(payments: list[Payment]) -> str:
                 str(payment.account_id) if payment.account_id else "",
                 f"{Decimal(str(payment.amount or 0)):.2f}",
                 payment.currency or "NGN",
-                payment.status.value if hasattr(payment.status, "value") else str(payment.status or ""),
+                payment.status.value
+                if hasattr(payment.status, "value")
+                else str(payment.status or ""),
                 method_value,
                 narration,
                 payment.paid_at.isoformat() if payment.paid_at else "",
@@ -683,7 +730,9 @@ def resolve_default_currency(db: Session) -> str:
     return str(value) if value else "NGN"
 
 
-def build_import_result_payload(*, imported_count: int, errors: list[str]) -> dict[str, object]:
+def build_import_result_payload(
+    *, imported_count: int, errors: list[str]
+) -> dict[str, object]:
     return {
         "imported": imported_count,
         "errors": errors[:10] if errors else [],
@@ -691,7 +740,9 @@ def build_import_result_payload(*, imported_count: int, errors: list[str]) -> di
     }
 
 
-def list_payment_import_history(db: Session, *, limit: int = 20) -> list[dict[str, object]]:
+def list_payment_import_history(
+    db: Session, *, limit: int = 20
+) -> list[dict[str, object]]:
     return list_payment_import_history_filtered(
         db,
         limit=limit,
@@ -715,7 +766,9 @@ def list_payment_import_history_filtered(
         if date_range == "today":
             start = datetime(now.year, now.month, now.day, tzinfo=UTC)
         elif date_range == "week":
-            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=now.weekday())
+            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+                days=now.weekday()
+            )
         elif date_range == "month":
             start = datetime(now.year, now.month, 1, tzinfo=UTC)
         else:
@@ -836,12 +889,20 @@ def process_payment_create(
     balance_value: str | None = None
     balance_display: str | None = None
     if resolved_invoice:
-        balance_value, balance_display = forms_svc.invoice_balance_info(resolved_invoice)
-    resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
+        balance_value, balance_display = forms_svc.invoice_balance_info(
+            resolved_invoice
+        )
+    resolved_account_id = account_id or (
+        str(resolved_invoice.account_id) if resolved_invoice else None
+    )
     if not resolved_account_id:
         raise ValueError("account_id is required")
     parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
-    effective_currency = resolved_invoice.currency if resolved_invoice and resolved_invoice.currency else currency
+    effective_currency = (
+        resolved_invoice.currency
+        if resolved_invoice and resolved_invoice.currency
+        else currency
+    )
     parsed_amount = _parse_decimal(amount, "amount")
     payload = build_create_payload(
         account_id=parsed_account_id,
@@ -883,18 +944,28 @@ def process_payment_update(
     before = billing_service.payments.get(db=db, payment_id=payment_id)
     current_invoice_id = payment_primary_invoice_id(before)
     resolved_invoice = forms_svc.resolve_invoice(db, invoice_id)
-    resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
+    resolved_account_id = account_id or (
+        str(resolved_invoice.account_id) if resolved_invoice else None
+    )
     if not resolved_account_id:
         resolved_account_id = str(before.account_id) if before else None
     if not resolved_account_id:
         raise ValueError("account_id is required")
     parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
-    effective_currency = resolved_invoice.currency if resolved_invoice and resolved_invoice.currency else currency
+    effective_currency = (
+        resolved_invoice.currency
+        if resolved_invoice and resolved_invoice.currency
+        else currency
+    )
     requested_invoice_id = str(resolved_invoice.id) if resolved_invoice else None
-    invoice_changed = requested_invoice_id and requested_invoice_id != current_invoice_id
+    invoice_changed = (
+        requested_invoice_id and requested_invoice_id != current_invoice_id
+    )
     payload = build_update_payload(
         account_id=parsed_account_id,
-        payment_method_id=resolve_payment_method_id(db, parsed_account_id, payment_method_id),
+        payment_method_id=resolve_payment_method_id(
+            db, parsed_account_id, payment_method_id
+        ),
         amount=_parse_decimal(amount, "amount"),
         currency=effective_currency,
         status=status,

@@ -21,7 +21,12 @@ from app.models.integration_hook import (
     IntegrationHookExecutionStatus,
     IntegrationHookType,
 )
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -234,11 +239,17 @@ def build_hooks_page_state(db: Session) -> dict[str, Any]:
                 func.count(IntegrationHookExecution.id).label("total"),
                 func.sum(
                     case(
-                        (IntegrationHookExecution.status == IntegrationHookExecutionStatus.success, 1),
+                        (
+                            IntegrationHookExecution.status
+                            == IntegrationHookExecutionStatus.success,
+                            1,
+                        ),
                         else_=0,
                     )
                 ).label("success_total"),
-                func.max(IntegrationHookExecution.created_at).label("last_triggered_at"),
+                func.max(IntegrationHookExecution.created_at).label(
+                    "last_triggered_at"
+                ),
             )
             .filter(IntegrationHookExecution.hook_id.in_(hook_ids))
             .group_by(IntegrationHookExecution.hook_id)
@@ -259,19 +270,25 @@ def build_hooks_page_state(db: Session) -> dict[str, Any]:
         "enabled": sum(1 for h in hooks if h.is_enabled),
         "web": sum(1 for h in hooks if h.hook_type == IntegrationHookType.web),
         "cli": sum(1 for h in hooks if h.hook_type == IntegrationHookType.cli),
-        "internal": sum(1 for h in hooks if h.hook_type == IntegrationHookType.internal),
+        "internal": sum(
+            1 for h in hooks if h.hook_type == IntegrationHookType.internal
+        ),
     }
     return {"hooks": hooks, "hook_metrics": metrics, "stats": stats}
 
 
-def _validate_hook_fields(*, hook_type: str, command: str | None, url: str | None) -> None:
+def _validate_hook_fields(
+    *, hook_type: str, command: str | None, url: str | None
+) -> None:
     resolved = validate_enum(hook_type, IntegrationHookType, "hook_type")
     if resolved == IntegrationHookType.cli and not (command and command.strip()):
         raise HTTPException(status_code=400, detail="command is required for CLI hooks")
     if resolved in {IntegrationHookType.web, IntegrationHookType.internal} and not (
         url and url.strip()
     ):
-        raise HTTPException(status_code=400, detail="url is required for web/internal hooks")
+        raise HTTPException(
+            status_code=400, detail="url is required for web/internal hooks"
+        )
 
 
 def list_executions(
@@ -281,9 +298,8 @@ def list_executions(
     limit: int = 50,
     offset: int = 0,
 ) -> list[IntegrationHookExecution]:
-    query = (
-        db.query(IntegrationHookExecution)
-        .filter(IntegrationHookExecution.hook_id == coerce_uuid(hook_id))
+    query = db.query(IntegrationHookExecution).filter(
+        IntegrationHookExecution.hook_id == coerce_uuid(hook_id)
     )
     query = apply_ordering(
         query,
@@ -307,11 +323,15 @@ def execute_hook(
     response_body: str | None = None
     try:
         if hook.hook_type in {IntegrationHookType.web, IntegrationHookType.internal}:
-            response_status, response_body = _execute_http_hook(hook=hook, payload=payload)
+            response_status, response_body = _execute_http_hook(
+                hook=hook, payload=payload
+            )
             if response_status < 200 or response_status >= 300:
                 status = IntegrationHookExecutionStatus.failed
         elif hook.hook_type == IntegrationHookType.cli:
-            response_status, response_body = _execute_cli_hook(hook=hook, payload=payload)
+            response_status, response_body = _execute_cli_hook(
+                hook=hook, payload=payload
+            )
             if response_status != 0:
                 status = IntegrationHookExecutionStatus.failed
     except Exception as exc:
@@ -378,7 +398,9 @@ def trigger_test(
     return execute_hook(db, hook=hook, event_type=event_type, payload=test_payload)
 
 
-def _execute_http_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tuple[int, str]:
+def _execute_http_hook(
+    *, hook: IntegrationHook, payload: dict[str, Any]
+) -> tuple[int, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     auth_config = hook.auth_config if isinstance(hook.auth_config, dict) else {}
     if hook.auth_type == IntegrationHookAuthType.bearer:
@@ -389,7 +411,7 @@ def _execute_http_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tup
         username = str(auth_config.get("username") or "")
         password = str(auth_config.get("password") or "")
         if username or password:
-            token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
     elif hook.auth_type == IntegrationHookAuthType.hmac:
         secret = str(auth_config.get("secret") or "")
@@ -408,11 +430,13 @@ def _execute_http_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tup
     return response.status_code, body
 
 
-def _execute_cli_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tuple[int, str]:
+def _execute_cli_hook(
+    *, hook: IntegrationHook, payload: dict[str, Any]
+) -> tuple[int, str]:
     command = str(hook.command or "").strip()
     if not command:
         raise ValueError("CLI hook command is empty")
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S602 - admin-configured hook command intentionally executes via shell
         command,
         shell=True,
         capture_output=True,

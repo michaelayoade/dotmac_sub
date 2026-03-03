@@ -19,10 +19,13 @@ def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> Non
     """Sync credential to RADIUS immediately (non-blocking)."""
     try:
         from app.services.radius import sync_credential_to_radius
+
         sync_credential_to_radius(db, credential)
     except Exception as exc:
         # Don't fail the operation if RADIUS sync fails
-        logger.warning(f"Failed to sync credential {credential.username} to RADIUS: {exc}")
+        logger.warning(
+            f"Failed to sync credential {credential.username} to RADIUS: {exc}"
+        )
 
 
 class AccessCredentials(CRUDManager[AccessCredential]):
@@ -65,13 +68,18 @@ class AccessCredentials(CRUDManager[AccessCredential]):
         offset: int,
     ):
         query = db.query(AccessCredential)
-        query = apply_optional_equals(query, {AccessCredential.subscriber_id: subscriber_id})
+        query = apply_optional_equals(
+            query, {AccessCredential.subscriber_id: subscriber_id}
+        )
         query = apply_active_state(query, AccessCredential.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": AccessCredential.created_at, "username": AccessCredential.username},
+            {
+                "created_at": AccessCredential.created_at,
+                "username": AccessCredential.username,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

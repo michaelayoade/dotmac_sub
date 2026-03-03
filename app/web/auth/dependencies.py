@@ -16,6 +16,7 @@ class AuthenticationRequired(Exception):
         self.redirect_url = redirect_url
         super().__init__("Authentication required")
 
+
 def get_session_token(request: Request) -> str | None:
     """Extract session token from cookie or Authorization header."""
     # First check for cookie-based token

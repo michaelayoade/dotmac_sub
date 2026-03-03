@@ -26,7 +26,9 @@ def _parse_uuid(value: str | None, field: str):
     return UUID(value)
 
 
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
+def _parse_decimal(
+    value: str | None, field: str, default: Decimal | None = None
+) -> Decimal:
     if value is None or value == "":
         if default is not None:
             return default
@@ -37,7 +39,11 @@ def _parse_decimal(value: str | None, field: str, default: Decimal | None = None
         raise ValueError(f"{field} must be a valid number") from exc
 
 
-@router.get("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get(
+    "/credits",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def billing_credits_list(
     request: Request,
     page: int = 1,
@@ -66,7 +72,11 @@ def billing_credits_list(
     )
 
 
-@router.get("/credits/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get(
+    "/credits/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def billing_credit_new(
     request: Request,
     account_id: str | None = Query(None),
@@ -93,14 +103,26 @@ def billing_credit_new(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             "account_locked": bool(selected_account),
-            "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,
-            "account_number": selected_account.account_number if selected_account else None,
-            "selected_account_id": str(selected_account.id) if selected_account else None,
+            "account_label": web_billing_customers_service.account_label(
+                selected_account
+            )
+            if selected_account
+            else None,
+            "account_number": selected_account.account_number
+            if selected_account
+            else None,
+            "selected_account_id": str(selected_account.id)
+            if selected_account
+            else None,
         },
     )
 
 
-@router.post("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/credits",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:write"))],
+)
 def billing_credit_create(
     request: Request,
     account_id: str = Form(...),
@@ -122,7 +144,9 @@ def billing_credit_create(
         )
         billing_service.credit_notes.create(db, payload)
     except Exception as exc:
-        selected_account = web_billing_credits_service.resolve_selected_account(db, account_id)
+        selected_account = web_billing_credits_service.resolve_selected_account(
+            db, account_id
+        )
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
@@ -139,9 +163,17 @@ def billing_credit_create(
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 "account_locked": bool(selected_account),
-                "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,
-                "account_number": selected_account.account_number if selected_account else None,
-                "selected_account_id": str(selected_account.id) if selected_account else None,
+                "account_label": web_billing_customers_service.account_label(
+                    selected_account
+                )
+                if selected_account
+                else None,
+                "account_number": selected_account.account_number
+                if selected_account
+                else None,
+                "selected_account_id": str(selected_account.id)
+                if selected_account
+                else None,
             },
             status_code=400,
         )
