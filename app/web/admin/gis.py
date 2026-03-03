@@ -6,64 +6,40 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.gis import GeoAreaType, GeoLocationType
-from app.schemas.gis import GeoLocationCreate, GeoLocationUpdate
 from app.services import gis as gis_service
+from app.services import web_gis as web_gis_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
 
 
-@router.get("", response_class=HTMLResponse)
-def gis_index(request: Request, tab: str = "locations", db: Session = Depends(get_db)):
+def _base_context(request: Request, db: Session) -> dict[str, object]:
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    # Get GIS data
-    locations = gis_service.geo_locations.list(
-        db=db, location_type=None, address_id=None, pop_site_id=None, is_active=None,
-        min_latitude=None, min_longitude=None, max_latitude=None, max_longitude=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
-    )
-    areas = gis_service.geo_areas.list(
-        db=db, area_type=None, is_active=None,
-        min_latitude=None, min_longitude=None, max_latitude=None, max_longitude=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
-    )
-    layers = gis_service.geo_layers.list(
-        db=db, layer_type=None, source_type=None, is_active=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
-    )
-
-    # Count coverage areas
-    coverage_areas = sum(1 for a in areas if a.area_type == GeoAreaType.coverage or a.area_type == GeoAreaType.service_area)
-
-    context = {
+    return {
         "request": request,
         "active_page": "gis",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "active_tab": tab,
-        "locations": locations,
-        "areas": areas,
-        "layers": layers,
-        "coverage_areas": coverage_areas,
     }
+
+
+@router.get("", response_class=HTMLResponse)
+def gis_index(request: Request, tab: str = "locations", db: Session = Depends(get_db)):
+    context = _base_context(request, db)
+    context.update(web_gis_service.list_page_data(db, tab=tab))
     return templates.TemplateResponse("admin/gis/index.html", context)
 
 
 @router.get("/locations/new", response_class=HTMLResponse)
 def gis_location_new(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    context = {
-        "request": request,
-        "active_page": "gis",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        "location": None,
-        "action_url": "/admin/gis/locations/new",
-        "error": None,
-    }
+    context = _base_context(request, db)
+    context.update(
+        web_gis_service.build_location_form_context(
+            location=None,
+            action_url="/admin/gis/locations/new",
+        )
+    )
     return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
@@ -78,47 +54,40 @@ def gis_location_create(
     is_active: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
     try:
-        payload = GeoLocationCreate(
+        payload = web_gis_service.build_location_create_payload(
             name=name,
-            location_type=GeoLocationType(location_type),
+            location_type=location_type,
             latitude=latitude,
             longitude=longitude,
-            notes=notes or None,
-            is_active=is_active == "true",
+            notes=notes,
+            is_active=is_active,
         )
         gis_service.geo_locations.create(db=db, payload=payload)
         return RedirectResponse(url="/admin/gis?tab=locations", status_code=303)
     except Exception as e:
-        context = {
-            "request": request,
-            "active_page": "gis",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "location": None,
-            "action_url": "/admin/gis/locations/new",
-            "error": str(e),
-        }
+        context = _base_context(request, db)
+        context.update(
+            web_gis_service.build_location_form_context(
+                location=None,
+                action_url="/admin/gis/locations/new",
+                error=str(e),
+            )
+        )
         return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
 @router.get("/locations/{location_id}/edit", response_class=HTMLResponse)
 def gis_location_edit(request: Request, location_id: str, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
     location = gis_service.geo_locations.get(db=db, location_id=location_id)
 
-    context = {
-        "request": request,
-        "active_page": "gis",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        "location": location,
-        "action_url": f"/admin/gis/locations/{location_id}/edit",
-        "error": None,
-    }
+    context = _base_context(request, db)
+    context.update(
+        web_gis_service.build_location_form_context(
+            location=location,
+            action_url=f"/admin/gis/locations/{location_id}/edit",
+        )
+    )
     return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
@@ -134,28 +103,25 @@ def gis_location_update(
     is_active: str = Form(None),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
     try:
-        payload = GeoLocationUpdate(
+        payload = web_gis_service.build_location_update_payload(
             name=name,
-            location_type=GeoLocationType(location_type),
+            location_type=location_type,
             latitude=latitude,
             longitude=longitude,
-            notes=notes or None,
-            is_active=is_active == "true",
+            notes=notes,
+            is_active=is_active,
         )
         gis_service.geo_locations.update(db=db, location_id=location_id, payload=payload)
         return RedirectResponse(url="/admin/gis?tab=locations", status_code=303)
     except Exception as e:
         location = gis_service.geo_locations.get(db=db, location_id=location_id)
-        context = {
-            "request": request,
-            "active_page": "gis",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "location": location,
-            "action_url": f"/admin/gis/locations/{location_id}/edit",
-            "error": str(e),
-        }
+        context = _base_context(request, db)
+        context.update(
+            web_gis_service.build_location_form_context(
+                location=location,
+                action_url=f"/admin/gis/locations/{location_id}/edit",
+                error=str(e),
+            )
+        )
         return templates.TemplateResponse("admin/gis/location_form.html", context)
