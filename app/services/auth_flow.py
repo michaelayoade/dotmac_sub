@@ -11,7 +11,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import func, select as sa_select
+from sqlalchemy import func
+from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -191,7 +192,9 @@ def _mfa_key(db: Session | None) -> bytes:
     key = _env_value("TOTP_ENCRYPTION_KEY") or _setting_value(db, "totp_encryption_key")
     key = resolve_secret(key)
     if not key:
-        raise HTTPException(status_code=500, detail="TOTP encryption key not configured")
+        raise HTTPException(
+            status_code=500, detail="TOTP encryption key not configured"
+        )
     return key.encode()
 
 
@@ -199,7 +202,9 @@ def _fernet(db: Session | None) -> Fernet:
     try:
         return Fernet(_mfa_key(db))
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail="Invalid TOTP encryption key") from exc
+        raise HTTPException(
+            status_code=500, detail="Invalid TOTP encryption key"
+        ) from exc
 
 
 def _hash_token(token: str) -> str:
@@ -297,7 +302,9 @@ def _issue_password_reset_token(
         "email": resolved_email,
         "typ": "password_reset",
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()),
+        "exp": int(
+            (now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()
+        ),
     }
     return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
 
@@ -369,7 +376,10 @@ def _load_rbac_claims(
         )
         direct_permissions = (
             db.query(Permission)
-            .join(SystemUserPermission, SystemUserPermission.permission_id == Permission.id)
+            .join(
+                SystemUserPermission,
+                SystemUserPermission.permission_id == Permission.id,
+            )
             .filter(SystemUserPermission.system_user_id == principal_uuid)
             .filter(Permission.is_active.is_(True))
             .all()
@@ -426,15 +436,27 @@ def _resolve_login_credential(
     )
 
 
-def _principal_for_credential(db: Session, credential: UserCredential) -> tuple[str, str, object | None]:
+def _principal_for_credential(
+    db: Session, credential: UserCredential
+) -> tuple[str, str, object | None]:
     if credential.system_user_id:
-        return "system_user", str(credential.system_user_id), db.get(SystemUser, credential.system_user_id)
+        return (
+            "system_user",
+            str(credential.system_user_id),
+            db.get(SystemUser, credential.system_user_id),
+        )
     if credential.subscriber_id:
-        return "subscriber", str(credential.subscriber_id), db.get(Subscriber, credential.subscriber_id)
+        return (
+            "subscriber",
+            str(credential.subscriber_id),
+            db.get(Subscriber, credential.subscriber_id),
+        )
     return "subscriber", "", None
 
 
-def _primary_totp_method(db: Session, principal_type: str, principal_id: str) -> MFAMethod | None:
+def _primary_totp_method(
+    db: Session, principal_type: str, principal_id: str
+) -> MFAMethod | None:
     query = db.query(MFAMethod).filter(MFAMethod.method_type == MFAMethodType.totp)
     if principal_type == "system_user":
         query = query.filter(MFAMethod.system_user_id == coerce_uuid(principal_id))
@@ -521,7 +543,11 @@ class AuthFlow(ListResponseMixin):
 
     @staticmethod
     def login_response(
-        db: Session, username: str, password: str, request: Request, provider: str | None
+        db: Session,
+        username: str,
+        password: str,
+        request: Request,
+        provider: str | None,
     ):
         result = AuthFlow.login(db, username, password, request, provider)
         if result.get("refresh_token"):
@@ -532,7 +558,11 @@ class AuthFlow(ListResponseMixin):
 
     @staticmethod
     def login(
-        db: Session, username: str, password: str, request: Request, provider: str | None
+        db: Session,
+        username: str,
+        password: str,
+        request: Request,
+        provider: str | None,
     ):
         if isinstance(provider, AuthProvider):
             provider_value = provider.value
@@ -541,7 +571,9 @@ class AuthFlow(ListResponseMixin):
         try:
             resolved_provider = AuthProvider(provider_value)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid auth provider") from exc
+            raise HTTPException(
+                status_code=400, detail="Invalid auth provider"
+            ) from exc
         if resolved_provider == AuthProvider.radius:
             credential = _resolve_login_credential(
                 db,
@@ -554,7 +586,9 @@ class AuthFlow(ListResponseMixin):
                 db,
                 str(credential.username or username),
                 password,
-                str(credential.radius_server_id) if credential.radius_server_id else None,
+                str(credential.radius_server_id)
+                if credential.radius_server_id
+                else None,
             )
         elif resolved_provider == AuthProvider.local:
             credential = _resolve_login_credential(
@@ -593,7 +627,9 @@ class AuthFlow(ListResponseMixin):
         credential.last_login_at = now
         db.commit()
 
-        principal_type, principal_id, principal = _principal_for_credential(db, credential)
+        principal_type, principal_id, principal = _principal_for_credential(
+            db, credential
+        )
         if not principal or not getattr(principal, "is_active", False):
             raise HTTPException(status_code=403, detail="Account disabled")
         if _primary_totp_method(db, principal_type, principal_id):
@@ -632,9 +668,7 @@ class AuthFlow(ListResponseMixin):
         db.refresh(method)
 
         totp = pyotp.TOTP(secret)
-        otpauth_uri = totp.provisioning_uri(
-            name=username, issuer_name=_totp_issuer(db)
-        )
+        otpauth_uri = totp.provisioning_uri(name=username, issuer_name=_totp_issuer(db))
         return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
 
     @staticmethod
@@ -789,7 +823,9 @@ class AuthFlow(ListResponseMixin):
         )
 
     @staticmethod
-    def resolve_refresh_token(request: Request, refresh_token: str | None, db: Session | None = None):
+    def resolve_refresh_token(
+        request: Request, refresh_token: str | None, db: Session | None = None
+    ):
         settings = AuthFlow.refresh_cookie_settings(db)
         return refresh_token or request.cookies.get(settings["key"])
 
@@ -832,8 +868,12 @@ class AuthFlow(ListResponseMixin):
                 system_user_id=principal_uuid,
                 status=SessionStatus.active,
                 token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host if active_request.client else None,
-                user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+                ip_address=active_request.client.host
+                if active_request.client
+                else None,
+                user_agent=_truncate_user_agent(
+                    active_request.headers.get("user-agent")
+                ),
                 created_at=now,
                 last_seen_at=now,
                 expires_at=expires_at,
@@ -843,8 +883,12 @@ class AuthFlow(ListResponseMixin):
                 subscriber_id=principal_uuid,
                 status=SessionStatus.active,
                 token_hash=_hash_token(refresh_token),
-                ip_address=active_request.client.host if active_request.client else None,
-                user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
+                ip_address=active_request.client.host
+                if active_request.client
+                else None,
+                user_agent=_truncate_user_agent(
+                    active_request.headers.get("user-agent")
+                ),
                 created_at=now,
                 last_seen_at=now,
                 expires_at=expires_at,
@@ -926,7 +970,9 @@ def request_password_reset(db: Session, email: str) -> dict | None:
     """
     normalized_email = email.strip().lower()
     subscriber = (
-        db.query(Subscriber).filter(func.lower(Subscriber.email) == normalized_email).first()
+        db.query(Subscriber)
+        .filter(func.lower(Subscriber.email) == normalized_email)
+        .first()
     )
     if subscriber:
         credential = (
@@ -946,7 +992,9 @@ def request_password_reset(db: Session, email: str) -> dict | None:
             }
 
     system_user = (
-        db.query(SystemUser).filter(func.lower(SystemUser.email) == normalized_email).first()
+        db.query(SystemUser)
+        .filter(func.lower(SystemUser.email) == normalized_email)
+        .first()
     )
     if not system_user:
         return None
@@ -981,6 +1029,7 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
     if not principal_id or not email:
         raise HTTPException(status_code=401, detail="Invalid reset token")
 
+    principal: Subscriber | SystemUser | None
     if principal_type == "system_user":
         principal = db.get(SystemUser, coerce_uuid(principal_id))
         credential_query = db.query(UserCredential).filter(
@@ -1034,6 +1083,7 @@ def validate_active_session(
     if active_id != str(principal_id):
         return None
 
+    principal: Subscriber | SystemUser | None
     if principal_type == "system_user":
         principal = db.get(SystemUser, active_id)
     else:

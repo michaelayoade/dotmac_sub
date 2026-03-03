@@ -6,7 +6,7 @@ import base64
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from app.models.subscription_engine import SettingValueType
 from app.models.wireguard import WireGuardPeerStatus
-from app.schemas.wireguard import WireGuardPeerCreate
 from app.schemas.settings import DomainSettingUpdate
+from app.schemas.wireguard import WireGuardPeerCreate
 from app.services import domain_settings as domain_settings_service
 from app.services import wireguard as wg_service
 from app.services.audit_helpers import log_audit_event
@@ -53,7 +53,9 @@ def _network_setting_json(db: Session, key: str, default: Any) -> Any:
     return default
 
 
-def _upsert_network_json(db: Session, key: str, value: dict[str, Any] | list[dict[str, Any]]) -> None:
+def _upsert_network_json(
+    db: Session, key: str, value: dict[str, Any] | list[dict[str, Any]]
+) -> None:
     domain_settings_service.network_settings.upsert_by_key(
         db,
         key,
@@ -142,7 +144,7 @@ def _build_openvpn_client_config(
 ) -> str:
     fake_ca = (
         "-----BEGIN CERTIFICATE-----\n"
-        + base64.b64encode(f"dotmac-openvpn-ca:{client_name}".encode("utf-8")).decode("utf-8")
+        + base64.b64encode(f"dotmac-openvpn-ca:{client_name}".encode()).decode("utf-8")
         + "\n-----END CERTIFICATE-----"
     )
     return (
@@ -163,7 +165,9 @@ def _build_openvpn_client_config(
     )
 
 
-def build_unified_dashboard_data(db: Session, server_id: str | None = None) -> dict[str, Any]:
+def build_unified_dashboard_data(
+    db: Session, server_id: str | None = None
+) -> dict[str, Any]:
     from app.services import web_vpn_servers as web_vpn_servers_service
 
     wg_data = web_vpn_servers_service.build_dashboard_data(db, server_id=server_id)
@@ -171,8 +175,13 @@ def build_unified_dashboard_data(db: Session, server_id: str | None = None) -> d
 
     combined_connections: list[dict[str, Any]] = []
 
-    for peer in wg_data.get("peers_read", []) or []:
-        status = "up" if peer.status == WireGuardPeerStatus.active and peer.last_handshake_at else "down"
+    peers_read = cast(list[Any], wg_data.get("peers_read", []) or [])
+    for peer in peers_read:
+        status = (
+            "up"
+            if peer.status == WireGuardPeerStatus.active and peer.last_handshake_at
+            else "down"
+        )
         combined_connections.append(
             {
                 "protocol": "wireguard",
@@ -197,7 +206,9 @@ def build_unified_dashboard_data(db: Session, server_id: str | None = None) -> d
                 connected_since = datetime.fromisoformat(connected_since_text)
             except ValueError:
                 connected_since = None
-        uptime_seconds = int((_now() - connected_since).total_seconds()) if connected_since else None
+        uptime_seconds = (
+            int((_now() - connected_since).total_seconds()) if connected_since else None
+        )
         combined_connections.append(
             {
                 "protocol": "openvpn",
@@ -226,7 +237,7 @@ def build_unified_dashboard_data(db: Session, server_id: str | None = None) -> d
             "total": len(combined_connections),
             "active": active_count,
             "down": max(0, len(combined_connections) - active_count),
-            "wireguard": len(wg_data.get("peers_read", []) or []),
+            "wireguard": len(peers_read),
             "openvpn": len(openvpn_clients),
         },
         "alerts": alerts,
@@ -305,7 +316,9 @@ def execute_control_job(db: Session, *, job_id: str) -> dict[str, Any]:
     if not job:
         raise ValueError("VPN control job not found")
 
-    job = upsert_control_job(db, {**job, "status": "running", "started_at": _now_iso(), "error": None})
+    job = upsert_control_job(
+        db, {**job, "status": "running", "started_at": _now_iso(), "error": None}
+    )
     protocol = str(job.get("protocol") or "")
     action = str(job.get("action") or "")
 
@@ -321,7 +334,9 @@ def execute_control_job(db: Session, *, job_id: str) -> dict[str, Any]:
             server = wg_service.wg_servers.get(db, server_id)
 
             if action == "restart":
-                down_ok, down_msg = WireGuardSystemService.undeploy_server(db, server.id)
+                down_ok, down_msg = WireGuardSystemService.undeploy_server(
+                    db, server.id
+                )
                 up_ok, up_msg = WireGuardSystemService.deploy_server(db, server.id)
                 result = {
                     "server": server.name,
@@ -331,7 +346,9 @@ def execute_control_job(db: Session, *, job_id: str) -> dict[str, Any]:
                     "up_message": up_msg,
                 }
             elif action == "status":
-                result = WireGuardSystemService.get_interface_status(server.interface_name)
+                result = WireGuardSystemService.get_interface_status(
+                    server.interface_name
+                )
             elif action == "config":
                 result = {
                     "server": server.name,
@@ -459,7 +476,9 @@ def create_vpn_client(
             },
         )
         _upsert_network_json(db, OPENVPN_CLIENTS_KEY, clients)
-        safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in name.strip())
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in name.strip()
+        )
         result = {
             "protocol": "openvpn",
             "client_id": client_id,
@@ -494,7 +513,9 @@ def run_health_scan(db: Session) -> dict[str, Any]:
     threshold = now - timedelta(minutes=15)
     alerts = list_vpn_alerts(db, limit=200)
 
-    active_wg_peers = wg_service.wg_peers.list(db, status=WireGuardPeerStatus.active, limit=2000)
+    active_wg_peers = wg_service.wg_peers.list(
+        db, status=WireGuardPeerStatus.active, limit=2000
+    )
     new_alerts: list[dict[str, Any]] = []
 
     for peer in active_wg_peers:
@@ -548,12 +569,17 @@ def run_health_scan(db: Session) -> dict[str, Any]:
         ),
     )
 
-    return {"scanned": len(active_wg_peers) + len(list_openvpn_clients(db)), "alerts_added": len(new_alerts)}
+    return {
+        "scanned": len(active_wg_peers) + len(list_openvpn_clients(db)),
+        "alerts_added": len(new_alerts),
+    }
 
 
 def should_schedule_health_scan(db: Session, *, every_minutes: int = 5) -> bool:
     try:
-        setting = domain_settings_service.network_settings.get_by_key(db, VPN_HEALTH_SCAN_KEY)
+        setting = domain_settings_service.network_settings.get_by_key(
+            db, VPN_HEALTH_SCAN_KEY
+        )
     except Exception:
         return True
     if not setting.value_text:

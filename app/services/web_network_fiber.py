@@ -130,7 +130,7 @@ def get_fiber_plant_consolidated_data(db: Session) -> dict[str, object]:
     )
     strands_in_use = sum(1 for strand in strands if strand.status.value == "in_use")
 
-    stats = {
+    stats: dict[str, object] = {
         "cabinets": len(cabinets),
         "splitters": len(splitters),
         "strands": len(strands),
@@ -321,7 +321,7 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
             }
         )
 
-    stats = {
+    stats: dict[str, object] = {
         "fdh_cabinets": db.scalar(
             select(func.count(FdhCabinet.id)).where(FdhCabinet.is_active.is_(True))
         ),
@@ -373,7 +373,7 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
 
 def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, object]:
     """Return aggregated report data and customer map for fiber reports page."""
-    stats = {
+    stats: dict[str, object] = {
         "fdh_cabinets": {
             "total": db.scalar(select(func.count(FdhCabinet.id))) or 0,
             "active": db.scalar(

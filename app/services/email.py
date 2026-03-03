@@ -3,18 +3,18 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationStatus,
 )
+from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import notification_settings
 from app.services.settings_spec import resolve_value
@@ -86,8 +86,10 @@ def _setting_value(db: Session | None, key: str) -> str | None:
 
 
 def _legacy_smtp_config(db: Session | None) -> dict:
-    username = _env_value("SMTP_USERNAME") or _env_value("SMTP_USER") or _setting_value(
-        db, "smtp_username"
+    username = (
+        _env_value("SMTP_USERNAME")
+        or _env_value("SMTP_USER")
+        or _setting_value(db, "smtp_username")
     )
     from_email = (
         _env_value("SMTP_FROM_EMAIL")
@@ -100,14 +102,18 @@ def _legacy_smtp_config(db: Session | None) -> dict:
     use_tls = _env_bool("SMTP_USE_TLS", _env_bool("SMTP_TLS", default_tls))
     use_ssl = _env_bool("SMTP_USE_SSL", _env_bool("SMTP_SSL", default_ssl))
     return {
-        "host": _env_value("SMTP_HOST") or _setting_value(db, "smtp_host") or "localhost",
+        "host": _env_value("SMTP_HOST")
+        or _setting_value(db, "smtp_host")
+        or "localhost",
         "port": _env_int("SMTP_PORT", 587),
         "username": username,
         "password": _env_value("SMTP_PASSWORD") or _setting_value(db, "smtp_password"),
         "use_tls": use_tls,
         "use_ssl": use_ssl,
         "from_email": from_email,
-        "from_name": _env_value("SMTP_FROM_NAME") or _setting_value(db, "smtp_from_name") or "DotMac SM",
+        "from_name": _env_value("SMTP_FROM_NAME")
+        or _setting_value(db, "smtp_from_name")
+        or "DotMac SM",
         "user": username,
         "from_addr": from_email,
     }
@@ -249,7 +255,9 @@ def set_default_smtp_sender_key(db: Session, sender_key: str) -> None:
     )
 
 
-def upsert_smtp_activity_mapping(db: Session, activity: str, sender_key: str | None) -> None:
+def upsert_smtp_activity_mapping(
+    db: Session, activity: str, sender_key: str | None
+) -> None:
     key = f"{SMTP_ACTIVITY_KEY_PREFIX}{activity.strip()}"
     normalized = (sender_key or "").strip().lower()
     if normalized:
@@ -270,7 +278,9 @@ def upsert_smtp_activity_mapping(db: Session, activity: str, sender_key: str | N
         .first()
     )
     if existing:
-        notification_settings.upsert_by_key(db, key, DomainSettingUpdate(is_active=False))
+        notification_settings.upsert_by_key(
+            db, key, DomainSettingUpdate(is_active=False)
+        )
 
 
 def upsert_smtp_sender(
@@ -289,7 +299,9 @@ def upsert_smtp_sender(
 ) -> str:
     normalized_key = sender_key.strip().lower()
     if not _valid_sender_key(normalized_key):
-        raise ValueError("Sender key must use only lowercase letters, numbers, '-' or '_'")
+        raise ValueError(
+            "Sender key must use only lowercase letters, numbers, '-' or '_'"
+        )
     if not host.strip():
         raise ValueError("SMTP host is required")
     if not from_email.strip():
@@ -300,10 +312,30 @@ def upsert_smtp_sender(
         "port": (SettingValueType.integer, str(int(port)), None, False),
         "username": (SettingValueType.string, (username or "").strip(), None, False),
         "from_email": (SettingValueType.string, from_email.strip(), None, False),
-        "from_name": (SettingValueType.string, (from_name or "DotMac SM").strip() or "DotMac SM", None, False),
-        "use_tls": (SettingValueType.boolean, "true" if use_tls else "false", use_tls, False),
-        "use_ssl": (SettingValueType.boolean, "true" if use_ssl else "false", use_ssl, False),
-        "is_active": (SettingValueType.boolean, "true" if is_active else "false", is_active, False),
+        "from_name": (
+            SettingValueType.string,
+            (from_name or "DotMac SM").strip() or "DotMac SM",
+            None,
+            False,
+        ),
+        "use_tls": (
+            SettingValueType.boolean,
+            "true" if use_tls else "false",
+            use_tls,
+            False,
+        ),
+        "use_ssl": (
+            SettingValueType.boolean,
+            "true" if use_ssl else "false",
+            use_ssl,
+            False,
+        ),
+        "is_active": (
+            SettingValueType.boolean,
+            "true" if is_active else "false",
+            is_active,
+            False,
+        ),
     }
     for field, (value_type, value_text, value_json, is_secret) in values.items():
         notification_settings.upsert_by_key(
@@ -312,7 +344,7 @@ def upsert_smtp_sender(
             DomainSettingUpdate(
                 value_type=value_type,
                 value_text=value_text,
-                value_json=value_json,
+                value_json=cast(dict[str, Any] | list[Any] | bool | int | str | None, value_json),
                 is_secret=is_secret,
                 is_active=True,
             ),
@@ -356,7 +388,11 @@ def _resolve_smtp_sender_config(
     sender_key: str | None = None,
     activity: str | None = None,
 ) -> dict[str, Any] | None:
-    available = {sender["sender_key"]: sender for sender in list_smtp_senders(db) if sender.get("is_active", True)}
+    available = {
+        sender["sender_key"]: sender
+        for sender in list_smtp_senders(db)
+        if sender.get("is_active", True)
+    }
     if not available:
         return None
 
@@ -386,7 +422,9 @@ def _get_smtp_config(
     activity: str | None = None,
 ) -> dict:
     if db is not None:
-        selected = _resolve_smtp_sender_config(db, sender_key=sender_key, activity=activity)
+        selected = _resolve_smtp_sender_config(
+            db, sender_key=sender_key, activity=activity
+        )
         if selected:
             return selected
     return _legacy_smtp_config(db)
@@ -403,10 +441,16 @@ def get_smtp_config(
 
 
 def _get_app_url(db: Session | None) -> str:
-    return _env_value("APP_URL") or _setting_value(db, "app_url") or "http://localhost:8000"
+    return (
+        _env_value("APP_URL")
+        or _setting_value(db, "app_url")
+        or "http://localhost:8000"
+    )
 
 
-def _create_smtp_client(host: str, port: int, use_ssl: bool, timeout: int | None = None):
+def _create_smtp_client(
+    host: str, port: int, use_ssl: bool, timeout: int | None = None
+):
     if use_ssl:
         if timeout is None:
             return smtplib.SMTP_SSL(host, port)
@@ -425,7 +469,9 @@ def send_email_with_config(
 ) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+    msg["From"] = (
+        f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+    )
     msg["To"] = to_email
 
     if body_text:
@@ -623,7 +669,9 @@ def test_smtp_connection(
                 pass
 
 
-def send_password_reset_email(db: Session, to_email: str, reset_token: str, person_name: str | None = None) -> bool:
+def send_password_reset_email(
+    db: Session, to_email: str, reset_token: str, person_name: str | None = None
+) -> bool:
     """
     Send a password reset email.
 
@@ -640,7 +688,9 @@ def send_password_reset_email(db: Session, to_email: str, reset_token: str, pers
     reset_url = f"{app_url}/auth/reset-password?token={reset_token}"
 
     # Get configurable expiry minutes
-    expiry_minutes = resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 60
+    expiry_minutes = (
+        resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 60
+    )
 
     greeting = f"Hi {person_name}," if person_name else "Hi,"
 
@@ -734,7 +784,9 @@ def send_user_invite_email(
     reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
 
     # Get configurable expiry minutes
-    expiry_minutes = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
+    expiry_minutes = (
+        resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
+    )
 
     greeting = f"Hi {person_name}," if person_name else "Hi,"
 

@@ -71,7 +71,9 @@ def _resolve_billing_cycle(
     if offer_price and offer_price.billing_cycle:
         return offer_price.billing_cycle
     offer = db.get(CatalogOffer, offer_id)
-    return offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
+    return (
+        offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
+    )
 
 
 def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetime:
@@ -127,6 +129,7 @@ def _generate_proration_if_enabled(
     except Exception as exc:
         # Log but don't fail the activation
         import logging
+
         logging.getLogger(__name__).warning(
             f"Failed to generate prorated invoice for subscription {subscription.id}: {exc}"
         )
@@ -136,9 +139,11 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
     """Sync all subscriber credentials to RADIUS on subscription activation."""
     try:
         from app.services.radius import sync_account_credentials_to_radius
+
         sync_account_credentials_to_radius(db, subscriber_id)
     except Exception as exc:
         import logging
+
         logging.getLogger(__name__).warning(
             f"Failed to sync credentials to RADIUS for subscriber {subscriber_id}: {exc}"
         )
@@ -173,7 +178,7 @@ def _emit_subscription_status_event(
                 EventType.subscription_resumed,
                 payload,
                 subscription_id=subscription.id,
-                account_id=subscription.subscriber_id,
+                subscriber_id=subscription.subscriber_id,
             )
         else:
             emit_event(
@@ -181,7 +186,7 @@ def _emit_subscription_status_event(
                 EventType.subscription_activated,
                 payload,
                 subscription_id=subscription.id,
-                account_id=subscription.subscriber_id,
+                subscriber_id=subscription.subscriber_id,
             )
             # Generate prorated invoice for new activations
             _generate_proration_if_enabled(db, subscription, from_status)
@@ -195,7 +200,7 @@ def _emit_subscription_status_event(
             EventType.subscription_suspended,
             payload,
             subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
+            subscriber_id=subscription.subscriber_id,
         )
     elif to_status == SubscriptionStatus.canceled:
         emit_event(
@@ -203,7 +208,7 @@ def _emit_subscription_status_event(
             EventType.subscription_canceled,
             payload,
             subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
+            subscriber_id=subscription.subscriber_id,
         )
 
 
@@ -218,7 +223,7 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
 
     try:
         payload = ServiceOrderCreate(
-            account_id=subscription.subscriber_id,
+            subscriber_id=subscription.subscriber_id,
             subscription_id=subscription.id,
             requested_by_contact_id=requested_by_contact_id,
             status=ServiceOrderStatus.submitted,
@@ -280,15 +285,26 @@ class Subscriptions(ListResponseMixin):
         if "billing_mode" not in fields_set:
             offer = db.get(CatalogOffer, str(payload.offer_id))
             data["billing_mode"] = (
-                offer.billing_mode if offer and offer.billing_mode else BillingMode.prepaid
+                offer.billing_mode
+                if offer and offer.billing_mode
+                else BillingMode.prepaid
             )
-        if "start_at" not in fields_set and data.get("status") == SubscriptionStatus.active:
+        if (
+            "start_at" not in fields_set
+            and data.get("status") == SubscriptionStatus.active
+        ):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
-        if "next_billing_at" not in fields_set and start_at and data.get("status") == SubscriptionStatus.active:
+        if (
+            "next_billing_at" not in fields_set
+            and start_at
+            and data.get("status") == SubscriptionStatus.active
+        ):
             offer_version_id = data.get("offer_version_id")
             cycle = _resolve_billing_cycle(
-                db, str(data["offer_id"]), str(offer_version_id) if offer_version_id else None
+                db,
+                str(data["offer_id"]),
+                str(offer_version_id) if offer_version_id else None,
             )
             data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
         if "end_at" not in fields_set and start_at and data.get("contract_term"):
@@ -315,7 +331,7 @@ class Subscriptions(ListResponseMixin):
                 "status": subscription.status.value if subscription.status else None,
             },
             subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
+            subscriber_id=subscription.subscriber_id,
         )
 
         # If created as active, also emit activation event
@@ -325,12 +341,14 @@ class Subscriptions(ListResponseMixin):
                 EventType.subscription_activated,
                 {
                     "subscription_id": str(subscription.id),
-                    "offer_name": subscription.offer.name if subscription.offer else None,
+                    "offer_name": subscription.offer.name
+                    if subscription.offer
+                    else None,
                     "from_status": None,
                     "to_status": "active",
                 },
                 subscription_id=subscription.id,
-                account_id=subscription.subscriber_id,
+                subscriber_id=subscription.subscriber_id,
             )
 
         # SQLite drops tzinfo even when DateTime(timezone=True), and emit_event()
@@ -357,7 +375,9 @@ class Subscriptions(ListResponseMixin):
             subscription_id,
             options=[
                 selectinload(Subscription.offer),
-                selectinload(Subscription.add_ons).selectinload(SubscriptionAddOn.add_on),
+                selectinload(Subscription.add_ons).selectinload(
+                    SubscriptionAddOn.add_on
+                ),
             ],
         )
         if not subscription:
@@ -388,7 +408,8 @@ class Subscriptions(ListResponseMixin):
         )
         if status:
             query = query.filter(
-                Subscription.status == validate_enum(status, SubscriptionStatus, "status")
+                Subscription.status
+                == validate_enum(status, SubscriptionStatus, "status")
             )
         query = apply_ordering(
             query,
@@ -451,7 +472,11 @@ class Subscriptions(ListResponseMixin):
         if status == SubscriptionStatus.active and not start_at:
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
-        if status == SubscriptionStatus.active and start_at and "next_billing_at" not in data:
+        if (
+            status == SubscriptionStatus.active
+            and start_at
+            and "next_billing_at" not in data
+        ):
             cycle = _resolve_billing_cycle(
                 db, offer_id, str(offer_version_id) if offer_version_id else None
             )
@@ -530,15 +555,21 @@ class Subscriptions(ListResponseMixin):
                     EventType.subscription_expired,
                     {
                         "subscription_id": str(subscription.id),
-                        "offer_name": subscription.offer.name if subscription.offer else None,
-                        "from_status": previous_status.value if previous_status else None,
+                        "offer_name": subscription.offer.name
+                        if subscription.offer
+                        else None,
+                        "from_status": previous_status.value
+                        if previous_status
+                        else None,
                         "to_status": "expired",
                         "reason": "contract_end",
-                        "end_at": subscription.end_at.isoformat() if subscription.end_at else None,
+                        "end_at": subscription.end_at.isoformat()
+                        if subscription.end_at
+                        else None,
                     },
                     subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
-        )
+                    subscriber_id=subscription.subscriber_id,
+                )
 
             expired_count += 1
 
@@ -616,7 +647,9 @@ class SubscriptionAddOns(CRUDManager[SubscriptionAddOn]):
         if not subscription_add_on:
             raise HTTPException(status_code=404, detail="Subscription add-on not found")
         data = payload.model_dump(exclude_unset=True)
-        subscription_id = data.get("subscription_id", subscription_add_on.subscription_id)
+        subscription_id = data.get(
+            "subscription_id", subscription_add_on.subscription_id
+        )
         add_on_id = data.get("add_on_id", subscription_add_on.add_on_id)
         quantity = data.get("quantity", subscription_add_on.quantity)
         catalog_validators.validate_subscription_add_on(

@@ -138,7 +138,14 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
     "payments": {
         "label": "Payments",
         "model": PaymentImportRow,
-        "headers": ["account_id", "amount", "currency", "status", "memo", "external_id"],
+        "headers": [
+            "account_id",
+            "amount",
+            "currency",
+            "status",
+            "memo",
+            "external_id",
+        ],
     },
     "nas_devices": {
         "label": "NAS Devices",
@@ -192,10 +199,10 @@ class ParsedPayload:
     source_name: str
 
 
-
 def module_options() -> list[dict[str, str]]:
-    return [{"id": key, "label": value["label"]} for key, value in ENTITY_CONFIG.items()]
-
+    return [
+        {"id": key, "label": value["label"]} for key, value in ENTITY_CONFIG.items()
+    ]
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -206,7 +213,6 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
             continue
         normalized[k] = value.strip() if isinstance(value, str) else value
     return normalized
-
 
 
 def _resolve_csv_delimiter(value: str | None) -> str:
@@ -260,7 +266,9 @@ def _parse_xlsx_rows(file_bytes: bytes) -> list[dict[str, Any]]:
                 raw_idx = cell.findtext("{*}v", default="").strip()
                 if raw_idx.isdigit():
                     idx = int(raw_idx)
-                    value = shared_strings[idx] if 0 <= idx < len(shared_strings) else ""
+                    value = (
+                        shared_strings[idx] if 0 <= idx < len(shared_strings) else ""
+                    )
             elif cell_type == "inlineStr":
                 value = "".join(node.text or "" for node in cell.findall(".//{*}t"))
             else:
@@ -327,7 +335,6 @@ def parse_payload(
     return ParsedPayload(rows=rows, source_name=source_name or "upload.json")
 
 
-
 def detect_columns_and_preview(
     *,
     data_format: str,
@@ -355,8 +362,9 @@ def detect_columns_and_preview(
     }
 
 
-
-def apply_column_mapping(rows: list[dict[str, Any]], mapping: dict[str, str]) -> list[dict[str, Any]]:
+def apply_column_mapping(
+    rows: list[dict[str, Any]], mapping: dict[str, str]
+) -> list[dict[str, Any]]:
     if not mapping:
         return rows
     mapped_rows: list[dict[str, Any]] = []
@@ -369,8 +377,9 @@ def apply_column_mapping(rows: list[dict[str, Any]], mapping: dict[str, str]) ->
     return mapped_rows
 
 
-
-def _validate_rows(module: str, rows: list[dict[str, Any]]) -> tuple[list[Any], list[dict[str, Any]]]:
+def _validate_rows(
+    module: str, rows: list[dict[str, Any]]
+) -> tuple[list[Any], list[dict[str, Any]]]:
     cfg = ENTITY_CONFIG.get(module)
     if not cfg:
         raise ValueError("Unsupported import module")
@@ -385,8 +394,8 @@ def _validate_rows(module: str, rows: list[dict[str, Any]]) -> tuple[list[Any], 
     return valid_rows, errors
 
 
-
 def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
+    obj: Any
     if module == "subscribers":
         obj = Subscriber(
             first_name=parsed_row.first_name,
@@ -469,10 +478,11 @@ def _persist_row(db: Session, module: str, parsed_row: Any) -> Any:
     raise ValueError("Unsupported import module")
 
 
-
 def _history_entries(db: Session) -> list[dict[str, Any]]:
     try:
-        setting = domain_settings_service.imports_settings.get_by_key(db, IMPORT_HISTORY_KEY)
+        setting = domain_settings_service.imports_settings.get_by_key(
+            db, IMPORT_HISTORY_KEY
+        )
     except Exception:
         return []
     if isinstance(setting.value_json, list):
@@ -485,7 +495,6 @@ def _history_entries(db: Session) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             return []
     return []
-
 
 
 def append_history(db: Session, entry: dict[str, Any]) -> None:
@@ -506,7 +515,9 @@ def append_history(db: Session, entry: dict[str, Any]) -> None:
 
 def _job_entries(db: Session) -> list[dict[str, Any]]:
     try:
-        setting = domain_settings_service.imports_settings.get_by_key(db, IMPORT_JOBS_KEY)
+        setting = domain_settings_service.imports_settings.get_by_key(
+            db, IMPORT_JOBS_KEY
+        )
     except Exception:
         return []
     if isinstance(setting.value_json, list):
@@ -564,7 +575,9 @@ def upsert_job(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def background_threshold_rows(db: Session) -> int:
-    raw = settings_spec.resolve_value(db, SettingDomain.imports, IMPORT_BACKGROUND_THRESHOLD_KEY)
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.imports, IMPORT_BACKGROUND_THRESHOLD_KEY
+    )
     if isinstance(raw, int) and raw >= 1:
         return raw
     if isinstance(raw, str):
@@ -577,7 +590,9 @@ def background_threshold_rows(db: Session) -> int:
 
 
 def rollback_window_hours(db: Session) -> int:
-    raw = settings_spec.resolve_value(db, SettingDomain.imports, IMPORT_ROLLBACK_WINDOW_KEY)
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.imports, IMPORT_ROLLBACK_WINDOW_KEY
+    )
     if isinstance(raw, int) and raw >= 1:
         return raw
     if isinstance(raw, str):
@@ -589,10 +604,8 @@ def rollback_window_hours(db: Session) -> int:
     return DEFAULT_ROLLBACK_WINDOW_HOURS
 
 
-
 def list_history(db: Session, *, limit: int = 50) -> list[dict[str, Any]]:
     return _history_entries(db)[:limit]
-
 
 
 def execute_import(
@@ -709,7 +722,6 @@ def execute_import(
     return summary
 
 
-
 def build_page_state(db: Session) -> dict[str, Any]:
     return {
         "module_options": module_options(),
@@ -727,7 +739,6 @@ def build_page_state(db: Session) -> dict[str, Any]:
     }
 
 
-
 def csv_template(module: str) -> str:
     cfg = ENTITY_CONFIG.get(module)
     if not cfg:
@@ -738,7 +749,6 @@ def csv_template(module: str) -> str:
     writer.writerow(headers)
     writer.writerow(["" for _ in headers])
     return buf.getvalue()
-
 
 
 def module_headers(module: str) -> list[str]:

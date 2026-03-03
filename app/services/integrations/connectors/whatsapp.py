@@ -30,13 +30,11 @@ class WhatsAppConfigError(ValueError):
     """Raised when WhatsApp configuration is invalid or missing."""
 
 
-
 def _read_setting(db: Session, key: str, default: str = "") -> str:
     value = resolve_value(db, SettingDomain.comms, key)
     if value is None:
         return default
     return str(value).strip()
-
 
 
 def _read_templates(db: Session) -> list[dict[str, Any]]:
@@ -53,6 +51,14 @@ def _read_templates(db: Session) -> list[dict[str, Any]]:
     return []
 
 
+
+
+def _read_timeout_seconds(db: Session) -> int:
+    raw = resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds")
+    try:
+        return int(str(raw)) if raw is not None else 10
+    except (TypeError, ValueError):
+        return 10
 
 def load_whatsapp_config(db: Session) -> dict[str, Any]:
     """Load normalized WhatsApp connector settings."""
@@ -73,7 +79,6 @@ def load_whatsapp_config(db: Session) -> dict[str, Any]:
     }
 
 
-
 def _require_config(config: dict[str, Any]) -> None:
     provider = str(config.get("provider", ""))
     if provider not in SUPPORTED_WHATSAPP_PROVIDERS:
@@ -82,7 +87,6 @@ def _require_config(config: dict[str, Any]) -> None:
         raise WhatsAppConfigError("WhatsApp API key is required")
     if not str(config.get("phone_number", "")).strip():
         raise WhatsAppConfigError("WhatsApp phone number is required")
-
 
 
 def build_template_payload(
@@ -106,7 +110,8 @@ def build_template_payload(
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": str(value)} for value in safe_vars.values()
+                            {"type": "text", "text": str(value)}
+                            for value in safe_vars.values()
                         ],
                     }
                 ],
@@ -116,7 +121,9 @@ def build_template_payload(
         return {
             "To": f"whatsapp:{recipient}",
             "ContentSid": template_name,
-            "ContentVariables": json.dumps({key: str(value) for key, value in safe_vars.items()}),
+            "ContentVariables": json.dumps(
+                {key: str(value) for key, value in safe_vars.items()}
+            ),
         }
     if provider == WHATSAPP_PROVIDER_MESSAGEBIRD:
         return {
@@ -131,7 +138,6 @@ def build_template_payload(
             },
         }
     raise WhatsAppConfigError("Unsupported WhatsApp provider")
-
 
 
 def send_template_message(
@@ -164,7 +170,7 @@ def send_template_message(
         }
 
     provider = str(config["provider"])
-    timeout_seconds = int(resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds") or 10)
+    timeout_seconds = _read_timeout_seconds(db)
     headers = {"Content-Type": "application/json"}
     endpoint = ""
 
@@ -178,7 +184,9 @@ def send_template_message(
         headers["Authorization"] = f"AccessKey {config['api_key']}"
         endpoint = "https://conversations.messagebird.com/v1/send"
 
-    response = httpx.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
+    response = httpx.post(
+        endpoint, json=payload, headers=headers, timeout=timeout_seconds
+    )
     return {
         "ok": response.status_code < 400,
         "provider": provider,
@@ -186,7 +194,6 @@ def send_template_message(
         "status_code": response.status_code,
         "response": response.text,
     }
-
 
 
 def send_text_message(
@@ -240,8 +247,10 @@ def send_text_message(
             "message": "Dry-run successful. Payload validated.",
         }
 
-    timeout_seconds = int(resolve_value(db, SettingDomain.comms, "whatsapp_api_timeout_seconds") or 10)
-    response = httpx.post(endpoint, json=payload, headers=headers, timeout=timeout_seconds)
+    timeout_seconds = _read_timeout_seconds(db)
+    response = httpx.post(
+        endpoint, json=payload, headers=headers, timeout=timeout_seconds
+    )
     return {
         "ok": response.status_code < 400,
         "provider": provider,
@@ -251,7 +260,9 @@ def send_text_message(
     }
 
 
-def normalize_inbound_webhook(*, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+def normalize_inbound_webhook(
+    *, provider: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     """Normalize inbound provider webhook payload to a common shape."""
     if provider == WHATSAPP_PROVIDER_META:
         message = payload.get("message") or {}
