@@ -205,6 +205,14 @@ jobs:
             sleep 2
           done
 
+      - name: Run database migrations
+        run: |
+          docker run --rm --network ci-net \
+            -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
+            -e SECRET_KEY=ci-test-secret-key-not-for-production \
+            -e REDIS_URL=redis://ci-redis:6379/0 \
+            dotmac-sub:ci poetry run alembic upgrade heads
+
       - name: Start application
         run: |
           docker run -d --name ci-app --network ci-net \
@@ -286,7 +294,7 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run Alembic migrations
-        run: poetry run alembic upgrade head
+        run: poetry run alembic upgrade heads
 
       - name: Run integration tests
         run: poetry run pytest tests/integration/ -v --tb=short -o "addopts=" || true
