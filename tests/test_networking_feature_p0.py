@@ -1,29 +1,20 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
-from app.services import nas as nas_service
-from app.services import backup_alerts as backup_alerts_service
-from app.services import web_network_core_runtime as core_runtime
-from app.services import web_network_core_devices_forms as core_devices_forms
-from app.services import web_network_cpes as web_network_cpes_service
-from app.services import web_network_ip as web_network_ip_service
-from app.services import web_network_dns_threats as web_network_dns_threats_service
-from app.services import web_network_olts as web_network_olts_service
-from app.services import web_network_speedtests as web_network_speedtests_service
-from app.services import web_network_weathermap as web_network_weathermap_service
-from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import network_map as network_map_service
 from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
-from app.models.network import OLTDevice, OltConfigBackup, OltConfigBackupType
-from app.models.subscriber import Address, AddressType, Subscriber
-from app.models.notification import Notification, NotificationChannel, NotificationStatus
+from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.models.network_monitoring import (
+    DeviceMetric,
     DeviceRole,
     DeviceStatus,
+    DnsThreatAction,
+    DnsThreatEvent,
+    DnsThreatSeverity,
+    MetricType,
     NetworkDevice,
     NetworkDeviceBandwidthGraph,
     NetworkDeviceBandwidthGraphSource,
@@ -31,32 +22,49 @@ from app.models.network_monitoring import (
     PopSite,
     SpeedTestResult,
     SpeedTestSource,
-    DnsThreatAction,
-    DnsThreatEvent,
-    DnsThreatSeverity,
-    DeviceMetric,
-    MetricType,
 )
-from app.models.tr069 import Tr069JobStatus
-from app.models.tr069 import Tr069Job
-from app.schemas.network import CPEDeviceCreate, IPAssignmentCreate, IPv4AddressCreate, IPv6AddressCreate
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
+from app.models.subscriber import Address, AddressType, Subscriber
+from app.models.tr069 import Tr069Job, Tr069JobStatus
+from app.schemas.catalog import NasDeviceCreate
+from app.schemas.network import (
+    CPEDeviceCreate,
+    IPAssignmentCreate,
+    IPv4AddressCreate,
+    IPv6AddressCreate,
+)
 from app.schemas.network_monitoring import NetworkDeviceCreate
 from app.schemas.tr069 import Tr069CpeDeviceCreate, Tr069JobCreate
-from app.services import network_monitoring as monitoring_service
+from app.services import backup_alerts as backup_alerts_service
+from app.services import nas as nas_service
 from app.services import network as network_service
+from app.services import network_map as network_map_service
+from app.services import network_monitoring as monitoring_service
 from app.services import tr069 as tr069_service
+from app.services import web_network_core_devices_forms as core_devices_forms
 from app.services import web_network_core_devices_views as core_devices_views
-from app.schemas.catalog import NasDeviceCreate
-from app.web.admin import nas as nas_web
+from app.services import web_network_core_runtime as core_runtime
+from app.services import web_network_cpes as web_network_cpes_service
+from app.services import web_network_dns_threats as web_network_dns_threats_service
+from app.services import web_network_ip as web_network_ip_service
+from app.services import web_network_nas as nas_web_service
+from app.services import web_network_olts as web_network_olts_service
+from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services import web_network_tr069 as web_network_tr069_service
+from app.services import web_network_weathermap as web_network_weathermap_service
 
 
 def test_validate_ipv4_address_rejects_invalid_octet():
-    error = nas_web._validate_ipv4_address("172.16.300.5", "IP address")
+    error = nas_web_service.validate_ipv4_address("172.16.300.5", "IP address")
     assert error == "IP address must be a valid IPv4 address."
 
 
 def test_merge_radius_pool_tags_replaces_previous_radius_tags():
-    merged = nas_web._merge_radius_pool_tags(
+    merged = nas_web_service.merge_radius_pool_tags(
         ["site:pop1", "radius_pool:old-1"],
         ["pool-a", "pool-b"],
     )
@@ -64,7 +72,7 @@ def test_merge_radius_pool_tags_replaces_previous_radius_tags():
 
 
 def test_extract_enhanced_fields_from_tags():
-    fields = nas_web._extract_enhanced_fields(
+    fields = nas_web_service.extract_enhanced_fields(
         [
             "partner_org:11111111-1111-1111-1111-111111111111",
             "authorization_type:ppp_dhcp_radius",
@@ -80,7 +88,7 @@ def test_extract_enhanced_fields_from_tags():
 
 
 def test_extract_enhanced_fields_includes_shaper_and_mikrotik_api_tags():
-    fields = nas_web._extract_enhanced_fields(
+    fields = nas_web_service.extract_enhanced_fields(
         [
             "mikrotik_api_enabled:true",
             "mikrotik_api_port:8728",
