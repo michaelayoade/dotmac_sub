@@ -3,23 +3,38 @@
 {% block title %}Conflict - 409{% endblock %}
 
 {% block body %}
-<div class="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center px-4">
-    <div class="max-w-2xl text-center">
-        <p class="text-8xl font-black text-orange-500">409</p>
-        <h1 class="mt-4 text-3xl font-bold text-slate-900 dark:text-white">Request conflict</h1>
-        <p class="mt-3 text-lg text-slate-600 dark:text-slate-400">
-            {{ message or "Your request conflicts with existing data. Please review and try again." }}
+<div class="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center px-4 relative overflow-hidden">
+    <!-- Subtle background decoration -->
+    <div class="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
+        <div class="absolute top-1/4 -left-24 w-80 h-80 rounded-full bg-orange-100/30 dark:bg-orange-900/10 blur-3xl"></div>
+        <div class="absolute bottom-1/4 -right-24 w-72 h-72 rounded-full bg-slate-100/40 dark:bg-slate-800/20 blur-3xl"></div>
+    </div>
+
+    <div class="relative max-w-lg w-full text-center">
+        <!-- Illustrated icon -->
+        <div class="mx-auto flex h-28 w-28 items-center justify-center rounded-3xl bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/30 dark:to-orange-800/20 shadow-sm border border-orange-200/50 dark:border-orange-700/30 mb-8">
+            <svg class="h-14 w-14 text-orange-500 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+        </div>
+
+        <p class="text-6xl font-black text-orange-500/70 dark:text-orange-400/50 tracking-tight" style="font-family: var(--font-display);">409</p>
+        <h1 class="mt-3 text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Request conflict</h1>
+        <p class="mt-3 text-base text-slate-500 dark:text-slate-400 leading-relaxed max-w-sm mx-auto">
+            {{ message if message else "Your request conflicts with existing data. Please review and try again." }}
         </p>
         {% if request_id %}
-        <p class="mt-4 text-xs text-slate-500 dark:text-slate-400">Reference ID: {{ request_id }}</p>
+        <p class="mt-4 text-xs text-slate-400 dark:text-slate-500 font-mono">Ref: {{ request_id }}</p>
         {% endif %}
-        <div class="mt-8 flex items-center justify-center gap-4">
-            <a href="/admin/dashboard" class="inline-flex items-center rounded-lg bg-primary-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
-                Go to dashboard
-            </a>
-            <button onclick="history.back()" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+        <div class="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button onclick="history.back()" class="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
                 Go back
             </button>
+            <a href="/" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                Go home
+            </a>
         </div>
     </div>
 </div>
