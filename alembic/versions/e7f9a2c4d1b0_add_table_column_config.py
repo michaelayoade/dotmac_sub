@@ -48,7 +48,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_subscribers_status_is_active_created_at",
         "subscribers",
-        ["status", "is_active", "created_at"],
+        ["is_active", "created_at"],
         unique=False,
     )
     op.create_index(
