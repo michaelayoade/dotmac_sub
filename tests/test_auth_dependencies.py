@@ -15,7 +15,12 @@ from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
 
 
-def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None = None, roles: list[str] | None = None):
+def _make_access_token(
+    person_id: str,
+    session_id: str,
+    scopes: list[str] | None = None,
+    roles: list[str] | None = None,
+):
     now = datetime.now(UTC)
     payload = {
         "sub": person_id,
@@ -55,7 +60,9 @@ def test_require_user_auth_accepts_valid_token(db_session, person, monkeypatch):
     db_session.commit()
 
     tokens = AuthFlow._issue_tokens(db_session, str(person.id), _make_request())
-    auth = require_user_auth(authorization=f"Bearer {tokens['access_token']}", db=db_session)
+    auth = require_user_auth(
+        authorization=f"Bearer {tokens['access_token']}", db=db_session
+    )
     assert auth["subscriber_id"] == str(person.id)
     assert auth["session_id"]
 
@@ -143,7 +150,9 @@ def test_require_audit_auth_accepts_session_token(db_session, person):
     db_session.add(session)
     db_session.commit()
 
-    auth = require_audit_auth(authorization=None, x_session_token=refresh_token, db=db_session)
+    auth = require_audit_auth(
+        authorization=None, x_session_token=refresh_token, db=db_session
+    )
     assert auth["actor_type"] == "user"
 
 
@@ -199,7 +208,9 @@ def test_require_role_and_permission(db_session, person, monkeypatch):
     role_perm = RolePermission(role_id=role.id, permission_id=permission.id)
     db_session.add(role_perm)
     db_session.commit()
-    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(
+        person.id
+    )
 
 
 def test_require_user_auth_missing_token(db_session):
@@ -253,7 +264,9 @@ def test_require_audit_auth_sets_actor_id(db_session, person, monkeypatch):
     db_session.commit()
     token = _make_access_token(str(person.id), str(session.id), scopes=["audit:read"])
     request = Request({"type": "http", "headers": []})
-    auth = require_audit_auth(authorization=f"Bearer {token}", request=request, db=db_session)
+    auth = require_audit_auth(
+        authorization=f"Bearer {token}", request=request, db=db_session
+    )
     assert request.state.actor_id == str(person.id)
     assert auth["actor_type"] == "user"
 
@@ -270,7 +283,10 @@ def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
     db_session.commit()
     request = Request({"type": "http", "headers": []})
     auth = require_audit_auth(
-        authorization=None, x_session_token=refresh_token, request=request, db=db_session
+        authorization=None,
+        x_session_token=refresh_token,
+        request=request,
+        db=db_session,
     )
     assert request.state.actor_id == str(person.id)
     assert auth["actor_type"] == "user"
@@ -289,7 +305,11 @@ def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
     db_session.commit()
     request = Request({"type": "http", "headers": []})
     auth = require_audit_auth(
-        authorization=None, x_session_token=None, x_api_key=raw_key, request=request, db=db_session
+        authorization=None,
+        x_session_token=None,
+        x_api_key=raw_key,
+        request=request,
+        db=db_session,
     )
     assert request.state.actor_id == str(api_key.id)
     assert auth["actor_type"] == "api_key"
@@ -360,4 +380,6 @@ def test_require_permission_short_circuit(db_session, person, monkeypatch):
     token = _make_access_token(str(person.id), str(session.id), roles=["admin"])
     auth = require_user_auth(authorization=f"Bearer {token}", db=db_session)
     require_permission = auth_dep.require_permission("any:perm")
-    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(
+        person.id
+    )

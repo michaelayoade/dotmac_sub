@@ -39,7 +39,9 @@ def test_webhook_endpoint_subscription_delivery_flow(db_session):
     updated = webhook_service.webhook_deliveries.update(
         db_session,
         str(delivery.id),
-        WebhookDeliveryUpdate(status=WebhookDeliveryStatus.delivered, response_status=200),
+        WebhookDeliveryUpdate(
+            status=WebhookDeliveryStatus.delivered, response_status=200
+        ),
     )
     assert updated.status == WebhookDeliveryStatus.delivered
 

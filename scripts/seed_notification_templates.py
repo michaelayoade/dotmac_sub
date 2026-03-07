@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.db import SessionLocal
 from app.models.notification import NotificationChannel, NotificationTemplate
 
-
 TEMPLATES = [
     # Billing Journey
     {
@@ -122,7 +121,6 @@ Thank you for your prompt payment!
 Best regards,
 {{company_name}}""",
     },
-
     # Collections Journey
     {
         "code": "dunning_notice",
@@ -199,7 +197,6 @@ Once payment is received, your service will be restored within 24 hours.
         "subject": None,
         "body": "Your service has been SUSPENDED due to non-payment of {{amount}}. Pay now to restore: {{short_link}}",
     },
-
     # Sales Journey
     {
         "code": "quote_sent",
@@ -243,7 +240,6 @@ If you have any questions, please contact us.
 Best regards,
 {{company_name}}""",
     },
-
     # Self-Service Journey
     {
         "code": "plan_change_requested",
@@ -281,7 +277,6 @@ Your new plan will be active on the effective date. Any billing adjustments will
 Thank you for choosing us!
 {{company_name}}""",
     },
-
     # Field Service Journey
     {
         "code": "work_order_scheduled",
@@ -359,7 +354,6 @@ If you have any questions or concerns about the work performed, please contact u
 
 Thank you for choosing {{company_name}}!""",
     },
-
     # Support Journey
     {
         "code": "ticket_created",

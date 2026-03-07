@@ -86,7 +86,9 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
     headers = bearer_headers(admin_token)
 
     agent_email = _email_for_username(settings.agent_username)
-    agent_person = ensure_person(api_context, admin_token, "Agent", "Support", agent_email)
+    agent_person = ensure_person(
+        api_context, admin_token, "Agent", "Support", agent_email
+    )
     ensure_user_credential(
         api_context,
         admin_token,
@@ -124,7 +126,9 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
 
 @pytest.fixture(scope="session")
 def agent_token(settings: E2ESettings, api_context, test_identities: dict) -> str:
-    return login_for_token(api_context, settings.agent_username, settings.agent_password)
+    return login_for_token(
+        api_context, settings.agent_username, settings.agent_password
+    )
 
 
 @pytest.fixture(scope="session")
@@ -260,7 +264,9 @@ def _email_for_username(username: str) -> str:
 
 
 @pytest.fixture()
-def customer_context(browser, settings: E2ESettings, api_context, admin_token: str, test_identities: dict):
+def customer_context(
+    browser, settings: E2ESettings, api_context, admin_token: str, test_identities: dict
+):
     """Browser context with customer portal session via impersonation."""
     customer = test_identities["customer"]
     person_id = customer["person"]["id"]
@@ -341,7 +347,11 @@ def customer_token(api_context, admin_token: str, test_identities: dict):
     if not response.ok:
         pytest.skip(f"Customer API token not available: {response.status}")
 
-    data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    data = (
+        response.json()
+        if response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
     if "token" in data:
         return data["token"]
 

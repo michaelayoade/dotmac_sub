@@ -18,7 +18,9 @@ def main() -> None:
     try:
         documents = db.query(LegalDocument).all()
         for doc in documents:
-            existing = file_uploads.get_active_entity_file(db, "legal_document", str(doc.id))
+            existing = file_uploads.get_active_entity_file(
+                db, "legal_document", str(doc.id)
+            )
             if existing:
                 skipped += 1
                 continue

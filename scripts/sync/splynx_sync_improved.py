@@ -129,6 +129,7 @@ def _convert_ip_bytes(value: bytes | None) -> str:
             return ".".join(str(b) for b in value)
         elif len(value) == 16:
             import socket
+
             return socket.inet_ntop(socket.AF_INET6, value)
     except (ValueError, OSError):
         logger.debug("Could not convert IP bytes: %r", value)
@@ -170,6 +171,7 @@ class SplynxSyncService:
             return ""
         # Give 1-minute overlap to handle clock skew
         from datetime import timedelta
+
         cutoff = last_sync - timedelta(minutes=1)
         return f" WHERE {mysql_col} >= '{cutoff.strftime('%Y-%m-%d %H:%M:%S')}'"
 
@@ -306,7 +308,9 @@ class SplynxSyncService:
                                 "last_update": _safe_datetime(row["last_update"]),
                                 "daily_prepaid_cost": row["daily_prepaid_cost"],
                                 "mrr_total": row["mrr_total"],
-                                "conversion_date": _safe_datetime(row["conversion_date"]),
+                                "conversion_date": _safe_datetime(
+                                    row["conversion_date"]
+                                ),
                                 "synced_at": _now(),
                             },
                         )
@@ -360,7 +364,9 @@ class SplynxSyncService:
                                 "customer_id": row["customer_id"],
                                 "number": row["number"],
                                 "date_created": _safe_date(row["date_created"]),
-                                "real_create_datetime": _safe_datetime(row["real_create_datetime"]),
+                                "real_create_datetime": _safe_datetime(
+                                    row["real_create_datetime"]
+                                ),
                                 "date_updated": _safe_date(row["date_updated"]),
                                 "date_payment": _safe_date(row["date_payment"]),
                                 "date_till": _safe_date(row["date_till"]),
@@ -429,7 +435,9 @@ class SplynxSyncService:
                                 "payment_type": row["payment_type"],
                                 "receipt_number": row["receipt_number"],
                                 "payment_date": _safe_date(row["date"]),
-                                "real_create_datetime": _safe_datetime(row["real_create_datetime"]),
+                                "real_create_datetime": _safe_datetime(
+                                    row["real_create_datetime"]
+                                ),
                                 "amount": row["amount"],
                                 "comment": row["comment"] or "",
                                 "note": row["note"] or "",
@@ -455,7 +463,9 @@ class SplynxSyncService:
         conn = _get_mysql_connection()
         try:
             with SessionLocal() as db:
-                where = self._incremental_clause(db, "splynx_services_internet", "updated_at")
+                where = self._incremental_clause(
+                    db, "splynx_services_internet", "updated_at"
+                )
                 query = f"""
                     SELECT id, customer_id, tariff_id, router_id, description, quantity,
                            unit, unit_price, start_date, end_date, status, discount,
@@ -708,8 +718,12 @@ class SplynxSyncService:
                                 "speed_upload": row["speed_upload"],
                                 "aggregation": row["aggregation"],
                                 "priority": row["priority"],
-                                "available_for_services": _bool_from_enum(row["available_for_services"]),
-                                "show_on_customer_portal": _bool_from_enum(row["show_on_customer_portal"]),
+                                "available_for_services": _bool_from_enum(
+                                    row["available_for_services"]
+                                ),
+                                "show_on_customer_portal": _bool_from_enum(
+                                    row["show_on_customer_portal"]
+                                ),
                                 "deleted": _bool_from_enum(row["deleted"]),
                                 "updated_at": row["updated_at"],
                                 "synced_at": _now(),

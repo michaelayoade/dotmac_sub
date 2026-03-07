@@ -68,8 +68,12 @@ def test_retry_batch_run_reuses_previous_cycle(db_session, monkeypatch):
         captured["billing_cycle"] = billing_cycle
         return "ok"
 
-    monkeypatch.setattr("app.services.web_billing_invoice_batch.run_batch", _fake_run_batch)
-    note = retry_batch_run(db_session, run_id=str(run.id), parse_cycle_fn=lambda _: None)
+    monkeypatch.setattr(
+        "app.services.web_billing_invoice_batch.run_batch", _fake_run_batch
+    )
+    note = retry_batch_run(
+        db_session, run_id=str(run.id), parse_cycle_fn=lambda _: None
+    )
 
     assert note == "ok"
     assert captured["billing_cycle"] == "monthly"
@@ -157,7 +161,9 @@ def test_run_batch_with_date_passes_run_at(monkeypatch):
 
 def test_preview_batch_can_group_by_partner(db_session, monkeypatch):
     reseller = Reseller(name="Partner X")
-    direct = Subscriber(first_name="Direct", last_name="User", email="direct@example.com")
+    direct = Subscriber(
+        first_name="Direct", last_name="User", email="direct@example.com"
+    )
     partner_user = Subscriber(
         first_name="Partner",
         last_name="User",
@@ -173,8 +179,18 @@ def test_preview_batch_can_group_by_partner(db_session, monkeypatch):
             "accounts_affected": 2,
             "total_amount": 120,
             "subscriptions": [
-                {"id": "sub-1", "account_id": str(direct.id), "offer_name": "Direct Plan", "amount": 20},
-                {"id": "sub-2", "account_id": str(partner_user.id), "offer_name": "Partner Plan", "amount": 100},
+                {
+                    "id": "sub-1",
+                    "account_id": str(direct.id),
+                    "offer_name": "Direct Plan",
+                    "amount": 20,
+                },
+                {
+                    "id": "sub-2",
+                    "account_id": str(partner_user.id),
+                    "offer_name": "Partner Plan",
+                    "amount": 100,
+                },
             ],
         }
 

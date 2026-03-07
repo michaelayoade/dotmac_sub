@@ -18,13 +18,12 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-
-from app.db import SessionLocal
 from app.models.vpn import VpnAuthDigest, VpnCipher, VpnProtocol, VpnServer
 from app.schemas.vpn import GenerateCertificatesRequest
 from app.services.vpn import VpnServerService
+from dotenv import load_dotenv
 
+from app.db import SessionLocal
 
 MIKROTIK_VPN_CONFIG = {
     "name": "MikroTik VPN Service",
@@ -102,9 +101,11 @@ def create_mikrotik_vpn_server(db, args):
     """Create or update the MikroTik VPN server configuration."""
 
     # Check if server already exists
-    existing = db.query(VpnServer).filter(
-        VpnServer.name == MIKROTIK_VPN_CONFIG["name"]
-    ).first()
+    existing = (
+        db.query(VpnServer)
+        .filter(VpnServer.name == MIKROTIK_VPN_CONFIG["name"])
+        .first()
+    )
 
     if existing and not args.force:
         print(f"MikroTik VPN Service already exists (ID: {existing.id})")
@@ -115,7 +116,14 @@ def create_mikrotik_vpn_server(db, args):
         # Update existing server
         print(f"Updating existing MikroTik VPN Service (ID: {existing.id})...")
         for key, value in MIKROTIK_VPN_CONFIG.items():
-            if key not in ("ca_cert", "ca_key", "server_cert", "server_key", "dh_params", "tls_auth_key"):
+            if key not in (
+                "ca_cert",
+                "ca_key",
+                "server_cert",
+                "server_key",
+                "dh_params",
+                "tls_auth_key",
+            ):
                 setattr(existing, key, value)
 
         if args.public_host:
@@ -197,7 +205,7 @@ Server Details:
   - VPN Network: {server.vpn_network}/{server.vpn_netmask}
   - Cipher: {server.cipher.value}
   - Auth: {server.auth_digest.value}
-  - Public Host: {server.public_host or 'NOT SET (configure in admin UI)'}
+  - Public Host: {server.public_host or "NOT SET (configure in admin UI)"}
 
 Next Steps:
 

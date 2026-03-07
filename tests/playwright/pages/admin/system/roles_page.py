@@ -12,13 +12,16 @@ class RolesPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/roles") -> None:
         """Navigate to the roles list."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the roles page is loaded."""
-        expect(self.page.get_by_role("heading", name="Roles & Permissions", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Roles & Permissions", exact=True)
+        ).to_be_visible()
 
     def click_new_role(self) -> None:
         """Click new role button."""

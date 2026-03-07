@@ -148,20 +148,24 @@ class TestHasAuditScope:
 
     def test_no_audit_scope_or_role(self):
         """Test without audit scope or role."""
-        result = auth_dependencies._has_audit_scope({
-            "scope": "read write",
-            "scopes": ["basic"],
-            "role": "user",
-            "roles": ["viewer"],
-        })
+        result = auth_dependencies._has_audit_scope(
+            {
+                "scope": "read write",
+                "scopes": ["basic"],
+                "role": "user",
+                "roles": ["viewer"],
+            }
+        )
         assert result is False
 
     def test_mixed_scope_and_role(self):
         """Test with both scope and role fields."""
-        result = auth_dependencies._has_audit_scope({
-            "scope": "basic",
-            "roles": ["admin"],  # admin role grants access
-        })
+        result = auth_dependencies._has_audit_scope(
+            {
+                "scope": "basic",
+                "roles": ["admin"],  # admin role grants access
+            }
+        )
         assert result is True
 
 
@@ -1039,7 +1043,9 @@ class TestRequirePermission:
                 db=db_session,
             )
 
-            require_tickets_manage = auth_dependencies.require_permission("tickets:manage")
+            require_tickets_manage = auth_dependencies.require_permission(
+                "tickets:manage"
+            )
             result = require_tickets_manage(auth=auth, db=db_session)
 
             assert result["person_id"] == str(person.id)
@@ -1075,7 +1081,9 @@ class TestRequirePermission:
                 db=db_session,
             )
 
-            require_nonexistent = auth_dependencies.require_permission("nonexistent:permission")
+            require_nonexistent = auth_dependencies.require_permission(
+                "nonexistent:permission"
+            )
 
             with pytest.raises(HTTPException) as exc_info:
                 require_nonexistent(auth=auth, db=db_session)
@@ -1101,7 +1109,9 @@ class TestRequirePermission:
         db_session.add(auth_session)
 
         # Create permission but don't assign to user
-        permission = Permission(key="billing:admin", description="Billing Admin", is_active=True)
+        permission = Permission(
+            key="billing:admin", description="Billing Admin", is_active=True
+        )
         db_session.add(permission)
         db_session.commit()
 
@@ -1119,7 +1129,9 @@ class TestRequirePermission:
                 db=db_session,
             )
 
-            require_billing_admin = auth_dependencies.require_permission("billing:admin")
+            require_billing_admin = auth_dependencies.require_permission(
+                "billing:admin"
+            )
 
             with pytest.raises(HTTPException) as exc_info:
                 require_billing_admin(auth=auth, db=db_session)

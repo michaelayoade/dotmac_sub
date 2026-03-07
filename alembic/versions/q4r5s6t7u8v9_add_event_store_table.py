@@ -6,23 +6,27 @@ Create Date: 2026-01-22 00:00:00.000000
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 # revision identifiers, used by Alembic.
 revision: str = "q4r5s6t7u8v9"
-down_revision: Union[str, Sequence[str]] = ("6f1c2d3e4b5a", "b2e1f3c4d5a6", "p3q4r5s6t7u8")
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] = ("6f1c2d3e4b5a", "b2e1f3c4d5a6", "p3q4r5s6t7u8")
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     # Create event status enum
     event_status_enum = postgresql.ENUM(
-        "pending", "processing", "completed", "failed",
+        "pending",
+        "processing",
+        "completed",
+        "failed",
         name="eventstatus",
         create_type=False,
     )
@@ -32,13 +36,18 @@ def upgrade() -> None:
     op.create_table(
         "event_store",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True),
+        sa.Column(
+            "event_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True
+        ),
         sa.Column("event_type", sa.String(100), nullable=False),
         sa.Column("payload", postgresql.JSONB, nullable=False, server_default="{}"),
         sa.Column(
             "status",
             postgresql.ENUM(
-                "pending", "processing", "completed", "failed",
+                "pending",
+                "processing",
+                "completed",
+                "failed",
                 name="eventstatus",
                 create_type=False,
             ),

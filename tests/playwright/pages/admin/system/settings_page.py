@@ -12,13 +12,16 @@ class SettingsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/settings") -> None:
         """Navigate to the settings page."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the settings page is loaded."""
-        expect(self.page.get_by_role("heading", name="System Settings", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="System Settings", exact=True)
+        ).to_be_visible()
 
     def select_domain(self, domain: str) -> None:
         """Select a settings domain."""
@@ -42,7 +45,9 @@ class SettingsPage(BasePage):
 
     def expect_error(self, message: str) -> None:
         """Assert an error is displayed."""
-        expect(self.page.locator(".text-red-500, .error").filter(has_text=message)).to_be_visible()
+        expect(
+            self.page.locator(".text-red-500, .error").filter(has_text=message)
+        ).to_be_visible()
 
     def reset_to_defaults(self) -> None:
         """Reset settings to defaults."""

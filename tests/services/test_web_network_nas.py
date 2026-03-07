@@ -19,15 +19,21 @@ def test_create_device_returns_error_context(monkeypatch):
     request = _request_stub()
     db = MagicMock()
 
-    monkeypatch.setattr(web_nas_service, "_base_context", lambda *_args, **_kwargs: {"request": request})
+    monkeypatch.setattr(
+        web_nas_service, "_base_context", lambda *_args, **_kwargs: {"request": request}
+    )
     monkeypatch.setattr(web_nas_service, "_form_options", lambda _db: {"pop_sites": []})
-    monkeypatch.setattr(web_nas_service, "parse_form_data_sync", lambda _req: {"name": "Router"})
+    monkeypatch.setattr(
+        web_nas_service, "parse_form_data_sync", lambda _req: {"name": "Router"}
+    )
 
     def _fake_build_payload(_db, form, existing_tags, for_update):
         assert form["name"] == "Router"
         return None, ["Device name is required"]
 
-    monkeypatch.setattr(web_nas_service.nas_service, "build_nas_device_payload", _fake_build_payload)
+    monkeypatch.setattr(
+        web_nas_service.nas_service, "build_nas_device_payload", _fake_build_payload
+    )
 
     result = web_nas_service.create_device(
         request,
@@ -53,6 +59,7 @@ def test_connection_rule_redirect_encodes_message(monkeypatch, is_error):
     device_id = "dev-1"
 
     if is_error:
+
         def _raiser(*_args, **_kwargs):
             raise RuntimeError("bad rule")
 
@@ -80,7 +87,9 @@ def test_connection_rule_redirect_encodes_message(monkeypatch, is_error):
         notes=None,
     )
 
-    assert url.startswith(f"/admin/network/nas/devices/{device_id}?tab=connection-rules")
+    assert url.startswith(
+        f"/admin/network/nas/devices/{device_id}?tab=connection-rules"
+    )
     if is_error:
         assert "rule_status=error" in url
         assert "bad+rule" in url

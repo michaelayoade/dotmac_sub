@@ -108,7 +108,9 @@ def test_extract_enhanced_fields_includes_shaper_and_mikrotik_api_tags():
     assert fields["blocking_rules_enabled"] == "true"
 
 
-def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(db_session):
+def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(
+    db_session,
+):
     payload, errors = nas_service.build_nas_device_payload(
         db_session,
         form={
@@ -176,7 +178,14 @@ def test_get_mikrotik_api_status_success(db_session, monkeypatch):
 
     def _fake_get(url, **kwargs):
         if url.endswith("/rest/system/resource"):
-            return _Resp({"platform": "MikroTik", "board-name": "CCR", "cpu-load": 17, "ipv6": True})
+            return _Resp(
+                {
+                    "platform": "MikroTik",
+                    "board-name": "CCR",
+                    "cpu-load": 17,
+                    "ipv6": True,
+                }
+            )
         return _Resp([{"name": "routeros", "version": "7.15"}])
 
     monkeypatch.setattr("requests.get", _fake_get)
@@ -189,7 +198,9 @@ def test_get_mikrotik_api_status_success(db_session, monkeypatch):
 def test_nas_connection_rules_create_list_toggle_delete(db_session):
     device = nas_service.NasDevices.create(
         db_session,
-        NasDeviceCreate(name="RuleNAS", vendor=NasVendor.mikrotik, ip_address="192.0.2.21"),
+        NasDeviceCreate(
+            name="RuleNAS", vendor=NasVendor.mikrotik, ip_address="192.0.2.21"
+        ),
     )
     created = nas_service.NasConnectionRules.create(
         db_session,
@@ -202,7 +213,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
     )
     assert created.name == "Corp PPPoE"
     assert created.connection_type == ConnectionType.pppoe
-    rules = nas_service.NasConnectionRules.list(db_session, nas_device_id=device.id, is_active=None)
+    rules = nas_service.NasConnectionRules.list(
+        db_session, nas_device_id=device.id, is_active=None
+    )
     assert [r.name for r in rules] == ["Corp PPPoE"]
 
     disabled = nas_service.NasConnectionRules.set_active(
@@ -213,7 +226,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
     )
     assert disabled.is_active is False
 
-    nas_service.NasConnectionRules.delete(db_session, rule_id=created.id, nas_device_id=device.id)
+    nas_service.NasConnectionRules.delete(
+        db_session, rule_id=created.id, nas_device_id=device.id
+    )
     rules_after_delete = nas_service.NasConnectionRules.list(
         db_session,
         nas_device_id=device.id,
@@ -225,7 +240,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
 def test_nas_connection_rules_reject_duplicate_name_per_device(db_session):
     device = nas_service.NasDevices.create(
         db_session,
-        NasDeviceCreate(name="RuleNAS-2", vendor=NasVendor.mikrotik, ip_address="192.0.2.31"),
+        NasDeviceCreate(
+            name="RuleNAS-2", vendor=NasVendor.mikrotik, ip_address="192.0.2.31"
+        ),
     )
     nas_service.NasConnectionRules.create(
         db_session,
@@ -280,7 +297,9 @@ def test_core_devices_list_page_data_filters_site_status_and_search(db_session):
     assert filtered["devices"][0].name == "Core Alpha Router"
 
 
-def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(db_session):
+def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
+    db_session,
+):
     pop = PopSite(name="Gamma Site", is_active=True)
     db_session.add(pop)
     db_session.flush()
@@ -339,7 +358,9 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(db_
 
 
 def test_create_snmp_oid_for_device_and_poll_success(db_session):
-    device = NetworkDevice(name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.commit()
 
@@ -376,7 +397,9 @@ def test_create_snmp_oid_for_device_and_poll_success(db_session):
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
-    device = NetworkDevice(name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.flush()
 
@@ -400,7 +423,11 @@ def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     assert ok is True
     assert "created" in msg.lower()
 
-    graph = db_session.query(NetworkDeviceBandwidthGraph).filter_by(device_id=device.id).first()
+    graph = (
+        db_session.query(NetworkDeviceBandwidthGraph)
+        .filter_by(device_id=device.id)
+        .first()
+    )
     assert graph is not None
     assert graph.is_public is False
 
@@ -447,12 +474,16 @@ def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     assert ok is True
     db_session.refresh(graph)
     assert graph.public_token is not None
-    public_graph = core_devices_forms.get_public_bandwidth_graph(db_session, token=graph.public_token)
+    public_graph = core_devices_forms.get_public_bandwidth_graph(
+        db_session, token=graph.public_token
+    )
     assert public_graph is not None
 
 
 def test_bandwidth_graph_preview_snapshot_uses_snmp_values(db_session):
-    device = NetworkDevice(name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.flush()
 
@@ -699,7 +730,9 @@ def test_tr069_dashboard_data_filters_and_stats(db_session, acs_server):
     assert data["stats"]["jobs_failed"] >= 1
 
 
-def test_tr069_queue_device_job_creates_and_executes(db_session, acs_server, monkeypatch):
+def test_tr069_queue_device_job_creates_and_executes(
+    db_session, acs_server, monkeypatch
+):
     device = tr069_service.cpe_devices.create(
         db_session,
         Tr069CpeDeviceCreate(
@@ -867,7 +900,9 @@ def test_dns_threat_form_parse_and_validate():
 
 
 def test_dns_threat_list_page_data_filters_and_stats(db_session, subscriber):
-    pop = PopSite(name="DNS POP", code="DNS-POP", latitude=9.2, longitude=7.6, is_active=True)
+    pop = PopSite(
+        name="DNS POP", code="DNS-POP", latitude=9.2, longitude=7.6, is_active=True
+    )
     db_session.add(pop)
     db_session.flush()
 
@@ -1011,7 +1046,9 @@ def test_core_device_validate_values_rejects_parent_cycle(db_session):
     assert "cycle" in error.lower()
 
 
-def test_ping_device_respects_notification_delay_before_offline(db_session, pop_site, monkeypatch):
+def test_ping_device_respects_notification_delay_before_offline(
+    db_session, pop_site, monkeypatch
+):
     device = monitoring_service.network_devices.create(
         db_session,
         NetworkDeviceCreate(
@@ -1128,14 +1165,18 @@ def test_parent_devices_for_forms_scopes_by_site_and_excludes_descendants(db_ses
     db_session.flush()
 
     root = NetworkDevice(name="Root A", pop_site_id=site_a.id, is_active=True)
-    child = NetworkDevice(name="Child A", pop_site_id=site_a.id, is_active=True, parent_device=root)
+    child = NetworkDevice(
+        name="Child A", pop_site_id=site_a.id, is_active=True, parent_device=root
+    )
     grandchild = NetworkDevice(
         name="Grandchild A",
         pop_site_id=site_a.id,
         is_active=True,
         parent_device=child,
     )
-    other_site = NetworkDevice(name="Other Site Root", pop_site_id=site_b.id, is_active=True)
+    other_site = NetworkDevice(
+        name="Other Site Root", pop_site_id=site_b.id, is_active=True
+    )
     db_session.add_all([root, child, grandchild, other_site])
     db_session.commit()
 
@@ -1208,7 +1249,9 @@ def test_backup_overview_page_data_classifies_and_filters(db_session):
     stale_backup.created_at = datetime.now(UTC) - timedelta(hours=60)
     db_session.flush()
 
-    olt = OLTDevice(name="OLT North", mgmt_ip="198.51.100.20", vendor="Huawei", model="MA5800")
+    olt = OLTDevice(
+        name="OLT North", mgmt_ip="198.51.100.20", vendor="Huawei", model="MA5800"
+    )
     db_session.add(olt)
     db_session.flush()
     olt_backup = OltConfigBackup(
@@ -1293,7 +1336,9 @@ def test_queue_backup_failure_notification_queues_notification(db_session, monke
     def _fake_resolve(_db, _domain, key):
         return values.get(key)
 
-    monkeypatch.setattr(backup_alerts_service.settings_spec, "resolve_value", _fake_resolve)
+    monkeypatch.setattr(
+        backup_alerts_service.settings_spec, "resolve_value", _fake_resolve
+    )
 
     queued = backup_alerts_service.queue_backup_failure_notification(
         db_session,
@@ -1324,7 +1369,9 @@ def test_queue_backup_failure_notification_no_recipient_noop(db_session, monkeyp
     def _fake_resolve(_db, _domain, key):
         return values.get(key)
 
-    monkeypatch.setattr(backup_alerts_service.settings_spec, "resolve_value", _fake_resolve)
+    monkeypatch.setattr(
+        backup_alerts_service.settings_spec, "resolve_value", _fake_resolve
+    )
 
     queued = backup_alerts_service.queue_backup_failure_notification(
         db_session,
@@ -1371,7 +1418,9 @@ def test_list_olt_backups_orders_desc_and_filters(db_session):
     assert [row.file_path for row in filtered] == ["olt/recent.txt"]
 
 
-def test_olt_backup_file_resolution_and_preview(db_session, monkeypatch, tmp_path: Path):
+def test_olt_backup_file_resolution_and_preview(
+    db_session, monkeypatch, tmp_path: Path
+):
     monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
     olt = OLTDevice(name="OLT Files", mgmt_ip="198.51.100.41")
     db_session.add(olt)
@@ -1487,7 +1536,9 @@ def test_test_olt_connection_and_test_backup(db_session, monkeypatch, tmp_path: 
     assert ok is True
     assert "successful" in message.lower()
 
-    backup, backup_message = web_network_olts_service.run_test_backup(db_session, str(olt.id))
+    backup, backup_message = web_network_olts_service.run_test_backup(
+        db_session, str(olt.id)
+    )
     assert backup is not None
     assert "successfully" in backup_message.lower()
     assert backup.backup_type == OltConfigBackupType.manual
@@ -1757,12 +1808,16 @@ def test_build_ip_pools_data_filters_fallback_and_standard(db_session):
     assert fallback_err is None and standard_err is None
     assert fallback is not None and standard is not None
 
-    fallback_state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="fallback")
+    fallback_state = web_network_ip_service.build_ip_pools_data(
+        db_session, pool_type="fallback"
+    )
     fallback_names = {pool.name for pool in fallback_state["pools"]}
     assert fallback_names == {"Fallback Only"}
     assert fallback_state["stats"]["fallback_pools"] == 1
 
-    standard_state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="standard")
+    standard_state = web_network_ip_service.build_ip_pools_data(
+        db_session, pool_type="standard"
+    )
     standard_names = {pool.name for pool in standard_state["pools"]}
     assert "Standard Only" in standard_names
     assert "Fallback Only" not in standard_names
@@ -1788,11 +1843,15 @@ def test_build_ip_pools_data_tracks_ipv6_utilization(db_session):
 
     network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:abcd::1", pool_id=pool.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:abcd::1", pool_id=pool.id, is_reserved=False
+        ),
     )
     network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:abcd::2", pool_id=pool.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:abcd::2", pool_id=pool.id, is_reserved=False
+        ),
     )
 
     state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="all")
@@ -2130,7 +2189,9 @@ def test_build_dual_stack_data_groups_ipv4_and_ipv6_by_subscriber_location(
     )
     v6 = network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:60::10", pool_id=pool6.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:60::10", pool_id=pool6.id, is_reserved=False
+        ),
     )
 
     network_service.ip_assignments.create(

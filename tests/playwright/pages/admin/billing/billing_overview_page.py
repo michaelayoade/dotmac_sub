@@ -19,7 +19,9 @@ class BillingOverviewPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the billing overview is loaded."""
-        expect(self.page.get_by_role("heading", name="Billing", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Billing", exact=True)
+        ).to_be_visible()
 
     def expect_stats_visible(self) -> None:
         """Assert billing stats are displayed."""

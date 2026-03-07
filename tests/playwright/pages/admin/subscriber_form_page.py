@@ -27,11 +27,15 @@ class SubscriberFormPage(BasePage):
 
     def expect_create_mode(self) -> None:
         """Assert form is in create mode."""
-        expect(self.page.get_by_role("heading", name="New Subscriber", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="New Subscriber", exact=True)
+        ).to_be_visible()
 
     def expect_edit_mode(self) -> None:
         """Assert form is in edit mode."""
-        expect(self.page.get_by_role("heading", name="Edit Subscriber", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Edit Subscriber", exact=True)
+        ).to_be_visible()
 
     def search_customer(self, query: str) -> None:
         """Search for a customer (person or organization)."""
@@ -75,7 +79,11 @@ class SubscriberFormPage(BasePage):
 
     def expect_error(self, message: str) -> None:
         """Assert an error message is displayed."""
-        expect(self.page.locator(".text-red-500, .text-red-700, .error").filter(has_text=message)).to_be_visible()
+        expect(
+            self.page.locator(".text-red-500, .text-red-700, .error").filter(
+                has_text=message
+            )
+        ).to_be_visible()
 
     def expect_validation_error(self, field: str) -> None:
         """Assert a field has a validation error."""

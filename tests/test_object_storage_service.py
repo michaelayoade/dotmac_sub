@@ -42,7 +42,9 @@ class _FakeS3Client:
     def create_bucket(self, **kwargs):
         self.created_bucket = True
 
-    def put_object(self, Bucket: str, Key: str, Body: bytes, ContentType: str | None = None):
+    def put_object(
+        self, Bucket: str, Key: str, Body: bytes, ContentType: str | None = None
+    ):
         self.objects[Key] = Body
         if ContentType:
             self.content_types[Key] = ContentType

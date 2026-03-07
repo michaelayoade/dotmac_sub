@@ -5,19 +5,20 @@ Revises: c7d8a9b0e1f2
 Create Date: 2026-01-13 12:30:00.000000
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
+import geoalchemy2
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
-import geoalchemy2
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "4b1b2a5f0c6e"
-down_revision: Union[str, None] = "c7d8a9b0e1f2"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "c7d8a9b0e1f2"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -46,11 +47,17 @@ def upgrade() -> None:
             sa.Column("structure_type", sa.String(80), nullable=True),
             sa.Column("owner", sa.String(160), nullable=True),
             sa.Column("status", sa.String(40), nullable=False, server_default="active"),
-            sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean, nullable=False, server_default=sa.true()
+            ),
             sa.Column("notes", sa.Text, nullable=True),
             sa.Column("metadata", sa.JSON, nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_wireless_masts_geom ON wireless_masts USING GIST(geom);"

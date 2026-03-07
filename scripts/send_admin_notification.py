@@ -16,9 +16,15 @@ from app.services import notification as notification_service
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Send in-app notification to all admin users.")
-    parser.add_argument("--subject", default="Admin notification", help="Notification subject")
-    parser.add_argument("--body", default="Please review the latest update.", help="Notification body")
+    parser = argparse.ArgumentParser(
+        description="Send in-app notification to all admin users."
+    )
+    parser.add_argument(
+        "--subject", default="Admin notification", help="Notification subject"
+    )
+    parser.add_argument(
+        "--body", default="Please review the latest update.", help="Notification body"
+    )
     parser.add_argument(
         "--status",
         default="delivered",
@@ -30,7 +36,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    status = NotificationStatus.delivered if args.status == "delivered" else NotificationStatus.queued
+    status = (
+        NotificationStatus.delivered
+        if args.status == "delivered"
+        else NotificationStatus.queued
+    )
 
     with SessionLocal() as db:
         role = db.query(Role).filter(Role.name == "admin").first()

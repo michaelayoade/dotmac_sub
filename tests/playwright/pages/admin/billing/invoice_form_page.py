@@ -63,7 +63,11 @@ class InvoiceFormPage(BasePage):
 
     def expect_error(self, message: str) -> None:
         """Assert an error message is displayed."""
-        expect(self.page.locator(".text-red-500, .text-red-700, .error").filter(has_text=message)).to_be_visible()
+        expect(
+            self.page.locator(".text-red-500, .text-red-700, .error").filter(
+                has_text=message
+            )
+        ).to_be_visible()
 
     def add_line_item(self, description: str, quantity: str, unit_price: str) -> None:
         """Add a line item to the invoice."""

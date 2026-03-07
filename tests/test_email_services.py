@@ -4,8 +4,8 @@ import smtplib
 
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
-from app.services.domain_settings import notification_settings
 from app.services import email as email_service
+from app.services.domain_settings import notification_settings
 from tests.mocks import FakeSMTP
 
 
@@ -116,6 +116,7 @@ def test_get_smtp_config_from_env(monkeypatch):
 
 def test_send_email_connection_error(db_session, monkeypatch):
     """Test handling SMTP connection error."""
+
     def mock_smtp_error(*args, **kwargs):
         raise ConnectionRefusedError("Connection refused")
 
@@ -138,6 +139,7 @@ def test_send_email_connection_error(db_session, monkeypatch):
 
 def test_send_email_auth_failure_logs(db_session, monkeypatch, caplog):
     """Test SMTP authentication failure is surfaced in logs."""
+
     def mock_smtp_auth_error(*args, **kwargs):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
@@ -163,6 +165,7 @@ def test_send_email_auth_failure_logs(db_session, monkeypatch, caplog):
 
 def test_smtp_connection_auth_failure_logs(monkeypatch, caplog):
     """Test SMTP auth failure during connection test is surfaced."""
+
     def mock_smtp_auth_error(*args, **kwargs):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
@@ -190,7 +193,9 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.host",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="smtp.billing.local"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="smtp.billing.local"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
@@ -200,7 +205,9 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.username",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="billing-user"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="billing-user"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
@@ -214,12 +221,16 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.from_email",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="billing@example.com"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="billing@example.com"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.use_tls",
-        DomainSettingUpdate(value_type=SettingValueType.boolean, value_text="true", value_json=True),
+        DomainSettingUpdate(
+            value_type=SettingValueType.boolean, value_text="true", value_json=True
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,

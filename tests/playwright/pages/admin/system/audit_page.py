@@ -12,13 +12,16 @@ class AuditPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/audit") -> None:
         """Navigate to the audit log."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the audit page is loaded."""
-        expect(self.page.get_by_role("heading", name="Audit Log", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Audit Log", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search audit logs."""

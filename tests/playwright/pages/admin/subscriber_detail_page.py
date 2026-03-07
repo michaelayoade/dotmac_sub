@@ -27,7 +27,11 @@ class SubscriberDetailPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert the detail page is loaded."""
         # Detail page shows subscriber info section
-        expect(self.page.locator(".subscriber-info, [data-testid='subscriber-detail']").first).to_be_visible()
+        expect(
+            self.page.locator(
+                ".subscriber-info, [data-testid='subscriber-detail']"
+            ).first
+        ).to_be_visible()
 
     def expect_subscriber_name(self, name: str) -> None:
         """Assert the subscriber name is displayed."""
@@ -93,4 +97,6 @@ class SubscriberDetailPage(BasePage):
 
     def expect_map_visible(self) -> None:
         """Assert the mini-map is visible."""
-        expect(self.page.locator("#map, .leaflet-container, [data-testid='map']")).to_be_visible()
+        expect(
+            self.page.locator("#map, .leaflet-container, [data-testid='map']")
+        ).to_be_visible()

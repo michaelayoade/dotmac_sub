@@ -59,8 +59,7 @@ def test_coverage_area_create(db_session):
 
 def test_import_subscriber_custom_fields(db_session, subscriber):
     content = (
-        "subscriber_id,key,value_type,value_text\n"
-        f"{subscriber.id},plan,string,Gold\n"
+        f"subscriber_id,key,value_type,value_text\n{subscriber.id},plan,string,Gold\n"
     )
     created, errors = import_service.import_subscriber_custom_fields_from_csv(
         db_session, content

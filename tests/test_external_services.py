@@ -358,7 +358,9 @@ class TestExternalReferencesUpdate:
         """Test raises 404 for non-existent reference."""
         with pytest.raises(HTTPException) as exc_info:
             external_service.external_references.update(
-                db_session, str(uuid.uuid4()), ExternalReferenceUpdate(external_id="new")
+                db_session,
+                str(uuid.uuid4()),
+                ExternalReferenceUpdate(external_id="new"),
             )
 
         assert exc_info.value.status_code == 404

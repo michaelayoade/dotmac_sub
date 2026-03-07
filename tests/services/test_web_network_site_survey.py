@@ -80,7 +80,11 @@ def test_delete_point_returns_parent_redirect(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(site_survey_service, "_actor_id", lambda _req: "user-1")
-    monkeypatch.setattr(site_survey_service, "log_audit_event", lambda **kwargs: deleted.setdefault("log", kwargs))
+    monkeypatch.setattr(
+        site_survey_service,
+        "log_audit_event",
+        lambda **kwargs: deleted.setdefault("log", kwargs),
+    )
 
     request = _request_stub()
     redirect_url = site_survey_service.delete_point(request, db, point_id="point-1")

@@ -113,7 +113,9 @@ def test_redirect_error_known_token_converts_to_template() -> None:
         return RedirectResponse("/somewhere?error=not_found", status_code=303)
 
     client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/redirect-known", headers={"accept": "text/html"}, follow_redirects=False)
+    resp = client.get(
+        "/redirect-known", headers={"accept": "text/html"}, follow_redirects=False
+    )
     assert resp.status_code == 404
     assert "text/html" in resp.headers.get("content-type", "")
     assert "could not be found" in resp.text
@@ -129,6 +131,8 @@ def test_redirect_error_unknown_token_keeps_redirect() -> None:
         return RedirectResponse("/somewhere?error=post_failed", status_code=303)
 
     client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/redirect-unknown", headers={"accept": "text/html"}, follow_redirects=False)
+    resp = client.get(
+        "/redirect-unknown", headers={"accept": "text/html"}, follow_redirects=False
+    )
     assert resp.status_code == 303
     assert resp.headers.get("location") == "/somewhere?error=post_failed"

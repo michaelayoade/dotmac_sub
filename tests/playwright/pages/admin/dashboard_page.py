@@ -12,13 +12,16 @@ class AdminDashboardPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/dashboard") -> None:
         """Navigate to the dashboard."""
         self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded")
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
-        expect(self.page.get_by_role("heading", name="Operations Center", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Operations Center", exact=True)
+        ).to_be_visible()
 
     def expect_stats_visible(self) -> None:
         """Assert stats cards are visible."""
@@ -41,7 +44,9 @@ class AdminDashboardPage(BasePage):
 
     def expect_sidebar_visible(self) -> None:
         """Assert the sidebar navigation is visible."""
-        expect(self.page.locator("nav, aside, .sidebar, [data-testid='sidebar']").first).to_be_visible()
+        expect(
+            self.page.locator("nav, aside, .sidebar, [data-testid='sidebar']").first
+        ).to_be_visible()
 
     def click_subscribers_link(self) -> None:
         """Click the link to subscribers page."""

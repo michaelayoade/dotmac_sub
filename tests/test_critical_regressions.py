@@ -18,7 +18,9 @@ def test_apply_mikrotik_address_list_executes_add_command(monkeypatch):
     def _fake_execute_ssh(_device, command):
         commands.append(command)
 
-    monkeypatch.setattr("app.services.enforcement.DeviceProvisioner._execute_ssh", _fake_execute_ssh)
+    monkeypatch.setattr(
+        "app.services.enforcement.DeviceProvisioner._execute_ssh", _fake_execute_ssh
+    )
 
     device = NasDevice(name="edge-1", vendor=NasVendor.mikrotik)
     result = _apply_mikrotik_address_list(device, "blocked", "192.0.2.10")
@@ -35,7 +37,9 @@ def test_remove_mikrotik_address_list_executes_remove_command(monkeypatch):
     def _fake_execute_ssh(_device, command):
         commands.append(command)
 
-    monkeypatch.setattr("app.services.enforcement.DeviceProvisioner._execute_ssh", _fake_execute_ssh)
+    monkeypatch.setattr(
+        "app.services.enforcement.DeviceProvisioner._execute_ssh", _fake_execute_ssh
+    )
 
     device = NasDevice(name="edge-1", vendor=NasVendor.mikrotik)
     result = _remove_mikrotik_address_list(device, "blocked", "192.0.2.10")

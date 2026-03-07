@@ -63,7 +63,9 @@ def _session_token_from_headers(headers: dict[str, str]) -> str | None:
     return match.group(1)
 
 
-def ensure_person(api_context, token: str, first_name: str, last_name: str, email: str) -> dict[str, Any]:
+def ensure_person(
+    api_context, token: str, first_name: str, last_name: str, email: str
+) -> dict[str, Any]:
     headers = bearer_headers(token)
     response = api_get(api_context, f"/api/v1/people?email={email}", headers=headers)
     if not response.ok:
@@ -147,7 +149,9 @@ def ensure_role_id(api_context, token: str, role_name: str) -> str:
     raise AuthError(f"Role not found: {role_name}")
 
 
-def ensure_person_role(api_context, token: str, person_id: str, role_id: str) -> dict[str, Any]:
+def ensure_person_role(
+    api_context, token: str, person_id: str, role_id: str
+) -> dict[str, Any]:
     headers = bearer_headers(token)
     response = api_get(
         api_context,

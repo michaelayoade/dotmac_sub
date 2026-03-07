@@ -85,7 +85,9 @@ class TestSubscriberDetail:
         # Should show subscriber details
         admin_page.wait_for_timeout(1000)
 
-    def test_subscriber_edit_navigation(self, admin_page: Page, settings, test_identities):
+    def test_subscriber_edit_navigation(
+        self, admin_page: Page, settings, test_identities
+    ):
         """Edit button should navigate to edit form."""
         customer = test_identities["customer"]
         subscriber_id = customer["subscriber"]["id"]
@@ -109,7 +111,9 @@ class TestSubscriberDetail:
 class TestSubscriberEdit:
     """Tests for editing subscribers."""
 
-    def test_edit_subscriber_form_loads(self, admin_page: Page, settings, test_identities):
+    def test_edit_subscriber_form_loads(
+        self, admin_page: Page, settings, test_identities
+    ):
         """Edit form should load with subscriber data."""
         customer = test_identities["customer"]
         subscriber_id = customer["subscriber"]["id"]

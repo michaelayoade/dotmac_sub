@@ -17,4 +17,6 @@ class AdminLoginPage:
         self.page.get_by_role("button", name="Sign in").click()
 
     def expect_loaded(self) -> None:
-        expect(self.page.get_by_role("heading", name="Welcome back", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Welcome back", exact=True)
+        ).to_be_visible()

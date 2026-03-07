@@ -3,19 +3,16 @@ import argparse
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
 from app.models.subscriber import Subscriber
-from app.models.rbac import Permission, SubscriberRole, Role, RolePermission
-
 
 DEFAULT_PERMISSIONS = [
     # Audit
     ("audit:read", "Read audit events"),
-
     # Auth & System
     ("auth:manage", "Manage authentication settings"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
-
     # RBAC - Granular permissions for role builder
     ("rbac:roles:read", "View roles"),
     ("rbac:roles:write", "Create and update roles"),
@@ -24,92 +21,76 @@ DEFAULT_PERMISSIONS = [
     ("rbac:permissions:write", "Create and update permissions"),
     ("rbac:permissions:delete", "Delete permissions"),
     ("rbac:assign", "Assign roles to users"),
-
     # Customers/Subscribers
     ("customer:read", "View customers and subscribers"),
     ("customer:create", "Create customers and subscribers"),
     ("customer:update", "Update customers and subscribers"),
     ("customer:delete", "Delete customers and subscribers"),
     ("customer:impersonate", "Impersonate customer accounts"),
-
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
     ("billing:invoice:update", "Update invoices"),
     ("billing:invoice:delete", "Delete/void invoices"),
-
     # Billing - Payments
     ("billing:payment:read", "View payments"),
     ("billing:payment:create", "Record payments"),
     ("billing:payment:update", "Update payments"),
     ("billing:payment:delete", "Delete/refund payments"),
-
     # Billing - Credit Notes
     ("billing:credit_note:read", "View credit notes"),
     ("billing:credit_note:create", "Create credit notes"),
     ("billing:credit_note:update", "Update credit notes"),
     ("billing:credit_note:delete", "Delete credit notes"),
-
     # Billing - Accounts & Ledger
     ("billing:account:read", "View billing accounts"),
     ("billing:account:write", "Manage billing accounts"),
     ("billing:ledger:read", "View ledger entries"),
     ("billing:tax:read", "View tax rates"),
     ("billing:tax:write", "Manage tax rates"),
-
     # Catalog
     ("catalog:product:read", "View catalog products"),
     ("catalog:product:write", "Manage catalog products"),
     ("catalog:offer:read", "View catalog offers"),
     ("catalog:offer:write", "Manage catalog offers"),
-
     # Subscriptions
     ("subscription:read", "View subscriptions"),
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     ("subscription:cancel", "Cancel subscriptions"),
-
     # Network - Devices
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
     ("network:ont:read", "View ONT units"),
     ("network:ont:write", "Manage ONT units"),
-
     # Network - IP Management
     ("network:ip:read", "View IP pools and assignments"),
     ("network:ip:write", "Manage IP pools and assignments"),
-
     # Network - Fiber
     ("network:fiber:read", "View fiber infrastructure"),
     ("network:fiber:write", "Manage fiber infrastructure"),
-
     # Network - RADIUS
     ("network:radius:read", "View RADIUS configuration"),
     ("network:radius:write", "Manage RADIUS configuration"),
-
     # Operations - Work Orders
     ("operations:work_order:read", "View work orders"),
     ("operations:work_order:create", "Create work orders"),
     ("operations:work_order:update", "Update work orders"),
     ("operations:work_order:delete", "Delete work orders"),
     ("operations:work_order:dispatch", "Dispatch work orders"),
-
     # Operations - Service Orders
     ("operations:service_order:read", "View service orders"),
     ("operations:service_order:create", "Create service orders"),
     ("operations:service_order:update", "Update service orders"),
-
     # Operations - Technicians
     ("operations:technician:read", "View technicians"),
     ("operations:technician:write", "Manage technicians"),
-
     # Support - Tickets
     ("support:ticket:read", "View tickets"),
     ("support:ticket:create", "Create tickets"),
     ("support:ticket:update", "Update tickets"),
     ("support:ticket:delete", "Delete tickets"),
     ("support:ticket:assign", "Assign tickets"),
-
     # CRM
     ("crm:contact:read", "View CRM contacts"),
     ("crm:contact:write", "Manage CRM contacts"),
@@ -117,7 +98,6 @@ DEFAULT_PERMISSIONS = [
     ("crm:conversation:write", "Manage conversations"),
     ("crm:lead:read", "View leads"),
     ("crm:lead:write", "Manage leads"),
-
     # Projects
     ("project:read", "View projects"),
     ("project:create", "Create projects"),
@@ -125,17 +105,14 @@ DEFAULT_PERMISSIONS = [
     ("project:delete", "Delete projects"),
     ("project:task:read", "View project tasks"),
     ("project:task:write", "Manage project tasks"),
-
     # Vendors
     ("vendor:read", "View vendors"),
     ("vendor:write", "Manage vendors"),
     ("vendor:project:read", "View vendor projects"),
     ("vendor:project:write", "Manage vendor projects"),
-
     # Inventory
     ("inventory:read", "View inventory"),
     ("inventory:write", "Manage inventory"),
-
     # GIS / Mapping
     ("gis:map:view", "View maps and layers"),
     ("gis:map:edit", "Edit map features (markers, polygons)"),
@@ -146,13 +123,11 @@ DEFAULT_PERMISSIONS = [
     ("gis:fiber:edit", "Edit fiber routes on map"),
     ("gis:serviceability:check", "Run address serviceability checks"),
     ("gis:export", "Export GIS data (KML, GeoJSON)"),
-
     # Reports
     ("reports:billing", "View billing reports"),
     ("reports:network", "View network reports"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
-
     # Legacy broad permissions (for backward compatibility)
     ("billing:read", "Read all billing data"),
     ("billing:write", "Manage all billing data"),
@@ -231,7 +206,9 @@ ROLE_PERMISSIONS = {
 def parse_args():
     parser = argparse.ArgumentParser(description="Seed RBAC roles and permissions.")
     parser.add_argument("--admin-email", help="Email to map to admin role.")
-    parser.add_argument("--admin-subscriber-id", help="Subscriber ID to map to admin role.")
+    parser.add_argument(
+        "--admin-subscriber-id", help="Subscriber ID to map to admin role."
+    )
     return parser.parse_args()
 
 
@@ -317,7 +294,11 @@ def main():
             if args.admin_subscriber_id:
                 subscriber = db.get(Subscriber, args.admin_subscriber_id)
             if not subscriber and args.admin_email:
-                subscriber = db.query(Subscriber).filter(Subscriber.email == args.admin_email).first()
+                subscriber = (
+                    db.query(Subscriber)
+                    .filter(Subscriber.email == args.admin_email)
+                    .first()
+                )
             if not subscriber:
                 raise SystemExit("Admin subscriber not found.")
             _ensure_subscriber_role(db, subscriber.id, admin_role.id)

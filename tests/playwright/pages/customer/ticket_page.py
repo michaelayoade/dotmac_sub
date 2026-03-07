@@ -18,11 +18,10 @@ class CustomerTicketPage(BasePage):
 
     def expect_form_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="New Ticket", exact=True).or_(
-                self.page.get_by_role("heading", name="Create Ticket", exact=True)
-            ).or_(
-                self.page.get_by_text("New Ticket", exact=False)
-            ).first
+            self.page.get_by_role("heading", name="New Ticket", exact=True)
+            .or_(self.page.get_by_role("heading", name="Create Ticket", exact=True))
+            .or_(self.page.get_by_text("New Ticket", exact=False))
+            .first
         ).to_be_visible()
 
     def fill_subject(self, value: str) -> None:
@@ -33,14 +32,9 @@ class CustomerTicketPage(BasePage):
     def fill_description(self, value: str) -> None:
         self.page.get_by_label("Description").or_(
             self.page.get_by_placeholder("Description")
-        ).or_(
-            self.page.locator("textarea").first
-        ).first.fill(value)
+        ).or_(self.page.locator("textarea").first).first.fill(value)
 
     def submit_ticket(self) -> None:
         self.page.get_by_role("button", name="Submit").or_(
             self.page.get_by_role("button", name="Create")
-        ).or_(
-            self.page.get_by_role("button", name="Send")
-        ).first.click()
-
+        ).or_(self.page.get_by_role("button", name="Send")).first.click()

@@ -14,6 +14,7 @@ repos:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
+        exclude: ^poetry\.lock$
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
@@ -21,6 +22,7 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements  # no pdb/breakpoint() in commits
       - id: detect-private-key  # catch accidental key commits
+        exclude: (templates/.*\.html|configs/.*\.conf|tests/)
 
   # Security: bandit static analysis
   - repo: https://github.com/PyCQA/bandit

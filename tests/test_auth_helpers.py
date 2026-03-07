@@ -121,7 +121,11 @@ def test_validate_enum_and_ensure_helpers(db_session, person):
 def test_get_redis_client_cached(monkeypatch):
     fake = _FakeRedisClient()
     monkeypatch.setenv("REDIS_URL", "redis://fake")
-    monkeypatch.setattr(auth_service.redis, "Redis", type("Redis", (), {"from_url": lambda *args, **kwargs: fake}))
+    monkeypatch.setattr(
+        auth_service.redis,
+        "Redis",
+        type("Redis", (), {"from_url": lambda *args, **kwargs: fake}),
+    )
     auth_service._REDIS_CLIENT = None
     client = auth_service._get_redis_client()
     assert client is fake
@@ -137,7 +141,9 @@ def test_get_redis_client_error(monkeypatch):
         raise auth_service.redis.RedisError("boom")
 
     monkeypatch.setenv("REDIS_URL", "redis://bad")
-    monkeypatch.setattr(auth_service.redis, "Redis", type("Redis", (), {"from_url": _raise}))
+    monkeypatch.setattr(
+        auth_service.redis, "Redis", type("Redis", (), {"from_url": _raise})
+    )
     auth_service._REDIS_CLIENT = None
     assert auth_service._get_redis_client() is None
 
@@ -243,7 +249,9 @@ def test_mfa_list_update_delete(db_session, person):
 
 def test_mfa_update_not_found(db_session):
     with pytest.raises(HTTPException):
-        auth_service.mfa_methods.update(db_session, str(uuid.uuid4()), MFAMethodUpdate(label="x"))
+        auth_service.mfa_methods.update(
+            db_session, str(uuid.uuid4()), MFAMethodUpdate(label="x")
+        )
 
 
 def test_mfa_create_commit_error(db_session, person, monkeypatch):
@@ -376,7 +384,9 @@ def test_sessions_create_list_update(db_session, person):
 
 
 def test_sessions_create_default_status(db_session, person, monkeypatch):
-    monkeypatch.setattr(auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "revoked")
+    monkeypatch.setattr(
+        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "revoked"
+    )
     session = auth_service.sessions.create(
         db_session,
         SessionCreate(
@@ -415,7 +425,11 @@ def test_api_key_generate_rate_limit_redis_error(monkeypatch, db_session):
 
 
 def test_api_key_generate_rate_limit_with_request(monkeypatch, db_session):
-    fake = type("Redis", (), {"incr": lambda self, _key: 1, "expire": lambda self, _key, _window: None})()
+    fake = type(
+        "Redis",
+        (),
+        {"incr": lambda self, _key: 1, "expire": lambda self, _key, _window: None},
+    )()
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: fake)
     request = Request(
         {
@@ -453,7 +467,9 @@ def test_api_keys_get_and_update_person(db_session, person):
 
 
 def test_user_credentials_default_provider(monkeypatch, db_session, person):
-    monkeypatch.setattr(auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "radius")
+    monkeypatch.setattr(
+        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "radius"
+    )
     payload = UserCredentialCreate(
         person_id=person.id,
         username="radius@example.com",

@@ -57,6 +57,7 @@ def test_resolve_openbao_ref_kv_v2(monkeypatch):
 
     # Patch httpx.get
     import httpx
+
     monkeypatch.setattr(httpx, "get", mock_get)
 
     result = secrets.resolve_openbao_ref("openbao://secret/data/myapp#password")
@@ -81,6 +82,7 @@ def test_resolve_openbao_ref_kv_v1(monkeypatch):
         return mock_response
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", mock_get)
 
     result = secrets.resolve_openbao_ref("openbao://kv/myapp#api_key")
@@ -98,11 +100,10 @@ def test_resolve_openbao_ref_with_namespace(monkeypatch):
 
     def mock_get(url, headers=None, **kwargs):
         captured_headers.update(headers or {})
-        return FakeHTTPXResponse(
-            json_data={"data": {"data": {"secret": "ns-value"}}}
-        )
+        return FakeHTTPXResponse(json_data={"data": {"data": {"secret": "ns-value"}}})
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", mock_get)
 
     result = secrets.resolve_openbao_ref("openbao://secret/data/app#secret")
@@ -130,6 +131,7 @@ def test_resolve_openbao_ref_missing_field_error(monkeypatch):
         return mock_response
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", mock_get)
 
     with pytest.raises(HTTPException) as exc_info:

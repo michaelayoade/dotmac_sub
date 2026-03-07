@@ -8,7 +8,7 @@ def _request_with_cookie(name: str, value: str) -> Request:
         "type": "http",
         "method": "GET",
         "path": "/portal",
-        "headers": [(b"cookie", f"{name}={value}".encode("utf-8"))],
+        "headers": [(b"cookie", f"{name}={value}".encode())],
     }
     return Request(scope)
 
@@ -34,7 +34,9 @@ def test_get_current_customer_enriches_module_flags(monkeypatch):
         web_customer_auth_service.customer_portal.SESSION_COOKIE_NAME,
         "session-token",
     )
-    current = web_customer_auth_service.get_current_customer_from_request(request, db=object())
+    current = web_customer_auth_service.get_current_customer_from_request(
+        request, db=object()
+    )
 
     assert current is not None
     assert current["username"] == "alice"
@@ -52,5 +54,9 @@ def test_get_current_customer_returns_none_when_session_missing(monkeypatch):
         web_customer_auth_service.customer_portal.SESSION_COOKIE_NAME,
         "missing",
     )
-    assert web_customer_auth_service.get_current_customer_from_request(request, db=object()) is None
-
+    assert (
+        web_customer_auth_service.get_current_customer_from_request(
+            request, db=object()
+        )
+        is None
+    )

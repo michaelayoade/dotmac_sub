@@ -7,7 +7,9 @@ from app.services import web_legal
 
 
 class _FakeUploadFile:
-    def __init__(self, *, content: bytes, content_type: str, filename: str = "doc.pdf") -> None:
+    def __init__(
+        self, *, content: bytes, content_type: str, filename: str = "doc.pdf"
+    ) -> None:
         self.file = BytesIO(content)
         self.content_type = content_type
         self.filename = filename
@@ -28,7 +30,9 @@ def test_list_page_data_parses_filters_and_paginates(monkeypatch) -> None:
             }
             return {"total": 51}
 
-    monkeypatch.setattr(web_legal.legal_service, "legal_documents", _FakeLegalDocuments())
+    monkeypatch.setattr(
+        web_legal.legal_service, "legal_documents", _FakeLegalDocuments()
+    )
 
     data = web_legal.list_page_data(
         db=object(),

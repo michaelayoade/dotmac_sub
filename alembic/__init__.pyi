@@ -5,4 +5,3 @@ from typing import Any
 # Provide minimal stubs for the symbols used by migration scripts.
 op: Any
 context: Any
-

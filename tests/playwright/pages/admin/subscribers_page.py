@@ -12,13 +12,16 @@ class SubscribersPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/subscribers") -> None:
         """Navigate to the subscribers list."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the subscribers page is loaded."""
-        expect(self.page.get_by_role("heading", name="Subscribers", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Subscribers", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search for subscribers."""
@@ -57,4 +60,6 @@ class SubscribersPage(BasePage):
 
     def expect_page_active(self, page_num: int) -> None:
         """Assert a pagination page is active."""
-        expect(self.page.locator("[aria-current='page']").filter(has_text=str(page_num))).to_be_visible()
+        expect(
+            self.page.locator("[aria-current='page']").filter(has_text=str(page_num))
+        ).to_be_visible()

@@ -25,6 +25,7 @@ def _make_request(user_agent: str = "pytest"):
     }
     return Request(scope)
 
+
 def _route_requires_auth(path: str) -> bool:
     for route in auth_flow_router.routes:
         if isinstance(route, APIRoute) and route.path == path:
@@ -95,7 +96,9 @@ def test_login_local_allows_email_identifier(db_session, person, monkeypatch):
     db_session.commit()
 
     request = _make_request()
-    tokens = AuthFlow.login(db_session, "person-login@example.com", "secret", request, None)
+    tokens = AuthFlow.login(
+        db_session, "person-login@example.com", "secret", request, None
+    )
     assert tokens.get("access_token")
     assert tokens.get("refresh_token")
 
@@ -108,7 +111,9 @@ def test_login_radius_allows_email_identifier(monkeypatch, db_session, person):
     def _fake_authenticate(db, username, password, server_id):
         called["username"] = username
 
-    monkeypatch.setattr("app.services.auth_flow.radius_auth_service.authenticate", _fake_authenticate)
+    monkeypatch.setattr(
+        "app.services.auth_flow.radius_auth_service.authenticate", _fake_authenticate
+    )
     credential = UserCredential(
         person_id=person.id,
         provider=AuthProvider.radius,
@@ -119,7 +124,13 @@ def test_login_radius_allows_email_identifier(monkeypatch, db_session, person):
     db_session.add(credential)
     db_session.commit()
 
-    AuthFlow.login(db_session, "radius-login@example.com", "secret", _make_request(), AuthProvider.radius)
+    AuthFlow.login(
+        db_session,
+        "radius-login@example.com",
+        "secret",
+        _make_request(),
+        AuthProvider.radius,
+    )
     assert called["username"] == "radius-user-001"
 
 
@@ -140,7 +151,9 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
 
     setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
     code = pyotp.TOTP(setup["secret"]).now()
-    method = AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    method = AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), code, str(person.id)
+    )
 
     assert method.enabled is True
     assert method.is_primary is True
@@ -219,7 +232,9 @@ def test_login_returns_mfa_token_when_enabled(db_session, person, monkeypatch):
     AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
 
     request = _make_request()
-    result = AuthFlow.login(db_session, "mfa-login@example.com", "secret", request, None)
+    result = AuthFlow.login(
+        db_session, "mfa-login@example.com", "secret", request, None
+    )
     assert result["mfa_required"] is True
     assert result["mfa_token"]
 

@@ -2,9 +2,9 @@ import argparse
 import json
 import math
 import zipfile
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable, Iterable
 from xml.etree import ElementTree as ET
 
 try:
@@ -13,11 +13,13 @@ except ImportError:  # pragma: no cover - optional dependency for local env file
     load_dotenv: Callable[..., bool] | None = None
 else:
     load_dotenv = _load_dotenv
+from app.models.vendor import AsBuiltRoute
 from sqlalchemy import func
 
 from app.db import SessionLocal
 from app.models.gis import ServiceBuilding
 from app.models.network import (
+    FdhCabinet,
     FiberAccessPoint,
     FiberCableType,
     FiberSegment,
@@ -25,15 +27,12 @@ from app.models.network import (
     FiberSplice,
     FiberSpliceClosure,
     FiberSpliceTray,
-    FdhCabinet,
     PonPortSplitterLink,
     Splitter,
     SplitterPort,
     SplitterPortAssignment,
 )
-from app.models.vendor import AsBuiltRoute
 from app.models.wireless_mast import WirelessMast
-
 
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 
@@ -47,23 +46,67 @@ class PlacemarkData:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Import KMZ/KML data into fiber plant tables.")
-    parser.add_argument("--paths-kmz", action="append", default=[], help="KMZ with fiber paths (LineString).")
-    parser.add_argument("--cabinet-kmz", action="append", default=[], help="KMZ with cabinets (Polygon/Point).")
-    parser.add_argument("--splice-kmz", action="append", default=[], help="KMZ with splice closures (Polygon/Point).")
-    parser.add_argument("--access-point-kmz", action="append", default=[], help="KMZ with fiber access points (Polygon/Point).")
-    parser.add_argument("--mast-kmz", action="append", default=[], help="KMZ with wireless masts/poles (Point).")
-    parser.add_argument("--building-kmz", action="append", default=[], help="KMZ with service buildings (Polygon/Point).")
-    parser.add_argument("--segment-type", default="distribution", choices=[t.value for t in FiberSegmentType])
-    parser.add_argument("--cable-type", default=None, choices=[t.value for t in FiberCableType])
+    parser = argparse.ArgumentParser(
+        description="Import KMZ/KML data into fiber plant tables."
+    )
+    parser.add_argument(
+        "--paths-kmz",
+        action="append",
+        default=[],
+        help="KMZ with fiber paths (LineString).",
+    )
+    parser.add_argument(
+        "--cabinet-kmz",
+        action="append",
+        default=[],
+        help="KMZ with cabinets (Polygon/Point).",
+    )
+    parser.add_argument(
+        "--splice-kmz",
+        action="append",
+        default=[],
+        help="KMZ with splice closures (Polygon/Point).",
+    )
+    parser.add_argument(
+        "--access-point-kmz",
+        action="append",
+        default=[],
+        help="KMZ with fiber access points (Polygon/Point).",
+    )
+    parser.add_argument(
+        "--mast-kmz",
+        action="append",
+        default=[],
+        help="KMZ with wireless masts/poles (Point).",
+    )
+    parser.add_argument(
+        "--building-kmz",
+        action="append",
+        default=[],
+        help="KMZ with service buildings (Polygon/Point).",
+    )
+    parser.add_argument(
+        "--segment-type",
+        default="distribution",
+        choices=[t.value for t in FiberSegmentType],
+    )
+    parser.add_argument(
+        "--cable-type", default=None, choices=[t.value for t in FiberCableType]
+    )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--upsert", action="store_true", help="Update existing rows instead of skipping.")
+    parser.add_argument(
+        "--upsert",
+        action="store_true",
+        help="Update existing rows instead of skipping.",
+    )
     parser.add_argument(
         "--purge",
         action="store_true",
         help="Delete existing FiberSegment/FdhCabinet/FiberSpliceClosure rows before import.",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Limit placemarks per file.")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit placemarks per file."
+    )
     return parser.parse_args()
 
 
@@ -107,7 +150,9 @@ def _parse_coord_text(text: str) -> list[tuple[float, float]]:
     return coords
 
 
-def _extract_geometry(placemark: ET.Element) -> tuple[str, list[tuple[float, float]]] | None:
+def _extract_geometry(
+    placemark: ET.Element,
+) -> tuple[str, list[tuple[float, float]]] | None:
     point = placemark.find(".//kml:Point", KML_NS)
     if point is not None:
         text = point.findtext("kml:coordinates", default="", namespaces=KML_NS)
@@ -126,7 +171,9 @@ def _extract_geometry(placemark: ET.Element) -> tuple[str, list[tuple[float, flo
     return None
 
 
-def _iter_placemarks(root: ET.Element, limit: int | None = None) -> Iterable[PlacemarkData]:
+def _iter_placemarks(
+    root: ET.Element, limit: int | None = None
+) -> Iterable[PlacemarkData]:
     count = 0
     for placemark in root.findall(".//kml:Placemark", KML_NS):
         name = placemark.findtext("kml:name", default="", namespaces=KML_NS).strip()
@@ -137,7 +184,12 @@ def _iter_placemarks(root: ET.Element, limit: int | None = None) -> Iterable[Pla
         if not coords:
             continue
         properties = _collect_properties(placemark)
-        yield PlacemarkData(name=name, properties=properties, geometry_type=geometry_type, coordinates=coords)
+        yield PlacemarkData(
+            name=name,
+            properties=properties,
+            geometry_type=geometry_type,
+            coordinates=coords,
+        )
         count += 1
         if limit is not None and count >= limit:
             break
@@ -159,8 +211,8 @@ def _polygon_centroid(coords: list[tuple[float, float]]) -> tuple[float, float]:
         avg_lat = sum(y for _, y in coords) / len(coords)
         return avg_lon, avg_lat
     area *= 0.5
-    cx /= (6.0 * area)
-    cy /= (6.0 * area)
+    cx /= 6.0 * area
+    cy /= 6.0 * area
     return cx, cy
 
 
@@ -168,7 +220,10 @@ def _haversine_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     rad = math.radians
     dlat = rad(lat2 - lat1)
     dlon = rad(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlon / 2) ** 2
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlon / 2) ** 2
+    )
     return 6371000 * 2 * math.asin(math.sqrt(a))
 
 
@@ -194,7 +249,14 @@ def _make_notes(properties: dict[str, str | None]) -> str | None:
     return json.dumps(properties, ensure_ascii=True, sort_keys=True)
 
 
-def import_segments(db, paths: list[Path], segment_type: str, cable_type: str | None, upsert: bool, limit: int | None):
+def import_segments(
+    db,
+    paths: list[Path],
+    segment_type: str,
+    cable_type: str | None,
+    upsert: bool,
+    limit: int | None,
+):
     created = 0
     updated = 0
     skipped = 0
@@ -203,7 +265,11 @@ def import_segments(db, paths: list[Path], segment_type: str, cable_type: str | 
         for placemark in _iter_placemarks(root, limit=limit):
             if placemark.geometry_type != "LineString":
                 continue
-            name = placemark.name or placemark.properties.get("spanid") or "unnamed-segment"
+            name = (
+                placemark.name
+                or placemark.properties.get("spanid")
+                or "unnamed-segment"
+            )
             existing = db.query(FiberSegment).filter(FiberSegment.name == name).first()
             coords = placemark.coordinates
             geojson = {"type": "LineString", "coordinates": coords}
@@ -252,7 +318,9 @@ def import_cabinets(db, paths: list[Path], upsert: bool, limit: int | None):
             if not point:
                 continue
             lon, lat = point
-            name = placemark.properties.get("name") or placemark.name or "unnamed-cabinet"
+            name = (
+                placemark.properties.get("name") or placemark.name or "unnamed-cabinet"
+            )
             code = placemark.properties.get("fibermngrid")
             existing = None
             if code:
@@ -296,8 +364,14 @@ def import_splice_closures(db, paths: list[Path], upsert: bool, limit: int | Non
             if not point:
                 continue
             lon, lat = point
-            name = placemark.properties.get("name") or placemark.name or "unnamed-closure"
-            existing = db.query(FiberSpliceClosure).filter(FiberSpliceClosure.name == name).first()
+            name = (
+                placemark.properties.get("name") or placemark.name or "unnamed-closure"
+            )
+            existing = (
+                db.query(FiberSpliceClosure)
+                .filter(FiberSpliceClosure.name == name)
+                .first()
+            )
             notes = _make_notes(placemark.properties)
             if existing:
                 if not upsert:
@@ -338,9 +412,17 @@ def import_access_points(db, paths: list[Path], upsert: bool, limit: int | None)
             code = placemark.properties.get("access_pointid")
             existing = None
             if code:
-                existing = db.query(FiberAccessPoint).filter(FiberAccessPoint.code == code).first()
+                existing = (
+                    db.query(FiberAccessPoint)
+                    .filter(FiberAccessPoint.code == code)
+                    .first()
+                )
             if not existing:
-                existing = db.query(FiberAccessPoint).filter(FiberAccessPoint.name == name).first()
+                existing = (
+                    db.query(FiberAccessPoint)
+                    .filter(FiberAccessPoint.name == name)
+                    .first()
+                )
             notes = _make_notes(placemark.properties)
             ap_type = placemark.properties.get("Type")
             placement = placemark.properties.get("Placement")
@@ -442,13 +524,23 @@ def import_buildings(db, paths: list[Path], upsert: bool, limit: int | None):
             if not point:
                 continue
             lon, lat = point
-            name = placemark.properties.get("Name") or placemark.name or "unnamed-building"
+            name = (
+                placemark.properties.get("Name") or placemark.name or "unnamed-building"
+            )
             code = placemark.properties.get("buildingid")
             existing = None
             if code:
-                existing = db.query(ServiceBuilding).filter(ServiceBuilding.code == code).first()
+                existing = (
+                    db.query(ServiceBuilding)
+                    .filter(ServiceBuilding.code == code)
+                    .first()
+                )
             if not existing:
-                existing = db.query(ServiceBuilding).filter(ServiceBuilding.name == name).first()
+                existing = (
+                    db.query(ServiceBuilding)
+                    .filter(ServiceBuilding.name == name)
+                    .first()
+                )
             notes = _make_notes(placemark.properties)
             clli = placemark.properties.get("CLLI")
             street = placemark.properties.get("Street")
@@ -523,9 +615,9 @@ def main():
             db.query(FiberSpliceTray).delete()
             db.query(FiberSpliceClosure).delete()
             # Clear FK references before deleting segments
-            db.query(AsBuiltRoute).filter(AsBuiltRoute.fiber_segment_id.isnot(None)).update(
-                {AsBuiltRoute.fiber_segment_id: None}
-            )
+            db.query(AsBuiltRoute).filter(
+                AsBuiltRoute.fiber_segment_id.isnot(None)
+            ).update({AsBuiltRoute.fiber_segment_id: None})
             db.query(FiberSegment).delete()
             # New tables (no dependencies)
             db.query(FiberAccessPoint).delete()
@@ -542,13 +634,17 @@ def main():
         total_created = total_updated = total_skipped = 0
 
         if cabinet_paths:
-            created, updated, skipped = import_cabinets(db, cabinet_paths, args.upsert, args.limit)
+            created, updated, skipped = import_cabinets(
+                db, cabinet_paths, args.upsert, args.limit
+            )
             total_created += created
             total_updated += updated
             total_skipped += skipped
 
         if splice_paths:
-            created, updated, skipped = import_splice_closures(db, splice_paths, args.upsert, args.limit)
+            created, updated, skipped = import_splice_closures(
+                db, splice_paths, args.upsert, args.limit
+            )
             total_created += created
             total_updated += updated
             total_skipped += skipped
@@ -567,19 +663,25 @@ def main():
             total_skipped += skipped
 
         if access_point_paths:
-            created, updated, skipped = import_access_points(db, access_point_paths, args.upsert, args.limit)
+            created, updated, skipped = import_access_points(
+                db, access_point_paths, args.upsert, args.limit
+            )
             total_created += created
             total_updated += updated
             total_skipped += skipped
 
         if mast_paths:
-            created, updated, skipped = import_wireless_masts(db, mast_paths, args.upsert, args.limit)
+            created, updated, skipped = import_wireless_masts(
+                db, mast_paths, args.upsert, args.limit
+            )
             total_created += created
             total_updated += updated
             total_skipped += skipped
 
         if building_paths:
-            created, updated, skipped = import_buildings(db, building_paths, args.upsert, args.limit)
+            created, updated, skipped = import_buildings(
+                db, building_paths, args.upsert, args.limit
+            )
             total_created += created
             total_updated += updated
             total_skipped += skipped
@@ -591,7 +693,9 @@ def main():
             db.commit()
             print("Import complete.")
 
-        print(f"Created: {total_created} Updated: {total_updated} Skipped: {total_skipped}")
+        print(
+            f"Created: {total_created} Updated: {total_updated} Skipped: {total_skipped}"
+        )
     finally:
         db.close()
 

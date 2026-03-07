@@ -7,7 +7,6 @@ Create Date: 2026-02-25 12:55:00.000000
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
 revision = "t1u2v3w4x5y6"
 down_revision = ("p9q0r1s2t3u4", "r6s7t8u9v0w1")
@@ -159,4 +158,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Data backfill is intentionally non-destructive and not auto-reverted.
     pass
-

@@ -50,4 +50,3 @@ def test_subscriber_list_invalid_type(db_session):
             offset=0,
         )
     assert exc.value.status_code == 400
-

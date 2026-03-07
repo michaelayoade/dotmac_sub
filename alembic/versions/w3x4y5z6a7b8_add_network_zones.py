@@ -27,12 +27,23 @@ def upgrade() -> None:
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
             sa.Column("name", sa.String(100), nullable=False),
             sa.Column("description", sa.Text, nullable=True),
-            sa.Column("parent_id", UUID(as_uuid=True), sa.ForeignKey("network_zones.id"), nullable=True),
+            sa.Column(
+                "parent_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("network_zones.id"),
+                nullable=True,
+            ),
             sa.Column("latitude", sa.Float, nullable=True),
             sa.Column("longitude", sa.Float, nullable=True),
-            sa.Column("is_active", sa.Boolean, default=True, server_default=sa.text("true")),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "is_active", sa.Boolean, default=True, server_default=sa.text("true")
+            ),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
             sa.UniqueConstraint("name", name="uq_network_zones_name"),
         )
 
@@ -49,7 +60,9 @@ def upgrade() -> None:
     columns = inspector.get_columns("ont_units")
     ont_cols = {c["name"] for c in columns}
     if "zone_id" not in ont_cols:
-        op.add_column("ont_units", sa.Column("zone_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "ont_units", sa.Column("zone_id", UUID(as_uuid=True), nullable=True)
+        )
         op.create_foreign_key(
             "fk_ont_units_zone_id",
             "ont_units",
@@ -61,7 +74,9 @@ def upgrade() -> None:
     columns = inspector.get_columns("splitters")
     splitter_cols = {c["name"] for c in columns}
     if "zone_id" not in splitter_cols:
-        op.add_column("splitters", sa.Column("zone_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "splitters", sa.Column("zone_id", UUID(as_uuid=True), nullable=True)
+        )
         op.create_foreign_key(
             "fk_splitters_zone_id",
             "splitters",
@@ -73,7 +88,9 @@ def upgrade() -> None:
     columns = inspector.get_columns("fdh_cabinets")
     fdh_cols = {c["name"] for c in columns}
     if "zone_id" not in fdh_cols:
-        op.add_column("fdh_cabinets", sa.Column("zone_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "fdh_cabinets", sa.Column("zone_id", UUID(as_uuid=True), nullable=True)
+        )
         op.create_foreign_key(
             "fk_fdh_cabinets_zone_id",
             "fdh_cabinets",
@@ -86,7 +103,9 @@ def upgrade() -> None:
         columns = inspector.get_columns("pop_sites")
         pop_cols = {c["name"] for c in columns}
         if "zone_id" not in pop_cols:
-            op.add_column("pop_sites", sa.Column("zone_id", UUID(as_uuid=True), nullable=True))
+            op.add_column(
+                "pop_sites", sa.Column("zone_id", UUID(as_uuid=True), nullable=True)
+            )
             op.create_foreign_key(
                 "fk_pop_sites_zone_id",
                 "pop_sites",
@@ -109,7 +128,9 @@ def downgrade() -> None:
 
     columns = inspector.get_columns("fdh_cabinets")
     if "zone_id" in {c["name"] for c in columns}:
-        op.drop_constraint("fk_fdh_cabinets_zone_id", "fdh_cabinets", type_="foreignkey")
+        op.drop_constraint(
+            "fk_fdh_cabinets_zone_id", "fdh_cabinets", type_="foreignkey"
+        )
         op.drop_column("fdh_cabinets", "zone_id")
 
     columns = inspector.get_columns("splitters")

@@ -37,7 +37,9 @@ def test_catalog_offer_defaults_use_settings(db_session):
         db_session, "default_billing_cycle", DomainSettingUpdate(value_text="annual")
     )
     settings_api.upsert_catalog_setting(
-        db_session, "default_contract_term", DomainSettingUpdate(value_text="twelve_month")
+        db_session,
+        "default_contract_term",
+        DomainSettingUpdate(value_text="twelve_month"),
     )
     settings_api.upsert_catalog_setting(
         db_session, "default_offer_status", DomainSettingUpdate(value_text="inactive")
@@ -63,7 +65,9 @@ def test_offer_description_metadata_roundtrip():
         plan_kind="ip_address",
         ip_block_size="/29",
     )
-    meta, cleaned = web_catalog_offers_service.parse_offer_description_metadata(description)
+    meta, cleaned = web_catalog_offers_service.parse_offer_description_metadata(
+        description
+    )
     assert meta["plan_kind"] == "ip_address"
     assert meta["ip_block_size"] == "/29"
     assert cleaned == "Public IP block add-on"

@@ -90,7 +90,9 @@ class BasePage:
         """Get the number of rows in a table."""
         return self.page.locator(f"{table_locator} tbody tr").count()
 
-    def expect_table_has_rows(self, min_rows: int = 1, table_locator: str = "table") -> None:
+    def expect_table_has_rows(
+        self, min_rows: int = 1, table_locator: str = "table"
+    ) -> None:
         """Assert table has at least the specified number of rows."""
         rows = self.page.locator(f"{table_locator} tbody tr")
         expect(rows).to_have_count(min_rows, timeout=10000)

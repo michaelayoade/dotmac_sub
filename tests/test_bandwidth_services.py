@@ -92,6 +92,7 @@ def test_delete_bandwidth_sample(db_session, subscription):
     # Bandwidth samples use hard delete, not soft delete
     import pytest
     from fastapi import HTTPException
+
     with pytest.raises(HTTPException) as exc_info:
         bandwidth_service.bandwidth_samples.get(db_session, str(sample.id))
     assert exc_info.value.status_code == 404

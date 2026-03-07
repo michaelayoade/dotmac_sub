@@ -5,17 +5,18 @@ Revises: b9c8d7e6f5a4
 Create Date: 2026-02-22 12:55:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "e8a1c4d2f7b9"
-down_revision: Union[str, None] = "b9c8d7e6f5a4"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b9c8d7e6f5a4"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 invoicepdfexportstatus = sa.Enum(
@@ -76,7 +77,9 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("id"),
         )
 
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("invoice_pdf_exports")}
+    existing_indexes = {
+        idx["name"] for idx in inspector.get_indexes("invoice_pdf_exports")
+    }
     if "ix_invoice_pdf_exports_invoice_id" not in existing_indexes:
         op.create_index(
             "ix_invoice_pdf_exports_invoice_id",

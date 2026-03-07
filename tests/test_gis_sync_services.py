@@ -121,9 +121,11 @@ class TestSyncPopSites:
         assert result.updated == 0
         assert result.skipped == 0
 
-        geo_loc = db_session.query(GeoLocation).filter(
-            GeoLocation.pop_site_id == pop.id
-        ).first()
+        geo_loc = (
+            db_session.query(GeoLocation)
+            .filter(GeoLocation.pop_site_id == pop.id)
+            .first()
+        )
         assert geo_loc is not None
         assert geo_loc.name == "Downtown POP"
         assert geo_loc.location_type == GeoLocationType.pop
@@ -294,9 +296,11 @@ class TestSyncAddresses:
         assert result.updated == 0
         assert result.skipped == 0
 
-        geo_loc = db_session.query(GeoLocation).filter(
-            GeoLocation.address_id == address.id
-        ).first()
+        geo_loc = (
+            db_session.query(GeoLocation)
+            .filter(GeoLocation.address_id == address.id)
+            .first()
+        )
         assert geo_loc is not None
         assert geo_loc.location_type == GeoLocationType.address
         assert geo_loc.latitude == 40.7128

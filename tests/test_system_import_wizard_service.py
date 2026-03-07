@@ -97,7 +97,12 @@ def test_execute_import_dry_run_does_not_persist(db_session):
 
     assert result["status"] == "dry_run"
     assert result["validated_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "ada@example.com").count() == 0
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "ada@example.com")
+        .count()
+        == 0
+    )
 
 
 def test_execute_import_subscribers_persists_rows(db_session):
@@ -114,7 +119,12 @@ def test_execute_import_subscribers_persists_rows(db_session):
 
     assert result["status"] == "success"
     assert result["imported_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "ada@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "ada@example.com")
+        .count()
+        == 1
+    )
 
 
 def test_execute_import_subscribers_with_column_mapping(db_session):
@@ -136,7 +146,12 @@ def test_execute_import_subscribers_with_column_mapping(db_session):
 
     assert result["status"] == "success"
     assert result["imported_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "ada-map@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "ada-map@example.com")
+        .count()
+        == 1
+    )
 
 
 def test_execute_import_subscribers_with_semicolon_delimiter(db_session):
@@ -154,7 +169,12 @@ def test_execute_import_subscribers_with_semicolon_delimiter(db_session):
 
     assert result["status"] == "success"
     assert result["imported_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "ada-semi@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "ada-semi@example.com")
+        .count()
+        == 1
+    )
 
 
 def test_execute_import_subscribers_from_xlsx_upload(db_session):
@@ -175,13 +195,16 @@ def test_execute_import_subscribers_from_xlsx_upload(db_session):
 
     assert result["status"] == "success"
     assert result["imported_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "ada-xlsx@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "ada-xlsx@example.com")
+        .count()
+        == 1
+    )
 
 
 def test_execute_import_subscriptions_json(db_session, subscriber, catalog_offer):
-    payload = (
-        f'[{{"subscriber_id": "{subscriber.id}", "offer_id": "{catalog_offer.id}", "status": "pending"}}]'
-    )
+    payload = f'[{{"subscriber_id": "{subscriber.id}", "offer_id": "{catalog_offer.id}", "status": "pending"}}]'
 
     result = import_wizard_service.execute_import(
         db_session,
@@ -203,7 +226,9 @@ def test_execute_import_subscriptions_json(db_session, subscriber, catalog_offer
     )
 
 
-def test_execute_import_invoices_payments_ip_pools_and_network_equipment(db_session, subscriber):
+def test_execute_import_invoices_payments_ip_pools_and_network_equipment(
+    db_session, subscriber
+):
     invoice_payload = (
         "account_id,invoice_number,status,currency,subtotal,tax_total,total,balance_due,memo\n"
         f"{subscriber.id},INV-1,draft,NGN,100,0,100,100,Imported\n"
@@ -253,10 +278,15 @@ def test_execute_import_invoices_payments_ip_pools_and_network_equipment(db_sess
     assert pool_result["imported_rows"] == 1
     assert device_result["imported_rows"] == 1
 
-    assert db_session.query(Invoice).filter(Invoice.invoice_number == "INV-1").count() == 1
+    assert (
+        db_session.query(Invoice).filter(Invoice.invoice_number == "INV-1").count() == 1
+    )
     assert db_session.query(Payment).filter(Payment.external_id == "ref-1").count() == 1
     assert db_session.query(IpPool).filter(IpPool.name == "Import Pool").count() == 1
-    assert db_session.query(NetworkDevice).filter(NetworkDevice.name == "Switch 1").count() == 1
+    assert (
+        db_session.query(NetworkDevice).filter(NetworkDevice.name == "Switch 1").count()
+        == 1
+    )
 
 
 def test_history_and_template_helpers(db_session):
@@ -290,12 +320,24 @@ def test_rollback_import_deletes_created_records(db_session):
         source_name="rollback.csv",
         dry_run=False,
     )
-    assert db_session.query(Subscriber).filter(Subscriber.email == "rollback@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "rollback@example.com")
+        .count()
+        == 1
+    )
 
-    rollback = import_wizard_service.rollback_import(db_session, import_id=result["import_id"])
+    rollback = import_wizard_service.rollback_import(
+        db_session, import_id=result["import_id"]
+    )
 
     assert rollback["rolled_back_rows"] == 1
-    assert db_session.query(Subscriber).filter(Subscriber.email == "rollback@example.com").count() == 0
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "rollback@example.com")
+        .count()
+        == 0
+    )
     history = import_wizard_service.list_history(db_session)
     assert history[0]["import_id"] == result["import_id"]
     assert history[0]["status"] == "rolled_back"
@@ -325,10 +367,14 @@ def test_rollback_import_respects_window(db_session):
         },
     )
 
-    rollback_window = db_session.query(DomainSetting).filter(
-        DomainSetting.domain == SettingDomain.imports,
-        DomainSetting.key == "import_rollback_window_hours",
-    ).first()
+    rollback_window = (
+        db_session.query(DomainSetting)
+        .filter(
+            DomainSetting.domain == SettingDomain.imports,
+            DomainSetting.key == "import_rollback_window_hours",
+        )
+        .first()
+    )
     if rollback_window is None:
         rollback_window = DomainSetting(
             domain=SettingDomain.imports,
@@ -349,7 +395,12 @@ def test_rollback_import_respects_window(db_session):
         raised = True
         assert "expired" in str(exc).lower()
     assert raised
-    assert db_session.query(Subscriber).filter(Subscriber.email == "old-import@example.com").count() == 1
+    assert (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "old-import@example.com")
+        .count()
+        == 1
+    )
 
 
 def test_import_jobs_registry_helpers(db_session):

@@ -369,7 +369,5 @@ class TestEnqueueTask:
         ) as mock_send:
             result = scheduler_service.enqueue_task("app.tasks.empty", None, None)
 
-            mock_send.assert_called_once_with(
-                "app.tasks.empty", args=[], kwargs={}
-            )
+            mock_send.assert_called_once_with("app.tasks.empty", args=[], kwargs={})
             assert result["queued"] is True

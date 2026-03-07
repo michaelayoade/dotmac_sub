@@ -5,10 +5,10 @@ Revises: n4p5q6r7s8t9
 Create Date: 2026-02-25 12:10:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "p9q0r1s2t3u4"
@@ -40,7 +40,9 @@ def upgrade() -> None:
             server_default="system_user",
         ),
         sa.Column("phone", sa.String(length=40), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -56,7 +58,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["role_id"], ["roles.id"]),
         sa.ForeignKeyConstraint(["system_user_id"], ["system_users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("system_user_id", "role_id", name="uq_system_user_roles_user_role"),
+        sa.UniqueConstraint(
+            "system_user_id", "role_id", name="uq_system_user_roles_user_role"
+        ),
     )
 
     op.create_table(
@@ -65,7 +69,9 @@ def upgrade() -> None:
         sa.Column("system_user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("granted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("granted_by_system_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "granted_by_system_user_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
         sa.ForeignKeyConstraint(["permission_id"], ["permissions.id"]),
         sa.ForeignKeyConstraint(["system_user_id"], ["system_users.id"]),
         sa.ForeignKeyConstraint(["granted_by_system_user_id"], ["system_users.id"]),
@@ -88,7 +94,12 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+    op.alter_column(
+        "user_credentials",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=True,
+    )
     op.create_check_constraint(
         "ck_user_credentials_exactly_one_principal",
         "user_credentials",
@@ -106,7 +117,12 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+    op.alter_column(
+        "mfa_methods",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=True,
+    )
     op.create_index(
         "ix_mfa_methods_primary_per_system_user",
         "mfa_methods",
@@ -131,7 +147,12 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+    op.alter_column(
+        "sessions",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=True,
+    )
     op.create_check_constraint(
         "ck_sessions_exactly_one_principal",
         "sessions",
@@ -152,22 +173,47 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_api_keys_system_user_id_system_users", "api_keys", type_="foreignkey")
+    op.drop_constraint(
+        "fk_api_keys_system_user_id_system_users", "api_keys", type_="foreignkey"
+    )
     op.drop_column("api_keys", "system_user_id")
 
     op.drop_constraint("ck_sessions_exactly_one_principal", "sessions", type_="check")
-    op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
-    op.drop_constraint("fk_sessions_system_user_id_system_users", "sessions", type_="foreignkey")
+    op.alter_column(
+        "sessions",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    op.drop_constraint(
+        "fk_sessions_system_user_id_system_users", "sessions", type_="foreignkey"
+    )
     op.drop_column("sessions", "system_user_id")
 
-    op.drop_constraint("ck_mfa_methods_exactly_one_principal", "mfa_methods", type_="check")
+    op.drop_constraint(
+        "ck_mfa_methods_exactly_one_principal", "mfa_methods", type_="check"
+    )
     op.drop_index("ix_mfa_methods_primary_per_system_user", table_name="mfa_methods")
-    op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
-    op.drop_constraint("fk_mfa_methods_system_user_id_system_users", "mfa_methods", type_="foreignkey")
+    op.alter_column(
+        "mfa_methods",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    op.drop_constraint(
+        "fk_mfa_methods_system_user_id_system_users", "mfa_methods", type_="foreignkey"
+    )
     op.drop_column("mfa_methods", "system_user_id")
 
-    op.drop_constraint("ck_user_credentials_exactly_one_principal", "user_credentials", type_="check")
-    op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
+    op.drop_constraint(
+        "ck_user_credentials_exactly_one_principal", "user_credentials", type_="check"
+    )
+    op.alter_column(
+        "user_credentials",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
     op.drop_constraint(
         "fk_user_credentials_system_user_id_system_users",
         "user_credentials",

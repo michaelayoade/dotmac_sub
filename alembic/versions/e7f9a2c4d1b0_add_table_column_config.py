@@ -8,6 +8,7 @@ Create Date: 2026-02-24 12:30:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 from alembic import op
@@ -45,12 +46,17 @@ def upgrade() -> None:
         ["user_id", "table_key", "display_order"],
         unique=False,
     )
-    op.create_index(
-        "ix_subscribers_status_is_active_created_at",
-        "subscribers",
-        ["status", "is_active", "created_at"],
-        unique=False,
-    )
+    # Only create index if 'status' column exists on subscribers table
+    bind = op.get_bind()
+    insp = inspect(bind)
+    sub_cols = [c["name"] for c in insp.get_columns("subscribers")]
+    if "status" in sub_cols:
+        op.create_index(
+            "ix_subscribers_status_is_active_created_at",
+            "subscribers",
+            ["status", "is_active", "created_at"],
+            unique=False,
+        )
     op.create_index(
         "ix_subscribers_email_created_at",
         "subscribers",
@@ -60,10 +66,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_subscribers_email_created_at", table_name="subscribers"
-    )
-    op.drop_index("ix_subscribers_status_is_active_created_at", table_name="subscribers")
+    op.drop_index("ix_subscribers_email_created_at", table_name="subscribers")
+    bind = op.get_bind()
+    insp = inspect(bind)
+    indexes = [idx["name"] for idx in insp.get_indexes("subscribers")]
+    if "ix_subscribers_status_is_active_created_at" in indexes:
+        op.drop_index(
+            "ix_subscribers_status_is_active_created_at", table_name="subscribers"
+        )
     op.drop_index(
         "ix_table_column_config_user_table_order", table_name="table_column_config"
     )

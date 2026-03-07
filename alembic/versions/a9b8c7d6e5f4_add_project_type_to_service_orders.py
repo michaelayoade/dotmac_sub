@@ -1,8 +1,9 @@
 """Add project_type to service orders."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import ENUM
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "a9b8c7d6e5f4"

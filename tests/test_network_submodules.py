@@ -384,7 +384,8 @@ class TestPortVlansCRUD:
             db_session, VlanCreate(region_id=region.id, tag=602, name="PV-UPD")
         )
         pv = network_service.port_vlans.create(
-            db_session, PortVlanCreate(port_id=port.id, vlan_id=vlan.id, is_tagged=False)
+            db_session,
+            PortVlanCreate(port_id=port.id, vlan_id=vlan.id, is_tagged=False),
         )
         updated = network_service.port_vlans.update(
             db_session, str(pv.id), PortVlanUpdate(is_tagged=True)
@@ -468,7 +469,9 @@ class TestIpPoolsCRUD:
         """Test getting an IP pool by ID."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Get Pool", cidr="10.101.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Get Pool", cidr="10.101.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         fetched = network_service.ip_pools.get(db_session, str(pool.id))
         assert fetched.id == pool.id
@@ -484,7 +487,9 @@ class TestIpPoolsCRUD:
         """Test updating an IP pool."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Upd Pool", cidr="10.102.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Upd Pool", cidr="10.102.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         updated = network_service.ip_pools.update(
             db_session, str(pool.id), IpPoolUpdate(name="Updated Pool", notes="changed")
@@ -504,7 +509,9 @@ class TestIpPoolsCRUD:
         """Test soft deleting an IP pool (sets is_active=False)."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Del Pool", cidr="10.103.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Del Pool", cidr="10.103.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         network_service.ip_pools.delete(db_session, str(pool.id))
         db_session.refresh(pool)
@@ -520,7 +527,9 @@ class TestIpPoolsCRUD:
         """Test listing IP pools with ip_version filter."""
         network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="v4 Pool", cidr="10.104.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="v4 Pool", cidr="10.104.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         pools = network_service.ip_pools.list(
             db_session,
@@ -546,7 +555,9 @@ class TestIPv4AddressesCRUD:
         """Test creating an IPv4 address."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="v4 Addr Pool", cidr="10.200.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="v4 Addr Pool", cidr="10.200.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         addr = network_service.ipv4_addresses.create(
             db_session,
@@ -651,7 +662,9 @@ class TestIPv6AddressesCRUD:
             IPv6AddressCreate(address="2001:db8::3"),
         )
         updated = network_service.ipv6_addresses.update(
-            db_session, str(addr.id), IPv6AddressUpdate(is_reserved=True, notes="reserved")
+            db_session,
+            str(addr.id),
+            IPv6AddressUpdate(is_reserved=True, notes="reserved"),
         )
         assert updated.is_reserved is True
         assert updated.notes == "reserved"
@@ -828,7 +841,9 @@ class TestPonPortsCRUD:
     def _make_olt(self, db_session, name="Pon OLT"):
         return network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name=name, hostname=f"{name.lower().replace(' ', '-')}.local"),
+            OLTDeviceCreate(
+                name=name, hostname=f"{name.lower().replace(' ', '-')}.local"
+            ),
         )
 
     def test_create_pon_port(self, db_session):
@@ -1212,6 +1227,7 @@ class TestOltCardPortsCRUD:
             db_session, OltCardPortCreate(card_id=card.id, port_number=1)
         )
         from app.schemas.network import OltCardPortUpdate
+
         with pytest.raises(HTTPException) as exc_info:
             network_service.olt_card_ports.update(
                 db_session,
@@ -1267,7 +1283,9 @@ class TestOltPowerUnitsCRUD:
             db_session, OltPowerUnitCreate(olt_id=olt.id, slot="PSU-C")
         )
         updated = network_service.olt_power_units.update(
-            db_session, str(pu.id), OltPowerUnitUpdate(status="inactive", notes="replaced")
+            db_session,
+            str(pu.id),
+            OltPowerUnitUpdate(status="inactive", notes="replaced"),
         )
         assert updated.status.value == "inactive"
         assert updated.notes == "replaced"

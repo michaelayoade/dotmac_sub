@@ -47,7 +47,9 @@ def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_accoun
     assert application.amount == Decimal("30.00")
     refreshed_invoice = billing_service.invoices.get(db_session, str(invoice.id))
     assert refreshed_invoice.balance_due == Decimal("70.00")
-    refreshed_credit_note = billing_service.credit_notes.get(db_session, str(credit_note.id))
+    refreshed_credit_note = billing_service.credit_notes.get(
+        db_session, str(credit_note.id)
+    )
     assert refreshed_credit_note.applied_total == Decimal("30.00")
     assert refreshed_credit_note.status == CreditNoteStatus.partially_applied
 
@@ -83,7 +85,9 @@ def test_credit_note_apply_without_lines_uses_total(db_session, subscriber_accou
     assert application.amount == Decimal("50.00")
     refreshed_invoice = billing_service.invoices.get(db_session, str(invoice.id))
     assert refreshed_invoice.balance_due == Decimal("70.00")
-    refreshed_credit_note = billing_service.credit_notes.get(db_session, str(credit_note.id))
+    refreshed_credit_note = billing_service.credit_notes.get(
+        db_session, str(credit_note.id)
+    )
     assert refreshed_credit_note.total == Decimal("50.00")
     assert refreshed_credit_note.applied_total == Decimal("50.00")
     assert refreshed_credit_note.status == CreditNoteStatus.applied

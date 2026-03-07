@@ -54,7 +54,9 @@ def test_process_export_uploads_invoice_pdf_to_s3_metadata(
         bind=db_session.get_bind(), autoflush=False, autocommit=False
     )
     monkeypatch.setattr(pdf_service, "SessionLocal", SessionLocal)
-    monkeypatch.setattr(pdf_service, "_build_pdf_bytes", lambda _invoice: b"%PDF-1.4 bytes")
+    monkeypatch.setattr(
+        pdf_service, "_build_pdf_bytes", lambda _invoice: b"%PDF-1.4 bytes"
+    )
 
     invoice = _invoice(db_session, subscriber_account)
     export = InvoicePdfExport(

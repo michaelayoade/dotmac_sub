@@ -183,7 +183,9 @@ def test_dashboard_stats_include_new_kpis_and_comparison(db_session, subscriber)
     ]
 
 
-def test_dashboard_stats_include_payment_method_and_daily_payments(db_session, subscriber):
+def test_dashboard_stats_include_payment_method_and_daily_payments(
+    db_session, subscriber
+):
     now = datetime.now(UTC)
     cash_method = _create_payment_method(
         db_session,

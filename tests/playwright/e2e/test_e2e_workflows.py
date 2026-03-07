@@ -22,9 +22,11 @@ class TestSubscriptionActivation:
         subscribers.expect_loaded()
 
         # Step 2: Verify we can access subscriber creation
-        expect(admin_page.get_by_role("link", name="New").or_(
-            admin_page.get_by_role("button", name="New")
-        ).first).to_be_visible()
+        expect(
+            admin_page.get_by_role("link", name="New")
+            .or_(admin_page.get_by_role("button", name="New"))
+            .first
+        ).to_be_visible()
 
     def test_service_order_creation_from_subscriber(self, admin_page: Page, settings):
         """Should be able to create service order from subscriber context."""
@@ -37,9 +39,11 @@ class TestSubscriptionActivation:
         orders.expect_loaded()
 
         # New order button should be visible
-        expect(admin_page.get_by_role("link", name="New").or_(
-            admin_page.get_by_role("button", name="New")
-        ).first).to_be_visible()
+        expect(
+            admin_page.get_by_role("link", name="New")
+            .or_(admin_page.get_by_role("button", name="New"))
+            .first
+        ).to_be_visible()
 
 
 class TestBillingCycle:
@@ -66,11 +70,15 @@ class TestBillingCycle:
         payments.expect_loaded()
 
         # Payment recording should be accessible
-        expect(admin_page.get_by_role("link", name="New").or_(
-            admin_page.get_by_role("button", name="New").or_(
-                admin_page.get_by_role("button", name="Record")
+        expect(
+            admin_page.get_by_role("link", name="New")
+            .or_(
+                admin_page.get_by_role("button", name="New").or_(
+                    admin_page.get_by_role("button", name="Record")
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
 
 class TestSupportResolution:

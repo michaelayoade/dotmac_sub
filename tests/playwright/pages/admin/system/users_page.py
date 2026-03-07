@@ -12,13 +12,16 @@ class UsersPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/users") -> None:
         """Navigate to the users list."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the users page is loaded."""
-        expect(self.page.get_by_role("heading", name="Users", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Users", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search users."""

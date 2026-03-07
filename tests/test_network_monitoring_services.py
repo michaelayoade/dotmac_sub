@@ -2,7 +2,12 @@
 
 from datetime import UTC, datetime, timedelta
 
-from app.models.network_monitoring import AlertOperator, AlertSeverity, AlertStatus, MetricType
+from app.models.network_monitoring import (
+    AlertOperator,
+    AlertSeverity,
+    AlertStatus,
+    MetricType,
+)
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,

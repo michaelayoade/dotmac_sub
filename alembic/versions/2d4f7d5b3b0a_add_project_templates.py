@@ -5,14 +5,14 @@ Revises: c7d8a9b0e1f2
 Create Date: 2026-01-14 00:00:00.000000
 """
 
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
 from typing import Any, cast
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "2d4f7d5b3b0a"
@@ -31,49 +31,72 @@ def upgrade() -> None:
             "project_templates",
             sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
             sa.Column("name", sa.String(length=160), nullable=False),
-            sa.Column("project_type", ENUM(
-                "cable_rerun",
-                "fiber_optics_relocation",
-                "radio_fiber_relocation",
-                "fiber_optics_installation",
-                "radio_installation",
-                name="projecttype",
-                create_type=False,
-            ), nullable=True),
+            sa.Column(
+                "project_type",
+                ENUM(
+                    "cable_rerun",
+                    "fiber_optics_relocation",
+                    "radio_fiber_relocation",
+                    "fiber_optics_installation",
+                    "radio_installation",
+                    name="projecttype",
+                    create_type=False,
+                ),
+                nullable=True,
+            ),
             sa.Column("description", sa.Text(), nullable=True),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.UniqueConstraint("project_type", name="uq_project_templates_project_type"),
+            sa.UniqueConstraint(
+                "project_type", name="uq_project_templates_project_type"
+            ),
         )
 
     if "project_template_tasks" not in existing_tables:
         op.create_table(
             "project_template_tasks",
             sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
-            sa.Column("template_id", UUID(as_uuid=True), sa.ForeignKey("project_templates.id"), nullable=False),
+            sa.Column(
+                "template_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("project_templates.id"),
+                nullable=False,
+            ),
             sa.Column("title", sa.String(length=200), nullable=False),
             sa.Column("description", sa.Text(), nullable=True),
-            sa.Column("status", ENUM(
-                "backlog",
-                "todo",
-                "in_progress",
-                "blocked",
-                "done",
-                "canceled",
-                name="project_taskstatus",
-                create_type=False,
-            ), nullable=True),
-            sa.Column("priority", ENUM(
-                "low",
-                "normal",
-                "high",
-                "urgent",
-                name="taskpriority",
-                create_type=False,
-            ), nullable=True),
+            sa.Column(
+                "status",
+                ENUM(
+                    "backlog",
+                    "todo",
+                    "in_progress",
+                    "blocked",
+                    "done",
+                    "canceled",
+                    name="project_taskstatus",
+                    create_type=False,
+                ),
+                nullable=True,
+            ),
+            sa.Column(
+                "priority",
+                ENUM(
+                    "low",
+                    "normal",
+                    "high",
+                    "urgent",
+                    name="taskpriority",
+                    create_type=False,
+                ),
+                nullable=True,
+            ),
             sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         )
@@ -110,9 +133,11 @@ def upgrade() -> None:
             ["id"],
         )
 
-    has_templates = bind.execute(sa.text("SELECT 1 FROM project_templates LIMIT 1")).first()
+    has_templates = bind.execute(
+        sa.text("SELECT 1 FROM project_templates LIMIT 1")
+    ).first()
     if not has_templates:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         templates_table = sa.table(
             "project_templates",
             sa.column("id", UUID(as_uuid=True)),

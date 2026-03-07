@@ -45,7 +45,9 @@ def test_save_columns_validates_and_persists(db_session):
         user.id,
         "customers",
         payload=[
-            TableColumnPreference(column_key="email", display_order=0, is_visible=False),
+            TableColumnPreference(
+                column_key="email", display_order=0, is_visible=False
+            ),
             TableColumnPreference(
                 column_key="customer_name", display_order=1, is_visible=True
             ),
@@ -112,7 +114,9 @@ def test_resolution_hierarchy_user_then_system_then_registry(db_session):
     other = _subscriber(db_session, "hier-other@example.com")
 
     # No user/default config -> registry fallback.
-    registry_columns = TableConfigurationService.get_columns(db_session, user.id, "customers")
+    registry_columns = TableConfigurationService.get_columns(
+        db_session, user.id, "customers"
+    )
     assert registry_columns
 
     # Add system defaults.
@@ -121,8 +125,12 @@ def test_resolution_hierarchy_user_then_system_then_registry(db_session):
         "customers",
         payload=[
             TableColumnPreference(column_key="email", display_order=0, is_visible=True),
-            TableColumnPreference(column_key="customer_name", display_order=1, is_visible=True),
-            TableColumnPreference(column_key="status", display_order=2, is_visible=True),
+            TableColumnPreference(
+                column_key="customer_name", display_order=1, is_visible=True
+            ),
+            TableColumnPreference(
+                column_key="status", display_order=2, is_visible=True
+            ),
         ],
     )
 
@@ -137,11 +145,17 @@ def test_resolution_hierarchy_user_then_system_then_registry(db_session):
         user.id,
         "customers",
         payload=[
-            TableColumnPreference(column_key="customer_name", display_order=0, is_visible=True),
-            TableColumnPreference(column_key="email", display_order=1, is_visible=False),
+            TableColumnPreference(
+                column_key="customer_name", display_order=0, is_visible=True
+            ),
+            TableColumnPreference(
+                column_key="email", display_order=1, is_visible=False
+            ),
         ],
     )
-    user_columns = TableConfigurationService.get_columns(db_session, user.id, "customers")
+    user_columns = TableConfigurationService.get_columns(
+        db_session, user.id, "customers"
+    )
     assert user_columns[0].column_key == "customer_name"
     email_col = next(column for column in user_columns if column.column_key == "email")
     assert email_col.is_visible is False
@@ -169,8 +183,12 @@ def test_user_configuration_is_isolated_per_user(db_session):
         ],
     )
 
-    columns_a = TableConfigurationService.get_columns(db_session, user_a.id, "subscribers")
-    columns_b = TableConfigurationService.get_columns(db_session, user_b.id, "subscribers")
+    columns_a = TableConfigurationService.get_columns(
+        db_session, user_a.id, "subscribers"
+    )
+    columns_b = TableConfigurationService.get_columns(
+        db_session, user_b.id, "subscribers"
+    )
 
     email_a = next(column for column in columns_a if column.column_key == "email")
     email_b = next(column for column in columns_b if column.column_key == "email")

@@ -7,8 +7,7 @@ from starlette.datastructures import FormData
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.network import NetworkZone
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Organization, Reseller
-from app.models.subscriber import Address
+from app.models.subscriber import Address, Organization, Reseller
 from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
@@ -50,8 +49,12 @@ def test_pop_site_detail_includes_hardware_and_customer_services(
     assert payload is not None
     assert payload["service_impact_count"] == 1
     assert len(payload["customer_services"]) == 1
-    assert any(device["device_type"] == "Core Device" for device in payload["hardware_devices"])
-    assert any(device["device_type"] == "NAS Router" for device in payload["hardware_devices"])
+    assert any(
+        device["device_type"] == "Core Device" for device in payload["hardware_devices"]
+    )
+    assert any(
+        device["device_type"] == "NAS Router" for device in payload["hardware_devices"]
+    )
 
 
 def test_pop_site_detail_includes_map_markers_from_service_addresses(
@@ -201,7 +204,9 @@ def test_parse_mast_form_supports_add_mast_toggle():
             "mast_is_active": "true",
         }
     )
-    enabled, payload, error, defaults = pop_sites_service.parse_mast_form(form, 9.08, 8.67)
+    enabled, payload, error, defaults = pop_sites_service.parse_mast_form(
+        form, 9.08, 8.67
+    )
     assert enabled is True
     assert error is None
     assert payload is not None

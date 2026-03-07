@@ -59,7 +59,9 @@ def main():
         print("Please set the environment variable before running this script.")
         print()
         print("Generate a new key with:")
-        print('  python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"')
+        print(
+            '  python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        )
         sys.exit(1)
 
     db = SessionLocal()
@@ -103,7 +105,11 @@ def main():
                 prefix = "[DRY RUN] " if args.dry_run else ""
                 print(f"{prefix}Device '{device.name}' (ID: {device.id}):")
                 for field in device_changes:
-                    print(f"  - {field}: would be encrypted" if args.dry_run else f"  - {field}: encrypted")
+                    print(
+                        f"  - {field}: would be encrypted"
+                        if args.dry_run
+                        else f"  - {field}: encrypted"
+                    )
                     if args.dry_run:
                         stats["credentials_encrypted"] += 1
                 stats["devices_updated"] += 1
@@ -114,8 +120,12 @@ def main():
         print()
         print("Summary:")
         print(f"  Devices checked: {stats['devices_checked']}")
-        print(f"  Devices {'would be ' if args.dry_run else ''}updated: {stats['devices_updated']}")
-        print(f"  Credentials {'would be ' if args.dry_run else ''}encrypted: {stats['credentials_encrypted']}")
+        print(
+            f"  Devices {'would be ' if args.dry_run else ''}updated: {stats['devices_updated']}"
+        )
+        print(
+            f"  Credentials {'would be ' if args.dry_run else ''}encrypted: {stats['credentials_encrypted']}"
+        )
         print(f"  Already encrypted: {stats['already_encrypted']}")
         print(f"  Empty fields: {stats['empty_fields']}")
 

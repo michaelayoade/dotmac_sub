@@ -136,7 +136,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[True, True, False],  # sync_pops, sync_addresses, deactivate_missing
+                side_effect=[
+                    True,
+                    True,
+                    False,
+                ],  # sync_pops, sync_addresses, deactivate_missing
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
@@ -162,7 +166,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[True, False, False],  # sync_pops=True, sync_addresses=False
+                side_effect=[
+                    True,
+                    False,
+                    False,
+                ],  # sync_pops=True, sync_addresses=False
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
@@ -187,7 +195,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[False, True, False],  # sync_pops=False, sync_addresses=True
+                side_effect=[
+                    False,
+                    True,
+                    False,
+                ],  # sync_pops=False, sync_addresses=True
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",

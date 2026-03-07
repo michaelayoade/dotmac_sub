@@ -13,8 +13,9 @@ Requirements:
     - These are created during the initial Splynx migration process
 """
 
-from app.db import SessionLocal
 from sqlalchemy import text
+
+from app.db import SessionLocal
 
 
 def update_account_start_dates():
@@ -22,13 +23,15 @@ def update_account_start_dates():
     db = SessionLocal()
     try:
         # Check how many records will be updated
-        result = db.execute(text("""
+        result = db.execute(
+            text("""
             SELECT COUNT(*)
             FROM subscribers s
             JOIN splynx_staging.map_customers mc ON mc.subscriber_id = s.id
             JOIN splynx_staging.splynx_customers sc ON sc.id = mc.splynx_customer_id
             WHERE sc.date_add IS NOT NULL
-        """))
+        """)
+        )
         count = result.scalar()
         print(f"Records to update: {count}")
 
@@ -37,12 +40,14 @@ def update_account_start_dates():
             return
 
         # Show date range
-        result = db.execute(text("""
+        result = db.execute(
+            text("""
             SELECT MIN(sc.date_add), MAX(sc.date_add)
             FROM splynx_staging.map_customers mc
             JOIN splynx_staging.splynx_customers sc ON sc.id = mc.splynx_customer_id
             WHERE sc.date_add IS NOT NULL
-        """))
+        """)
+        )
         row = result.fetchone()
         print(f"Date range: {row[0]} to {row[1]}")
 
@@ -53,28 +58,32 @@ def update_account_start_dates():
             return
 
         # Run the bulk update
-        result = db.execute(text("""
+        result = db.execute(
+            text("""
             UPDATE subscribers s
             SET account_start_date = sc.date_add::timestamp with time zone
             FROM splynx_staging.map_customers mc
             JOIN splynx_staging.splynx_customers sc ON sc.id = mc.splynx_customer_id
             WHERE mc.subscriber_id = s.id
               AND sc.date_add IS NOT NULL
-        """))
+        """)
+        )
 
         db.commit()
         print(f"\nUpdated {result.rowcount} subscriber records with Splynx start dates")
 
         # Verify the update
-        result = db.execute(text("""
+        result = db.execute(
+            text("""
             SELECT
                 COUNT(*) as total,
                 COUNT(CASE WHEN account_start_date::date != created_at::date THEN 1 END) as different_dates
             FROM subscribers
             WHERE account_start_date IS NOT NULL
-        """))
+        """)
+        )
         row = result.fetchone()
-        print(f"\nVerification:")
+        print("\nVerification:")
         print(f"  Total with account_start_date: {row[0]}")
         print(f"  With different date than created_at: {row[1]}")
 

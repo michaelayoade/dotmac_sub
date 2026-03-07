@@ -35,8 +35,12 @@ def test_save_config_persists_and_masks_credentials(db_session):
     assert state["form"]["api_secret_masked"].endswith("4321")
     assert "invoice_due" in state["form"]["message_templates_json"]
 
-    stored_key = domain_settings_service.comms_settings.get_by_key(db_session, "whatsapp_api_key")
-    stored_secret = domain_settings_service.comms_settings.get_by_key(db_session, "whatsapp_api_secret")
+    stored_key = domain_settings_service.comms_settings.get_by_key(
+        db_session, "whatsapp_api_key"
+    )
+    stored_secret = domain_settings_service.comms_settings.get_by_key(
+        db_session, "whatsapp_api_secret"
+    )
     assert stored_key.value_text
     assert stored_secret.value_text
     assert str(stored_key.value_text).startswith(("plain:", "enc:"))
@@ -105,5 +109,11 @@ def test_settings_spec_keys_resolve_for_whatsapp(db_session):
         api_secret="mb-secret",
         message_templates_json=json.dumps([{"name": "n1"}]),
     )
-    assert resolve_value(db_session, SettingDomain.comms, "whatsapp_provider") == "messagebird"
-    assert resolve_value(db_session, SettingDomain.comms, "whatsapp_phone_number") == "+2348000000000"
+    assert (
+        resolve_value(db_session, SettingDomain.comms, "whatsapp_provider")
+        == "messagebird"
+    )
+    assert (
+        resolve_value(db_session, SettingDomain.comms, "whatsapp_phone_number")
+        == "+2348000000000"
+    )

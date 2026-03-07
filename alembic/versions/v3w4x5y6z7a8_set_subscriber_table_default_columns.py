@@ -101,4 +101,3 @@ def downgrade() -> None:
             "DELETE FROM table_column_default_config WHERE table_key = :table_key"
         ).bindparams(table_key="subscribers")
     )
-
