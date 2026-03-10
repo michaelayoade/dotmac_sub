@@ -171,6 +171,9 @@ ENCRYPTED_CREDENTIAL_FIELDS = frozenset({
     "api_password",
     "api_token",
     "snmp_community",
+    "snmp_auth_secret",
+    "snmp_priv_secret",
+    "pppoe_password",
 })
 
 

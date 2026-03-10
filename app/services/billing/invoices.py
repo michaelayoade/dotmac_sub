@@ -158,8 +158,11 @@ class Invoices(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Invoice not found")
         previous_status = invoice.status
         data = payload.model_dump(exclude_unset=True)
-        if "account_id" in data:
-            _validate_account(db, str(data["account_id"]))
+        if "account_id" in data and data["account_id"] != invoice.account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change account on an existing invoice",
+            )
         if "currency" in data and data["currency"] != invoice.currency:
             raise HTTPException(status_code=400, detail="Currency does not match invoice")
         merged = {
@@ -223,6 +226,13 @@ class Invoices(ListResponseMixin):
 
     @staticmethod
     def write_off(db: Session, invoice_id: str, memo: str | None = None):
+        """Write off an invoice's remaining balance.
+
+        Creates a credit adjustment ledger entry and recalculates totals,
+        which will transition the invoice to ``paid`` status. The invoice
+        record is preserved for accounting purposes — use ``void()`` only
+        when an invoice should never have existed.
+        """
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
@@ -238,17 +248,53 @@ class Invoices(ListResponseMixin):
             memo=memo or "Write-off",
         )
         db.add(entry)
-        invoice.balance_due = Decimal("0.00")
-        invoice.status = InvoiceStatus.void
-        db.commit()
+        try:
+            db.flush()
+            _recalculate_invoice_totals(db, invoice)
+            # Write-offs are authoritative adjustments and should close
+            # any remaining balance even when no payment allocations exist.
+            invoice.balance_due = Decimal("0.00")
+            invoice.status = InvoiceStatus.void
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         db.refresh(invoice)
         return invoice
 
     @staticmethod
     def void(db: Session, invoice_id: str, memo: str | None = None):
+        """Void an invoice, creating reversing ledger entries.
+
+        Voiding means the invoice should never have existed. All existing
+        debit ledger entries are reversed with compensating credits.
+        """
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+
+        # Create reversing entries for any active debit ledger entries
+        active_debits = (
+            db.query(LedgerEntry)
+            .filter(LedgerEntry.invoice_id == invoice.id)
+            .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+            .filter(LedgerEntry.is_active.is_(True))
+            .all()
+        )
+        for debit in active_debits:
+            reversal = LedgerEntry(
+                account_id=debit.account_id,
+                invoice_id=debit.invoice_id,
+                payment_id=debit.payment_id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.adjustment,
+                amount=debit.amount,
+                currency=debit.currency,
+                memo=memo or f"Void reversal for invoice {invoice_id}",
+            )
+            db.add(reversal)
+            debit.is_active = False
+
         invoice.status = InvoiceStatus.void
         invoice.balance_due = Decimal("0.00")
         if memo:
@@ -266,6 +312,7 @@ class Invoices(ListResponseMixin):
         if len(invoices) != len(ids):
             raise HTTPException(status_code=404, detail="One or more invoices not found")
         updated = 0
+        affected_invoices: list[Invoice] = []
         for invoice in invoices:
             if invoice.balance_due <= 0:
                 continue
@@ -279,10 +326,16 @@ class Invoices(ListResponseMixin):
                 memo=payload.memo or "Write-off",
             )
             db.add(entry)
-            invoice.balance_due = Decimal("0.00")
-            invoice.status = InvoiceStatus.void
+            affected_invoices.append(invoice)
             updated += 1
-        db.commit()
+        try:
+            db.flush()
+            for invoice in affected_invoices:
+                _recalculate_invoice_totals(db, invoice)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         return updated
 
     @staticmethod
@@ -299,6 +352,27 @@ class Invoices(ListResponseMixin):
         if len(invoices) != len(ids):
             raise HTTPException(status_code=404, detail="One or more invoices not found")
         for invoice in invoices:
+            # Reverse active debit ledger entries
+            active_debits = (
+                db.query(LedgerEntry)
+                .filter(LedgerEntry.invoice_id == invoice.id)
+                .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+                .filter(LedgerEntry.is_active.is_(True))
+                .all()
+            )
+            for debit in active_debits:
+                reversal = LedgerEntry(
+                    account_id=debit.account_id,
+                    invoice_id=debit.invoice_id,
+                    payment_id=debit.payment_id,
+                    entry_type=LedgerEntryType.credit,
+                    source=LedgerSource.adjustment,
+                    amount=debit.amount,
+                    currency=debit.currency,
+                    memo=payload.memo or f"Void reversal for invoice {invoice.id}",
+                )
+                db.add(reversal)
+                debit.is_active = False
             invoice.status = InvoiceStatus.void
             invoice.balance_due = Decimal("0.00")
             if payload.memo:

@@ -3,9 +3,8 @@ import argparse
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
 from app.models.subscriber import Subscriber
-from app.models.rbac import Permission, SubscriberRole, Role, RolePermission
-
 
 DEFAULT_PERMISSIONS = [
     # Audit
@@ -57,6 +56,25 @@ DEFAULT_PERMISSIONS = [
     ("billing:tax:read", "View tax rates"),
     ("billing:tax:write", "Manage tax rates"),
 
+    # Billing - Dunning & Collections
+    ("billing:dunning:read", "View dunning cases and collection status"),
+    ("billing:dunning:write", "Manage dunning cases (pause, resume, close)"),
+
+    # Billing - Payment Providers & Channels
+    ("billing:provider:read", "View payment provider configuration"),
+    ("billing:provider:write", "Manage payment provider configuration"),
+    ("billing:channel:read", "View payment channel configuration"),
+    ("billing:channel:write", "Manage payment channel configuration"),
+
+    # Billing - Arrangements
+    ("billing:arrangement:read", "View payment arrangements"),
+    ("billing:arrangement:write", "Manage payment arrangements"),
+
+    # Billing - Batch & Import
+    ("billing:batch:read", "View invoice batch history"),
+    ("billing:batch:write", "Generate and manage invoice batches"),
+    ("billing:import:write", "Import payment data"),
+
     # Catalog
     ("catalog:product:read", "View catalog products"),
     ("catalog:product:write", "Manage catalog products"),
@@ -86,6 +104,8 @@ DEFAULT_PERMISSIONS = [
     # Network - RADIUS
     ("network:radius:read", "View RADIUS configuration"),
     ("network:radius:write", "Manage RADIUS configuration"),
+    ("monitoring:read", "View monitoring dashboards and alerts"),
+    ("monitoring:write", "Manage monitoring rules and alert states"),
 
     # Operations - Work Orders
     ("operations:work_order:read", "View work orders"),
@@ -172,6 +192,7 @@ DEFAULT_ROLES = [
     ("auditor", "Audit read-only access"),
     ("operator", "Network and provisioning operations"),
     ("support", "Subscriber and billing support"),
+    ("finance_manager", "Full billing and finance access"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -183,6 +204,11 @@ ROLE_PERMISSIONS = {
         "billing:credit_note:read",
         "billing:account:read",
         "billing:ledger:read",
+        "billing:dunning:read",
+        "billing:provider:read",
+        "billing:channel:read",
+        "billing:arrangement:read",
+        "billing:batch:read",
         "customer:read",
         "reports:billing",
         "reports:subscribers",
@@ -198,6 +224,8 @@ ROLE_PERMISSIONS = {
         "network:fiber:write",
         "network:radius:read",
         "network:radius:write",
+        "monitoring:read",
+        "monitoring:write",
         "network:read",
         "network:write",
         "provisioning:read",
@@ -216,6 +244,7 @@ ROLE_PERMISSIONS = {
         "billing:payment:create",
         "billing:credit_note:read",
         "billing:account:read",
+        "billing:dunning:read",
         "subscription:read",
         "support:ticket:read",
         "support:ticket:create",
@@ -224,6 +253,38 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+    ],
+    "finance_manager": [
+        "billing:invoice:read",
+        "billing:invoice:create",
+        "billing:invoice:update",
+        "billing:invoice:delete",
+        "billing:payment:read",
+        "billing:payment:create",
+        "billing:payment:update",
+        "billing:payment:delete",
+        "billing:credit_note:read",
+        "billing:credit_note:create",
+        "billing:credit_note:update",
+        "billing:credit_note:delete",
+        "billing:account:read",
+        "billing:account:write",
+        "billing:ledger:read",
+        "billing:tax:read",
+        "billing:tax:write",
+        "billing:dunning:read",
+        "billing:dunning:write",
+        "billing:provider:read",
+        "billing:provider:write",
+        "billing:channel:read",
+        "billing:channel:write",
+        "billing:arrangement:read",
+        "billing:arrangement:write",
+        "billing:batch:read",
+        "billing:batch:write",
+        "billing:import:write",
+        "reports:billing",
+        "customer:read",
     ],
 }
 

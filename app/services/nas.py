@@ -11,16 +11,19 @@ import hashlib
 import ipaddress
 import json
 import re
-import subprocess
+import secrets
+import string
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db import SessionLocal
 from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,
@@ -35,6 +38,8 @@ from app.models.catalog import (
     ProvisioningTemplate,
     RadiusProfile,
 )
+from app.models.domain_settings import SettingDomain
+from app.models.network_monitoring import DeviceMetric, DeviceStatus, MetricType, NetworkDevice
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Organization
 from app.schemas.catalog import (
@@ -45,11 +50,13 @@ from app.schemas.catalog import (
     ProvisioningTemplateCreate,
     ProvisioningTemplateUpdate,
 )
+from app.services import backup_alerts as backup_alerts_service
+from app.services import ping as ping_service
+from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_nas_credentials
 from app.services.response import ListResponseMixin
-from app.services import backup_alerts as backup_alerts_service
-from app.services.audit_helpers import diff_dicts, model_to_dict
+from app.services.settings_spec import resolve_value
 
 _REDACT_KEYS = {
     "password",
@@ -203,6 +210,14 @@ def extract_mikrotik_status(tags: list[str] | None) -> dict[str, str | None]:
         "platform": prefixed_value_from_tags(tags, "mikrotik_status_platform:"),
         "board_name": prefixed_value_from_tags(tags, "mikrotik_status_board_name:"),
         "routeros_version": prefixed_value_from_tags(tags, "mikrotik_status_routeros_version:"),
+        "serial_number": prefixed_value_from_tags(tags, "mikrotik_status_serial_number:"),
+        "primary_mac": prefixed_value_from_tags(tags, "mikrotik_status_primary_mac:"),
+        "architecture_name": prefixed_value_from_tags(tags, "mikrotik_status_architecture_name:"),
+        "cpu_model": prefixed_value_from_tags(tags, "mikrotik_status_cpu_model:"),
+        "cpu_count": prefixed_value_from_tags(tags, "mikrotik_status_cpu_count:"),
+        "cpu_frequency": prefixed_value_from_tags(tags, "mikrotik_status_cpu_frequency:"),
+        "total_hdd_space": prefixed_value_from_tags(tags, "mikrotik_status_total_hdd_space:"),
+        "free_hdd_space": prefixed_value_from_tags(tags, "mikrotik_status_free_hdd_space:"),
         "cpu_usage": prefixed_value_from_tags(tags, "mikrotik_status_cpu_usage:"),
         "ipv6_status": prefixed_value_from_tags(tags, "mikrotik_status_ipv6_status:"),
         "last_status_check": prefixed_value_from_tags(tags, "mikrotik_status_last_check:"),
@@ -505,6 +520,7 @@ def build_nas_dashboard_data(
     partner_org_id: str | None,
     online_status: str | None,
     search: str | None,
+    refresh: str | None,
     page: int,
     limit: int = 25,
 ) -> dict[str, Any]:
@@ -539,7 +555,7 @@ def build_nas_dashboard_data(
         ]
 
     ping_statuses_all = {
-        str(device.id): get_ping_status(device.ip_address or device.management_ip)
+        str(device.id): get_cached_ping_status(device)
         for device in devices_all
     }
     if online_status == "online":
@@ -552,14 +568,61 @@ def build_nas_dashboard_data(
     devices = devices_all[offset : offset + limit]
     total_pages = (total + limit - 1) // limit
 
+    linked_by_nas = _resolve_linked_monitoring_devices(db, devices)
+    force_refresh = str(refresh or "").strip().lower() in {"1", "true", "yes", "on"}
+    if linked_by_nas:
+        try:
+            ping_interval_seconds = int(
+                str(resolve_value(db, SettingDomain.network_monitoring, "core_device_ping_interval_seconds") or 120)
+            )
+        except (TypeError, ValueError):
+            ping_interval_seconds = 120
+        try:
+            snmp_interval_seconds = int(
+                str(resolve_value(db, SettingDomain.network_monitoring, "core_device_snmp_walk_interval_seconds") or 300)
+            )
+        except (TypeError, ValueError):
+            snmp_interval_seconds = 300
+        from app.services import web_network_core_runtime as core_runtime_service
+
+        core_runtime_service.refresh_stale_devices_health(
+            db,
+            list(linked_by_nas.values()),
+            ping_interval_seconds=ping_interval_seconds,
+            snmp_interval_seconds=snmp_interval_seconds,
+            include_snmp=True,
+            force=force_refresh,
+        )
+        # Re-read after refresh to ensure UI reflects current state.
+        linked_by_nas = _resolve_linked_monitoring_devices(db, devices)
+
+    runtime_statuses: dict[str, str] = {}
+    runtime_last_seen: dict[str, datetime | None] = {}
     ping_statuses = {
         str(device.id): ping_statuses_all.get(str(device.id), {"state": "unknown", "label": "No host"})
         for device in devices
     }
+    for device in devices:
+        nas_id = str(device.id)
+        linked = linked_by_nas.get(nas_id)
+        if not linked:
+            continue
+        runtime_statuses[nas_id] = linked.status.value if linked.status else "unknown"
+        seen_at = linked.last_snmp_at or linked.last_ping_at
+        runtime_last_seen[nas_id] = seen_at
+        if linked.last_ping_ok is True:
+            label = "Reachable"
+            if linked.last_ping_at:
+                label = f"Seen {linked.last_ping_at.strftime('%H:%M:%S')}"
+            ping_statuses[nas_id] = {"state": "reachable", "label": label}
+        elif linked.last_ping_ok is False:
+            ping_statuses[nas_id] = {"state": "unreachable", "label": "Unreachable"}
 
     return {
         "devices": devices,
         "ping_statuses": ping_statuses,
+        "runtime_statuses": runtime_statuses,
+        "runtime_last_seen": runtime_last_seen,
         "stats": {
             "by_vendor": NasDevices.count_by_vendor(db),
             "by_status": NasDevices.count_by_status(db),
@@ -579,8 +642,53 @@ def build_nas_dashboard_data(
             "partner_org_id": partner_org_id,
             "online_status": online_status,
             "search": search,
+            "refresh": refresh,
         },
     }
+
+
+def _resolve_linked_monitoring_devices(
+    db: Session,
+    devices: list[NasDevice],
+) -> dict[str, NetworkDevice]:
+    """Map NAS device id -> linked monitoring device for runtime status display."""
+    if not devices:
+        return {}
+    mapping: dict[str, NetworkDevice] = {}
+    ids: list[UUID] = [
+        cast(UUID, d.network_device_id)
+        for d in devices
+        if d.network_device_id is not None
+    ]
+    if ids:
+        rows = db.execute(
+            select(NetworkDevice).where(NetworkDevice.id.in_(ids))
+        ).scalars().all()
+        by_id = {str(row.id): row for row in rows}
+        for d in devices:
+            if d.network_device_id and str(d.network_device_id) in by_id:
+                mapping[str(d.id)] = by_id[str(d.network_device_id)]
+
+    unresolved = [d for d in devices if str(d.id) not in mapping]
+    if not unresolved:
+        return mapping
+    mgmt_hosts = {
+        str((d.management_ip or d.ip_address or "")).strip()
+        for d in unresolved
+        if (d.management_ip or d.ip_address)
+    }
+    mgmt_hosts.discard("")
+    if not mgmt_hosts:
+        return mapping
+    rows = db.execute(
+        select(NetworkDevice).where(NetworkDevice.mgmt_ip.in_(list(mgmt_hosts)))
+    ).scalars().all()
+    by_host = {str(row.mgmt_ip): row for row in rows if row.mgmt_ip}
+    for d in unresolved:
+        host = str((d.management_ip or d.ip_address or "")).strip()
+        if host and host in by_host:
+            mapping[str(d.id)] = by_host[host]
+    return mapping
 
 
 def build_nas_device_detail_data(
@@ -596,6 +704,51 @@ def build_nas_device_detail_data(
 ) -> dict[str, Any]:
     """Build NAS device detail page payload."""
     device = NasDevices.get(db, device_id)
+    mikrotik_status = extract_mikrotik_status(device.tags)
+    linked_device = _resolve_linked_monitoring_device(db, device)
+    metrics_by_type = _latest_monitoring_metrics(db, linked_device)
+
+    resolved_health_status = _resolve_nas_health_status(device, linked_device)
+    resolved_last_health_check_at = (
+        device.last_health_check_at
+        or (linked_device.last_health_check_at if linked_device else None)
+        or (linked_device.last_snmp_at if linked_device else None)
+        or (linked_device.last_ping_at if linked_device else None)
+    )
+    resolved_last_seen_at = (
+        device.last_seen_at
+        or (linked_device.last_snmp_at if linked_device else None)
+        or (linked_device.last_ping_at if linked_device else None)
+    )
+    resolved_location = device.rack_position or pop_site_label(device)
+    resolved_model = (
+        device.model
+        or (linked_device.model if linked_device else None)
+        or mikrotik_status.get("board_name")
+    )
+    resolved_firmware_version = (
+        device.firmware_version
+        or mikrotik_status.get("routeros_version")
+    )
+    resolved_serial_number = (
+        device.serial_number
+        or (linked_device.serial_number if linked_device else None)
+        or mikrotik_status.get("serial_number")
+    )
+    resolved_current_subscriber_count = (
+        linked_device.current_subscriber_count
+        if linked_device and linked_device.current_subscriber_count is not None
+        else device.current_subscriber_count
+    )
+
+    if not mikrotik_status.get("cpu_usage") and metrics_by_type.get("cpu"):
+        mikrotik_status["cpu_usage"] = str(metrics_by_type["cpu"]["value"])
+    if not mikrotik_status.get("last_status_check"):
+        last_metric_at = metrics_by_type.get("latest_recorded_at")
+        mikrotik_status["last_status_check"] = (
+            str(last_metric_at) if last_metric_at else None
+        )
+
     recent_backups = NasConfigBackups.list(
         db,
         nas_device_id=UUID(device_id),
@@ -608,6 +761,7 @@ def build_nas_device_detail_data(
         limit=10,
         offset=0,
     )
+    connection_logs = _recent_nas_connection_auth_logs(db, nas_device_id=UUID(device_id), limit=50)
     activities = build_activities_fn(db, "nas_device", device_id, limit=10)
     connection_rules = NasConnectionRules.list(db, nas_device_id=device_id, is_active=None)
     if tab not in {"information", "connection-rules", "vendor-specific", "device-log", "map"}:
@@ -617,6 +771,7 @@ def build_nas_device_detail_data(
         "device": device,
         "backups": recent_backups,
         "logs": recent_logs,
+        "connection_logs": connection_logs,
         "activities": activities,
         "ping_status": get_ping_status(device.ip_address or device.management_ip),
         "radius_pool_names": resolve_radius_pool_names(db, device),
@@ -628,9 +783,122 @@ def build_nas_device_detail_data(
         "api_test_message": api_test_message,
         "rule_status": rule_status,
         "rule_message": rule_message,
-        "mikrotik_status": extract_mikrotik_status(device.tags),
+        "mikrotik_status": mikrotik_status,
         "connection_types": [{"value": ct.value, "label": ct.value.upper()} for ct in ConnectionType],
+        "linked_device": linked_device,
+        "metrics_by_type": metrics_by_type,
+        "resolved_health_status": resolved_health_status,
+        "resolved_last_health_check_at": resolved_last_health_check_at,
+        "resolved_last_seen_at": resolved_last_seen_at,
+        "resolved_location": resolved_location,
+        "resolved_model": resolved_model,
+        "resolved_firmware_version": resolved_firmware_version,
+        "resolved_serial_number": resolved_serial_number,
+        "resolved_current_subscriber_count": resolved_current_subscriber_count,
+        "resolved_ssh_port": device.management_port,
     }
+
+
+def _recent_nas_connection_auth_logs(
+    db: Session,
+    *,
+    nas_device_id: UUID,
+    limit: int = 50,
+) -> list[ProvisioningLog]:
+    """Return NAS connection auth attempts (server -> MikroTik) for detail tab."""
+    rows = db.execute(
+        select(ProvisioningLog)
+        .where(ProvisioningLog.nas_device_id == nas_device_id)
+        .where(ProvisioningLog.command_sent.ilike("mikrotik_auth:%"))
+        .order_by(ProvisioningLog.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+    return list(rows)
+
+
+def _resolve_linked_monitoring_device(db: Session, device: NasDevice) -> NetworkDevice | None:
+    """Resolve monitoring device linked to a NAS device."""
+    if device.network_device_id:
+        linked = db.get(NetworkDevice, device.network_device_id)
+        if linked:
+            return linked
+    host = (device.management_ip or device.ip_address or "").strip()
+    if not host:
+        return None
+    return db.execute(
+        select(NetworkDevice)
+        .where(NetworkDevice.mgmt_ip == host)
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_monitoring_metrics(
+    db: Session, linked_device: NetworkDevice | None
+) -> dict[str, Any]:
+    """Return latest key monitoring metrics for a linked core device."""
+    if not linked_device:
+        return {}
+
+    wanted = {
+        MetricType.cpu: "cpu",
+        MetricType.memory: "memory",
+        MetricType.uptime: "uptime",
+        MetricType.rx_bps: "rx_bps",
+        MetricType.tx_bps: "tx_bps",
+    }
+    rows = db.execute(
+        select(
+            DeviceMetric.metric_type,
+            DeviceMetric.value,
+            DeviceMetric.unit,
+            DeviceMetric.recorded_at,
+        )
+        .where(DeviceMetric.device_id == linked_device.id)
+        .where(DeviceMetric.interface_id.is_(None))
+        .where(DeviceMetric.metric_type.in_(list(wanted.keys())))
+        .order_by(DeviceMetric.recorded_at.desc())
+        .limit(250)
+    ).all()
+
+    latest: dict[str, Any] = {}
+    latest_recorded_at = None
+    for metric_type, value, unit, recorded_at in rows:
+        key = wanted.get(metric_type)
+        if not key or key in latest:
+            continue
+        latest[key] = {
+            "value": value,
+            "unit": unit,
+            "recorded_at": recorded_at,
+        }
+        if latest_recorded_at is None:
+            latest_recorded_at = recorded_at
+    if latest_recorded_at is not None:
+        latest["latest_recorded_at"] = latest_recorded_at
+    return latest
+
+
+def _resolve_nas_health_status(
+    device: NasDevice, linked_device: NetworkDevice | None
+) -> str:
+    """Resolve best-available health status for NAS detail UI."""
+    if device.health_status and getattr(device.health_status, "value", None):
+        value = str(device.health_status.value)
+        if value != "unknown":
+            return value
+    if linked_device and linked_device.health_status and getattr(linked_device.health_status, "value", None):
+        value = str(linked_device.health_status.value)
+        if value != "unknown":
+            return value
+    if linked_device and linked_device.status:
+        status_map = {
+            DeviceStatus.online: "healthy",
+            DeviceStatus.degraded: "degraded",
+            DeviceStatus.offline: "unhealthy",
+            DeviceStatus.maintenance: "unknown",
+        }
+        return status_map.get(linked_device.status, "unknown")
+    return "unknown"
 
 
 def build_nas_device_backups_page_data(
@@ -840,48 +1108,89 @@ def trigger_backup_for_device(
         return {"ok": False, "backup": None, "error": error_message}
 
 
-def _build_ping_command(host: str) -> list[str]:
-    command = ["ping", "-c", "1", "-W", "2", host]
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.version == 6:
-            return ["ping", "-6", "-c", "1", "-W", "2", host]
-    except ValueError:
-        pass
-    return command
-
-
 def get_ping_status(host: str | None) -> dict[str, object]:
     """Return lightweight ping status for list/detail badges."""
     if not host:
         return {"state": "unknown", "label": "No host"}
-    try:
-        result = subprocess.run(
-            _build_ping_command(host),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=4,
-        )
-    except Exception:
+    success, latency_ms = ping_service.run_ping(host, timeout_seconds=4)
+    if not success:
         return {"state": "unreachable", "label": "Unreachable"}
-    if result.returncode != 0:
-        return {"state": "unreachable", "label": "Unreachable"}
-    output = f"{result.stdout or ''} {result.stderr or ''}"
-    latency_ms = None
-    match = re.search(r"time[=<]\s*([0-9.]+)\s*ms", output)
-    if match:
-        try:
-            latency_ms = float(match.group(1))
-        except ValueError:
-            latency_ms = None
     if latency_ms is None:
         return {"state": "reachable", "label": "Reachable"}
     return {"state": "reachable", "label": f"Reachable {latency_ms:.1f} ms", "latency_ms": latency_ms}
 
 
-def get_mikrotik_api_status(device: NasDevice) -> dict[str, object]:
-    """Test MikroTik API and return basic runtime status fields."""
+def get_cached_ping_status(device: NasDevice, *, stale_after_minutes: int = 10) -> dict[str, object]:
+    """Return cached reachability for list pages without active probing."""
+    host = device.ip_address or device.management_ip
+    if not host:
+        return {"state": "unknown", "label": "No host"}
+    if not device.last_seen_at:
+        return {"state": "unknown", "label": "Unknown"}
+
+    now = datetime.now(UTC)
+    last_seen = device.last_seen_at
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    age_seconds = max(int((now - last_seen).total_seconds()), 0)
+    stale_after_seconds = max(1, stale_after_minutes) * 60
+    age_minutes = max(1, age_seconds // 60)
+
+    if age_seconds <= stale_after_seconds:
+        return {"state": "reachable", "label": f"Seen {age_minutes}m ago"}
+    return {"state": "unreachable", "label": f"Stale ({age_minutes}m)"}
+
+
+def _parse_routeros_uptime_to_seconds(value: object) -> int | None:
+    """Parse RouterOS uptime strings into seconds."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    match = re.fullmatch(
+        r"(?:(?P<w>\d+)w)?(?:(?P<d>\d+)d)?(?P<h>\d{1,2}):(?P<m>\d{2}):(?P<s>\d{2})",
+        text,
+    )
+    if match:
+        weeks = int(match.group("w") or 0)
+        days = int(match.group("d") or 0)
+        hours = int(match.group("h") or 0)
+        minutes = int(match.group("m") or 0)
+        seconds = int(match.group("s") or 0)
+        return (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds
+
+    # Older RouterOS API commonly reports uptime in token form (e.g. 1w2d3h4m5s).
+    token_match = re.fullmatch(
+        r"(?:(?P<w>\d+)w)?(?:(?P<d>\d+)d)?(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m)?(?:(?P<s>\d+)s)?",
+        text,
+    )
+    if not token_match:
+        return None
+    if not any(token_match.group(name) for name in ("w", "d", "h", "m", "s")):
+        return None
+    weeks = int(token_match.group("w") or 0)
+    days = int(token_match.group("d") or 0)
+    hours = int(token_match.group("h") or 0)
+    minutes = int(token_match.group("m") or 0)
+    seconds = int(token_match.group("s") or 0)
+    return (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def _mikrotik_api_port(device: NasDevice) -> int:
+    raw_port = prefixed_value_from_tags(device.tags, "mikrotik_api_port:")
+    if raw_port:
+        try:
+            return int(raw_port)
+        except (TypeError, ValueError):
+            pass
+    return 8728
+
+
+def _mikrotik_rest_auth(
+    device: NasDevice,
+) -> tuple[str, tuple[str, str] | None, dict[str, str], bool]:
+    """Build MikroTik REST auth context."""
     import requests
 
     if device.vendor != NasVendor.mikrotik:
@@ -900,29 +1209,119 @@ def get_mikrotik_api_status(device: NasDevice) -> dict[str, object]:
 
     base_url = device.api_url.rstrip("/")
     verify_tls = device.api_verify_tls if device.api_verify_tls is not None else False
+    return base_url, auth, headers, verify_tls
 
+
+def _mikrotik_routeros_auth(device: NasDevice) -> tuple[str, int, str, str]:
+    if device.vendor != NasVendor.mikrotik:
+        raise HTTPException(status_code=400, detail="Vendor-specific API status is only available for MikroTik devices.")
+
+    host = device.management_ip or device.ip_address
+    if not host:
+        raise HTTPException(status_code=400, detail="Management IP is not configured.")
+    if not (device.api_username and device.api_password):
+        raise HTTPException(status_code=400, detail="API credentials are not configured.")
+    return host, _mikrotik_api_port(device), device.api_username, decrypt_credential(device.api_password)
+
+
+def _mikrotik_rest_get(
+    *,
+    base_url: str,
+    path: str,
+    auth: tuple[str, str] | None,
+    headers: dict[str, str],
+    verify_tls: bool,
+    timeout: int = 10,
+) -> object:
+    """Issue a GET request to MikroTik REST endpoint."""
+    import requests
+
+    resp = requests.get(
+        f"{base_url}{path}",
+        auth=auth,
+        headers=headers,
+        timeout=timeout,
+        verify=verify_tls,
+    )
+    resp.raise_for_status()
+    if not resp.text:
+        return {}
+    return resp.json()
+
+
+def _select_primary_mac(interfaces: object) -> str | None:
+    """Select the most useful MAC address from interface list."""
+    if not isinstance(interfaces, list):
+        return None
+
+    candidates: list[tuple[int, str]] = []
+    for item in interfaces:
+        if not isinstance(item, dict):
+            continue
+        mac = item.get("mac-address") or item.get("mac_address")
+        if not mac:
+            continue
+        name = str(item.get("name") or "").strip().lower()
+        default_name = str(item.get("default-name") or item.get("default_name") or "").strip().lower()
+        disabled = str(item.get("disabled") or "").lower() == "true"
+        running = str(item.get("running") or "").lower() == "true"
+
+        rank = 100
+        iface_key = default_name or name
+        if iface_key in {"ether1", "sfp1"}:
+            rank = 10
+        elif iface_key.startswith("ether"):
+            rank = 20
+        elif iface_key.startswith("sfp"):
+            rank = 30
+        elif "bridge" in iface_key:
+            rank = 40
+        if running and not disabled:
+            rank -= 5
+        candidates.append((rank, str(mac)))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0])
+    return candidates[0][1]
+
+
+def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
+    base_url, auth, headers, verify_tls = _mikrotik_rest_auth(device)
+    resource_data = _mikrotik_rest_get(
+        base_url=base_url,
+        path="/rest/system/resource",
+        auth=auth,
+        headers=headers,
+        verify_tls=verify_tls,
+    )
+    package_data = _mikrotik_rest_get(
+        base_url=base_url,
+        path="/rest/system/package",
+        auth=auth,
+        headers=headers,
+        verify_tls=verify_tls,
+    )
     try:
-        resource_resp = requests.get(
-            f"{base_url}/rest/system/resource",
+        routerboard_data = _mikrotik_rest_get(
+            base_url=base_url,
+            path="/rest/system/routerboard",
             auth=auth,
             headers=headers,
-            timeout=10,
-            verify=verify_tls,
+            verify_tls=verify_tls,
         )
-        resource_resp.raise_for_status()
-        resource_data = resource_resp.json() if resource_resp.text else {}
-
-        package_resp = requests.get(
-            f"{base_url}/rest/system/package",
+    except Exception:
+        routerboard_data = {}
+    try:
+        interfaces_raw = _mikrotik_rest_get(
+            base_url=base_url,
+            path="/rest/interface",
             auth=auth,
             headers=headers,
-            timeout=10,
-            verify=verify_tls,
+            verify_tls=verify_tls,
         )
-        package_resp.raise_for_status()
-        package_data = package_resp.json() if package_resp.text else []
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"MikroTik API test failed: {exc}") from exc
+    except Exception:
+        interfaces_raw = []
 
     version = None
     if isinstance(package_data, list):
@@ -932,15 +1331,312 @@ def get_mikrotik_api_status(device: NasDevice) -> dict[str, object]:
                 break
     if version is None and isinstance(resource_data, dict):
         version = resource_data.get("version")
+    uptime_raw = resource_data.get("uptime") if isinstance(resource_data, dict) else None
+    uptime_seconds = _parse_routeros_uptime_to_seconds(uptime_raw)
+    serial_number = None
+    if isinstance(routerboard_data, dict):
+        serial_number = routerboard_data.get("serial-number") or routerboard_data.get("serial_number")
+    primary_mac = _select_primary_mac(interfaces_raw)
 
     return {
         "platform": resource_data.get("platform") if isinstance(resource_data, dict) else None,
         "board_name": resource_data.get("board-name") if isinstance(resource_data, dict) else None,
         "routeros_version": version,
+        "serial_number": serial_number,
+        "primary_mac": primary_mac,
+        "architecture_name": resource_data.get("architecture-name") if isinstance(resource_data, dict) else None,
+        "cpu_model": resource_data.get("cpu") if isinstance(resource_data, dict) else None,
+        "cpu_count": resource_data.get("cpu-count") if isinstance(resource_data, dict) else None,
+        "cpu_frequency": resource_data.get("cpu-frequency") if isinstance(resource_data, dict) else None,
+        "total_hdd_space": resource_data.get("total-hdd-space") if isinstance(resource_data, dict) else None,
+        "free_hdd_space": resource_data.get("free-hdd-space") if isinstance(resource_data, dict) else None,
         "cpu_usage": resource_data.get("cpu-load") if isinstance(resource_data, dict) else None,
+        "total_memory": resource_data.get("total-memory") if isinstance(resource_data, dict) else None,
+        "free_memory": resource_data.get("free-memory") if isinstance(resource_data, dict) else None,
+        "uptime": uptime_raw,
+        "uptime_seconds": uptime_seconds,
         "ipv6_status": "enabled" if resource_data.get("ipv6") else "unknown",
         "last_status_check": datetime.now(UTC),
+        "api_source": "rest",
     }
+
+
+def _mikrotik_routeros_query(device: NasDevice) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+    from routeros_api import RouterOsApiPool
+
+    host, port, username, password = _mikrotik_routeros_auth(device)
+    use_ssl = port == 8729
+    pool = RouterOsApiPool(
+        host,
+        username=username,
+        password=password,
+        port=port,
+        plaintext_login=not use_ssl,
+        use_ssl=use_ssl,
+        ssl_verify=False,
+        ssl_verify_hostname=False,
+    )
+    try:
+        api = pool.get_api()
+        raw_resource = api.get_resource("/system/resource").get()
+        resource = raw_resource[0] if isinstance(raw_resource, list) and raw_resource else {}
+        raw_interfaces = api.get_resource("/interface").get()
+        interfaces = [row for row in raw_interfaces if isinstance(row, dict)] if isinstance(raw_interfaces, list) else []
+        try:
+            raw_ppp_active = api.get_resource("/ppp/active").get()
+            ppp_active = [row for row in raw_ppp_active if isinstance(row, dict)] if isinstance(raw_ppp_active, list) else []
+        except Exception:
+            ppp_active = []
+        return cast(dict[str, object], resource), interfaces, ppp_active
+    finally:
+        pool.disconnect()
+
+
+def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
+    resource_data, interfaces, _ppp_active = _mikrotik_routeros_query(device)
+    uptime_raw = resource_data.get("uptime")
+    uptime_seconds = _parse_routeros_uptime_to_seconds(uptime_raw)
+    serial_number = resource_data.get("serial-number") or resource_data.get("serial_number")
+    if not serial_number:
+        try:
+            from routeros_api import RouterOsApiPool
+
+            host, port, username, password = _mikrotik_routeros_auth(device)
+            use_ssl = port == 8729
+            pool = RouterOsApiPool(
+                host,
+                username=username,
+                password=password,
+                port=port,
+                plaintext_login=not use_ssl,
+                use_ssl=use_ssl,
+                ssl_verify=False,
+                ssl_verify_hostname=False,
+            )
+            try:
+                api = pool.get_api()
+                rb = api.get_resource("/system/routerboard").get()
+                if isinstance(rb, list) and rb and isinstance(rb[0], dict):
+                    serial_number = rb[0].get("serial-number") or rb[0].get("serial_number")
+            finally:
+                pool.disconnect()
+        except Exception:
+            serial_number = None
+    primary_mac = _select_primary_mac(interfaces)
+    return {
+        "platform": resource_data.get("platform"),
+        "board_name": resource_data.get("board-name"),
+        "routeros_version": resource_data.get("version"),
+        "serial_number": serial_number,
+        "primary_mac": primary_mac,
+        "architecture_name": resource_data.get("architecture-name"),
+        "cpu_model": resource_data.get("cpu"),
+        "cpu_count": resource_data.get("cpu-count"),
+        "cpu_frequency": resource_data.get("cpu-frequency"),
+        "total_hdd_space": resource_data.get("total-hdd-space"),
+        "free_hdd_space": resource_data.get("free-hdd-space"),
+        "cpu_usage": resource_data.get("cpu-load"),
+        "total_memory": resource_data.get("total-memory"),
+        "free_memory": resource_data.get("free-memory"),
+        "uptime": uptime_raw,
+        "uptime_seconds": uptime_seconds,
+        "ipv6_status": "unknown",
+        "last_status_check": datetime.now(UTC),
+        "api_source": "routeros_api",
+    }
+
+
+def _record_mikrotik_auth_attempt(
+    *,
+    nas_device_id: UUID,
+    method: str,
+    success: bool,
+    execution_time_ms: int | None,
+    error: str | None = None,
+) -> None:
+    """Persist MikroTik auth/connect attempt as provisioning log."""
+    session = SessionLocal()
+    try:
+        log = ProvisioningLog(
+            nas_device_id=nas_device_id,
+            action=ProvisioningAction.get_user_info,
+            command_sent=f"mikrotik_auth:{method}",
+            response_received="connected" if success else None,
+            status=ProvisioningLogStatus.success if success else ProvisioningLogStatus.failed,
+            error_message=error,
+            execution_time_ms=execution_time_ms,
+            triggered_by="system",
+            request_data={"kind": "mikrotik_auth_attempt", "method": method},
+        )
+        session.add(log)
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
+
+def get_mikrotik_api_status(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
+    """Test MikroTik API and return basic runtime status fields."""
+    rest_error: Exception | None = None
+    started = time.perf_counter()
+    try:
+        status = _mikrotik_status_from_rest(device)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        if db is not None:
+            _record_mikrotik_auth_attempt(
+                nas_device_id=device.id,
+                method="rest",
+                success=True,
+                execution_time_ms=elapsed_ms,
+            )
+        return status
+    except Exception as exc:
+        rest_error = exc
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        if db is not None:
+            _record_mikrotik_auth_attempt(
+                nas_device_id=device.id,
+                method="rest",
+                success=False,
+                execution_time_ms=elapsed_ms,
+                error=str(exc),
+            )
+
+    started = time.perf_counter()
+    try:
+        status = _mikrotik_status_from_routeros_api(device)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        if db is not None:
+            _record_mikrotik_auth_attempt(
+                nas_device_id=device.id,
+                method="routeros_api",
+                success=True,
+                execution_time_ms=elapsed_ms,
+            )
+        return status
+    except Exception as api_exc:
+        rest_msg = str(rest_error) if rest_error else "not attempted"
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        if db is not None:
+            _record_mikrotik_auth_attempt(
+                nas_device_id=device.id,
+                method="routeros_api",
+                success=False,
+                execution_time_ms=elapsed_ms,
+                error=str(api_exc),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"MikroTik API test failed. REST error: {rest_msg}. RouterOS API error: {api_exc}",
+        ) from api_exc
+
+
+def get_mikrotik_api_telemetry(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
+    """Fetch MikroTik telemetry with REST-first, RouterOS-API fallback."""
+    status = get_mikrotik_api_status(device, db=db)
+    source = str(status.get("api_source") or "")
+
+    def _to_float(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def _to_int(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(float(str(value).strip()))
+        except (TypeError, ValueError):
+            return None
+
+    if source != "rest":
+        try:
+            _resource, interfaces_raw, ppp_active_raw = _mikrotik_routeros_query(device)
+        except Exception:
+            interfaces_raw = []
+            ppp_active_raw = []
+    else:
+        base_url, auth, headers, verify_tls = _mikrotik_rest_auth(device)
+        interfaces_raw: object = []
+        ppp_active_raw: object = []
+        try:
+            interfaces_raw = _mikrotik_rest_get(
+                base_url=base_url,
+                path="/rest/interface",
+                auth=auth,
+                headers=headers,
+                verify_tls=verify_tls,
+            )
+        except Exception:
+            interfaces_raw = []
+        try:
+            ppp_active_raw = _mikrotik_rest_get(
+                base_url=base_url,
+                path="/rest/ppp/active",
+                auth=auth,
+                headers=headers,
+                verify_tls=verify_tls,
+            )
+        except Exception:
+            ppp_active_raw = []
+
+    interfaces = interfaces_raw if isinstance(interfaces_raw, list) else []
+    ppp_active = ppp_active_raw if isinstance(ppp_active_raw, list) else []
+
+    rx_bps = 0.0
+    tx_bps = 0.0
+    interface_up = 0
+    interface_down = 0
+    for item in interfaces:
+        if not isinstance(item, dict):
+            continue
+        running = str(item.get("running") or "").lower() == "true"
+        disabled = str(item.get("disabled") or "").lower() == "true"
+        if running and not disabled:
+            interface_up += 1
+        else:
+            interface_down += 1
+
+        rx_val = (
+            _to_float(item.get("rx-bits-per-second"))
+            or _to_float(item.get("rx-bps"))
+            or 0.0
+        )
+        tx_val = (
+            _to_float(item.get("tx-bits-per-second"))
+            or _to_float(item.get("tx-bps"))
+            or 0.0
+        )
+        rx_bps += rx_val
+        tx_bps += tx_val
+
+    total_memory = _to_int(status.get("total_memory") or status.get("total-memory"))
+    free_memory = _to_int(status.get("free_memory") or status.get("free-memory"))
+    memory_percent: float | None = None
+    if total_memory and total_memory > 0 and free_memory is not None:
+        used = max(total_memory - free_memory, 0)
+        memory_percent = (used / total_memory) * 100.0
+
+    pppoe_active = 0
+    for session in ppp_active:
+        if not isinstance(session, dict):
+            continue
+        service = str(session.get("service") or "").lower()
+        if "pppoe" in service:
+            pppoe_active += 1
+
+    status["rx_bps"] = rx_bps
+    status["tx_bps"] = tx_bps
+    status["active_subscribers"] = len(ppp_active)
+    status["pppoe_active_subscribers"] = pppoe_active
+    status["interface_up"] = interface_up
+    status["interface_down"] = interface_down
+    status["memory_percent"] = memory_percent
+    return status
 
 
 def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
@@ -1326,21 +2022,109 @@ def delete_connection_rule_for_device(
 
 def refresh_mikrotik_status_for_device(db: Session, *, device_id: str) -> str:
     device = NasDevices.get(db, device_id)
-    status = get_mikrotik_api_status(device)
+    status = get_mikrotik_api_status(device, db=db)
     tags = device.tags
     tags = merge_single_tag(tags, "mikrotik_status_platform:", str(status.get("platform") or "-"))
     tags = merge_single_tag(tags, "mikrotik_status_board_name:", str(status.get("board_name") or "-"))
     tags = merge_single_tag(tags, "mikrotik_status_routeros_version:", str(status.get("routeros_version") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_serial_number:", str(status.get("serial_number") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_primary_mac:", str(status.get("primary_mac") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_architecture_name:", str(status.get("architecture_name") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_cpu_model:", str(status.get("cpu_model") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_cpu_count:", str(status.get("cpu_count") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_cpu_frequency:", str(status.get("cpu_frequency") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_total_hdd_space:", str(status.get("total_hdd_space") or "-"))
+    tags = merge_single_tag(tags, "mikrotik_status_free_hdd_space:", str(status.get("free_hdd_space") or "-"))
     tags = merge_single_tag(tags, "mikrotik_status_cpu_usage:", str(status.get("cpu_usage") or "-"))
     tags = merge_single_tag(tags, "mikrotik_status_ipv6_status:", str(status.get("ipv6_status") or "-"))
     last_check = status.get("last_status_check")
     tags = merge_single_tag(tags, "mikrotik_status_last_check:", str(last_check) if last_check else "-")
-    NasDevices.update(db, device_id, NasDeviceUpdate(tags=tags))
+    NasDevices.update(
+        db,
+        device_id,
+        NasDeviceUpdate(
+            model=str(status.get("board_name") or "").strip() or None,
+            firmware_version=str(status.get("routeros_version") or "").strip() or None,
+            serial_number=str(status.get("serial_number") or "").strip() or None,
+            tags=tags,
+        ),
+    )
     return (
         f"Connected. Platform={status.get('platform') or '-'}, "
         f"Board={status.get('board_name') or '-'}, "
         f"RouterOS={status.get('routeros_version') or '-'}"
     )
+
+
+def _generate_router_password(length: int = 20) -> str:
+    alphabet = string.ascii_letters + string.digits + "@#%+=_-"
+    return "".join(secrets.choice(alphabet) for _ in range(max(12, length)))
+
+
+def generate_mikrotik_bootstrap_script_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    username: str = "dotmacapi",
+    api_port: int = 8728,
+    rest_port: int = 443,
+) -> dict[str, str]:
+    """Rotate MikroTik API credentials and return RouterOS terminal bootstrap script."""
+    device = NasDevices.get(db, device_id)
+    host = (device.management_ip or device.ip_address or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="Management IP is not configured for this NAS device.")
+
+    username = (username or "dotmacapi").strip().lower() or "dotmacapi"
+    api_port = max(1, min(int(api_port or 8728), 65535))
+    rest_port = max(1, min(int(rest_port or 443), 65535))
+    password = _generate_router_password(20)
+
+    tags = device.tags
+    tags = merge_single_tag(tags, "mikrotik_api_enabled:", "true")
+    tags = merge_single_tag(tags, "mikrotik_api_port:", str(api_port))
+
+    NasDevices.update(
+        db,
+        device_id,
+        NasDeviceUpdate(
+            vendor=NasVendor.mikrotik,
+            api_url=f"https://{host}",
+            api_username=username,
+            api_password=password,
+            api_verify_tls=False,
+            tags=tags,
+        ),
+    )
+
+    script_lines = [
+        "# Dotmac MikroTik API bootstrap",
+        f"# Device: {device.name} ({host})",
+        f"# Generated: {datetime.now(UTC).isoformat()}",
+        "",
+        f':local existing [/user find where name="{username}"]',
+        ':if ([:len $existing] = 0) do={',
+        f'    /user add name="{username}" password="{password}" group=read comment="dotmac-api"',
+        "} else={",
+        f'    /user set $existing password="{password}" group=read',
+        "}",
+        "",
+        f"/ip service set [find name=api] disabled=no port={api_port}",
+        ':if ([:len [/ip service find where name="www-ssl"]] > 0) do={',
+        f"    /ip service set [find name=www-ssl] disabled=no port={rest_port}",
+        "}",
+        "",
+        f':put "DOTMAC_API_USERNAME={username}"',
+        f':put "DOTMAC_API_PASSWORD={password}"',
+    ]
+    return {
+        "script": "\n".join(script_lines),
+        "username": username,
+        "password": password,
+        "api_url": f"https://{host}",
+        "api_port": str(api_port),
+        "rest_port": str(rest_port),
+    }
 
 
 # =============================================================================
@@ -2080,7 +2864,7 @@ class DeviceProvisioner:
             raise HTTPException(status_code=400, detail="Device has no SSH credentials")
 
         host = device.management_ip or device.ip_address
-        port = device.management_port or 22
+        port = device.management_port or 120
         assert host is not None
 
         client = paramiko.SSHClient()

@@ -159,7 +159,7 @@
                 <h3 class="text-lg font-semibold">Delete Subscribers</h3>
             </div>
             <p class="mt-3 text-sm text-slate-600 dark:text-slate-400">
-                Are you sure you want to delete <span x-text="selectedIds.length" class="font-semibold text-red-600 dark:text-red-400"></span> subscriber(s)? Only inactive subscribers will be deleted. This action cannot be undone.
+                Are you sure you want to move <span x-text="selectedIds.length" class="font-semibold text-red-600 dark:text-red-400"></span> subscriber(s) to recovery queue? Only inactive subscribers are eligible.
             </p>
             <div class="mt-6 flex justify-end gap-3">
                 <button @click="bulkDeleteModal = false" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
@@ -167,7 +167,7 @@
                 </button>
                 <button @click="applyBulkDelete()"
                         class="rounded-lg bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-600">
-                    <span x-show="!bulkLoading">Delete Subscribers</span>
+                    <span x-show="!bulkLoading">Move To Recovery</span>
                     <span x-show="bulkLoading" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                         Deleting...

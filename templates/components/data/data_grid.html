@@ -1,0 +1,606 @@
+{#
+   Data Grid Component
+   ===================
+   A reusable, data-driven table with column picker, sorting, search, and pagination.
+
+   Usage:
+   {% from "components/data/data_grid.html" import data_grid, cell, cell_link, cell_status,
+       cell_badge, cell_date, cell_currency, cell_mono, cell_boolean, cell_actions,
+       cell_bandwidth, cell_custom %}
+
+   {% call(row) data_grid(
+       table_id="subscribers-grid",
+       items=subscribers,
+       columns=[
+           {"key": "name", "label": "Subscriber", "sortable": true},
+           {"key": "email", "label": "Email", "hidden": true},
+           {"key": "status", "label": "Status"},
+           {"key": "created_at", "label": "Created", "sortable": true},
+           {"key": "actions", "label": "", "align": "right", "always_visible": true},
+       ],
+       color="amber",
+       htmx_url="/admin/subscribers",
+       create_url="/admin/subscribers/new",
+       create_label="Add Subscriber",
+       page=page, total_pages=total_pages, total=total, per_page=per_page,
+       current_sort=sort, current_dir=dir
+   ) %}
+       {{ cell_link("name", row.display_name, "/admin/subscribers/" ~ row.id, row.email) }}
+       {{ cell_status("status", row.status.value|title, "active") }}
+       {{ cell_date("created_at", row.created_at) }}
+       {{ cell_actions("actions", [
+           {"href": "/admin/subscribers/" ~ row.id, "icon": "view", "title": "View"},
+           {"href": "/admin/subscribers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit"},
+       ]) }}
+   {% endcall %}
+
+   IMPORTANT: Cell order in the call block MUST match column order in the columns list.
+   Hidden columns still occupy DOM positions — x-show keeps alignment correct.
+
+   Parameters:
+   - table_id: Unique ID for the table (used for HTMX targets and localStorage)
+   - items: List of ORM model instances or dicts to iterate
+   - columns: List of column definitions:
+       key (str):            Column identifier — must match the cell macro's col param
+       label (str):          Header text
+       sortable (bool):      Enable sort button (default: false)
+       hidden (bool):        Hidden by default in column picker (default: false)
+       always_visible (bool): Cannot be toggled off (default: false)
+       align (str):          "left" | "center" | "right" (default: "left")
+       class (str):          Extra CSS classes for the <th>
+   - color: Module accent color (default: "slate")
+   - htmx_url: Base URL for HTMX requests (search, sort, pagination)
+   - htmx_target: Override HTMX target ID (default: "{table_id}-wrapper")
+   - searchable: Show search input (default: true)
+   - search_placeholder: Search input placeholder text
+   - search_value: Current search term (echo back for HTMX)
+   - create_url: URL for "Add New" button (omit to hide)
+   - create_label: Label for create button (default: "Add New")
+   - filters: Pre-rendered HTML for filter controls in toolbar
+   - extra_actions: Pre-rendered HTML for extra toolbar buttons
+   - empty_title/empty_message/empty_action_label/empty_action_href: Empty state config
+   - page/total_pages/total/per_page: Pagination state
+   - current_sort/current_dir: Current sort column and direction
+   - selectable: Show row checkboxes (default: false)
+   - column_picker: Show column toggle dropdown (default: true)
+   - show_count: Show total count badge (default: true)
+#}
+
+{% from "components/ui/macros.html" import status_badge %}
+
+
+{# ============================================
+   DATA GRID
+   Full-featured reusable data table
+   ============================================ #}
+{% macro data_grid(
+    table_id="data-grid",
+    items=none,
+    columns=none,
+    color="slate",
+    htmx_url="",
+    htmx_target="",
+    searchable=true,
+    search_placeholder="Search...",
+    search_value="",
+    create_url="",
+    create_label="Add New",
+    filters="",
+    extra_actions="",
+    empty_title="No data found",
+    empty_message="Get started by creating a new item.",
+    empty_action_label="",
+    empty_action_href="",
+    page=1,
+    total_pages=1,
+    total=0,
+    per_page=25,
+    current_sort="",
+    current_dir="desc",
+    selectable=false,
+    column_picker=true,
+    show_count=true
+) %}
+{# Compute default visible columns #}
+{% set ns = namespace(visible=[]) %}
+{% for col in columns %}
+    {% if not col.get("hidden", false) %}
+        {% set ns.visible = ns.visible + [col.key] %}
+    {% endif %}
+{% endfor %}
+{% set hx_tgt = htmx_target or (table_id ~ "-wrapper") %}
+{% set items_list = items or [] %}
+{% set col_count = columns|length + (1 if selectable else 0) %}
+
+<div id="{{ hx_tgt }}"
+     x-data='{
+         visibleCols: JSON.parse(localStorage.getItem("dg_{{ table_id }}")) || {{ ns.visible | tojson }},
+         showPicker: false,
+         selectedIds: [],
+         get allSelected() {
+             const boxes = this.$root.querySelectorAll("[data-row-select]");
+             return boxes.length > 0 && this.selectedIds.length === boxes.length;
+         }
+     }'
+     x-init="$watch('visibleCols', v => localStorage.setItem('dg_{{ table_id }}', JSON.stringify(v)))"
+     class="animate-fade-in-up space-y-4">
+
+    {# ──── Toolbar ──── #}
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-wrap items-center gap-3">
+            {# Search #}
+            {% if searchable and htmx_url %}
+            <div class="relative">
+                <input type="search"
+                       name="search"
+                       value="{{ search_value }}"
+                       placeholder="{{ search_placeholder }}"
+                       hx-get="{{ htmx_url }}"
+                       hx-trigger="input changed delay:300ms, search"
+                       hx-target="#{{ hx_tgt }}"
+                       hx-swap="outerHTML"
+                       hx-include="closest div [name='sort'], closest div [name='dir']"
+                       class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm placeholder-slate-400 shadow-sm transition-all focus:border-{{ color }}-400 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-{{ color }}-500 sm:w-72" />
+                <svg class="absolute left-3 top-3 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+            </div>
+            {% endif %}
+
+            {# Filters slot #}
+            {% if filters %}{{ filters | safe }}{% endif %}
+
+            {# Count badge #}
+            {% if show_count and total %}
+            <span class="text-sm text-slate-500 dark:text-slate-400">
+                <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
+            </span>
+            {% endif %}
+        </div>
+
+        <div class="flex items-center gap-2">
+            {# Extra actions slot #}
+            {% if extra_actions %}{{ extra_actions | safe }}{% endif %}
+
+            {# Column Picker #}
+            {% if column_picker %}
+            <div class="relative">
+                <button @click="showPicker = !showPicker"
+                        type="button"
+                        class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                        title="Toggle columns">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7"/>
+                    </svg>
+                    Columns
+                </button>
+                <div x-show="showPicker"
+                     @click.away="showPicker = false"
+                     x-transition
+                     x-cloak
+                     class="absolute right-0 z-30 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                    <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Toggle Columns</p>
+                    {% for col in columns %}
+                    {% if not col.get("always_visible", false) and col.get("label", "") %}
+                    <label class="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm text-slate-700 transition-colors hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/50">
+                        <input type="checkbox"
+                               :checked="visibleCols.includes('{{ col.key }}')"
+                               @change="visibleCols.includes('{{ col.key }}') ? visibleCols = visibleCols.filter(c => c !== '{{ col.key }}') : visibleCols = [...visibleCols, '{{ col.key }}']"
+                               class="h-4 w-4 rounded border-slate-300 text-{{ color }}-600 focus:ring-{{ color }}-500 dark:border-slate-600" />
+                        {{ col.label }}
+                    </label>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            {# Create Button #}
+            {% if create_url %}
+            <a href="{{ create_url }}"
+               class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                {{ create_label }}
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Hidden sort state for HTMX includes #}
+    <input type="hidden" name="sort" value="{{ current_sort }}" />
+    <input type="hidden" name="dir" value="{{ current_dir }}" />
+
+    {# ──── Table ──── #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+
+                {# ── Header ── #}
+                <thead>
+                    <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                        {% if selectable %}
+                        <th scope="col" class="w-12 px-3 py-3.5">
+                            <input type="checkbox"
+                                   :checked="allSelected"
+                                   @change="if ($event.target.checked) { selectedIds = [...$root.querySelectorAll('[data-row-select]')].map(el => el.dataset.rowId) } else { selectedIds = [] }"
+                                   class="h-4 w-4 rounded border-slate-300 text-{{ color }}-600 focus:ring-{{ color }}-500 dark:border-slate-600 dark:bg-slate-700" />
+                        </th>
+                        {% endif %}
+
+                        {% for col in columns %}
+                        <th x-show="visibleCols.includes('{{ col.key }}')"
+                            scope="col"
+                            class="px-5 py-3.5 text-{{ col.get('align', 'left') }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 {{ col.get('class', '') }}">
+                            {% if col.get("sortable", false) and htmx_url %}
+                            <button class="group inline-flex items-center gap-1.5 transition-colors hover:text-slate-700 dark:hover:text-slate-200"
+                                    hx-get="{{ htmx_url }}?sort={{ col.key }}&dir={{ 'desc' if current_sort == col.key and current_dir == 'asc' else 'asc' }}"
+                                    hx-target="#{{ hx_tgt }}"
+                                    hx-swap="outerHTML"
+                                    hx-include="[name='search']">
+                                {{ col.label }}
+                                {% if current_sort == col.key %}
+                                <svg class="h-3.5 w-3.5 text-{{ color }}-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    {% if current_dir == "asc" %}
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+                                    {% else %}
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    {% endif %}
+                                </svg>
+                                {% else %}
+                                <svg class="h-3.5 w-3.5 text-slate-300 opacity-0 transition-opacity group-hover:opacity-100 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+                                </svg>
+                                {% endif %}
+                            </button>
+                            {% else %}
+                            {{ col.label }}
+                            {% endif %}
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+
+                {# ── Body ── #}
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% if items_list %}
+                    {% for item in items_list %}
+                    <tr class="group transition-colors hover:bg-gradient-to-r hover:from-{{ color }}-50/50 hover:to-{{ color }}-50/30 dark:hover:from-{{ color }}-900/10 dark:hover:to-{{ color }}-900/5"
+                        {% if item.id is defined %}data-row-id="{{ item.id }}"{% endif %}>
+                        {% if selectable and item.id is defined %}
+                        <td class="w-12 px-3 py-4">
+                            <input type="checkbox"
+                                   data-row-select
+                                   data-row-id="{{ item.id }}"
+                                   :checked="selectedIds.includes('{{ item.id }}')"
+                                   @change="$event.target.checked ? selectedIds = [...selectedIds, '{{ item.id }}'] : selectedIds = selectedIds.filter(id => id !== '{{ item.id }}')"
+                                   class="h-4 w-4 rounded border-slate-300 text-{{ color }}-600 focus:ring-{{ color }}-500 dark:border-slate-600" />
+                        </td>
+                        {% endif %}
+                        {{ caller(item) }}
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    {# ── Empty State ── #}
+                    <tr>
+                        <td colspan="{{ col_count }}" class="px-6 py-16 text-center">
+                            <div class="flex flex-col items-center gap-4">
+                                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-100 to-{{ color }}-200 dark:from-{{ color }}-900/40 dark:to-{{ color }}-800/30">
+                                    <svg class="h-8 w-8 text-{{ color }}-600 dark:text-{{ color }}-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ empty_title }}</h3>
+                                    {% if empty_message %}
+                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>
+                                    {% endif %}
+                                </div>
+                                {% if empty_action_label and empty_action_href %}
+                                <a href="{{ empty_action_href }}"
+                                   class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                                    </svg>
+                                    {{ empty_action_label }}
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        {# ──── Pagination ──── #}
+        {% if total_pages > 1 %}
+        <div class="border-t border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-5 py-4 dark:border-slate-700/60 dark:from-slate-800/80 dark:to-slate-800/50">
+            <div class="flex flex-col items-center justify-between gap-3 sm:flex-row">
+                <p class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing
+                    <span class="font-semibold text-slate-700 dark:text-slate-300">{{ (page - 1) * per_page + 1 }}</span>
+                    to
+                    <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span>
+                    of
+                    <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span>
+                </p>
+                <nav class="flex items-center gap-1" aria-label="Pagination">
+                    {# Previous #}
+                    {% if page > 1 %}
+                    <button hx-get="{{ htmx_url }}?page={{ page - 1 }}"
+                            hx-target="#{{ hx_tgt }}"
+                            hx-swap="outerHTML"
+                            hx-include="[name='search'],[name='sort'],[name='dir']"
+                            class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200"
+                            aria-label="Previous page">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    </button>
+                    {% endif %}
+
+                    {# Page numbers #}
+                    {% for p in range(1, total_pages + 1) %}
+                        {% if p == page %}
+                        <span class="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-{{ color }}-500/25"
+                              aria-current="page">{{ p }}</span>
+                        {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
+                        <button hx-get="{{ htmx_url }}?page={{ p }}"
+                                hx-target="#{{ hx_tgt }}"
+                                hx-swap="outerHTML"
+                                hx-include="[name='search'],[name='sort'],[name='dir']"
+                                class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                            {{ p }}
+                        </button>
+                        {% elif p == page - 2 or p == page + 2 %}
+                        <span class="px-1 text-slate-400">...</span>
+                        {% endif %}
+                    {% endfor %}
+
+                    {# Next #}
+                    {% if page < total_pages %}
+                    <button hx-get="{{ htmx_url }}?page={{ page + 1 }}"
+                            hx-target="#{{ hx_tgt }}"
+                            hx-swap="outerHTML"
+                            hx-include="[name='search'],[name='sort'],[name='dir']"
+                            class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200"
+                            aria-label="Next page">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </button>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ============================================
+   CELL MACROS
+   Typed cell renderers for common data patterns.
+   Each wraps a <td> with x-show for column visibility.
+   ============================================ #}
+
+
+{# ── Plain text cell ── #}
+{% macro cell(col, value="", class="") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4 {{ class }}">
+    <span class="text-sm text-slate-900 dark:text-white">{{ value if value is not none and value != "" else "—" }}</span>
+</td>
+{% endmacro %}
+
+
+{# ── Linked text with optional secondary line ── #}
+{% macro cell_link(col, label, href, secondary="", color="slate") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    <div class="min-w-0">
+        <a href="{{ href }}" class="group/link inline-flex items-center gap-1.5">
+            <span class="text-sm font-semibold text-slate-900 transition-colors group-hover/link:text-{{ color }}-600 dark:text-white dark:group-hover/link:text-{{ color }}-400">
+                {{ label }}
+            </span>
+            <svg class="h-3.5 w-3.5 flex-shrink-0 text-slate-400 opacity-0 transition-all group-hover/link:opacity-100 group-hover/link:text-{{ color }}-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+        </a>
+        {% if secondary %}
+        <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ secondary }}</p>
+        {% endif %}
+    </div>
+</td>
+{% endmacro %}
+
+
+{# ── Status badge (uses the global status_badge macro) ── #}
+{% macro cell_status(col, label, variant="default") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    {{ status_badge(label, variant) }}
+</td>
+{% endmacro %}
+
+
+{# ── Simple colored badge (for type indicators, categories) ── #}
+{% macro cell_badge(col, label, variant="default") %}
+{% set styles = {
+    "info":    "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+    "success": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+    "warning": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+    "danger":  "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
+    "purple":  "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+    "default": "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300"
+} %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium {{ styles.get(variant, styles['default']) }}">
+        {{ label }}
+    </span>
+</td>
+{% endmacro %}
+
+
+{# ── Formatted date/datetime ── #}
+{% macro cell_date(col, value, format="short") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    {% if value %}
+    <span class="text-sm text-slate-600 dark:text-slate-300">
+        {% if format == "short" %}
+        {{ value.strftime('%b %d, %Y') }}
+        {% elif format == "datetime" %}
+        {{ value.strftime('%b %d, %Y %H:%M') }}
+        {% elif format == "iso" %}
+        {{ value.strftime('%Y-%m-%d') }}
+        {% else %}
+        {{ value.strftime(format) }}
+        {% endif %}
+    </span>
+    {% else %}
+    <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+    {% endif %}
+</td>
+{% endmacro %}
+
+
+{# ── Currency amount with symbol ── #}
+{% macro cell_currency(col, amount, symbol="₦") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    <span class="text-sm font-medium tabular-nums font-mono text-slate-900 dark:text-white">
+        {{ symbol }}{{ "%.2f" | format(amount or 0) }}
+    </span>
+</td>
+{% endmacro %}
+
+
+{# ── Monospace text (IPs, MACs, serial numbers, UUIDs) ── #}
+{% macro cell_mono(col, value) %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    {% if value %}
+    <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ value }}</code>
+    {% else %}
+    <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+    {% endif %}
+</td>
+{% endmacro %}
+
+
+{# ── Boolean indicator (check / x) ── #}
+{% macro cell_boolean(col, value) %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    {% if value %}
+    <svg class="h-5 w-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="Yes"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+    {% else %}
+    <svg class="h-5 w-5 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="No"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    {% endif %}
+</td>
+{% endmacro %}
+
+
+{# ── Bandwidth display (ISP-specific: download / upload) ── #}
+{% macro cell_bandwidth(col, download, upload=none) %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4">
+    {% if download %}
+    <div class="flex items-center gap-1.5 text-sm">
+        <svg class="h-3.5 w-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+        <span class="font-medium text-slate-900 dark:text-white">{{ download }} Mbps</span>
+        {% if upload %}
+        <span class="text-slate-400 dark:text-slate-500">/</span>
+        <svg class="h-3.5 w-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+        <span class="text-slate-600 dark:text-slate-400">{{ upload }} Mbps</span>
+        {% endif %}
+    </div>
+    {% else %}
+    <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+    {% endif %}
+</td>
+{% endmacro %}
+
+
+{# ── Hover-reveal action buttons ── #}
+{#
+   actions: list of dicts with keys:
+     href (str):       Link URL (for link actions)
+     hx_post (str):    HTMX POST URL (for button actions)
+     hx_delete (str):  HTMX DELETE URL (for button actions)
+     hx_confirm (str): Confirmation prompt text
+     icon (str):       Icon name — "view", "edit", "delete", "link", or "more"
+     title (str):      Tooltip text
+     color (str):      Accent color (default: "slate")
+#}
+{% macro cell_actions(col, actions) %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4 text-right">
+    <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        {% for a in actions %}
+        {% set btn_color = a.get("color", "slate") %}
+        {% set btn_class = "inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-" ~ btn_color ~ "-100 hover:text-" ~ btn_color ~ "-600 dark:hover:bg-" ~ btn_color ~ "-900/30 dark:hover:text-" ~ btn_color ~ "-400" %}
+
+        {% if a.get("hx_post") or a.get("hx_delete") %}
+        <button type="button"
+                {% if a.get("hx_post") %}hx-post="{{ a.hx_post }}"{% endif %}
+                {% if a.get("hx_delete") %}hx-delete="{{ a.hx_delete }}"{% endif %}
+                {% if a.get("hx_confirm") %}hx-confirm="{{ a.hx_confirm }}"{% endif %}
+                class="{{ btn_class }}"
+                title="{{ a.get('title', '') }}">
+            {{ _action_icon(a.get("icon", "more")) }}
+        </button>
+        {% else %}
+        <a href="{{ a.get('href', '#') }}"
+           class="{{ btn_class }}"
+           title="{{ a.get('title', '') }}">
+            {{ _action_icon(a.get("icon", "more")) }}
+        </a>
+        {% endif %}
+        {% endfor %}
+    </div>
+</td>
+{% endmacro %}
+
+
+{# ── Custom freeform cell (escape hatch) ── #}
+{#
+   Usage:
+   {% call cell_custom("my_col") %}
+       <div class="flex items-center gap-2">
+           <img src="{{ row.avatar }}" class="h-8 w-8 rounded-full" />
+           <span>{{ row.name }}</span>
+       </div>
+   {% endcall %}
+#}
+{% macro cell_custom(col, align="left", class="") %}
+<td x-show="visibleCols.includes('{{ col }}')"
+    class="whitespace-nowrap px-5 py-4 text-{{ align }} {{ class }}">
+    {{ caller() }}
+</td>
+{% endmacro %}
+
+
+{# ============================================
+   INTERNAL HELPERS
+   ============================================ #}
+
+{# Action icon resolver #}
+{% macro _action_icon(name) %}
+{% if name == "view" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+{% elif name == "edit" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+{% elif name == "delete" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+{% elif name == "link" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+{% elif name == "download" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+{% elif name == "disable" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+{% else %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
+{% endif %}
+{% endmacro %}

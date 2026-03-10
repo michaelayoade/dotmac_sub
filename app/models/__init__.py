@@ -145,6 +145,11 @@ from app.models.integration import (  # noqa: F401
     IntegrationTarget,
     IntegrationTargetType,
 )
+from app.models.integration_connector import (  # noqa: F401
+    IntegrationConnector,
+    IntegrationConnectorStatus,
+    IntegrationConnectorType,
+)
 from app.models.integration_hook import (  # noqa: F401
     IntegrationHook,
     IntegrationHookAuthType,

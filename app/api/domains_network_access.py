@@ -1,54 +1,14 @@
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.network import IPVersion
-from app.schemas.bandwidth import (
-    BandwidthSampleCreate,
-    BandwidthSampleRead,
-    BandwidthSeriesPoint,
-)
-from app.schemas.collections import (
-    DunningActionLogCreate,
-    DunningActionLogRead,
-    DunningCaseCreate,
-    DunningCaseRead,
-    DunningCaseUpdate,
-    DunningRunRequest,
-    DunningRunResponse,
-)
 from app.schemas.common import ListResponse
-from app.schemas.lifecycle import (
-    SubscriptionLifecycleEventCreate,
-    SubscriptionLifecycleEventRead,
-)
 from app.schemas.network import (
     CPEDeviceCreate,
     CPEDeviceRead,
     CPEDeviceUpdate,
-    FdhCabinetCreate,
-    FdhCabinetRead,
-    FdhCabinetUpdate,
-    FiberSegmentCreate,
-    FiberSegmentRead,
-    FiberSegmentUpdate,
-    FiberSpliceClosureCreate,
-    FiberSpliceClosureRead,
-    FiberSpliceClosureUpdate,
-    FiberSpliceCreate,
-    FiberSpliceRead,
-    FiberSpliceTrayCreate,
-    FiberSpliceTrayRead,
-    FiberSpliceTrayUpdate,
-    FiberSpliceUpdate,
-    FiberStrandCreate,
-    FiberStrandRead,
-    FiberStrandUpdate,
-    FiberTerminationPointCreate,
-    FiberTerminationPointRead,
-    FiberTerminationPointUpdate,
     IPAssignmentCreate,
     IPAssignmentRead,
     IPAssignmentUpdate,
@@ -99,95 +59,13 @@ from app.schemas.network import (
     PortUpdate,
     PortVlanCreate,
     PortVlanRead,
-    SplitterCreate,
-    SplitterPortAssignmentCreate,
-    SplitterPortAssignmentRead,
-    SplitterPortAssignmentUpdate,
-    SplitterPortCreate,
-    SplitterPortRead,
-    SplitterPortUpdate,
-    SplitterRead,
-    SplitterUpdate,
     VlanCreate,
     VlanRead,
     VlanUpdate,
 )
-from app.schemas.network_metrics import FiberPathRead, PortUtilizationRead
-from app.schemas.radius import (
-    RadiusClientCreate,
-    RadiusClientRead,
-    RadiusClientUpdate,
-    RadiusServerCreate,
-    RadiusServerRead,
-    RadiusServerUpdate,
-    RadiusSyncJobCreate,
-    RadiusSyncJobRead,
-    RadiusSyncJobUpdate,
-    RadiusSyncRunRead,
-    RadiusUserRead,
-)
-from app.schemas.snmp import (
-    SnmpCredentialCreate,
-    SnmpCredentialRead,
-    SnmpCredentialUpdate,
-    SnmpOidCreate,
-    SnmpOidRead,
-    SnmpOidUpdate,
-    SnmpPollerCreate,
-    SnmpPollerRead,
-    SnmpPollerUpdate,
-    SnmpReadingCreate,
-    SnmpReadingRead,
-    SnmpTargetCreate,
-    SnmpTargetRead,
-    SnmpTargetUpdate,
-)
-from app.schemas.subscription_engine import (
-    SubscriptionEngineCreate,
-    SubscriptionEngineRead,
-    SubscriptionEngineSettingCreate,
-    SubscriptionEngineSettingRead,
-    SubscriptionEngineSettingUpdate,
-    SubscriptionEngineUpdate,
-)
-from app.schemas.tr069 import (
-    Tr069AcsServerCreate,
-    Tr069AcsServerRead,
-    Tr069AcsServerUpdate,
-    Tr069CpeDeviceCreate,
-    Tr069CpeDeviceRead,
-    Tr069CpeDeviceUpdate,
-    Tr069JobCreate,
-    Tr069JobRead,
-    Tr069JobUpdate,
-    Tr069ParameterCreate,
-    Tr069ParameterRead,
-    Tr069SessionCreate,
-    Tr069SessionRead,
-)
-from app.services import (
-    bandwidth as bandwidth_service,
-)
-from app.services import (
-    collections as collections_service,
-)
-from app.services import (
-    lifecycle as lifecycle_service,
-)
+from app.schemas.network_metrics import PortUtilizationRead
 from app.services import (
     network as network_service,
-)
-from app.services import (
-    radius as radius_service,
-)
-from app.services import (
-    snmp as snmp_service,
-)
-from app.services import (
-    subscription_engine as subscription_engine_service,
-)
-from app.services import (
-    tr069 as tr069_service,
 )
 from app.services.auth_dependencies import require_permission
 

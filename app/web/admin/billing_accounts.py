@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationChannel, NotificationStatus
+from app.schemas.notification import NotificationCreate
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_accounts as web_billing_accounts_service
@@ -16,13 +17,12 @@ from app.services import web_billing_statements as web_billing_statements_servic
 from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.services.file_storage import build_content_disposition
-from app.schemas.notification import NotificationCreate
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-@router.get("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:read"))])
 def accounts_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -49,7 +49,7 @@ def accounts_list(
     )
 
 
-@router.get("/accounts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get("/accounts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
 def account_new(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -74,7 +74,7 @@ def account_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
 def account_create(
     request: Request,
     subscriber_id: str | None = Form(None),
@@ -138,7 +138,7 @@ def account_create(
     return RedirectResponse(url=f"/admin/billing/accounts/{account.id}", status_code=303)
 
 
-@router.get("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
 def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -170,7 +170,7 @@ def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_d
     )
 
 
-@router.post("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
 def account_update(
     request: Request,
     account_id: UUID,
@@ -235,7 +235,7 @@ def account_update(
         )
 
 
-@router.get("/accounts/{account_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/accounts/{account_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:read"))])
 def account_detail(
     request: Request,
     account_id: UUID,
@@ -272,7 +272,7 @@ def account_detail(
 
 @router.get(
     "/accounts/{account_id}/statement.csv",
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:account:read"))],
 )
 def account_statement_csv(
     account_id: UUID,
@@ -307,7 +307,7 @@ def account_statement_csv(
 @router.post(
     "/accounts/{account_id}/statement/send",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def account_statement_send(
     request: Request,

@@ -1,0 +1,29 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% block title %}NAS Types - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+<div class="relative space-y-6">
+    {% call page_header(title="NAS Types", subtitle="Supported NAS vendor types and their capabilities", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>', color="blue", color2="cyan") %}{% endcall %}
+    {% call card("Configured NAS Types", color="blue") %}
+    {% if nas_types %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead><tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400"><th class="px-4 py-3">Name</th><th class="px-4 py-3">MikroTik API</th></tr></thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for t in nas_types %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ t.name }}</td>
+                    <td class="px-4 py-3">{% if t.has_api %}{{ status_badge("Yes", "active", size="sm") }}{% else %}{{ status_badge("No", "neutral", size="sm") }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No NAS types configured", "NAS types define supported vendor equipment for RADIUS.") }}
+    {% endif %}
+    {% endcall %}
+</div>
+{{ animation_styles() }}
+{% endblock %}

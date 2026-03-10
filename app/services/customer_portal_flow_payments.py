@@ -116,6 +116,23 @@ def verify_and_record_payment(
     if not invoice_id:
         raise ValueError("Payment metadata missing invoice_id")
 
+    # Idempotency: check if a payment with this external reference already exists
+    from app.models.billing import Payment
+
+    existing_payment = (
+        db.query(Payment)
+        .filter(Payment.external_id == str(tx.get("id", "")))
+        .first()
+    )
+    if existing_payment:
+        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+        return {
+            "payment": existing_payment,
+            "invoice": invoice,
+            "amount": getattr(existing_payment, "amount", amount_naira),
+            "reference": reference,
+        }
+
     allowed_account_ids = get_allowed_account_ids(customer, db)
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     if not invoice or (

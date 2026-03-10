@@ -14,3 +14,15 @@ def run_usage_rating():
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.usage.import_radius_accounting")
+def import_radius_accounting():
+    session = SessionLocal()
+    try:
+        return usage_service.import_radius_accounting(session)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

@@ -16,6 +16,7 @@
         color2="indigo"
     ) %}
         <div class="flex items-center gap-2">
+            {{ action_button("Refresh", "/admin/network/nas?refresh=1", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "slate") }}
             {{ action_button("Templates", "/admin/network/nas/templates", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>', "secondary", "slate") }}
             {{ action_button("Logs", "/admin/network/nas/logs", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>', "secondary", "slate") }}
             {{ action_button("Add NAS Device", "/admin/network/nas/devices/new", icon_plus(), "primary", "blue", "indigo") }}
@@ -164,10 +165,28 @@
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
+                        {% set runtime_status = runtime_statuses[device.id|string] if runtime_statuses and device.id|string in runtime_statuses else None %}
+                        {% if runtime_status %}
+                        {% if runtime_status == 'online' %}
+                        {{ status_badge("Online", "active", pulse=true, size="sm") }}
+                        {% elif runtime_status == 'offline' %}
+                        {{ status_badge("Offline", "error", size="sm") }}
+                        {% elif runtime_status == 'degraded' %}
+                        {{ status_badge("Degraded", "warning", size="sm") }}
+                        {% elif runtime_status == 'maintenance' %}
+                        {{ status_badge("Maintenance", "neutral", size="sm") }}
+                        {% else %}
+                        {{ status_badge(runtime_status|title, "neutral", size="sm") }}
+                        {% endif %}
+                        {% else %}
                         {{ status_badge(device.status.value|title, device.status.value, pulse=(device.status.value == 'active'), size="sm") }}
+                        {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                        {% if device.last_seen_at %}
+                        {% set last_seen_runtime = runtime_last_seen[device.id|string] if runtime_last_seen and device.id|string in runtime_last_seen else None %}
+                        {% if last_seen_runtime %}
+                        {{ last_seen_runtime.strftime('%Y-%m-%d %H:%M') }}
+                        {% elif device.last_seen_at %}
                         {{ device.last_seen_at.strftime('%Y-%m-%d %H:%M') }}
                         {% else %}
                         <span class="text-slate-400">Never</span>

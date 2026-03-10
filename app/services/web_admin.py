@@ -1,8 +1,15 @@
 """Service helpers for admin web layer."""
 
+from __future__ import annotations
+
+from threading import Lock
+from time import monotonic
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.provisioning import ServiceOrderStatus
+from app.models.notification import Notification, NotificationStatus
+from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 
 
 def _get_initials(name: str) -> str:
@@ -39,30 +46,62 @@ def get_current_user(request) -> dict:
     }
 
 
+_SIDEBAR_STATS_TTL_SECONDS = 10.0
+_sidebar_stats_lock = Lock()
+_sidebar_stats_cached_at = 0.0
+_sidebar_stats_cache: dict[str, object] | None = None
+
+
+def _count_open_service_orders(db: Session) -> int:
+    """Count non-terminal service orders without loading full rows."""
+    return (
+        db.query(func.count(ServiceOrder.id))
+        .filter(
+            ServiceOrder.status.notin_(
+                (
+                    ServiceOrderStatus.active,
+                    ServiceOrderStatus.canceled,
+                    ServiceOrderStatus.failed,
+                )
+            )
+        )
+        .scalar()
+        or 0
+    )
+
+
+def _count_unread_notifications(db: Session) -> int:
+    """Count pending notification queue items for top-bar indicator."""
+    return (
+        db.query(func.count(Notification.id))
+        .filter(Notification.is_active.is_(True))
+        .filter(Notification.status.in_((NotificationStatus.queued, NotificationStatus.sending)))
+        .scalar()
+        or 0
+    )
+
+
 def get_sidebar_stats(db: Session) -> dict:
     """Get stats for sidebar badges."""
+    global _sidebar_stats_cached_at, _sidebar_stats_cache
+
     from app.models.domain_settings import SettingDomain
     from app.services import module_manager as module_manager_service
-    from app.services import provisioning as provisioning_service
     from app.services import settings_spec
 
+    now = monotonic()
+    with _sidebar_stats_lock:
+        if _sidebar_stats_cache and (now - _sidebar_stats_cached_at) < _SIDEBAR_STATS_TTL_SECONDS:
+            return dict(_sidebar_stats_cache)
+
     try:
-        orders = provisioning_service.service_orders.list(
-            db=db,
-            subscriber_id=None,
-            subscription_id=None,
-            status=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=1000,
-            offset=0,
-        )
-        service_orders_count = sum(
-            1 for o in orders
-            if o.status not in (ServiceOrderStatus.active, ServiceOrderStatus.canceled, ServiceOrderStatus.failed)
-        )
+        service_orders_count = _count_open_service_orders(db)
     except Exception:
         service_orders_count = 0
+    try:
+        notifications_unread = _count_unread_notifications(db)
+    except Exception:
+        notifications_unread = 0
 
     try:
         logo_raw = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
@@ -86,12 +125,18 @@ def get_sidebar_stats(db: Session) -> dict:
         module_states = {}
         feature_states = {}
 
-    return {
+    stats = {
         "service_orders": service_orders_count,
         "dispatch_jobs": 0,
+        "notifications_unread": notifications_unread,
         "sidebar_logo_url": sidebar_logo_url,
         "sidebar_logo_dark_url": sidebar_logo_dark_url,
         "favicon_url": favicon_url,
         "module_states": module_states,
         "feature_states": feature_states,
     }
+    with _sidebar_stats_lock:
+        _sidebar_stats_cached_at = monotonic()
+        _sidebar_stats_cache = dict(stats)
+
+    return stats

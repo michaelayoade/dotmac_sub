@@ -1,0 +1,35 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}Data Retention - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Data Retention Policy", subtitle="Configure how long logs and statistics are kept before automatic cleanup", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>', color="slate", color2="gray") %}{% endcall %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20 animate-fade-in-up" style="animation-delay: 30ms;"><p class="text-sm text-amber-700 dark:text-amber-300"><strong>Note:</strong> Retention policies should comply with local regulatory requirements (e.g., GDPR, telecom regulations). Consult your compliance officer before reducing retention periods.</p></div>
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("Retention Periods", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {% set fields = [("admin_logs_months","Admin Audit Logs"),("api_logs_months","API Request Logs"),("internal_logs_months","Internal System Logs"),("portal_logs_months","Portal Access Logs"),("usage_stats_months","Subscriber Usage Stats"),("task_logs_months","Background Task Logs"),("task_results_months","Task Result Files")] %}
+            {% for key, label in fields %}
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</label>
+                <div class="mt-1 flex gap-2">
+                    <select name="{{ key }}" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for v, l in [("1","1 month"),("3","3 months"),("6","6 months"),("12","1 year"),("24","2 years"),("36","3 years"),("60","5 years"),("0","Indefinite")] %}
+                        <option value="{{ v }}" {% if retention[key] == v %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                    {% if retention[key] != retention_defaults.get(key, '') %}
+                    <span class="flex items-center text-xs text-amber-600 dark:text-amber-400" title="Modified from default ({{ retention_defaults.get(key, '') }} months)">Modified</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endcall %}
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Retention Policy</button></div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

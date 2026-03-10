@@ -1,0 +1,39 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+
+{% block title %}Reports Hub - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("teal", "cyan") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Reports Hub",
+        subtitle="Open any report page from one place",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="teal",
+        color2="cyan"
+    ) %}{% endcall %}
+
+    {% for section in sections %}
+    <div class="animate-fade-in-up" style="animation-delay: {{ 75 + loop.index * 50 }}ms;">
+        {% call card(section.name, color=section.color) %}
+        <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">{{ section.description }}</p>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {% for link in section.links %}
+            <a href="{{ link.url }}" class="group flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-{{ section.color }}-200 hover:bg-{{ section.color }}-50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-{{ section.color }}-700 dark:hover:bg-{{ section.color }}-900/20">
+                <div class="min-w-0">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ link.name }}</p>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ link.description }}</p>
+                </div>
+                <svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400 transition group-hover:text-{{ section.color }}-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </a>
+            {% endfor %}
+        </div>
+        {% endcall %}
+    </div>
+    {% endfor %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

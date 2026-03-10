@@ -13,20 +13,24 @@ from app.tasks.bandwidth import (
 from app.tasks.billing import run_invoice_cycle
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
 from app.tasks.exports import run_export_job, run_scheduled_export
-from app.tasks.gis import sync_gis_sources
+from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.nas import cleanup_nas_backups
+from app.tasks.network_monitoring import (
+    refresh_core_device_ping,
+    refresh_core_device_snmp,
+)
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_polling import poll_all_olt_signals
-from app.tasks.provisioning import run_bulk_activation_job
+from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
-from app.tasks.usage import run_usage_rating
+from app.tasks.usage import import_radius_accounting, run_usage_rating
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -50,6 +54,7 @@ from app.tasks.wireguard import (
 
 __all__ = [
     "sync_gis_sources",
+    "run_batch_geocode_job",
     "run_import_job",
     "run_integration_job",
     "generate_invoice_pdf_export",
@@ -60,7 +65,10 @@ __all__ = [
     "run_scheduled_export",
     "run_export_job",
     "run_usage_rating",
+    "import_radius_accounting",
     "cleanup_nas_backups",
+    "refresh_core_device_ping",
+    "refresh_core_device_snmp",
     "refresh_expiring_tokens",
     "check_token_health",
     "cleanup_wireguard_logs",
@@ -74,6 +82,7 @@ __all__ = [
     "backup_all_olts",
     "poll_all_olt_signals",
     "run_bulk_activation_job",
+    "run_service_migration_job",
     "discover_snmp_interfaces",
     "walk_snmp_interfaces",
     "run_vpn_control_job",

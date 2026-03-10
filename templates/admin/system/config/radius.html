@@ -1,0 +1,45 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}RADIUS Configuration - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+<div class="relative space-y-6">
+    {% call page_header(title="RADIUS Configuration", subtitle="Reject IPs, MAC binding, debug logging, and session management", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="blue", color2="cyan") %}{% endcall %}
+    {% if push_message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if push_status == 'success' %}border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300{% endif %}">
+        {{ push_message }}
+    </div>
+    {% endif %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("RADIUS Configuration", color="blue") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reject IP (Not Found)</label><input type="text" name="reject_ip_not_found" value="{{ radius.reject_ip_not_found or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reject IP (Blocked)</label><input type="text" name="reject_ip_blocked" value="{{ radius.reject_ip_blocked or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reject IP (Negative Balance)</label><input type="text" name="reject_ip_negative" value="{{ radius.reject_ip_negative or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reject IP (Bad MAC)</label><input type="text" name="reject_ip_bad_mac" value="{{ radius.reject_ip_bad_mac or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reject IP (Bad Password)</label><input type="text" name="reject_ip_bad_password" value="{{ radius.reject_ip_bad_password or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default NAS Type</label><input type="text" name="nas_type_default" value="{{ radius.nas_type_default or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Debug Mode</label><input type="text" name="debug_enabled" value="{{ radius.debug_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Debug Level (0-10)</label><input type="text" name="debug_level" value="{{ radius.debug_level or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Binding</label><input type="text" name="mac_binding_enabled" value="{{ radius.mac_binding_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Max MACs</label><input type="text" name="max_mac_addresses" value="{{ radius.max_mac_addresses or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Pool Location Link</label><input type="text" name="ip_pool_location_linking" value="{{ radius.ip_pool_location_linking or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Periodic Restart</label><input type="text" name="periodic_restart_enabled" value="{{ radius.periodic_restart_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Restart Frequency</label><input type="text" name="restart_frequency" value="{{ radius.restart_frequency or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Restart Time</label><input type="text" name="restart_time" value="{{ radius.restart_time or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Redirect Enabled</label><input type="text" name="captive_redirect_enabled" value="{{ radius.captive_redirect_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="true/false"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Portal IP/CIDR</label><input type="text" name="captive_portal_ip" value="{{ radius.captive_portal_ip or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="203.0.113.10"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Portal URL</label><input type="text" name="captive_portal_url" value="{{ radius.captive_portal_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://oss.dotmac.ng/portal/billing"></div>
+        </div>
+        {% endcall %}
+        <div class="flex justify-end gap-3">
+            <button type="submit" formaction="/admin/system/config/radius/push-reject-rules" class="rounded-lg border border-blue-300 bg-white px-6 py-2.5 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-50 transition dark:border-blue-700 dark:bg-slate-800 dark:text-blue-300 dark:hover:bg-slate-700">
+                Push Reject Rules Now
+            </button>
+            <button type="submit" class="rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 transition">Save Configuration</button>
+        </div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

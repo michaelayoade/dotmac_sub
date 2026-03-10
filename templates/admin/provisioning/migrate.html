@@ -1,0 +1,251 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Service Migration - Provisioning{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Service Migration</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Filter subscribers, select records, preview changes, and run migrations in the background.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ notice }}</div>
+    {% endif %}
+
+    <form method="GET" action="/admin/provisioning/migrate" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="grid gap-4 md:grid-cols-3">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Reseller/Partner</label>
+                <select name="reseller_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for reseller in resellers %}
+                    <option value="{{ reseller.id }}" {% if filters.reseller_id == reseller.id|string %}selected{% endif %}>{{ reseller.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Location/POP Site</label>
+                <select name="pop_site_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for pop in pop_sites %}
+                    <option value="{{ pop.id }}" {% if filters.pop_site_id == pop.id|string %}selected{% endif %}>{{ pop.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Status</label>
+                <select name="subscriber_status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for status in subscriber_statuses %}
+                    <option value="{{ status }}" {% if filters.subscriber_status == status %}selected{% endif %}>{{ status }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="mt-4 grid gap-4 md:grid-cols-3">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Current Plan</label>
+                <select name="current_offer_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for offer in offers %}
+                    <option value="{{ offer.id }}" {% if filters.current_offer_id == offer.id|string %}selected{% endif %}>{{ offer.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Current Router/NAS</label>
+                <select name="current_nas_device_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Any</option>
+                    {% for nas in nas_devices %}
+                    <option value="{{ nas.id }}" {% if filters.current_nas_device_id == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Search</label>
+                <input type="text" name="query" value="{{ filters.query or '' }}" placeholder="ID, login, name, phone" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+
+        <div class="mt-4 flex justify-end">
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Apply Filters</button>
+        </div>
+    </form>
+
+    <form method="POST" action="/admin/provisioning/migrate/execute" class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 space-y-4">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="reseller_id" value="{{ filters.reseller_id or '' }}">
+        <input type="hidden" name="pop_site_id" value="{{ filters.pop_site_id or '' }}">
+        <input type="hidden" name="subscriber_status" value="{{ filters.subscriber_status or '' }}">
+        <input type="hidden" name="current_offer_id" value="{{ filters.current_offer_id or '' }}">
+        <input type="hidden" name="current_nas_device_id" value="{{ filters.current_nas_device_id or '' }}">
+        <input type="hidden" name="query" value="{{ filters.query or '' }}">
+
+        <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Target Plan</label>
+                <select name="target_offer_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">No change</option>
+                    {% for offer in offers %}
+                    <option value="{{ offer.id }}">{{ offer.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Target Router/NAS</label>
+                <select name="target_nas_device_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">No change</option>
+                    {% for nas in nas_devices %}
+                    <option value="{{ nas.id }}">{{ nas.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Target IP Pool</label>
+                <select name="target_ip_pool_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">No change</option>
+                    {% for pool in ip_pools %}
+                    <option value="{{ pool.id }}">{{ pool.name }} ({{ pool.cidr }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Target OLT Port</label>
+                <select name="target_pon_port_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">No change</option>
+                    {% for port in pon_ports %}
+                    <option value="{{ port.id }}">{{ port.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Schedule (Optional)</label>
+                <input type="datetime-local" name="scheduled_at" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500"><input type="checkbox" onclick="document.querySelectorAll('.subscriber-check').forEach(cb => cb.checked = this.checked)"></th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Status</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Subscriber ID</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Portal Login</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Full Name</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Phone</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Current Plan</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Assigned IPs</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Router/NAS</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">MAC</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">OLT Port</th>
+                        <th class="px-2 py-2 text-left font-semibold uppercase text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in rows %}
+                    <tr>
+                        <td class="px-2 py-1.5"><input class="subscriber-check" type="checkbox" name="selected_ids" value="{{ row.subscriber_id }}"></td>
+                        <td class="px-2 py-1.5">
+                            <span class="rounded-full px-2 py-0.5 {% if row.status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300{% elif row.status in ['suspended', 'delinquent'] %}bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300{% endif %}">{{ row.status }}</span>
+                        </td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200 font-mono">{{ row.subscriber_id }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.portal_login or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.full_name }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.phone or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.current_plan or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.assigned_ips or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.router_nas or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.mac_address or '-' }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.olt_port or '-' }}</td>
+                        <td class="px-2 py-1.5">
+                            <button type="button"
+                                    class="rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                                    onclick="document.querySelectorAll('.subscriber-check').forEach(cb => cb.checked = false); this.closest('tr').querySelector('.subscriber-check').checked = true;">
+                                Select Only
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="12" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No subscribers match current filters.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="flex items-center justify-between">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Showing {{ total }} rows. Select subscribers then preview/execute migration.</p>
+            <div class="flex gap-2">
+                <button type="button"
+                        hx-post="/admin/provisioning/migrate/preview"
+                        hx-target="#migration-preview"
+                        hx-swap="innerHTML"
+                        hx-include="closest form"
+                        class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                    Preview Migration
+                </button>
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                    Execute Migration
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <div id="migration-preview">
+        {% if preview %}
+        {% include "admin/provisioning/_migrate_preview.html" %}
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Migration Job Status</h2>
+        {% if active_job_id %}
+        <div hx-get="/admin/provisioning/migrate/jobs/{{ active_job_id }}/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+            {% if active_job %}
+            {% set job = active_job %}
+            {% include "admin/provisioning/_migrate_job_status.html" %}
+            {% endif %}
+        </div>
+        {% else %}
+        <p class="text-xs text-slate-500 dark:text-slate-400">No active migration job selected.</p>
+        {% endif %}
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Recent Migration Jobs</h2>
+        {% if jobs %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                    <tr>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Job</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Status</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Progress</th>
+                        <th class="px-2 py-1.5 text-left font-semibold uppercase text-slate-500">Counts</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in jobs %}
+                    <tr>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                            <a href="/admin/provisioning/migrate?job_id={{ row.job_id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ row.job_id }}</a>
+                        </td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.status }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.progress_percent or 0 }}%</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">M: {{ row.counts.migrated if row.counts else 0 }}, F: {{ row.counts.failed if row.counts else 0 }}, S: {{ row.counts.skipped if row.counts else 0 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-xs text-slate-500 dark:text-slate-400">No migration jobs yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

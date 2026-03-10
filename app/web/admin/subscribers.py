@@ -50,16 +50,23 @@ from app.services.object_storage import ObjectNotFoundError
 from app.services.web_subscriber_details import (
     build_subscriber_detail_page_context,
 )
-from app.services.web_subscriber_forms import (
-    build_subscriber_update_form_values,
-    load_subscriber_form_options,
-    resolve_new_form_prefill,
-)
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/subscribers", tags=["web-admin-subscribers"])
+
+
+def _parse_json(value: str | None, field: str) -> dict | None:
+    if not value or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field} must be a JSON object")
+    return parsed
 
 
 def _actor_id(request: Request) -> str | None:
@@ -291,28 +298,23 @@ def subscriber_new(request: Request, db: Session = Depends(get_db)):
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-    subscriber_id = request.query_params.get("subscriber_id", "").strip() or None
-    organization_id = request.query_params.get("organization_id", "").strip() or None
-    prefill_ref, prefill_label = resolve_new_form_prefill(
-        db,
-        subscriber_id=subscriber_id,
-        organization_id=organization_id,
-    )
-
-    people, organizations = load_subscriber_form_options(db)
+    customer_type = request.query_params.get("type", "person")
+    if customer_type not in {"person", "organization"}:
+        customer_type = "person"
 
     return templates.TemplateResponse(
-        "admin/subscribers/form.html",
+        "admin/customers/form.html",
         {
             "request": request,
             "subscriber": None,
+            "customer": None,
+            "customer_type": customer_type,
             "action": "create",
+            "form_mode": "subscriber",
+            "return_url": "/admin/subscribers",
+            "return_label": "Subscribers",
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
-            "people": people,
-            "organizations": organizations,
-            "prefill_ref": prefill_ref,
-            "prefill_label": prefill_label,
         },
     )
 
@@ -320,36 +322,105 @@ def subscriber_new(request: Request, db: Session = Depends(get_db)):
 @router.post("/new", response_class=HTMLResponse)
 def subscriber_create(
     request: Request,
-    customer_ref: str | None = Form(None),
-    customer_search: str | None = Form(None),
-    subscriber_type: str | None = Form(None),
-    person_id: str | None = Form(None),
-    organization_id: str | None = Form(None),
+    customer_type: str = Form(...),
+    first_name: str | None = Form(None),
+    last_name: str | None = Form(None),
+    display_name: str | None = Form(None),
+    avatar_url: str | None = Form(None),
+    bio: str | None = Form(None),
+    name: str | None = Form(None),
+    legal_name: str | None = Form(None),
+    tax_id: str | None = Form(None),
+    domain: str | None = Form(None),
+    website: str | None = Form(None),
+    org_notes: str | None = Form(None),
+    email: str | None = Form(None),
+    email_verified: str | None = Form(None),
+    phone: str | None = Form(None),
+    date_of_birth: str | None = Form(None),
+    gender: str | None = Form(None),
+    preferred_contact_method: str | None = Form(None),
+    locale: str | None = Form(None),
+    timezone: str | None = Form(None),
+    address_line1: str | None = Form(None),
+    address_line2: str | None = Form(None),
+    city: str | None = Form(None),
+    region: str | None = Form(None),
+    postal_code: str | None = Form(None),
+    country_code: str | None = Form(None),
+    status: str | None = Form(None),
+    marketing_opt_in: str | None = Form(None),
+    notes: str | None = Form(None),
+    account_start_date: str | None = Form(None),
+    org_account_start_date: str | None = Form(None),
+    metadata: str | None = Form(None),
+    contact_first_name: list[str] = Form([]),
+    contact_last_name: list[str] = Form([]),
+    contact_title: list[str] = Form([]),
+    contact_role: list[str] = Form([]),
+    contact_email: list[str] = Form([]),
+    contact_phone: list[str] = Form([]),
+    contact_is_primary: list[str] = Form([]),
     subscriber_number: str | None = Form(None),
     subscriber_category: str | None = Form(None),
-    notes: str | None = Form(None),
+    subscriber_notes: str | None = Form(None),
     is_active: str | None = Form(None),
-    create_user: str | None = Form(None),
-    user_username: str | None = Form(None),
-    user_password: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Create a new subscriber."""
     try:
-        subscriber = web_subscriber_actions_service.create_subscriber_from_form(
+        contact_columns = {
+            "first_name": contact_first_name,
+            "last_name": contact_last_name,
+            "title": contact_title,
+            "role": contact_role,
+            "email": contact_email,
+            "phone": contact_phone,
+            "is_primary": contact_is_primary,
+        }
+        form_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "display_name": display_name,
+            "avatar_url": avatar_url,
+            "bio": bio,
+            "name": name,
+            "legal_name": legal_name,
+            "tax_id": tax_id,
+            "domain": domain,
+            "website": website,
+            "org_notes": org_notes,
+            "email": email,
+            "email_verified": email_verified,
+            "phone": phone,
+            "date_of_birth": date_of_birth,
+            "gender": gender,
+            "preferred_contact_method": preferred_contact_method,
+            "locale": locale,
+            "timezone": timezone,
+            "address_line1": address_line1,
+            "address_line2": address_line2,
+            "city": city,
+            "region": region,
+            "postal_code": postal_code,
+            "country_code": country_code,
+            "status": status,
+            "is_active": is_active,
+            "marketing_opt_in": marketing_opt_in,
+            "notes": notes,
+            "account_start_date": account_start_date,
+            "org_account_start_date": org_account_start_date,
+            "metadata_json": _parse_json(metadata, "metadata"),
+        }
+        subscriber = web_subscriber_actions_service.create_subscriber_from_full_form(
             db=db,
-            customer_ref=customer_ref,
-            customer_search=customer_search,
-            subscriber_type=subscriber_type,
-            person_id=person_id,
-            organization_id=organization_id,
+            customer_type=customer_type,
+            form_data=form_data,
+            contact_columns=contact_columns,
             subscriber_number=subscriber_number,
             subscriber_category=subscriber_category,
-            notes=notes,
+            subscriber_notes=subscriber_notes,
             is_active=is_active,
-            create_user=create_user,
-            user_username=user_username,
-            user_password=user_password,
         )
         return RedirectResponse(
             url=f"/admin/subscribers/{subscriber.id}",
@@ -364,32 +435,80 @@ def subscriber_create(
 
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
-        people, organizations = load_subscriber_form_options(db)
+        contact_rows = []
+        try:
+            contact_rows = web_customer_actions_service.build_error_contact_rows(
+                {
+                    "first_name": contact_first_name,
+                    "last_name": contact_last_name,
+                    "title": contact_title,
+                    "role": contact_role,
+                    "email": contact_email,
+                    "phone": contact_phone,
+                    "is_primary": contact_is_primary,
+                }
+            )
+        except Exception:
+            contact_rows = []
+
+        form_values = {
+            "first_name": first_name or "",
+            "last_name": last_name or "",
+            "display_name": display_name or "",
+            "avatar_url": avatar_url or "",
+            "bio": bio or "",
+            "name": name or "",
+            "legal_name": legal_name or "",
+            "tax_id": tax_id or "",
+            "domain": domain or "",
+            "website": website or "",
+            "org_notes": org_notes or "",
+            "email": email or "",
+            "email_verified": email_verified or "",
+            "phone": phone or "",
+            "date_of_birth": date_of_birth or "",
+            "gender": gender or "",
+            "preferred_contact_method": preferred_contact_method or "",
+            "locale": locale or "",
+            "timezone": timezone or "",
+            "address_line1": address_line1 or "",
+            "address_line2": address_line2 or "",
+            "city": city or "",
+            "region": region or "",
+            "postal_code": postal_code or "",
+            "country_code": country_code or "",
+            "status": status or "",
+            "is_active": is_active or "",
+            "marketing_opt_in": marketing_opt_in or "",
+            "notes": notes or "",
+            "account_start_date": account_start_date or "",
+            "org_account_start_date": org_account_start_date or "",
+            "metadata": metadata or "",
+        }
 
         return templates.TemplateResponse(
-            "admin/subscribers/form.html",
+            "admin/customers/form.html",
             {
                 "request": request,
                 "subscriber": None,
+                "customer": None,
+                "customer_type": customer_type,
                 "action": "create",
                 "error": str(e),
-                "form": web_subscriber_actions_service.build_subscriber_create_form_values(
-                    customer_ref=customer_ref,
-                    customer_search=customer_search,
-                    subscriber_type=subscriber_type,
-                    person_id=person_id,
-                    organization_id=organization_id,
-                    subscriber_number=subscriber_number,
-                    subscriber_category=subscriber_category,
-                    notes=notes,
-                    is_active=is_active,
-                    create_user=create_user,
-                    user_username=user_username,
-                ),
+                "form_mode": "subscriber",
+                "return_url": "/admin/subscribers",
+                "return_label": "Subscribers",
+                "form": {
+                    "contact_rows": contact_rows or None,
+                },
+                "form_values_json": json.dumps(form_values),
+                "subscriber_form": {
+                    "subscriber_number": subscriber_number or "",
+                    "subscriber_category": subscriber_category or "residential",
+                    "subscriber_notes": subscriber_notes or "",
+                },
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
-                "people": people,
-                "organizations": organizations,
             },
             status_code=400,
         )
@@ -1449,19 +1568,27 @@ def subscriber_edit(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-
-    people, organizations = load_subscriber_form_options(db)
+    customer_type = "organization" if subscriber.organization_id else "person"
+    customer = subscriber.organization if customer_type == "organization" else subscriber
 
     return templates.TemplateResponse(
-        "admin/subscribers/form.html",
+        "admin/customers/form.html",
         {
             "request": request,
             "subscriber": subscriber,
+            "customer": customer,
+            "customer_type": customer_type,
             "action": "edit",
+            "form_mode": "subscriber",
+            "return_url": "/admin/subscribers",
+            "return_label": "Subscribers",
+            "subscriber_form": {
+                "subscriber_number": subscriber.subscriber_number or "",
+                "subscriber_category": subscriber.category.value if subscriber.category else "residential",
+                "subscriber_notes": subscriber.notes or "",
+            },
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
-            "people": people,
-            "organizations": organizations,
         },
     )
 
@@ -1470,30 +1597,95 @@ def subscriber_edit(
 def subscriber_update(
     request: Request,
     subscriber_id: UUID,
-    customer_ref: str | None = Form(None),
-    customer_search: str | None = Form(None),
-    subscriber_type: str | None = Form(None),
-    person_id: str | None = Form(None),
-    organization_id: str | None = Form(None),
+    customer_type: str = Form(...),
+    first_name: str | None = Form(None),
+    last_name: str | None = Form(None),
+    display_name: str | None = Form(None),
+    avatar_url: str | None = Form(None),
+    bio: str | None = Form(None),
+    name: str | None = Form(None),
+    legal_name: str | None = Form(None),
+    tax_id: str | None = Form(None),
+    domain: str | None = Form(None),
+    website: str | None = Form(None),
+    org_notes: str | None = Form(None),
+    email: str | None = Form(None),
+    email_verified: str | None = Form(None),
+    phone: str | None = Form(None),
+    date_of_birth: str | None = Form(None),
+    gender: str | None = Form(None),
+    preferred_contact_method: str | None = Form(None),
+    locale: str | None = Form(None),
+    timezone: str | None = Form(None),
+    address_line1: str | None = Form(None),
+    address_line2: str | None = Form(None),
+    city: str | None = Form(None),
+    region: str | None = Form(None),
+    postal_code: str | None = Form(None),
+    country_code: str | None = Form(None),
+    status: str | None = Form(None),
+    marketing_opt_in: str | None = Form(None),
+    notes: str | None = Form(None),
+    account_start_date: str | None = Form(None),
+    org_account_start_date: str | None = Form(None),
+    metadata: str | None = Form(None),
+    contact_first_name: list[str] = Form([]),
+    contact_last_name: list[str] = Form([]),
+    contact_title: list[str] = Form([]),
+    contact_role: list[str] = Form([]),
+    contact_email: list[str] = Form([]),
+    contact_phone: list[str] = Form([]),
+    contact_is_primary: list[str] = Form([]),
     subscriber_number: str | None = Form(None),
     subscriber_category: str | None = Form(None),
-    notes: str | None = Form(None),
+    subscriber_notes: str | None = Form(None),
     is_active: str | None = Form(None),  # Checkbox sends "true" or nothing
     db: Session = Depends(get_db),
 ):
     """Update a subscriber."""
     try:
-        _, before, after = web_subscriber_actions_service.update_subscriber_from_form(
+        form_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "display_name": display_name,
+            "avatar_url": avatar_url,
+            "bio": bio,
+            "name": name,
+            "legal_name": legal_name,
+            "tax_id": tax_id,
+            "domain": domain,
+            "website": website,
+            "org_notes": org_notes,
+            "email": email,
+            "email_verified": email_verified,
+            "phone": phone,
+            "date_of_birth": date_of_birth,
+            "gender": gender,
+            "preferred_contact_method": preferred_contact_method,
+            "locale": locale,
+            "timezone": timezone,
+            "address_line1": address_line1,
+            "address_line2": address_line2,
+            "city": city,
+            "region": region,
+            "postal_code": postal_code,
+            "country_code": country_code,
+            "status": status,
+            "is_active": is_active,
+            "marketing_opt_in": marketing_opt_in,
+            "notes": notes,
+            "account_start_date": account_start_date,
+            "org_account_start_date": org_account_start_date,
+            "metadata_json": _parse_json(metadata, "metadata"),
+        }
+        _, before, after = web_subscriber_actions_service.update_subscriber_from_full_form(
             db=db,
             subscriber_id=subscriber_id,
-            customer_ref=customer_ref,
-            customer_search=customer_search,
-            subscriber_type=subscriber_type,
-            person_id=person_id,
-            organization_id=organization_id,
+            customer_type=customer_type,
+            form_data=form_data,
             subscriber_number=subscriber_number,
             subscriber_category=subscriber_category,
-            notes=notes,
+            subscriber_notes=subscriber_notes,
             is_active=is_active,
         )
         metadata = build_changes_metadata(before, after)
@@ -1513,36 +1705,87 @@ def subscriber_update(
             status_code=303,
         )
     except Exception as e:
+        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
-
-        people, organizations = load_subscriber_form_options(db)
+        customer_type = "organization" if subscriber.organization_id else "person"
+        customer = subscriber.organization if customer_type == "organization" else subscriber
+        contact_rows = []
+        try:
+            contact_rows = web_customer_actions_service.build_error_contact_rows(
+                {
+                    "first_name": contact_first_name,
+                    "last_name": contact_last_name,
+                    "title": contact_title,
+                    "role": contact_role,
+                    "email": contact_email,
+                    "phone": contact_phone,
+                    "is_primary": contact_is_primary,
+                }
+            )
+        except Exception:
+            contact_rows = []
+        form_values = {
+            "first_name": first_name or "",
+            "last_name": last_name or "",
+            "display_name": display_name or "",
+            "avatar_url": avatar_url or "",
+            "bio": bio or "",
+            "name": name or "",
+            "legal_name": legal_name or "",
+            "tax_id": tax_id or "",
+            "domain": domain or "",
+            "website": website or "",
+            "org_notes": org_notes or "",
+            "email": email or "",
+            "email_verified": email_verified or "",
+            "phone": phone or "",
+            "date_of_birth": date_of_birth or "",
+            "gender": gender or "",
+            "preferred_contact_method": preferred_contact_method or "",
+            "locale": locale or "",
+            "timezone": timezone or "",
+            "address_line1": address_line1 or "",
+            "address_line2": address_line2 or "",
+            "city": city or "",
+            "region": region or "",
+            "postal_code": postal_code or "",
+            "country_code": country_code or "",
+            "status": status or "",
+            "is_active": is_active or "",
+            "marketing_opt_in": marketing_opt_in or "",
+            "notes": notes or "",
+            "account_start_date": account_start_date or "",
+            "org_account_start_date": org_account_start_date or "",
+            "metadata": metadata or "",
+        }
 
         return templates.TemplateResponse(
-            "admin/subscribers/form.html",
+            "admin/customers/form.html",
             {
                 "request": request,
                 "subscriber": subscriber,
+                "customer": customer,
+                "customer_type": customer_type,
                 "action": "edit",
                 "error": str(e),
-                "form": build_subscriber_update_form_values(
-                    customer_ref=customer_ref,
-                    customer_search=customer_search,
-                    subscriber_type=subscriber_type,
-                    person_id=person_id,
-                    organization_id=organization_id,
-                    subscriber_number=subscriber_number,
-                    subscriber_category=subscriber_category,
-                    notes=notes,
-                    is_active=is_active,
-                ),
+                "form_mode": "subscriber",
+                "return_url": "/admin/subscribers",
+                "return_label": "Subscribers",
+                "form": {
+                    "contact_rows": contact_rows or None,
+                },
+                "form_values_json": json.dumps(form_values),
+                "subscriber_form": {
+                    "subscriber_number": subscriber_number or "",
+                    "subscriber_category": subscriber_category or "residential",
+                    "subscriber_notes": subscriber_notes or "",
+                },
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
-                "people": people,
-                "organizations": organizations,
             },
             status_code=400,
         )
@@ -1605,8 +1848,8 @@ def subscriber_billing_config_update(
     return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
 
 
-@router.delete("/{subscriber_id}", response_class=HTMLResponse)
-@router.post("/{subscriber_id}/delete", response_class=HTMLResponse)
+@router.delete("/{subscriber_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("subscriber:delete"))])
+@router.post("/{subscriber_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("subscriber:delete"))])
 def subscriber_delete(
     request: Request,
     subscriber_id: UUID,
@@ -1683,17 +1926,20 @@ def bulk_status_change(
             return _htmx_error_response("Invalid status", title="Error", reswap="none")
 
         is_active = status == "active"
-        updated_count = web_subscriber_actions_service.bulk_set_subscriber_status(
+        updated_count, failed_count = web_subscriber_actions_service.bulk_set_subscriber_status(
             db=db,
             subscriber_ids=ids,
             is_active=is_active,
         )
 
+        msg = f"{updated_count} subscriber(s) set to {'active' if is_active else 'inactive'}."
+        if failed_count > 0:
+            msg += f" {failed_count} failed."
         trigger = {
             "showToast": {
-                "type": "success",
+                "type": "success" if failed_count == 0 else "warning",
                 "title": "Status updated",
-                "message": f"{updated_count} subscriber(s) set to {'active' if is_active else 'inactive'}.",
+                "message": msg,
             }
         }
         return Response(
@@ -1720,7 +1966,7 @@ def bulk_delete(
         if not ids:
             return _htmx_error_response("No subscribers selected", title="Error", reswap="none")
 
-        deleted_count, skipped_active = web_subscriber_actions_service.bulk_delete_inactive_subscribers(
+        deleted_count, skipped_active, failed_count = web_subscriber_actions_service.bulk_delete_inactive_subscribers(
             db=db,
             subscriber_ids=ids,
             actor_id=actor_id,
@@ -1729,6 +1975,8 @@ def bulk_delete(
         message_parts = [f"{deleted_count} subscriber(s) moved to recovery queue"]
         if skipped_active > 0:
             message_parts.append(f"{skipped_active} active (skipped)")
+        if failed_count > 0:
+            message_parts.append(f"{failed_count} failed")
 
         trigger = {
             "showToast": {

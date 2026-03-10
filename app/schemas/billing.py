@@ -202,6 +202,7 @@ class CreditNoteApplicationRead(CreditNoteApplicationBase):
 
     id: UUID
     created_at: datetime
+    updated_at: datetime
 
 
 class CreditNoteApplyRequest(BaseModel):
@@ -453,6 +454,7 @@ class LedgerEntryRead(LedgerEntryBase):
 
     id: UUID
     created_at: datetime
+    updated_at: datetime
 
 
 class TaxRateBase(BaseModel):

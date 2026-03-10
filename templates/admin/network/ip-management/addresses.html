@@ -152,7 +152,7 @@
                     {% if addresses %}
                     {% for addr in addresses %}
                     <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
-                        data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ addr.notes or '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                        data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ addr.notes or '' }} {{ 'assigned' if addr.assignment and addr.assignment.is_active else 'available' }}"
                         data-row-copy="{{ addr.address }}">
                         <td class="whitespace-nowrap px-6 py-4">
                             <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-{{ color1 }}-600 focus:ring-{{ color1 }}-500">
@@ -174,7 +174,7 @@
                                 <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                                     Reserved
                                 </span>
-                            {% elif addr.assignment %}
+                            {% elif addr.assignment and addr.assignment.is_active %}
                                 <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
                                     Assigned
                                 </span>
@@ -185,10 +185,8 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                            {% if addr.assignment and addr.assignment.account %}
-                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-{{ color1 }}-600 hover:text-{{ color1 }}-700 dark:text-{{ color1 }}-400">
-                                    {{ addr.assignment.account.account_number or 'View Account' }}
-                                </a>
+                            {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
+                                {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
                             {% else %}
                                 -
                             {% endif %}

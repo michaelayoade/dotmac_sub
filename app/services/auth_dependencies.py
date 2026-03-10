@@ -1,4 +1,6 @@
+import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -17,6 +19,8 @@ from app.models.rbac import (
 )
 from app.services.auth import hash_api_key
 from app.services.auth_flow import decode_access_token, hash_session_token
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -192,6 +196,7 @@ def require_role(role_name: str):
         )
         if not role:
             raise HTTPException(status_code=403, detail="Role not found")
+        link: Any | None = None
         if principal_type == "system_user":
             link = (
                 db.query(SystemUserRole)
@@ -271,26 +276,82 @@ def _expand_permission_keys(permission_key: str) -> list[str]:
     return keys
 
 
+def has_permission(auth: dict, db: Session, permission_key: str) -> bool:
+    principal_id = auth["principal_id"]
+    principal_type = auth.get("principal_type", "subscriber")
+    roles = set(auth.get("roles") or [])
+    if "admin" in roles:
+        return True
+
+    possible_keys = _expand_permission_keys(permission_key)
+
+    scopes = set(auth.get("scopes") or [])
+    if scopes & set(possible_keys):
+        return True
+
+    permissions = (
+        db.query(Permission)
+        .filter(Permission.key.in_(possible_keys))
+        .filter(Permission.is_active.is_(True))
+        .all()
+    )
+    if not permissions:
+        return False
+
+    permission_ids = [p.id for p in permissions]
+
+    has_role_permission: Any | None = None
+    has_direct_permission: Any | None = None
+    if principal_type == "system_user":
+        has_role_permission = (
+            db.query(RolePermission)
+            .join(Role, RolePermission.role_id == Role.id)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .filter(SystemUserRole.system_user_id == principal_id)
+            .filter(RolePermission.permission_id.in_(permission_ids))
+            .filter(Role.is_active.is_(True))
+            .first()
+        )
+        has_direct_permission = (
+            db.query(SystemUserPermission)
+            .filter(SystemUserPermission.system_user_id == principal_id)
+            .filter(SystemUserPermission.permission_id.in_(permission_ids))
+            .first()
+        )
+    else:
+        has_role_permission = (
+            db.query(RolePermission)
+            .join(Role, RolePermission.role_id == Role.id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == principal_id)
+            .filter(RolePermission.permission_id.in_(permission_ids))
+            .filter(Role.is_active.is_(True))
+            .first()
+        )
+        has_direct_permission = (
+            db.query(SubscriberPermission)
+            .filter(SubscriberPermission.subscriber_id == principal_id)
+            .filter(SubscriberPermission.permission_id.in_(permission_ids))
+            .first()
+        )
+
+    return bool(has_role_permission or has_direct_permission)
+
+
 def require_permission(permission_key: str):
     def _require_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
-        principal_id = auth["principal_id"]
-        principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             return auth
 
-        # Expand the permission key to include hierarchical matches
         possible_keys = _expand_permission_keys(permission_key)
-
-        # Check if permission is granted via JWT scopes
         scopes = set(auth.get("scopes") or [])
         if scopes & set(possible_keys):
             return auth
 
-        # Find all matching permissions (exact or hierarchical)
         permissions = (
             db.query(Permission)
             .filter(Permission.key.in_(possible_keys))
@@ -298,45 +359,22 @@ def require_permission(permission_key: str):
             .all()
         )
         if not permissions:
+            logger.warning(
+                "Permission check failed: permission record missing for %s (principal_type=%s principal_id=%s)",
+                permission_key,
+                auth.get("principal_type"),
+                auth.get("principal_id"),
+            )
             raise HTTPException(status_code=403, detail="Permission not found")
-
-        permission_ids = [p.id for p in permissions]
-
-        # Check if user has any of the matching permissions via roles
-        if principal_type == "system_user":
-            has_role_permission = (
-                db.query(RolePermission)
-                .join(Role, RolePermission.role_id == Role.id)
-                .join(SystemUserRole, SystemUserRole.role_id == Role.id)
-                .filter(SystemUserRole.system_user_id == principal_id)
-                .filter(RolePermission.permission_id.in_(permission_ids))
-                .filter(Role.is_active.is_(True))
-                .first()
+        if not has_permission(auth, db, permission_key):
+            logger.warning(
+                "Permission check failed: forbidden for %s (principal_type=%s principal_id=%s roles=%s scopes=%s)",
+                permission_key,
+                auth.get("principal_type"),
+                auth.get("principal_id"),
+                auth.get("roles"),
+                auth.get("scopes"),
             )
-            has_direct_permission = (
-                db.query(SystemUserPermission)
-                .filter(SystemUserPermission.system_user_id == principal_id)
-                .filter(SystemUserPermission.permission_id.in_(permission_ids))
-                .first()
-            )
-        else:
-            has_role_permission = (
-                db.query(RolePermission)
-                .join(Role, RolePermission.role_id == Role.id)
-                .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-                .filter(SubscriberRole.subscriber_id == principal_id)
-                .filter(RolePermission.permission_id.in_(permission_ids))
-                .filter(Role.is_active.is_(True))
-                .first()
-            )
-            has_direct_permission = (
-                db.query(SubscriberPermission)
-                .filter(SubscriberPermission.subscriber_id == principal_id)
-                .filter(SubscriberPermission.permission_id.in_(permission_ids))
-                .first()
-            )
-
-        if not has_role_permission and not has_direct_permission:
             raise HTTPException(status_code=403, detail="Forbidden")
         return auth
 
@@ -359,6 +397,9 @@ def require_any_permission(*permission_keys: str):
         all_possible_keys = set()
         for key in permission_keys:
             all_possible_keys.update(_expand_permission_keys(key))
+        scopes = set(auth.get("scopes") or [])
+        if scopes & all_possible_keys:
+            return auth
 
         permissions = (
             db.query(Permission)
@@ -372,6 +413,8 @@ def require_any_permission(*permission_keys: str):
         permission_ids = [p.id for p in permissions]
 
         # Check if user has any of the matching permissions via roles
+        has_role_permission: Any | None = None
+        has_direct_permission: Any | None = None
         if principal_type == "system_user":
             has_role_permission = (
                 db.query(RolePermission)

@@ -1,11 +1,14 @@
 """Service helpers for customer portal auth."""
 
+import html
+import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.db import SessionLocal
 from app.models.auth import AuthProvider, UserCredential
@@ -17,13 +20,14 @@ from app.services import customer_portal, radius_auth
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
 from app.services.settings_spec import resolve_value
+from app.web.customer.branding import get_customer_templates
 
-templates = Jinja2Templates(directory="templates")
+templates = get_customer_templates()
 
 
 def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str:
     """Validate redirect URL to prevent open redirect attacks."""
-    if next_url and next_url.startswith("/"):
+    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
         return next_url
     return fallback
 
@@ -53,14 +57,15 @@ def get_current_customer_from_request(request: Request, db: Session) -> dict | N
     return enriched
 
 
-def customer_login_page(request: Request, error: str | None = None, next_url: str | None = None):
-    db = SessionLocal()
-    try:
-        customer = get_current_customer_from_request(request, db)
-        if customer:
-            return RedirectResponse(url=_safe_next(next_url), status_code=303)
-    finally:
-        db.close()
+def customer_login_page(
+    request: Request,
+    db: Session,
+    error: str | None = None,
+    next_url: str | None = None,
+):
+    customer = get_current_customer_from_request(request, db)
+    if customer:
+        return RedirectResponse(url=_safe_next(next_url), status_code=303)
 
     return templates.TemplateResponse(
         "customer/auth/login.html",
@@ -235,7 +240,8 @@ def customer_stop_impersonation(request: Request, next_url: str | None):
     if session_token:
         customer_portal.invalidate_customer_session(session_token)
 
-    response = RedirectResponse(url=next_url or "/admin/customers", status_code=303)
+    safe_url = _safe_next(next_url, fallback="/admin/subscribers")
+    response = RedirectResponse(url=safe_url, status_code=303)
     response.delete_cookie(customer_portal.SESSION_COOKIE_NAME)
     return response
 
@@ -248,25 +254,22 @@ def customer_session_info(request: Request, db: Session):
             headers={"HX-Redirect": "/portal/auth/login"},
         )
 
+    escaped_username = html.escape(str(customer.get("username", "")))
     return HTMLResponse(
-        content=f'<span class="text-green-500">Logged in as {customer.get("username")}</span>'
+        content=f'<span class="text-green-500">Logged in as {escaped_username}</span>'
     )
 
 
-def customer_refresh(request: Request):
+def customer_refresh(request: Request, db: Session):
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
     if not session_token:
         return Response(status_code=401)
 
-    db = SessionLocal()
-    try:
-        session = customer_portal.refresh_customer_session(session_token, db)
-        if not session:
-            return Response(status_code=401)
+    session = customer_portal.refresh_customer_session(session_token, db)
+    if not session:
+        return Response(status_code=401)
 
-        max_age = customer_portal.get_remember_max_age(db) if session.get("remember") else customer_portal.get_session_max_age(db)
-    finally:
-        db.close()
+    max_age = customer_portal.get_remember_max_age(db) if session.get("remember") else customer_portal.get_session_max_age(db)
 
     response = Response(status_code=204)
     response.set_cookie(

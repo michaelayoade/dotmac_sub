@@ -26,10 +26,13 @@ from app.schemas.billing import (
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
-from app.services import web_billing_customers as web_billing_customers_service
 from app.services import numbering
-from app.services.audit_helpers import extract_changes, format_changes
-from app.services.audit_helpers import build_changes_metadata
+from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import (
+    build_changes_metadata,
+    extract_changes,
+    format_changes,
+)
 
 logger = logging.getLogger(__name__)
 PROFORMA_TAG = "[PROFORMA]"

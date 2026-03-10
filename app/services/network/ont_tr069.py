@@ -130,6 +130,7 @@ _HOST_FIELDS = ["HostName", "IPAddress", "MACAddress", "InterfaceType", "Active"
 class TR069Summary:
     """Structured TR-069 data grouped by section."""
 
+    ont_id: str | None = None
     system: dict[str, Any] = field(default_factory=dict)
     wan: dict[str, Any] = field(default_factory=dict)
     lan: dict[str, Any] = field(default_factory=dict)
@@ -239,7 +240,7 @@ class OntTR069:
             logger.error("TR-069 fetch failed for ONT %s: %s", ont.serial_number, e)
             return TR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
-        summary = TR069Summary(available=True)
+        summary = TR069Summary(available=True, ont_id=str(ont.id))
         summary.system = _extract_group(client, device, "system")
         summary.wan = _extract_group(client, device, "wan")
         summary.lan = _extract_group(client, device, "lan")

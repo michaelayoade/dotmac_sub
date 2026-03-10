@@ -1,0 +1,53 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}System Preferences - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+<div class="relative space-y-6">
+    {% call page_header(title="System Preferences & Security", subtitle="Default landing page, portal title, 2FA enforcement, and UI settings", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>', color="slate", color2="gray") %}{% endcall %}
+
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("General", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default Landing Page</label>
+                <select name="default_landing_page" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="admin" {% if preferences.default_landing_page == 'admin' %}selected{% endif %}>Admin Portal</option>
+                    <option value="customer" {% if preferences.default_landing_page == 'customer' %}selected{% endif %}>Customer Portal</option>
+                    <option value="reseller" {% if preferences.default_landing_page == 'reseller' %}selected{% endif %}>Reseller Portal</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Admin Portal Title</label>
+                <input type="text" name="admin_portal_title" value="{{ preferences.admin_portal_title or '' }}" placeholder="DotMac Sub Admin" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Appears in the browser tab title bar</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Security", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Force 2FA for All Admins</label>
+                <select name="force_2fa" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if preferences.force_2fa == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if preferences.force_2fa != 'true' %}selected{% endif %}>Disabled</option>
+                </select>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">When enabled, all admin users must set up two-factor authentication</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search Debounce (ms)</label>
+                <input type="number" name="search_debounce_ms" value="{{ preferences.search_debounce_ms or '300' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Delay before HTMX search requests fire (300ms default)</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        <div class="flex justify-end">
+            <button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Preferences</button>
+        </div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

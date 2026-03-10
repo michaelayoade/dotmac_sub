@@ -1,12 +1,19 @@
 """Tests for RADIUS service."""
-
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from passlib.context import CryptContext
 
+from app.models.catalog import (
+    AccessCredential,
+    NasDevice,
+    NasVendor,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.radius import RadiusServer
+from app.models.radius import RadiusClient, RadiusServer, RadiusUser
 from app.models.subscription_engine import SettingValueType
 from app.schemas.radius import (
     RadiusClientCreate,
@@ -17,6 +24,11 @@ from app.schemas.radius import (
 )
 from app.services import radius as radius_service
 from app.services import radius_auth
+
+SERVICE_PASSWORD_CONTEXT = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt", "sha512_crypt"],
+    default="pbkdf2_sha256",
+)
 
 
 def test_create_radius_server(db_session):
@@ -108,6 +120,63 @@ def test_create_radius_client(db_session, radius_server):
     )
     assert client.server_id == radius_server.id
     assert client.client_ip == "10.0.0.1"
+
+
+def test_external_password_row_uses_cleartext_password_for_plain_prefixed_secret():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005030",
+        secret_hash="plain:secret123",
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row is not None
+    assert row[0] == "Cleartext-Password"
+    assert row[1] == ":="
+    assert row[2] == "secret123"
+
+
+def test_external_password_row_keeps_crypt_password_for_legacy_sha512_crypt():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005030",
+        secret_hash=SERVICE_PASSWORD_CONTEXT.hash("secret123", scheme="sha512_crypt"),
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row is not None
+    assert row[0] == "Crypt-Password"
+    assert row[1] == ":="
+    assert row[2].startswith("$6$")
+
+
+def test_external_password_row_skips_legacy_pbkdf2_hash():
+    credential = AccessCredential(
+        subscriber_id="00000000-0000-0000-0000-000000000001",
+        username="10005030",
+        secret_hash=SERVICE_PASSWORD_CONTEXT.hash("secret123"),
+        is_active=True,
+    )
+
+    row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+
+    assert row is None
 
 
 def test_list_radius_clients_by_server(db_session, radius_server):
@@ -225,6 +294,81 @@ def test_delete_radius_client(db_session, radius_server):
     radius_service.radius_clients.delete(db_session, str(client.id))
     db_session.refresh(client)
     assert client.is_active is False
+
+
+@patch("app.services.radius._active_external_sync_configs", return_value=[])
+@patch("app.services.radius.sync_credential_to_radius", return_value=False)
+def test_reconcile_subscription_connectivity_creates_internal_radius_state(
+    _sync_credential_to_radius,
+    _active_external_sync_configs,
+    db_session,
+    subscriber,
+    catalog_offer,
+    radius_server,
+):
+    """Test reconciliation creates RadiusClient and RadiusUser without sync jobs."""
+    nas_device = NasDevice(
+        name="Edge NAS",
+        vendor=NasVendor.mikrotik,
+        nas_ip="10.10.10.1",
+        management_ip="10.10.10.1",
+        shared_secret="plain:radius-secret",
+        is_active=True,
+    )
+    db_session.add(nas_device)
+    db_session.flush()
+
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        provisioning_nas_device_id=nas_device.id,
+        status=SubscriptionStatus.active,
+        login="10005030",
+    )
+    db_session.add(subscription)
+    db_session.flush()
+
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="10005030",
+        secret_hash="hashed-secret",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    result = radius_service.reconcile_subscription_connectivity(
+        db_session, str(subscription.id)
+    )
+
+    assert result == {
+        "ok": True,
+        "radius_clients_changed": 1,
+        "radius_users_changed": 1,
+        "external_nas_synced": 0,
+        "external_credentials_synced": 0,
+    }
+
+    client = (
+        db_session.query(RadiusClient)
+        .filter(RadiusClient.server_id == radius_server.id)
+        .filter(RadiusClient.nas_device_id == nas_device.id)
+        .one()
+    )
+    assert client.client_ip == "10.10.10.1"
+    assert client.shared_secret_hash == radius_service._hash_secret("radius-secret")
+    assert client.description == "Edge NAS"
+
+    radius_user = (
+        db_session.query(RadiusUser)
+        .filter(RadiusUser.access_credential_id == credential.id)
+        .one()
+    )
+    assert radius_user.subscriber_id == subscriber.id
+    assert radius_user.subscription_id == subscription.id
+    assert radius_user.username == "10005030"
+    assert radius_user.secret_hash == "hashed-secret"
+    assert radius_user.is_active is True
 
 
 # =============================================================================

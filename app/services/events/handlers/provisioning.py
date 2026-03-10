@@ -46,18 +46,25 @@ class ProvisioningHandler:
         self._push_nas_provisioning(db, str(subscription_id))
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:
-        """Sync RADIUS credentials for the subscription's subscriber."""
+        """Reconcile RADIUS state for the activated subscription."""
         try:
             from app.models.catalog import Subscription
+            from app.services.radius import (
+                reconcile_subscription_connectivity,
+                sync_account_credentials_to_radius,
+            )
+
             subscription = db.get(Subscription, coerce_uuid(subscription_id))
             if not subscription:
                 return
-            from app.services.radius import sync_account_credentials_to_radius
-            count = sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
-            if count:
+
+            sync_account_credentials_to_radius(db, str(subscription.subscriber_id))
+            result = reconcile_subscription_connectivity(db, subscription_id)
+            if result.get("ok"):
                 logger.info(
-                    "Synced %d RADIUS credentials for subscription %s activation.",
-                    count, subscription_id,
+                    "Reconciled RADIUS state for subscription %s: %s",
+                    subscription_id,
+                    result,
                 )
         except Exception as exc:
             logger.warning(
@@ -69,6 +76,7 @@ class ProvisioningHandler:
         """Push NAS provisioning commands on subscription activation."""
         try:
             from app.models.catalog import NasDevice, Subscription
+            from app.models.catalog import ProvisioningAction
             from app.services.connection_type_provisioning import (
                 build_nas_provisioning_commands,
             )
@@ -95,6 +103,22 @@ class ProvisioningHandler:
                         "NAS command failed for subscription %s: %s (cmd: %s)",
                         subscription_id, cmd_exc, cmd,
                     )
+            try:
+                DeviceProvisioner._handle_queue_mapping(
+                    db,
+                    nas_device,
+                    ProvisioningAction.create_user,
+                    {
+                        "subscription_id": str(subscription.id),
+                        "username": subscription.login or "",
+                    },
+                )
+            except Exception as mapping_exc:
+                logger.warning(
+                    "Queue mapping sync failed for subscription %s: %s",
+                    subscription_id,
+                    mapping_exc,
+                )
             logger.info(
                 "Pushed %d NAS provisioning commands for subscription %s.",
                 len(commands), subscription_id,

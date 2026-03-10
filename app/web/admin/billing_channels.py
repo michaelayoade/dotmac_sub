@@ -32,7 +32,7 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict[str, 
 @router.get(
     "/payment-channels",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:channel:read"))],
 )
 def payment_channels_list(request: Request, db: Session = Depends(get_db)):
     state = web_billing_channels_service.list_payment_channels_data(db)
@@ -48,7 +48,7 @@ def payment_channels_list(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/payment-channels",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channels_create(
     request: Request,
@@ -91,7 +91,7 @@ def payment_channels_create(
 @router.get(
     "/payment-channels/{channel_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channels_edit(request: Request, channel_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_channels_service.load_payment_channel_edit_data(db, str(channel_id))
@@ -116,7 +116,7 @@ def payment_channels_edit(request: Request, channel_id: UUID, db: Session = Depe
 @router.post(
     "/payment-channels/{channel_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channels_update(
     request: Request,
@@ -164,7 +164,7 @@ def payment_channels_update(
 @router.post(
     "/payment-channels/{channel_id}/deactivate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channels_deactivate(channel_id: UUID, db: Session = Depends(get_db)):
     billing_service.payment_channels.delete(db, str(channel_id))
@@ -174,7 +174,7 @@ def payment_channels_deactivate(channel_id: UUID, db: Session = Depends(get_db))
 @router.get(
     "/payment-channel-accounts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:channel:read"))],
 )
 def payment_channel_accounts_list(request: Request, db: Session = Depends(get_db)):
     state = web_billing_channels_service.list_payment_channel_accounts_data(db)
@@ -190,7 +190,7 @@ def payment_channel_accounts_list(request: Request, db: Session = Depends(get_db
 @router.post(
     "/payment-channel-accounts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channel_accounts_create(
     request: Request,
@@ -229,7 +229,7 @@ def payment_channel_accounts_create(
 @router.get(
     "/payment-channel-accounts/{mapping_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channel_accounts_edit(request: Request, mapping_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_channels_service.load_payment_channel_account_edit_data(db, str(mapping_id))
@@ -254,7 +254,7 @@ def payment_channel_accounts_edit(request: Request, mapping_id: UUID, db: Sessio
 @router.post(
     "/payment-channel-accounts/{mapping_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channel_accounts_update(
     request: Request,
@@ -298,7 +298,7 @@ def payment_channel_accounts_update(
 @router.post(
     "/payment-channel-accounts/{mapping_id}/deactivate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:channel:write"))],
 )
 def payment_channel_accounts_deactivate(mapping_id: UUID, db: Session = Depends(get_db)):
     billing_service.payment_channel_accounts.delete(db, str(mapping_id))

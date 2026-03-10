@@ -8,12 +8,35 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.models.network import OntUnit
+from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
 from app.services.genieacs import GenieACSClient, GenieACSError
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_device_id_from_server(
+    client: GenieACSClient,
+    serial_number: str,
+) -> str | None:
+    devices = client.list_devices(query={"_id": {"$regex": f".*-{serial_number}$"}})
+    if not devices:
+        return None
+    device_id = str(devices[0].get("_id") or "").strip()
+    return device_id or None
+
+
+def _resolve_server_by_id(
+    db: Session,
+    server_id: str | None,
+) -> Tr069AcsServer | None:
+    if not server_id:
+        return None
+    server = db.get(Tr069AcsServer, str(server_id))
+    if not server or not server.base_url:
+        return None
+    return server
 
 
 def resolve_genieacs(
@@ -27,7 +50,22 @@ def resolve_genieacs(
     Returns:
         Tuple of (client, device_id) or None if not resolvable.
     """
-    # Find CPE device by serial number
+    # 1) OLT profile (authoritative in inherited ACS model)
+    olt_server = None
+    if ont.olt_device_id:
+        olt = db.get(OLTDevice, str(ont.olt_device_id))
+        if olt and olt.tr069_acs_server_id:
+            olt_server = _resolve_server_by_id(db, str(olt.tr069_acs_server_id))
+    if olt_server:
+        client = GenieACSClient(olt_server.base_url)
+        try:
+            device_id = _resolve_device_id_from_server(client, ont.serial_number)
+            if device_id:
+                return client, device_id
+        except GenieACSError:
+            logger.warning("Failed OLT ACS lookup for ONT %s", ont.serial_number)
+
+    # 2) Linked TR-069 device by serial number
     stmt = (
         select(Tr069CpeDevice)
         .where(Tr069CpeDevice.serial_number == ont.serial_number)
@@ -37,33 +75,33 @@ def resolve_genieacs(
     cpe = db.scalars(stmt).first()
 
     if cpe and cpe.acs_server_id:
-        server = db.get(Tr069AcsServer, str(cpe.acs_server_id))
-        if server and server.base_url:
+        server = _resolve_server_by_id(db, str(cpe.acs_server_id))
+        if server:
             client = GenieACSClient(server.base_url)
-            device_id = client.build_device_id(
-                cpe.oui or "", cpe.product_class or "", cpe.serial_number or ""
-            )
+            try:
+                device_id = _resolve_device_id_from_server(client, ont.serial_number)
+            except GenieACSError:
+                device_id = None
+            if not device_id:
+                device_id = client.build_device_id(
+                    cpe.oui or "", cpe.product_class or "", cpe.serial_number or ""
+                )
             return client, device_id
 
-    # Fallback: try default ACS server with serial number query
+    # 3) Default ACS server
     default_server_id = settings_spec.resolve_value(
         db,
         SettingDomain.tr069,
         "default_acs_server_id",
     )
     if default_server_id:
-        server = db.get(Tr069AcsServer, str(default_server_id))
-        if server and server.base_url:
+        server = _resolve_server_by_id(db, str(default_server_id))
+        if server:
             client = GenieACSClient(server.base_url)
-            # Search by serial number in GenieACS
             try:
-                devices = client.list_devices(
-                    query={"_id": {"$regex": f".*-{ont.serial_number}$"}}
-                )
-                if devices:
-                    device_id = devices[0].get("_id", "")
-                    if device_id:
-                        return client, device_id
+                device_id = _resolve_device_id_from_server(client, ont.serial_number)
+                if device_id:
+                    return client, device_id
             except GenieACSError:
                 logger.warning(
                     "Failed to search GenieACS for ONT %s", ont.serial_number

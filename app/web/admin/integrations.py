@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import connector as connector_service
-from app.services import integration_hooks as integration_hooks_service
 from app.services import integration as integration_service
+from app.services import integration_hooks as integration_hooks_service
 from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
+from app.services.integrations import accounting_sync as accounting_sync_service
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
@@ -48,12 +49,174 @@ def connectors_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/integrations/connectors/index.html", context)
 
 
+@router.get("/marketplace", response_class=HTMLResponse)
+def integrations_marketplace(request: Request, db: Session = Depends(get_db)):
+    """Integrations marketplace with discovered and installed connectors."""
+    state = web_integrations_service.build_marketplace_data(db)
+    context = _base_context(request, db, active_page="connectors")
+    context.update(
+        {
+            **state,
+            "updates_checked": request.query_params.get("checked") == "1",
+        }
+    )
+    return templates.TemplateResponse("admin/integrations/marketplace.html", context)
+
+
+@router.post("/marketplace/check-updates", response_class=HTMLResponse)
+def integrations_marketplace_check_updates():
+    return RedirectResponse("/admin/integrations/marketplace?checked=1", status_code=303)
+
+
+@router.get("/installed", response_class=HTMLResponse)
+def integrations_installed(request: Request, db: Session = Depends(get_db)):
+    state = web_integrations_service.build_installed_integrations_data(db)
+    context = _base_context(request, db, active_page="connectors")
+    context.update(
+        {
+            **state,
+            "saved": request.query_params.get("saved") == "1",
+        }
+    )
+    return templates.TemplateResponse("admin/integrations/installed.html", context)
+
+
+@router.post("/installed/bulk", response_class=HTMLResponse)
+def integrations_installed_bulk(
+    connector_ids: list[str] = Form(default=[]),
+    action: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if connector_ids:
+        web_integrations_service.bulk_set_integrations_enabled(
+            db,
+            connector_ids=connector_ids,
+            enabled=(action == "enable"),
+        )
+    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
+
+
+@router.post("/installed/{connector_id}/relay", response_class=HTMLResponse)
+def integrations_installed_relay_toggle(
+    connector_id: str,
+    relay_to_portal: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    web_integrations_service.set_relay_to_portal(
+        db,
+        connector_id=connector_id,
+        relay=relay_to_portal,
+    )
+    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
+
+
+@router.post("/installed/{connector_id}/toggle", response_class=HTMLResponse)
+def integrations_installed_toggle(
+    connector_id: str,
+    enabled: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    web_integrations_service.bulk_set_integrations_enabled(
+        db,
+        connector_ids=[connector_id],
+        enabled=enabled,
+    )
+    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
+
+
+@router.post("/installed/{connector_id}/uninstall", response_class=HTMLResponse)
+def integrations_installed_uninstall(connector_id: str, db: Session = Depends(get_db)):
+    web_integrations_service.uninstall_integration(db, connector_id)
+    return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
+
+
 @router.get("/connectors/new", response_class=HTMLResponse)
 def connector_new(request: Request, db: Session = Depends(get_db)):
     """New connector form."""
     context = _base_context(request, db, active_page="connectors")
     context.update(web_integrations_service.connector_form_options())
     return templates.TemplateResponse("admin/integrations/connectors/new.html", context)
+
+
+@router.get("/register", response_class=HTMLResponse)
+def integration_register_page(request: Request, db: Session = Depends(get_db)):
+    context = _base_context(request, db, active_page="connectors")
+    context.update(web_integrations_service.integration_registration_form_options())
+    return templates.TemplateResponse("admin/integrations/register.html", context)
+
+
+@router.post("/register", response_class=HTMLResponse)
+def integration_register_create(
+    request: Request,
+    name: str = Form(...),
+    display_title: str = Form(...),
+    integration_type: str = Form("simple"),
+    root_section: str = Form("integrations"),
+    icon: str = Form("puzzle-piece"),
+    db: Session = Depends(get_db),
+):
+    try:
+        connector = web_integrations_service.create_registered_integration(
+            db,
+            name=name,
+            display_title=display_title,
+            integration_type=integration_type,
+            root_section=root_section,
+            icon=icon,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="connectors")
+        context.update(
+            {
+                **web_integrations_service.integration_registration_form_options(),
+                "error": str(exc),
+                "form": {
+                    "name": name,
+                    "display_title": display_title,
+                    "integration_type": integration_type,
+                    "root_section": root_section,
+                    "icon": icon,
+                },
+            }
+        )
+        return templates.TemplateResponse("admin/integrations/register.html", context, status_code=400)
+    return RedirectResponse(url=f"/admin/integrations/register/{connector.id}/configure", status_code=303)
+
+
+@router.get("/register/{connector_id}/configure", response_class=HTMLResponse)
+def integration_register_configure_page(request: Request, connector_id: str, db: Session = Depends(get_db)):
+    context = _base_context(request, db, active_page="connectors")
+    context.update(web_integrations_service.registered_integration_config_state(db, connector_id))
+    return templates.TemplateResponse("admin/integrations/register_configure.html", context)
+
+
+@router.post("/register/{connector_id}/configure", response_class=HTMLResponse)
+def integration_register_configure_save(
+    request: Request,
+    connector_id: str,
+    custom_fields_json: str | None = Form("{}"),
+    webhook_endpoint: str | None = Form(None),
+    auth_method: str | None = Form(None),
+    data_mapping_json: str | None = Form("{}"),
+    external_url: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        connector = web_integrations_service.update_registered_integration_config(
+            db,
+            connector_id=connector_id,
+            custom_fields_json=custom_fields_json,
+            webhook_endpoint=webhook_endpoint,
+            auth_method=auth_method,
+            data_mapping_json=data_mapping_json,
+            external_url=external_url,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="connectors")
+        context.update(web_integrations_service.registered_integration_config_state(db, connector_id))
+        context["error"] = str(exc)
+        return templates.TemplateResponse("admin/integrations/register_configure.html", context, status_code=400)
+    return RedirectResponse(url=f"/admin/integrations/connectors/{connector.id}", status_code=303)
 
 
 @router.post("/connectors", response_class=HTMLResponse)
@@ -155,6 +318,52 @@ def connector_embed(request: Request, connector_id: str, db: Session = Depends(g
 
 
 # ==================== Integration Targets ====================
+
+
+@router.get("/accounting-sync", response_class=HTMLResponse)
+def accounting_sync_dashboard(request: Request, db: Session = Depends(get_db)):
+    """Accounting sync dashboard for QuickBooks, Xero, and Sage connectors."""
+    state = accounting_sync_service.dashboard_state(db)
+    context = _base_context(request, db, active_page="connectors")
+    context.update(
+        {
+            **state,
+            "sync_success": request.query_params.get("synced") == "1",
+            "mapping_success": request.query_params.get("mapping_saved") == "1",
+        }
+    )
+    return templates.TemplateResponse("admin/integrations/accounting_sync.html", context)
+
+
+@router.post("/accounting-sync/{connector_id}/sync", response_class=HTMLResponse)
+def accounting_sync_run(connector_id: str, db: Session = Depends(get_db)):
+    accounting_sync_service.run_sync_for_connector(db, connector_id)
+    return RedirectResponse(url="/admin/integrations/accounting-sync?synced=1", status_code=303)
+
+
+@router.post("/accounting-sync/{connector_id}/mapping", response_class=HTMLResponse)
+def accounting_sync_mapping_save(
+    connector_id: str,
+    invoice_number_field: str = Form("invoice_number"),
+    payment_reference_field: str = Form("reference"),
+    customer_name_field: str = Form("display_name"),
+    credit_note_number_field: str = Form("credit_note_number"),
+    db: Session = Depends(get_db),
+):
+    accounting_sync_service.save_field_mapping(
+        db,
+        connector_id,
+        {
+            "invoice_number": invoice_number_field,
+            "payment_reference": payment_reference_field,
+            "customer_name": customer_name_field,
+            "credit_note_number": credit_note_number_field,
+        },
+    )
+    return RedirectResponse(
+        url="/admin/integrations/accounting-sync?mapping_saved=1",
+        status_code=303,
+    )
 
 @router.get("/targets", response_class=HTMLResponse)
 def targets_list(request: Request, db: Session = Depends(get_db)):

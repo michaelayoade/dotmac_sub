@@ -200,45 +200,14 @@
             <div x-show="open" x-collapse class="p-6 space-y-6">
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
-                        <label for="login" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Login / Username</label>
-                        <input type="text" name="login" id="login" value="{{ subscription.login }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="ipv4_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv4 Address</label>
-                        <input type="text" name="ipv4_address" id="ipv4_address" value="{{ subscription.ipv4_address }}"
+                        <label for="splynx_service_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">External Service ID</label>
+                        <input type="number" name="splynx_service_id" id="splynx_service_id" value="{{ subscription.splynx_service_id }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     <div>
                         <label for="ipv6_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv6 Address</label>
                         <input type="text" name="ipv6_address" id="ipv6_address" value="{{ subscription.ipv6_address }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="mac_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
-                        <input type="text" name="mac_address" id="mac_address" value="{{ subscription.mac_address }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="router_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Router ID</label>
-                        <input type="number" name="router_id" id="router_id" value="{{ subscription.router_id }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="splynx_service_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">External Service ID</label>
-                        <input type="number" name="splynx_service_id" id="splynx_service_id" value="{{ subscription.splynx_service_id }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="provisioning_nas_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">NAS Device</label>
-                        <select name="provisioning_nas_device_id" id="provisioning_nas_device_id"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">None</option>
-                            {% for nas in nas_devices or [] %}
-                            <option value="{{ nas.id }}" {% if subscription.provisioning_nas_device_id == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
-                            {% endfor %}
-                        </select>
-                        <p class="mt-1 text-xs text-slate-500">NAS device for RADIUS provisioning</p>
                     </div>
                     <div>
                         <label for="radius_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Profile</label>
@@ -282,6 +251,114 @@
             </div>
         </div>
         {% endif %}
+
+        {# Service Provisioning fields (kept near end for generated values) #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Service Provisioning</h2>
+            </div>
+            <div class="p-6 space-y-6" x-data="subscriptionProvisioning()">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="provisioning_nas_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Router (All Devices)</label>
+                        <div class="relative mt-1" data-typeahead-url="/api/v1/search/nas-devices" data-typeahead-min="2" data-typeahead-limit="50">
+                            <input type="text"
+                                id="provisioning_nas_device_id"
+                                name="provisioning_nas_device_search"
+                                data-typeahead-input
+                                value="{{ selected_router_label }}"
+                                placeholder="Type router name or IP address..."
+                                autocomplete="off"
+                                class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="hidden"
+                                name="provisioning_nas_device_id"
+                                data-typeahead-hidden
+                                value="{{ subscription.provisioning_nas_device_id | default('') }}">
+                            <div data-typeahead-results></div>
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500">Start typing part of the router name or IP to see suggestions.</p>
+                    </div>
+                    <div>
+                        <label for="ipv4_method" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IPv4 Method</label>
+                        <select name="ipv4_method" id="ipv4_method"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="permanent_static" {% if subscription.ipv4_method == 'permanent_static' %}selected{% endif %}>Permanently Static IP</option>
+                            <option value="dynamic" {% if subscription.ipv4_method != 'permanent_static' %}selected{% endif %}>Dynamic IP</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="login" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Login</label>
+                        <input type="text" name="login" id="login" value="{{ subscription.login }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500">
+                            {% if is_new %}
+                            Auto-generated from subscriber number by default, but you can change it before saving.
+                            {% else %}
+                            Change the service login here if you need a different PPP/RADIUS username.
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
+                        <label for="service_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Password</label>
+                        <input type="text" name="service_password" id="service_password" value="{{ subscription.service_password }}"
+                            placeholder="{% if is_new %}Generated from subscriber number{% else %}Leave blank to keep current password{% endif %}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500">
+                            {% if is_new %}
+                            Generated from the subscriber number by default, but you can change it before saving.
+                            {% else %}
+                            Enter a new password to rotate the service password. Leave blank to keep the current one.
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label for="mac_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
+                        <input type="text" name="mac_address" id="mac_address" readonly value="{{ subscription.mac_address }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500">MAC is recorded after successful connection/online session.</p>
+                    </div>
+                </div>
+
+                {% set initial_ipv4_addresses = subscription.ipv4_addresses if subscription.ipv4_addresses else ([subscription.ipv4_address] if subscription.ipv4_address else ['']) %}
+                {% set initial_ipv4_block_ids = subscription.ipv4_block_ids if subscription.ipv4_block_ids else [] %}
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">IPv4 Allocation</h3>
+                        <button type="button" @click="addIpv4Row()" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            Add more IPv4
+                        </button>
+                    </div>
+                    <template x-for="(row, idx) in rows" :key="idx">
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Block</label>
+                                <select :name="'ipv4_block_ids'" x-model="row.blockId" @change="populateIpFromBlock(row)"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select block</option>
+                                    <template x-for="block in blocks" :key="block.id">
+                                        <option :value="block.id" x-text="block.display"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-300">IPv4 Address</label>
+                                <input type="text" :name="'ipv4_addresses'" x-model="row.ip" :list="'ipv4-address-options-' + idx"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <datalist :id="'ipv4-address-options-' + idx">
+                                    <template x-for="ip in availableIpsForBlock(row.blockId)" :key="ip">
+                                        <option :value="ip"></option>
+                                    </template>
+                                </datalist>
+                                <p class="mt-1 text-xs text-slate-500">Auto-fills the next free IP. You can replace it with another free IP from the selected block.</p>
+                            </div>
+                            <div class="sm:col-span-2 flex justify-end" x-show="rows.length > 1">
+                                <button type="button" @click="removeIpv4Row(idx)" class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400">Remove</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
 
         {# Quick Options for new subscriptions #}
         {% if is_new %}
@@ -335,4 +412,50 @@
         </div>
     </form>
 </div>
+<script>
+function subscriptionProvisioning() {
+    const blocks = {{ ipv4_blocks | tojson }};
+    const initialAddresses = {{ initial_ipv4_addresses | tojson }};
+    const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
+    const rows = initialAddresses.map((ip, idx) => ({
+        blockId: initialBlocks[idx] || "",
+        ip: ip || "",
+    }));
+    return {
+        blocks,
+        rows: rows.length ? rows : [{ blockId: "", ip: "" }],
+        addIpv4Row() {
+            this.rows.push({ blockId: "", ip: "" });
+        },
+        removeIpv4Row(index) {
+            this.rows.splice(index, 1);
+            if (!this.rows.length) {
+                this.rows.push({ blockId: "", ip: "" });
+            }
+        },
+        availableIpsForBlock(blockId) {
+            const block = this.blocks.find((item) => item.id === blockId);
+            return block && Array.isArray(block.available_ips) ? block.available_ips : [];
+        },
+        populateIpFromBlock(row) {
+            const availableIps = this.availableIpsForBlock(row.blockId);
+            if (!availableIps.length) {
+                row.ip = "";
+                return;
+            }
+            const alreadyPicked = new Set(
+                this.rows
+                    .filter((entry) => entry !== row)
+                    .map((entry) => entry.ip)
+                    .filter((value) => value)
+            );
+            if (row.ip && availableIps.includes(row.ip) && !alreadyPicked.has(row.ip)) {
+                return;
+            }
+            const candidate = availableIps.find((ip) => !alreadyPicked.has(ip));
+            row.ip = candidate || availableIps[0];
+        },
+    };
+}
+</script>
 {% endblock %}

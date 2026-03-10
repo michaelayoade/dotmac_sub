@@ -268,6 +268,20 @@ def seed_usage_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("USAGE_RATING_INTERVAL_SECONDS", "86400"),
     )
+    accounting_enabled_raw = os.getenv("RADIUS_ACCOUNTING_IMPORT_ENABLED", "true")
+    usage_settings.ensure_by_key(
+        db,
+        key="radius_accounting_import_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=accounting_enabled_raw,
+        value_json=accounting_enabled_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    usage_settings.ensure_by_key(
+        db,
+        key="radius_accounting_import_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("RADIUS_ACCOUNTING_IMPORT_INTERVAL_SECONDS", "60"),
+    )
     warning_enabled_raw = os.getenv("USAGE_WARNING_ENABLED", "true")
     usage_settings.ensure_by_key(
         db,
@@ -1228,6 +1242,18 @@ def seed_network_monitoring_settings(db: Session) -> None:
         key="network_health_crit_pct",
         value_type=SettingValueType.integer,
         value_text=os.getenv("NETWORK_HEALTH_CRIT_PCT", "70"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="core_device_ping_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CORE_DEVICE_PING_INTERVAL_SECONDS", "120"),
+    )
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="core_device_snmp_walk_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("CORE_DEVICE_SNMP_WALK_INTERVAL_SECONDS", "300"),
     )
     radius_settings.ensure_by_key(
         db,

@@ -7,8 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider
-from app.models.subscriber import Organization
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Organization, Subscriber
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import auth as auth_service

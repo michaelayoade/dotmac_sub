@@ -104,7 +104,7 @@ def tr069_acs_create(request: Request, db: Session = Depends(get_db)):
         entity_type="tr069_acs_server",
         entity_id=str(server.id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": server.name, "base_url": server.base_url},
+        metadata={"name": server.name, "base_url": server.base_url, "cwmp_url": server.cwmp_url},
     )
     return RedirectResponse(
         "/admin/network/tr069?status=success&message=ACS%20server%20created",
@@ -172,7 +172,7 @@ def tr069_acs_update(request: Request, acs_id: str, db: Session = Depends(get_db
         entity_type="tr069_acs_server",
         entity_id=str(server.id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": server.name, "base_url": server.base_url},
+        metadata={"name": server.name, "base_url": server.base_url, "cwmp_url": server.cwmp_url},
     )
     return RedirectResponse(
         "/admin/network/tr069?status=success&message=ACS%20server%20updated",
@@ -197,6 +197,16 @@ def tr069_sync_acs(acs_id: str, db: Session = Depends(get_db)) -> RedirectRespon
             f"/admin/network/tr069?acs_server_id={acs_id}&status=error&message={message}",
             status_code=303,
         )
+
+
+@router.get("/tr069/acs/{acs_id}/sync")
+def tr069_sync_acs_get_fallback(acs_id: str) -> RedirectResponse:
+    """GET fallback for auth-refresh redirects targeting the sync POST endpoint."""
+    message = quote_plus("Sync uses POST. Please click Sync again.")
+    return RedirectResponse(
+        f"/admin/network/tr069?acs_server_id={acs_id}&status=info&message={message}",
+        status_code=303,
+    )
 
 
 @router.post("/tr069/devices/{device_id}/link")

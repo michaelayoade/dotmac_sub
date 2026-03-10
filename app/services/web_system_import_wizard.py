@@ -34,7 +34,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
-from app.services import settings_spec
+from app.services import job_log_store, settings_spec
 
 IMPORT_HISTORY_KEY = "import_history_log"
 IMPORT_ROLLBACK_WINDOW_KEY = "import_rollback_window_hours"
@@ -505,33 +505,18 @@ def append_history(db: Session, entry: dict[str, Any]) -> None:
 
 
 def _job_entries(db: Session) -> list[dict[str, Any]]:
-    try:
-        setting = domain_settings_service.imports_settings.get_by_key(db, IMPORT_JOBS_KEY)
-    except Exception:
-        return []
-    if isinstance(setting.value_json, list):
-        return [item for item in setting.value_json if isinstance(item, dict)]
-    if isinstance(setting.value_text, str) and setting.value_text.strip():
-        try:
-            parsed = json.loads(setting.value_text)
-            if isinstance(parsed, list):
-                return [item for item in parsed if isinstance(item, dict)]
-        except json.JSONDecodeError:
-            return []
-    return []
+    return job_log_store.read_json_list(db, domain_settings_service.imports_settings, IMPORT_JOBS_KEY)
 
 
 def _save_jobs(db: Session, jobs: list[dict[str, Any]]) -> None:
-    trimmed = jobs[:200]
-    domain_settings_service.imports_settings.upsert_by_key(
+    job_log_store.save_json_list(
         db,
+        domain_settings_service.imports_settings,
         IMPORT_JOBS_KEY,
-        DomainSettingUpdate(
-            value_type=SettingValueType.json,
-            value_json=trimmed,
-            value_text=None,
-            is_secret=False,
-        ),
+        jobs,
+        limit=200,
+        is_secret=False,
+        is_active=None,
     )
 
 
@@ -540,27 +525,13 @@ def list_jobs(db: Session, *, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def get_job(db: Session, job_id: str) -> dict[str, Any] | None:
-    for item in _job_entries(db):
-        if str(item.get("job_id") or "") == job_id:
-            return item
-    return None
+    return job_log_store.get_job(_job_entries(db), job_id)
 
 
 def upsert_job(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    job_id = str(payload.get("job_id") or "").strip()
-    if not job_id:
-        raise ValueError("job_id is required")
-    jobs = _job_entries(db)
-    replaced = False
-    for idx, item in enumerate(jobs):
-        if str(item.get("job_id") or "") == job_id:
-            jobs[idx] = {**item, **payload}
-            replaced = True
-            break
-    if not replaced:
-        jobs.insert(0, payload)
+    jobs, merged = job_log_store.upsert_job(_job_entries(db), payload)
     _save_jobs(db, jobs)
-    return get_job(db, job_id) or payload
+    return merged
 
 
 def background_threshold_rows(db: Session) -> int:

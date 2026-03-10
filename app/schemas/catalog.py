@@ -738,7 +738,7 @@ class NasDeviceBase(BaseModel):
     # Network Configuration
     ip_address: str | None = Field(default=None, max_length=64)
     management_ip: str | None = Field(default=None, max_length=64)
-    management_port: int | None = 22
+    management_port: int | None = 120
     nas_ip: str | None = Field(default=None, max_length=64)
 
     # RADIUS Configuration

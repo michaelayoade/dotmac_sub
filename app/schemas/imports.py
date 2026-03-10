@@ -240,6 +240,7 @@ class RadiusAccountingSessionImportRow(CSVRowModel):
     input_octets: int | None = None
     output_octets: int | None = None
     terminate_cause: str | None = None
+    calling_station_id: str | None = None
 
 
 class UsageRecordImportRow(CSVRowModel):

@@ -34,6 +34,11 @@ class Tr069AcsServer(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
+    cwmp_url: Mapped[str | None] = mapped_column(String(255))
+    cwmp_username: Mapped[str | None] = mapped_column(String(120))
+    cwmp_password: Mapped[str | None] = mapped_column(String(255))
+    connection_request_username: Mapped[str | None] = mapped_column(String(120))
+    connection_request_password: Mapped[str | None] = mapped_column(String(255))
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)

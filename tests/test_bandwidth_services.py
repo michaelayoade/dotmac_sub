@@ -1,6 +1,10 @@
 """Tests for bandwidth service."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
 
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services import bandwidth as bandwidth_service
@@ -90,8 +94,6 @@ def test_delete_bandwidth_sample(db_session, subscription):
     )
     bandwidth_service.bandwidth_samples.delete(db_session, str(sample.id))
     # Bandwidth samples use hard delete, not soft delete
-    import pytest
-    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
         bandwidth_service.bandwidth_samples.get(db_session, str(sample.id))
     assert exc_info.value.status_code == 404
@@ -174,3 +176,59 @@ def test_list_bandwidth_samples_order_by_sample_at(db_session, subscription):
     # Verify descending order (newest first)
     for i in range(len(samples) - 1):
         assert samples[i].sample_at >= samples[i + 1].sample_at
+
+
+def test_check_subscription_access_allows_admin_role_in_roles(db_session, subscription):
+    user = {"roles": ["admin"], "principal_type": "subscriber"}
+
+    allowed = bandwidth_service.bandwidth_samples.check_subscription_access(
+        db_session,
+        subscription.id,
+        user,
+    )
+
+    assert allowed.id == subscription.id
+
+
+def test_check_subscription_access_allows_owner_principal_id(db_session, subscription):
+    user = {
+        "roles": [],
+        "principal_type": "subscriber",
+        "principal_id": str(subscription.subscriber_id),
+    }
+
+    allowed = bandwidth_service.bandwidth_samples.check_subscription_access(
+        db_session,
+        subscription.id,
+        user,
+    )
+
+    assert allowed.id == subscription.id
+
+
+def test_check_subscription_access_denies_non_owner_subscriber(db_session, subscription):
+    user = {
+        "roles": [],
+        "principal_type": "subscriber",
+        "principal_id": str(uuid4()),
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        bandwidth_service.bandwidth_samples.check_subscription_access(
+            db_session,
+            subscription.id,
+            user,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_get_user_active_subscription_uses_principal_id(db_session, subscription):
+    user = {"principal_id": str(subscription.subscriber_id)}
+
+    current = bandwidth_service.bandwidth_samples.get_user_active_subscription(
+        db_session,
+        user,
+    )
+
+    assert current.id == subscription.id

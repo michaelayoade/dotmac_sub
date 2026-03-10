@@ -29,8 +29,11 @@ from app.services.common import (
     apply_pagination,
     validate_enum,
 )
+from app.services.credential_crypto import encrypt_credential
 from app.services.genieacs import GenieACSClient, GenieACSError
 from app.services.response import ListResponseMixin
+
+_ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,11 @@ logger = logging.getLogger(__name__)
 class AcsServers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: Tr069AcsServerCreate):
-        server = Tr069AcsServer(**payload.model_dump())
+        data = payload.model_dump()
+        for field in _ACS_CREDENTIAL_FIELDS:
+            if data.get(field):
+                data[field] = encrypt_credential(data[field])
+        server = Tr069AcsServer(**data)
         db.add(server)
         db.commit()
         db.refresh(server)
@@ -78,7 +85,11 @@ class AcsServers(ListResponseMixin):
         server = db.get(Tr069AcsServer, server_id)
         if not server:
             raise HTTPException(status_code=404, detail="ACS server not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        data = payload.model_dump(exclude_unset=True)
+        for field in _ACS_CREDENTIAL_FIELDS:
+            if field in data and data[field]:
+                data[field] = encrypt_credential(data[field])
+        for key, value in data.items():
             setattr(server, key, value)
         db.commit()
         db.refresh(server)
@@ -94,6 +105,60 @@ class AcsServers(ListResponseMixin):
 
 
 class CpeDevices(ListResponseMixin):
+    @staticmethod
+    def _clip_text(value: object | None, max_len: int) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        return text[:max_len]
+
+    @staticmethod
+    def _extract_identity(client: GenieACSClient, device_data: dict) -> tuple[str | None, str | None, str | None]:
+        device_id = str(device_data.get("_id") or "").strip()
+        parsed_oui: str | None = None
+        parsed_product_class: str | None = None
+        parsed_serial: str | None = None
+
+        if device_id:
+            try:
+                parsed_oui, parsed_product_class, parsed_serial = client.parse_device_id(device_id)
+            except ValueError:
+                logger.warning("Invalid device ID format: %s", device_id)
+
+        raw_device_id = device_data.get("_deviceId")
+        fallback_oui = fallback_product_class = fallback_serial = None
+        if isinstance(raw_device_id, dict):
+            fallback_oui = raw_device_id.get("_OUI") or raw_device_id.get("OUI")
+            fallback_product_class = raw_device_id.get("_ProductClass") or raw_device_id.get("ProductClass")
+            fallback_serial = raw_device_id.get("_SerialNumber") or raw_device_id.get("SerialNumber")
+
+        param_serial = client.extract_parameter_value(
+            device_data, "Device.DeviceInfo.SerialNumber"
+        ) or client.extract_parameter_value(
+            device_data, "InternetGatewayDevice.DeviceInfo.SerialNumber"
+        )
+        param_product_class = client.extract_parameter_value(
+            device_data, "Device.DeviceInfo.ProductClass"
+        ) or client.extract_parameter_value(
+            device_data, "InternetGatewayDevice.DeviceInfo.ProductClass"
+        )
+
+        # Prefer structured GenieACS identity fields over parsed `_id` parts.
+        oui = CpeDevices._clip_text(fallback_oui, 8) or CpeDevices._clip_text(parsed_oui, 8)
+        product_class = (
+            CpeDevices._clip_text(param_product_class, 120)
+            or CpeDevices._clip_text(fallback_product_class, 120)
+            or CpeDevices._clip_text(parsed_product_class, 120)
+        )
+        serial_number = (
+            CpeDevices._clip_text(param_serial, 120)
+            or CpeDevices._clip_text(fallback_serial, 120)
+            or CpeDevices._clip_text(parsed_serial, 120)
+        )
+        return oui, product_class, serial_number
+
     @staticmethod
     def create(db: Session, payload: Tr069CpeDeviceCreate):
         device = Tr069CpeDevice(**payload.model_dump())
@@ -178,23 +243,10 @@ class CpeDevices(ListResponseMixin):
         now = datetime.now(UTC)
 
         for device_data in devices:
-            device_id = device_data.get("_id")
-            if not device_id:
+            oui, product_class, serial_number = CpeDevices._extract_identity(client, device_data)
+            if not serial_number:
+                logger.warning("Skipping GenieACS device without serial number: %s", device_data.get("_id"))
                 continue
-
-            try:
-                oui, product_class, serial_number = client.parse_device_id(device_id)
-            except ValueError:
-                logger.warning(f"Invalid device ID format: {device_id}")
-                continue
-
-            # Look for existing device by serial number and ACS server
-            existing = (
-                db.query(Tr069CpeDevice)
-                .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
-                .filter(Tr069CpeDevice.serial_number == serial_number)
-                .first()
-            )
 
             # Extract connection request URL if available
             connection_url = client.extract_parameter_value(
@@ -202,6 +254,23 @@ class CpeDevices(ListResponseMixin):
             ) or client.extract_parameter_value(
                 device_data, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL"
             )
+            connection_url = CpeDevices._clip_text(connection_url, 255)
+
+            # Look for existing device by serial number and ACS server first.
+            existing = (
+                db.query(Tr069CpeDevice)
+                .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+                .filter(Tr069CpeDevice.serial_number == serial_number)
+                .first()
+            )
+            # Fallback: update legacy/mis-parsed records by stable connection URL.
+            if not existing and connection_url:
+                existing = (
+                    db.query(Tr069CpeDevice)
+                    .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+                    .filter(Tr069CpeDevice.connection_request_url == connection_url)
+                    .first()
+                )
 
             # Extract last inform time
             last_inform = device_data.get("_lastInform")

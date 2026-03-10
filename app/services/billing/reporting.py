@@ -1,6 +1,8 @@
 """Billing reporting services.
 
 Provides statistics, summaries, and reports for billing data.
+All aggregations are performed at the database level via SQL to avoid
+loading large result sets into Python memory.
 """
 from __future__ import annotations
 
@@ -10,25 +12,63 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    CreditNote,
     CreditNoteStatus,
+    Invoice,
     InvoiceStatus,
+    Payment,
+    PaymentChannel,
+    PaymentMethod,
     PaymentStatus,
 )
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.subscriber import SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _month_start(value: datetime) -> datetime:
+    """Return the first instant of the month containing *value*."""
+    return datetime(value.year, value.month, 1, tzinfo=UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    """Return the first instant of the month after *value*."""
+    if value.month == 12:
+        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
+    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
+
+
+def _month_window(month_anchor: datetime) -> tuple[datetime, datetime]:
+    start = _month_start(month_anchor)
+    return start, _next_month_start(start)
+
+
+def _last_6_months(now: datetime) -> list[tuple[str, int, int, datetime, datetime]]:
+    """Return (label, year, month, start, end) for the last 6 months."""
+    months: list[tuple[str, int, int, datetime, datetime]] = []
+    for i in range(5, -1, -1):
+        month = now.month - i
+        year = now.year
+        while month <= 0:
+            month += 12
+            year -= 1
+        start = datetime(year, month, 1, tzinfo=UTC)
+        end = _next_month_start(start)
+        months.append((calendar.month_abbr[month], year, month, start, end))
+    return months
 
 
 class BillingReporting:
     """Service for billing reports and statistics."""
 
     @staticmethod
-    def get_overview_stats(db: Session) -> dict:
-        """Calculate billing overview statistics.
+    def get_overview_stats(db: Session) -> dict[str, Any]:
+        """Calculate billing overview statistics using SQL aggregation.
 
         Returns:
             Dictionary with keys:
@@ -41,95 +81,64 @@ class BillingReporting:
             - overdue_count: Number of overdue invoices
             - draft_count: Number of draft invoices
         """
-        from app.services.billing import invoices as invoices_service
-
-        all_invoices = invoices_service.list(
-            db=db,
-            account_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
+        stmt = select(
+            func.coalesce(
+                func.sum(case((Invoice.status == InvoiceStatus.paid, Invoice.total), else_=Decimal("0"))),
+                Decimal("0"),
+            ).label("total_revenue"),
+            func.coalesce(
+                func.sum(case((Invoice.status == InvoiceStatus.issued, Invoice.total), else_=Decimal("0"))),
+                Decimal("0"),
+            ).label("pending_amount"),
+            func.coalesce(
+                func.sum(case((Invoice.status == InvoiceStatus.overdue, Invoice.total), else_=Decimal("0"))),
+                Decimal("0"),
+            ).label("overdue_amount"),
+            func.count().label("total_invoices"),
+            func.count(case((Invoice.status == InvoiceStatus.paid, 1))).label("paid_count"),
+            func.count(case((Invoice.status == InvoiceStatus.issued, 1))).label("pending_count"),
+            func.count(case((Invoice.status == InvoiceStatus.overdue, 1))).label("overdue_count"),
+            func.count(case((Invoice.status == InvoiceStatus.draft, 1))).label("draft_count"),
         )
-
-        total_revenue = Decimal("0")
-        pending_amount = Decimal("0")
-        overdue_amount = Decimal("0")
-        paid_count = 0
-        pending_count = 0
-        overdue_count = 0
-        draft_count = 0
-
-        for inv in all_invoices:
-            total = Decimal(str(getattr(inv, "total", 0) or 0))
-
-            if inv.status == InvoiceStatus.paid:
-                total_revenue += total
-                paid_count += 1
-            elif inv.status == InvoiceStatus.issued:
-                pending_amount += total
-                pending_count += 1
-            elif inv.status == InvoiceStatus.overdue:
-                overdue_amount += total
-                overdue_count += 1
-            elif inv.status == InvoiceStatus.draft:
-                draft_count += 1
+        row = db.execute(stmt).one()
 
         return {
-            "total_revenue": float(total_revenue),
-            "pending_amount": float(pending_amount),
-            "overdue_amount": float(overdue_amount),
-            "total_invoices": len(all_invoices),
-            "paid_count": paid_count,
-            "pending_count": pending_count,
-            "overdue_count": overdue_count,
-            "draft_count": draft_count,
+            "total_revenue": float(row.total_revenue),
+            "pending_amount": float(row.pending_amount),
+            "overdue_amount": float(row.overdue_amount),
+            "total_invoices": row.total_invoices,
+            "paid_count": row.paid_count,
+            "pending_count": row.pending_count,
+            "overdue_count": row.overdue_count,
+            "draft_count": row.draft_count,
         }
 
     @staticmethod
-    def get_account_stats(db: Session) -> dict:
-        """Calculate account-level statistics.
+    def get_account_stats(db: Session) -> dict[str, Any]:
+        """Calculate account-level statistics using SQL aggregation.
 
         Returns:
             Dictionary with keys:
-            - total_balance: Sum of all account balances
+            - total_balance: Sum of all account min_balance values
             - active_count: Number of active accounts
             - suspended_count: Number of suspended accounts
         """
-        from app.services import subscriber as subscriber_service
-
-        accounts = subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
+        stmt = select(
+            func.coalesce(func.sum(Subscriber.min_balance), Decimal("0")).label("total_balance"),
+            func.count(case((Subscriber.status == SubscriberStatus.active, 1))).label("active_count"),
+            func.count(case((Subscriber.status == SubscriberStatus.suspended, 1))).label("suspended_count"),
         )
-
-        total_balance = Decimal("0")
-        active_count = 0
-        suspended_count = 0
-
-        for account in accounts:
-            total_balance += Decimal(str(getattr(account, "balance", 0) or 0))
-            if account.status == SubscriberStatus.active:
-                active_count += 1
-            elif account.status == SubscriberStatus.suspended:
-                suspended_count += 1
+        row = db.execute(stmt).one()
 
         return {
-            "total_balance": float(total_balance),
-            "active_count": active_count,
-            "suspended_count": suspended_count,
+            "total_balance": float(row.total_balance),
+            "active_count": row.active_count,
+            "suspended_count": row.suspended_count,
         }
 
     @staticmethod
-    def get_ar_aging_buckets(db: Session) -> dict:
-        """Classify invoices into aging buckets.
+    def get_ar_aging_buckets(db: Session) -> dict[str, Any]:
+        """Classify unpaid invoices into aging buckets.
 
         Returns:
             Dictionary with keys:
@@ -137,20 +146,22 @@ class BillingReporting:
                       Each containing a list of invoices
             - totals: Dict with same keys containing sum of balance_due for each bucket
         """
-        from app.services.billing import invoices as invoices_service
-
-        all_invoices = invoices_service.list(
-            db=db,
-            account_id=None,
-            status=None,
-            is_active=None,
-            order_by="due_at",
-            order_dir="asc",
-            limit=10000,
-            offset=0,
-        )
-
         today = datetime.now(UTC).date()
+
+        # Only fetch unpaid invoices — paid/void are excluded
+        unpaid_statuses = [
+            InvoiceStatus.draft,
+            InvoiceStatus.issued,
+            InvoiceStatus.overdue,
+            InvoiceStatus.partially_paid,
+        ]
+        stmt = (
+            select(Invoice)
+            .where(Invoice.status.in_(unpaid_statuses))
+            .order_by(Invoice.due_at.asc())
+        )
+        invoices = db.scalars(stmt).all()
+
         buckets: dict[str, list[Any]] = {
             "current": [],
             "1_30": [],
@@ -159,10 +170,7 @@ class BillingReporting:
             "90_plus": [],
         }
 
-        for invoice in all_invoices:
-            if invoice.status in {InvoiceStatus.paid, InvoiceStatus.void}:
-                continue
-
+        for invoice in invoices:
             due_at = invoice.due_at.date() if invoice.due_at else None
             if not due_at or due_at >= today:
                 buckets["current"].append(invoice)
@@ -194,55 +202,12 @@ class BillingReporting:
     ) -> dict[str, Any]:
         """Build complete billing dashboard statistics.
 
-        Combines overview stats, account stats, collection rate,
-        revenue trend, chart data, and recent invoices into a
-        single dict suitable for both web and API consumption.
+        All heavy aggregations are performed at the SQL level.
 
         Returns:
             Dictionary with keys: stats, invoices, revenue_trend,
             chart_data, total_balance, active_count, suspended_count.
         """
-        from app.services.billing import credit_notes as credit_notes_service
-        from app.services.billing import invoices as invoices_service
-        from app.services.billing import payments as payments_service
-
-        def _month_start(value: datetime) -> datetime:
-            return datetime(value.year, value.month, 1, tzinfo=UTC)
-
-        def _next_month_start(value: datetime) -> datetime:
-            if value.month == 12:
-                return datetime(value.year + 1, 1, 1, tzinfo=UTC)
-            return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
-
-        def _month_window(month_anchor: datetime) -> tuple[datetime, datetime]:
-            start = _month_start(month_anchor)
-            return start, _next_month_start(start)
-
-        def _as_utc_aware(value: datetime | None) -> datetime | None:
-            if value is None:
-                return None
-            if value.tzinfo is None:
-                return value.replace(tzinfo=UTC)
-            return value.astimezone(UTC)
-
-        def _in_window(value: datetime | None, start: datetime, end: datetime) -> bool:
-            comparable = _as_utc_aware(value)
-            return bool(comparable and start <= comparable < end)
-
-        def _matches_scope(account, *, selected_partner_id: str | None, selected_location: str | None) -> bool:
-            if selected_partner_id:
-                if str(getattr(account, "reseller_id", "") or "") != selected_partner_id:
-                    return False
-            if selected_location:
-                account_location = (
-                    str(getattr(account, "region", "") or "")
-                    or str(getattr(account, "billing_region", "") or "")
-                    or str(getattr(account, "city", "") or "")
-                )
-                if account_location.lower() != selected_location.lower():
-                    return False
-            return True
-
         selected_partner_id = (partner_id or "").strip() or None
         selected_location = (location or "").strip() or None
 
@@ -261,184 +226,185 @@ class BillingReporting:
             else 0.0
         )
 
-        all_invoices = invoices_service.list(
-            db=db,
-            account_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
-        )
-        if selected_partner_id or selected_location:
-            all_invoices = [
-                inv
-                for inv in all_invoices
-                if _matches_scope(getattr(inv, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
-            ]
+        # --- Scoping helpers for SQL WHERE clauses ---
+        def _scope_invoice_stmt(stmt: Any) -> Any:
+            """Apply partner/location scope to an invoice query via JOIN."""
+            if selected_partner_id or selected_location:
+                stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
+                if selected_partner_id:
+                    stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+                if selected_location:
+                    loc = selected_location.lower()
+                    stmt = stmt.where(
+                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                    )
+            return stmt
 
-        all_payments = payments_service.list(
-            db=db,
-            account_id=None,
-            invoice_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
-        )
-        if selected_partner_id or selected_location:
-            all_payments = [
-                p
-                for p in all_payments
-                if _matches_scope(getattr(p, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
-            ]
-        succeeded_payments = [
-            payment
-            for payment in all_payments
-            if getattr(payment, "status", None) == PaymentStatus.succeeded
-        ]
-        total_payments_amount = sum(
-            Decimal(str(getattr(payment, "amount", 0) or 0)) for payment in succeeded_payments
-        )
+        def _scope_payment_stmt(stmt: Any) -> Any:
+            """Apply partner/location scope to a payment query via JOIN."""
+            if selected_partner_id or selected_location:
+                stmt = stmt.join(Subscriber, Payment.account_id == Subscriber.id)
+                if selected_partner_id:
+                    stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+                if selected_location:
+                    loc = selected_location.lower()
+                    stmt = stmt.where(
+                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                    )
+            return stmt
 
-        unpaid_statuses = {
+        def _scope_credit_note_stmt(stmt: Any) -> Any:
+            """Apply partner/location scope to a credit note query via JOIN."""
+            if selected_partner_id or selected_location:
+                stmt = stmt.join(Subscriber, CreditNote.account_id == Subscriber.id)
+                if selected_partner_id:
+                    stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+                if selected_location:
+                    loc = selected_location.lower()
+                    stmt = stmt.where(
+                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                    )
+            return stmt
+
+        # --- Payments aggregate ---
+        payments_stmt = select(
+            func.count().label("count"),
+            func.coalesce(func.sum(Payment.amount), Decimal("0")).label("total"),
+        ).where(Payment.status == PaymentStatus.succeeded)
+        payments_stmt = _scope_payment_stmt(payments_stmt)
+        payments_row = db.execute(payments_stmt).one()
+
+        # --- Unpaid invoices aggregate ---
+        unpaid_statuses = [
             InvoiceStatus.issued,
             InvoiceStatus.overdue,
             InvoiceStatus.partially_paid,
-        }
-        unpaid_invoices = [
-            inv
-            for inv in all_invoices
-            if getattr(inv, "status", None) in unpaid_statuses
         ]
-        unpaid_amount = sum(
-            Decimal(str(getattr(inv, "balance_due", 0) or 0)) for inv in unpaid_invoices
-        )
+        unpaid_stmt = select(
+            func.count().label("count"),
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label("total"),
+        ).where(Invoice.status.in_(unpaid_statuses))
+        unpaid_stmt = _scope_invoice_stmt(unpaid_stmt)
+        unpaid_row = db.execute(unpaid_stmt).one()
 
-        all_credit_notes = credit_notes_service.list(
-            db=db,
-            account_id=None,
-            invoice_id=None,
-            status=None,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10000,
-            offset=0,
+        # --- Credit notes aggregate ---
+        cn_stmt = select(
+            func.count().label("count"),
+            func.coalesce(func.sum(CreditNote.total), Decimal("0")).label("total"),
+        ).where(
+            CreditNote.is_active.is_(True),
+            CreditNote.status != CreditNoteStatus.void,
         )
-        if selected_partner_id or selected_location:
-            all_credit_notes = [
-                n
-                for n in all_credit_notes
-                if _matches_scope(getattr(n, "account", None), selected_partner_id=selected_partner_id, selected_location=selected_location)
-            ]
-        active_credit_notes = [
-            note
-            for note in all_credit_notes
-            if getattr(note, "status", None) != CreditNoteStatus.void
-        ]
-        credit_note_total = sum(
-            Decimal(str(getattr(note, "total", 0) or 0)) for note in active_credit_notes
-        )
+        cn_stmt = _scope_credit_note_stmt(cn_stmt)
+        cn_row = db.execute(cn_stmt).one()
 
-        stats = {
+        stats: dict[str, Any] = {
             **overview,
             "collection_rate": collection_rate,
-            "payments_count": len(succeeded_payments),
-            "payments_amount": float(total_payments_amount),
-            "unpaid_invoices_count": len(unpaid_invoices),
-            "unpaid_invoices_amount": float(unpaid_amount),
-            "credit_notes_count": len(active_credit_notes),
-            "credit_notes_total": float(credit_note_total),
+            "payments_count": payments_row.count,
+            "payments_amount": float(payments_row.total),
+            "unpaid_invoices_count": unpaid_row.count,
+            "unpaid_invoices_amount": float(unpaid_row.total),
+            "credit_notes_count": cn_row.count,
+            "credit_notes_total": float(cn_row.total),
         }
 
-        # Revenue trend — last 6 months of billed vs collected
+        # --- Revenue trend (last 6 months, SQL GROUP BY) ---
         now = datetime.now(UTC)
+        six_months = _last_6_months(now)
+        six_months_start = six_months[0][3]  # earliest start
+
+        inv_trend_stmt = select(
+            func.extract("year", Invoice.created_at).label("yr"),
+            func.extract("month", Invoice.created_at).label("mo"),
+            func.coalesce(func.sum(Invoice.total), Decimal("0")).label("billed"),
+            func.coalesce(
+                func.sum(case((Invoice.status == InvoiceStatus.paid, Invoice.total), else_=Decimal("0"))),
+                Decimal("0"),
+            ).label("collected"),
+        ).where(Invoice.created_at >= six_months_start).group_by("yr", "mo")
+        inv_trend_stmt = _scope_invoice_stmt(inv_trend_stmt)
+        trend_rows = {(int(r.yr), int(r.mo)): r for r in db.execute(inv_trend_stmt).all()}
+
         labels: list[str] = []
         billed: list[float] = []
         collected: list[float] = []
-
-        for i in range(5, -1, -1):
-            month = now.month - i
-            year = now.year
-            while month <= 0:
-                month += 12
-                year -= 1
-            label = calendar.month_abbr[month]
+        for label, year, month, _start, _end in six_months:
             labels.append(label)
+            row = trend_rows.get((year, month))
+            billed.append(float(row.billed) if row else 0.0)
+            collected.append(float(row.collected) if row else 0.0)
 
-            month_billed = Decimal("0")
-            month_collected = Decimal("0")
-            for inv in all_invoices:
-                inv_date = inv.created_at
-                if inv_date and inv_date.year == year and inv_date.month == month:
-                    total = Decimal(str(getattr(inv, "total", 0) or 0))
-                    month_billed += total
-                    if inv.status == InvoiceStatus.paid:
-                        month_collected += total
+        revenue_trend = {"labels": labels, "billed": billed, "collected": collected}
 
-            billed.append(float(month_billed))
-            collected.append(float(month_collected))
-
-        revenue_trend = {
-            "labels": labels,
-            "billed": billed,
-            "collected": collected,
-        }
-
-        # Period comparison (last/current/next month)
+        # --- Period comparison (last / current / next month) ---
         current_month_start = _month_start(now)
         last_month_start = _month_start(current_month_start - timedelta(days=1))
-        next_month_start = _next_month_start(current_month_start)
+        next_month_start_dt = _next_month_start(current_month_start)
         comparison_periods = [
-            ("Last Month", * _month_window(last_month_start)),
-            ("Current Month", * _month_window(current_month_start)),
-            ("Next Month", * _month_window(next_month_start)),
+            ("Last Month", *_month_window(last_month_start)),
+            ("Current Month", *_month_window(current_month_start)),
+            ("Next Month", *_month_window(next_month_start_dt)),
         ]
-        period_comparison: list[dict[str, Any]] = []
-        for label, start, end in comparison_periods:
-            period_payments = [
-                payment
-                for payment in succeeded_payments
-                if _in_window(getattr(payment, "paid_at", None) or getattr(payment, "created_at", None), start, end)
-            ]
-            payments_amount = sum(Decimal(str(getattr(p, "amount", 0) or 0)) for p in period_payments)
-            paid_invoices = [
-                inv
-                for inv in all_invoices
-                if getattr(inv, "status", None) == InvoiceStatus.paid
-                and _in_window(getattr(inv, "paid_at", None) or getattr(inv, "created_at", None), start, end)
-            ]
-            unpaid_invoices_period = [
-                inv
-                for inv in all_invoices
-                if getattr(inv, "status", None) in unpaid_statuses
-                and _in_window(getattr(inv, "created_at", None), start, end)
-            ]
-            period_credit_notes = [
-                note
-                for note in active_credit_notes
-                if _in_window(getattr(note, "created_at", None), start, end)
-            ]
-            credit_note_amount = sum(Decimal(str(getattr(n, "total", 0) or 0)) for n in period_credit_notes)
-            period_comparison.append(
-                {
-                    "label": label,
-                    "payments_amount": float(payments_amount),
-                    "payments_count": len(period_payments),
-                    "paid_invoices_count": len(paid_invoices),
-                    "unpaid_invoices_count": len(unpaid_invoices_period),
-                    "credit_notes_count": len(period_credit_notes),
-                    "credit_notes_amount": float(credit_note_amount),
-                    "total_income": float(payments_amount),
-                }
-            )
 
-        # Payment method breakdown
-        method_labels = {
+        period_comparison: list[dict[str, Any]] = []
+        for period_label, period_start, period_end in comparison_periods:
+            # Payments in period
+            pp_stmt = select(
+                func.count().label("count"),
+                func.coalesce(func.sum(Payment.amount), Decimal("0")).label("total"),
+            ).where(
+                Payment.status == PaymentStatus.succeeded,
+                func.coalesce(Payment.paid_at, Payment.created_at) >= period_start,
+                func.coalesce(Payment.paid_at, Payment.created_at) < period_end,
+            )
+            pp_stmt = _scope_payment_stmt(pp_stmt)
+            pp_row = db.execute(pp_stmt).one()
+
+            # Paid invoices in period
+            pi_stmt = select(func.count()).where(
+                Invoice.status == InvoiceStatus.paid,
+                func.coalesce(Invoice.paid_at, Invoice.created_at) >= period_start,
+                func.coalesce(Invoice.paid_at, Invoice.created_at) < period_end,
+            )
+            pi_stmt = _scope_invoice_stmt(pi_stmt)
+            paid_inv_count = db.execute(pi_stmt).scalar() or 0
+
+            # Unpaid invoices created in period
+            ui_stmt = select(func.count()).where(
+                Invoice.status.in_(unpaid_statuses),
+                Invoice.created_at >= period_start,
+                Invoice.created_at < period_end,
+            )
+            ui_stmt = _scope_invoice_stmt(ui_stmt)
+            unpaid_inv_count = db.execute(ui_stmt).scalar() or 0
+
+            # Credit notes in period
+            pcn_stmt = select(
+                func.count().label("count"),
+                func.coalesce(func.sum(CreditNote.total), Decimal("0")).label("total"),
+            ).where(
+                CreditNote.is_active.is_(True),
+                CreditNote.status != CreditNoteStatus.void,
+                CreditNote.created_at >= period_start,
+                CreditNote.created_at < period_end,
+            )
+            pcn_stmt = _scope_credit_note_stmt(pcn_stmt)
+            pcn_row = db.execute(pcn_stmt).one()
+
+            period_comparison.append({
+                "label": period_label,
+                "payments_amount": float(pp_row.total),
+                "payments_count": pp_row.count,
+                "paid_invoices_count": paid_inv_count,
+                "unpaid_invoices_count": unpaid_inv_count,
+                "credit_notes_count": pcn_row.count,
+                "credit_notes_amount": float(pcn_row.total),
+                "total_income": float(pp_row.total),
+            })
+
+        # --- Payment method breakdown (SQL JOIN + GROUP BY) ---
+        METHOD_LABELS = {
             "cash": "Cash",
             "card": "Card",
             "transfer": "Bank Transfer",
@@ -447,77 +413,118 @@ class BillingReporting:
             "other": "Other",
             "bank_transfer": "Bank Transfer",
         }
-        method_totals: dict[str, Decimal] = {}
-        for payment in succeeded_payments:
-            method_key = "other"
-            if getattr(payment, "payment_method", None) and getattr(payment.payment_method, "method_type", None):
-                raw = payment.payment_method.method_type
-                method_key = raw.value if hasattr(raw, "value") else str(raw)
-            elif getattr(payment, "payment_channel", None) and getattr(payment.payment_channel, "channel_type", None):
-                raw = payment.payment_channel.channel_type
-                method_key = raw.value if hasattr(raw, "value") else str(raw)
-            label = method_labels.get(method_key, "Other")
-            method_totals[label] = method_totals.get(label, Decimal("0")) + Decimal(
-                str(getattr(payment, "amount", 0) or 0)
+
+        # Prefer PaymentMethod.method_type, fall back to PaymentChannel.channel_type
+        pm_stmt = (
+            select(
+                func.coalesce(
+                    cast(PaymentMethod.method_type, String),
+                    cast(PaymentChannel.channel_type, String),
+                    "other",
+                ).label("method_key"),
+                func.sum(Payment.amount).label("total"),
             )
+            .outerjoin(PaymentMethod, Payment.payment_method_id == PaymentMethod.id)
+            .outerjoin(PaymentChannel, Payment.payment_channel_id == PaymentChannel.id)
+            .where(Payment.status == PaymentStatus.succeeded)
+            .group_by("method_key")
+        )
+        if selected_partner_id or selected_location:
+            pm_stmt = pm_stmt.join(Subscriber, Payment.account_id == Subscriber.id)
+            if selected_partner_id:
+                pm_stmt = pm_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+            if selected_location:
+                loc = selected_location.lower()
+                pm_stmt = pm_stmt.where(
+                    func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                )
+
+        method_rows = db.execute(pm_stmt).all()
+        method_totals: dict[str, float] = {}
+        for mrow in method_rows:
+            display_label = METHOD_LABELS.get(mrow.method_key, "Other")
+            method_totals[display_label] = method_totals.get(display_label, 0.0) + float(mrow.total or 0)
+
         payment_method_breakdown = {
             "labels": list(method_totals.keys()),
-            "values": [float(value) for value in method_totals.values()],
+            "values": list(method_totals.values()),
         }
 
-        # Daily payments (current month)
+        # --- Daily payments (current month, SQL GROUP BY day) ---
         days_in_month = calendar.monthrange(now.year, now.month)[1]
-        daily_totals: dict[int, Decimal] = {day: Decimal("0") for day in range(1, days_in_month + 1)}
         month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
         month_end = _next_month_start(month_start)
-        for payment in succeeded_payments:
-            payment_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
-            if not _in_window(payment_at, month_start, month_end):
-                continue
-            if payment_at:
-                daily_totals[payment_at.day] += Decimal(str(getattr(payment, "amount", 0) or 0))
+
+        dp_stmt = select(
+            func.extract("day", func.coalesce(Payment.paid_at, Payment.created_at)).label("day"),
+            func.sum(Payment.amount).label("total"),
+        ).where(
+            Payment.status == PaymentStatus.succeeded,
+            func.coalesce(Payment.paid_at, Payment.created_at) >= month_start,
+            func.coalesce(Payment.paid_at, Payment.created_at) < month_end,
+        ).group_by("day")
+        dp_stmt = _scope_payment_stmt(dp_stmt)
+        dp_rows = {int(r.day): float(r.total) for r in db.execute(dp_stmt).all()}
+
         daily_payments = {
             "labels": [str(day) for day in range(1, days_in_month + 1)],
-            "values": [float(daily_totals[day]) for day in range(1, days_in_month + 1)],
+            "values": [dp_rows.get(day, 0.0) for day in range(1, days_in_month + 1)],
         }
 
-        # Invoicing for period (status overlay) - month granularity for last 6 months.
+        # --- Invoicing period overlay (last 6 months, SQL) ---
+        inv_overlay_stmt = select(
+            func.extract("year", Invoice.created_at).label("yr"),
+            func.extract("month", Invoice.created_at).label("mo"),
+            func.coalesce(
+                func.sum(case((Invoice.status == InvoiceStatus.paid, Invoice.total), else_=Decimal("0"))),
+                Decimal("0"),
+            ).label("paid"),
+            func.coalesce(
+                func.sum(case(
+                    (Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.overdue, InvoiceStatus.partially_paid, InvoiceStatus.draft]), Invoice.total),
+                    else_=Decimal("0"),
+                )),
+                Decimal("0"),
+            ).label("unpaid"),
+            # paid_on_time: paid AND (paid_at <= due_at OR due_at IS NULL)
+            func.coalesce(
+                func.sum(case(
+                    (
+                        (Invoice.status == InvoiceStatus.paid) & ((Invoice.paid_at <= Invoice.due_at) | (Invoice.due_at.is_(None))),
+                        Invoice.total,
+                    ),
+                    else_=Decimal("0"),
+                )),
+                Decimal("0"),
+            ).label("paid_on_time"),
+            # paid_overdue: paid AND paid_at > due_at
+            func.coalesce(
+                func.sum(case(
+                    (
+                        (Invoice.status == InvoiceStatus.paid) & (Invoice.paid_at > Invoice.due_at),
+                        Invoice.total,
+                    ),
+                    else_=Decimal("0"),
+                )),
+                Decimal("0"),
+            ).label("paid_overdue"),
+        ).where(Invoice.created_at >= six_months_start).group_by("yr", "mo")
+        inv_overlay_stmt = _scope_invoice_stmt(inv_overlay_stmt)
+        overlay_rows = {(int(r.yr), int(r.mo)): r for r in db.execute(inv_overlay_stmt).all()}
+
         invoicing_labels: list[str] = []
         invoicing_paid: list[float] = []
         invoicing_unpaid: list[float] = []
         invoicing_paid_on_time: list[float] = []
         invoicing_paid_overdue: list[float] = []
-        for i in range(5, -1, -1):
-            month = now.month - i
-            year = now.year
-            while month <= 0:
-                month += 12
-                year -= 1
-            invoicing_labels.append(calendar.month_abbr[month])
-            paid = Decimal("0")
-            unpaid = Decimal("0")
-            paid_on_time = Decimal("0")
-            paid_overdue = Decimal("0")
-            for inv in all_invoices:
-                inv_date = getattr(inv, "created_at", None)
-                if not inv_date or inv_date.year != year or inv_date.month != month:
-                    continue
-                total = Decimal(str(getattr(inv, "total", 0) or 0))
-                status = getattr(inv, "status", None)
-                if status == InvoiceStatus.paid:
-                    paid += total
-                    due_at = getattr(inv, "due_at", None)
-                    paid_at = getattr(inv, "paid_at", None)
-                    if due_at and paid_at and paid_at > due_at:
-                        paid_overdue += total
-                    else:
-                        paid_on_time += total
-                elif status in {InvoiceStatus.issued, InvoiceStatus.overdue, InvoiceStatus.partially_paid, InvoiceStatus.draft}:
-                    unpaid += total
-            invoicing_paid.append(float(paid))
-            invoicing_unpaid.append(float(unpaid))
-            invoicing_paid_on_time.append(float(paid_on_time))
-            invoicing_paid_overdue.append(float(paid_overdue))
+        for label, year, month, _start, _end in six_months:
+            invoicing_labels.append(label)
+            orow = overlay_rows.get((year, month))
+            invoicing_paid.append(float(orow.paid) if orow else 0.0)
+            invoicing_unpaid.append(float(orow.unpaid) if orow else 0.0)
+            invoicing_paid_on_time.append(float(orow.paid_on_time) if orow else 0.0)
+            invoicing_paid_overdue.append(float(orow.paid_overdue) if orow else 0.0)
+
         invoicing_period_overlay = {
             "labels": invoicing_labels,
             "paid": invoicing_paid,
@@ -526,109 +533,137 @@ class BillingReporting:
             "paid_overdue": invoicing_paid_overdue,
         }
 
-        # MRR/ARPU + top payers.
+        # --- MRR / ARPU (SQL per-month aggregation on Subscription) ---
         mrr_labels: list[str] = []
         mrr_values: list[float] = []
         arpu_values: list[float] = []
         active_subscriber_counts: list[int] = []
-        for i in range(5, -1, -1):
-            month = now.month - i
-            year = now.year
-            while month <= 0:
-                month += 12
-                year -= 1
-            month_start = datetime(year, month, 1, tzinfo=UTC)
-            month_end = _next_month_start(month_start)
-            mrr_labels.append(calendar.month_abbr[month])
-            month_mrr = Decimal("0")
-            active_accounts: set[str] = set()
-            for sub in db.query(Subscription).filter(Subscription.status == SubscriptionStatus.active).all():
-                sub_account = getattr(sub, "subscriber", None)
-                if selected_partner_id or selected_location:
-                    if not _matches_scope(sub_account, selected_partner_id=selected_partner_id, selected_location=selected_location):
-                        continue
-                next_billing_at = getattr(sub, "next_billing_at", None)
-                if next_billing_at and _in_window(next_billing_at, month_start, month_end):
-                    month_mrr += Decimal(str(getattr(sub, "unit_price", 0) or 0))
-                    if getattr(sub, "subscriber_id", None):
-                        active_accounts.add(str(sub.subscriber_id))
-            count = len(active_accounts) or 1
-            active_subscriber_counts.append(len(active_accounts))
-            mrr_values.append(float(month_mrr))
-            arpu_values.append(float(month_mrr / Decimal(count)))
+
+        for label, year, month, m_start, m_end in six_months:
+            mrr_labels.append(label)
+
+            mrr_stmt = select(
+                func.coalesce(func.sum(Subscription.unit_price), Decimal("0")).label("mrr"),
+                func.count(func.distinct(Subscription.subscriber_id)).label("active_count"),
+            ).where(
+                Subscription.status == SubscriptionStatus.active,
+                Subscription.next_billing_at >= m_start,
+                Subscription.next_billing_at < m_end,
+            )
+            if selected_partner_id or selected_location:
+                mrr_stmt = mrr_stmt.join(Subscriber, Subscription.subscriber_id == Subscriber.id)
+                if selected_partner_id:
+                    mrr_stmt = mrr_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+                if selected_location:
+                    loc = selected_location.lower()
+                    mrr_stmt = mrr_stmt.where(
+                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                    )
+
+            mrr_row = db.execute(mrr_stmt).one()
+            month_mrr = float(mrr_row.mrr)
+            count = mrr_row.active_count or 1
+            active_subscriber_counts.append(mrr_row.active_count)
+            mrr_values.append(month_mrr)
+            arpu_values.append(round(month_mrr / count, 2))
+
         mrr_growth_rate = 0.0
         if len(mrr_values) >= 2 and mrr_values[-2] > 0:
             mrr_growth_rate = round(((mrr_values[-1] - mrr_values[-2]) / mrr_values[-2]) * 100, 2)
 
-        # Planned income (next billing period from active subscriptions).
-        next_month_start = _next_month_start(_month_start(now))
-        next_month_end = _next_month_start(next_month_start)
-        planned_income = Decimal("0")
-        for sub in db.query(Subscription).filter(Subscription.status == SubscriptionStatus.active).all():
-            sub_account = getattr(sub, "subscriber", None)
-            if selected_partner_id or selected_location:
-                if not _matches_scope(sub_account, selected_partner_id=selected_partner_id, selected_location=selected_location):
-                    continue
-            next_billing_at = getattr(sub, "next_billing_at", None)
-            if next_billing_at and _in_window(next_billing_at, next_month_start, next_month_end):
-                planned_income += Decimal(str(getattr(sub, "unit_price", 0) or 0))
+        # --- Planned income (next month from active subscriptions) ---
+        next_m_start = _next_month_start(_month_start(now))
+        next_m_end = _next_month_start(next_m_start)
+        planned_stmt = select(
+            func.coalesce(func.sum(Subscription.unit_price), Decimal("0")),
+        ).where(
+            Subscription.status == SubscriptionStatus.active,
+            Subscription.next_billing_at >= next_m_start,
+            Subscription.next_billing_at < next_m_end,
+        )
+        if selected_partner_id or selected_location:
+            planned_stmt = planned_stmt.join(Subscriber, Subscription.subscriber_id == Subscriber.id)
+            if selected_partner_id:
+                planned_stmt = planned_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
+            if selected_location:
+                loc = selected_location.lower()
+                planned_stmt = planned_stmt.where(
+                    func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
+                )
+        planned_income = float(db.execute(planned_stmt).scalar() or 0)
 
-        # Net revenue retention (payment-based approximation).
+        # --- Net revenue retention (payment-based, SQL aggregation) ---
         current_start = _month_start(now)
         current_end = _next_month_start(current_start)
         prev_start = _month_start(current_start - timedelta(days=1))
         prev_end = current_start
-        prev_by_account: dict[str, Decimal] = {}
-        current_by_account: dict[str, Decimal] = {}
-        for payment in succeeded_payments:
-            paid_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
-            account_id = str(getattr(payment, "account_id", "") or "")
-            if not account_id:
-                continue
-            amount = Decimal(str(getattr(payment, "amount", 0) or 0))
-            if _in_window(paid_at, prev_start, prev_end):
-                prev_by_account[account_id] = prev_by_account.get(account_id, Decimal("0")) + amount
-            if _in_window(paid_at, current_start, current_end):
-                current_by_account[account_id] = current_by_account.get(account_id, Decimal("0")) + amount
+
+        # Previous month totals by account
+        prev_stmt = select(
+            Payment.account_id,
+            func.sum(Payment.amount).label("total"),
+        ).where(
+            Payment.status == PaymentStatus.succeeded,
+            func.coalesce(Payment.paid_at, Payment.created_at) >= prev_start,
+            func.coalesce(Payment.paid_at, Payment.created_at) < prev_end,
+        ).group_by(Payment.account_id)
+        prev_by_account = {str(r.account_id): float(r.total) for r in db.execute(prev_stmt).all()}
+
+        # Current month totals by account (only for cohort accounts)
         cohort_ids = set(prev_by_account.keys())
         prev_total = sum(prev_by_account.values())
-        current_total = sum(current_by_account.get(acc_id, Decimal("0")) for acc_id in cohort_ids)
-        net_revenue_retention = round((float(current_total / prev_total) * 100), 2) if prev_total > 0 else 0.0
 
-        payer_totals: dict[str, Decimal] = {}
-        payer_labels: dict[str, str] = {}
-        period_start = _month_start(now)
-        period_end = _next_month_start(period_start)
-        for payment in succeeded_payments:
-            paid_at = getattr(payment, "paid_at", None) or getattr(payment, "created_at", None)
-            if not _in_window(paid_at, period_start, period_end):
-                continue
-            payer_account = getattr(payment, "account", None)
-            account_id = str(getattr(payment, "account_id", "") or "")
-            if not account_id:
-                continue
-            amount = Decimal(str(getattr(payment, "amount", 0) or 0))
-            payer_totals[account_id] = payer_totals.get(account_id, Decimal("0")) + amount
-            if payer_account:
-                payer_labels[account_id] = (
-                    getattr(payer_account, "display_name", None)
-                    or " ".join(
-                        part for part in [
-                            (getattr(payer_account, "first_name", "") or "").strip(),
-                            (getattr(payer_account, "last_name", "") or "").strip(),
-                        ] if part
-                    )
-                    or str(getattr(payer_account, "account_number", None) or f"Account {account_id[:8]}")
-                )
-            else:
-                payer_labels[account_id] = f"Account {account_id[:8]}"
-        top_payers_sorted = sorted(payer_totals.items(), key=lambda item: item[1], reverse=True)[:10]
-        top_payers = {
-            "labels": [payer_labels.get(account_id, account_id) for account_id, _ in top_payers_sorted],
-            "values": [float(amount) for _, amount in top_payers_sorted],
-        }
+        if cohort_ids and prev_total > 0:
+            cur_stmt = select(
+                Payment.account_id,
+                func.sum(Payment.amount).label("total"),
+            ).where(
+                Payment.status == PaymentStatus.succeeded,
+                func.coalesce(Payment.paid_at, Payment.created_at) >= current_start,
+                func.coalesce(Payment.paid_at, Payment.created_at) < current_end,
+                cast(Payment.account_id, String).in_(cohort_ids),
+            ).group_by(Payment.account_id)
+            current_by_account = {str(r.account_id): float(r.total) for r in db.execute(cur_stmt).all()}
+            current_total = sum(current_by_account.get(acc_id, 0.0) for acc_id in cohort_ids)
+            net_revenue_retention = round((current_total / prev_total) * 100, 2)
+        else:
+            net_revenue_retention = 0.0
 
-        # Invoice status chart data
+        # --- Top payers (current month, SQL JOIN + GROUP BY + ORDER BY) ---
+        tp_stmt = (
+            select(
+                Payment.account_id,
+                func.sum(Payment.amount).label("total"),
+                func.max(Subscriber.display_name).label("display_name"),
+                func.max(Subscriber.first_name).label("first_name"),
+                func.max(Subscriber.last_name).label("last_name"),
+                func.max(Subscriber.account_number).label("account_number"),
+            )
+            .join(Subscriber, Payment.account_id == Subscriber.id)
+            .where(
+                Payment.status == PaymentStatus.succeeded,
+                func.coalesce(Payment.paid_at, Payment.created_at) >= current_start,
+                func.coalesce(Payment.paid_at, Payment.created_at) < current_end,
+            )
+            .group_by(Payment.account_id)
+            .order_by(func.sum(Payment.amount).desc())
+            .limit(10)
+        )
+        tp_rows = db.execute(tp_stmt).all()
+        top_payer_labels: list[str] = []
+        top_payer_values: list[float] = []
+        for tpr in tp_rows:
+            name = (
+                tpr.display_name
+                or " ".join(part for part in [(tpr.first_name or "").strip(), (tpr.last_name or "").strip()] if part)
+                or str(tpr.account_number or f"Account {str(tpr.account_id)[:8]}")
+            )
+            top_payer_labels.append(name)
+            top_payer_values.append(float(tpr.total))
+
+        top_payers = {"labels": top_payer_labels, "values": top_payer_values}
+
+        # --- Invoice status chart data ---
         chart_data = {
             "labels": ["Paid", "Pending", "Overdue", "Draft"],
             "values": [
@@ -640,17 +675,13 @@ class BillingReporting:
             "colors": ["#10b981", "#3b82f6", "#f59e0b", "#94a3b8"],
         }
 
-        # Recent invoices (last 10)
-        recent_invoices = invoices_service.list(
-            db=db,
-            account_id=None,
-            status=None,
-            is_active=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=10,
-            offset=0,
+        # --- Recent invoices (last 10) ---
+        recent_stmt = (
+            select(Invoice)
+            .order_by(Invoice.created_at.desc())
+            .limit(10)
         )
+        recent_invoices = db.scalars(recent_stmt).all()
 
         return {
             "stats": stats,
@@ -666,7 +697,7 @@ class BillingReporting:
             "top_payers": top_payers,
             "mrr_growth_rate": mrr_growth_rate,
             "net_revenue_retention": net_revenue_retention,
-            "planned_income": float(planned_income),
+            "planned_income": planned_income,
             "total_balance": account_stats["total_balance"],
             "active_count": account_stats["active_count"],
             "suspended_count": account_stats["suspended_count"],

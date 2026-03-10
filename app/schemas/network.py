@@ -350,6 +350,12 @@ class OLTDeviceBase(BaseModel):
     vendor: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     serial_number: str | None = Field(default=None, max_length=120)
+    ssh_username: str | None = Field(default=None, max_length=120)
+    ssh_password: str | None = Field(default=None, max_length=255)
+    ssh_port: int | None = None
+    netconf_enabled: bool = False
+    netconf_port: int | None = None
+    tr069_acs_server_id: UUID | None = None
     notes: str | None = None
     is_active: bool = True
 
@@ -365,6 +371,12 @@ class OLTDeviceUpdate(BaseModel):
     vendor: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     serial_number: str | None = Field(default=None, max_length=120)
+    ssh_username: str | None = Field(default=None, max_length=120)
+    ssh_password: str | None = Field(default=None, max_length=255)
+    ssh_port: int | None = None
+    netconf_enabled: bool | None = None
+    netconf_port: int | None = None
+    tr069_acs_server_id: UUID | None = None
     notes: str | None = None
     is_active: bool | None = None
 

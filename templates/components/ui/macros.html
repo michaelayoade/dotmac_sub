@@ -325,7 +325,9 @@
     </div>
     {% endif %}
     <div class="overflow-x-auto">
-        {{ caller() }}
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            {{ caller() }}
+        </table>
     </div>
 </div>
 {% endmacro %}
@@ -339,8 +341,10 @@
 <thead>
     <tr class="border-b border-slate-100 dark:border-slate-700/50">
         {% for col in columns %}
-        <th scope="col" class="px-6 py-3 text-{{ col.align|default('left') }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-            {{ col.label }}
+        {% set align = col.align if col is mapping and col.align is defined else 'left' %}
+        {% set label = col.label if col is mapping and col.label is defined else col %}
+        <th scope="col" class="px-6 py-3 text-{{ align }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            {{ label }}
         </th>
         {% endfor %}
     </tr>

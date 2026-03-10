@@ -1,0 +1,13 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, empty_state, animation_styles %}
+{% block title %}DNS Threat Archive - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("teal", "emerald") }}
+<div class="relative space-y-6">
+    {% call page_header(title="DNS Threat Archive", subtitle="DNS-based threat detection and blocking events", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>', color="teal", color2="emerald") %}{% endcall %}
+    {% call card("DNS Threat Archive", color="teal") %}
+    {{ empty_state("Coming Soon", "DNS-based threat detection and blocking events reporting will be available in a future update.") }}
+    {% endcall %}
+</div>
+{{ animation_styles() }}
+{% endblock %}

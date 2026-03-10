@@ -36,6 +36,18 @@
                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
             </div>
             <input type="hidden" name="tab" x-model="activeTab" value="{{ tab | default('core') }}">
+            <input type="hidden" name="page" value="1">
+            <div>
+                <label for="core-per-page" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rows per page</label>
+                <select id="core-per-page"
+                        name="per_page"
+                        onchange="this.form.submit()"
+                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for option in core_per_page_options %}
+                    <option value="{{ option }}" {% if core_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="flex gap-2">
                 <button type="submit"
                         class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
@@ -52,7 +64,7 @@
 
     <div class="flex items-center justify-end">
         <button type="button"
-                hx-get="/admin/network/network-devices?tab={{ tab | default('core') }}{% if search %}&search={{ search }}{% endif %}"
+                hx-get="/admin/network/network-devices?tab={{ tab | default('core') }}&page={{ core_pagination.page }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
                 hx-target="#network-devices-content"
                 hx-select="#network-devices-content"
                 hx-swap="outerHTML"
@@ -203,6 +215,31 @@
                     </tbody>
                 </table>
             </div>
+
+            {% if core_pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Showing {{ core_devices|length }} of {{ core_pagination.total }} devices
+                    (page {{ core_pagination.page }} of {{ core_pagination.total_pages }})
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if core_pagination.has_prev %}
+                    <a href="/admin/network/network-devices?tab=core&page={{ core_pagination.page - 1 }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        Previous
+                    </a>
+                    {% endif %}
+                    {% if core_pagination.has_next %}
+                    <a href="/admin/network/network-devices?tab=core&page={{ core_pagination.page + 1 }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
+                       class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        Next
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -255,16 +292,33 @@
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <span class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1 text-sm font-mono text-slate-700 dark:bg-slate-700 dark:text-slate-300">
-                                    {{ olt.mgmt_ip or olt.management_ip or '-' }}
+                                    {{ olt.mgmt_ip or '-' }}
                                 </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <span class="inline-flex items-center gap-1.5 rounded-lg bg-violet-100 px-2.5 py-1 text-sm font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-400">
-                                    {{ olt_stats[olt.id|string].pon_ports if olt_stats and olt.id|string in olt_stats else 0 }} ports
+                                    {{ olt.pon_ports }} ports
                                 </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                {{ status_badge("Active" if olt.is_active else "Inactive", "active" if olt.is_active else "inactive", pulse=olt.is_active) }}
+                                {% set status_val = olt.runtime_status | default('unknown') %}
+                                {% if status_val == 'online' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>Online
+                                </span>
+                                {% elif status_val == 'degraded' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Degraded
+                                </span>
+                                {% elif status_val == 'offline' %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>Offline
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700/60 dark:text-slate-300">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-slate-500"></span>Unknown
+                                </span>
+                                {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">

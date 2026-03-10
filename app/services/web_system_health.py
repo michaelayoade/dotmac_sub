@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.domain_settings import SettingDomain
+from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import settings_spec
 from app.services import system_health as system_health_service
 
@@ -38,4 +39,9 @@ def build_health_data(db) -> dict[str, object]:
         except (TypeError, ValueError):
             thresholds[key] = None
     health_status = system_health_service.evaluate_health(health, thresholds)
-    return {"health": health, "health_status": health_status}
+    invoice_cache_stats = billing_invoice_pdf_service.get_cache_dashboard_stats(db)
+    return {
+        "health": health,
+        "health_status": health_status,
+        "invoice_cache_stats": invoice_cache_stats,
+    }

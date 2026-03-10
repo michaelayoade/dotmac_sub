@@ -1,0 +1,74 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, action_button, animation_styles %}
+
+{% block title %}Settings Hub - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+
+<div class="relative space-y-6" x-data="settingsHub()">
+    {% call page_header(
+        title="Settings Hub",
+        subtitle="All configuration sections in one place",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}{% endcall %}
+
+    {# Search Bar #}
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="relative">
+            <svg class="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input type="text" x-model="search" placeholder="Search settings (e.g., billing, email, RADIUS)..." class="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-slate-500">
+        </div>
+    </div>
+
+    {# Category Pills #}
+    <div class="flex flex-wrap gap-2 animate-fade-in-up" style="animation-delay: 75ms;">
+        <button type="button" @click.prevent="setCategory('')" :class="activeCategory === '' ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900' : 'bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300'" class="rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">All</button>
+        {% for cat in categories %}
+        <button type="button" @click.prevent="setCategory('{{ cat.id }}')" :class="activeCategory === '{{ cat.id }}' ? 'bg-{{ cat.color }}-600 text-white' : 'bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300'" class="rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">{{ cat.name }}</button>
+        {% endfor %}
+    </div>
+
+    {# Category Cards #}
+    {% for cat in categories %}
+    {% set cat_search_blob = cat.name ~ ' ' ~ cat.description ~ ' ' ~ (cat.links | map(attribute='name') | join(' ')) ~ ' ' ~ (cat.links | map(attribute='description') | join(' ')) %}
+    <div x-show='(activeCategory === "" || activeCategory === "{{ cat.id }}") && matchesSearch({{ cat_search_blob | tojson }})' x-transition class="animate-fade-in-up" style="animation-delay: {{ 100 + loop.index * 50 }}ms;">
+        {% call card(cat.name, color=cat.color) %}
+        <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">{{ cat.description }}</p>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {% for link in cat.links %}
+            {% set link_search_blob = link.name ~ ' ' ~ link.description %}
+            <a href="{{ link.url }}" x-show='matchesSearch({{ link_search_blob | tojson }})' class="group flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-{{ cat.color }}-200 hover:bg-{{ cat.color }}-50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-{{ cat.color }}-700 dark:hover:bg-{{ cat.color }}-900/20">
+                <div class="min-w-0">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ link.name }}</p>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ link.description }}</p>
+                </div>
+                <svg class="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400 transition group-hover:text-{{ cat.color }}-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </a>
+            {% endfor %}
+        </div>
+        {% endcall %}
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+function settingsHub() {
+    return {
+        search: '',
+        activeCategory: '',
+        setCategory(categoryId) {
+            this.activeCategory = categoryId || '';
+        },
+        matchesSearch(searchableText) {
+            if (!this.search) return true;
+            const q = this.search.toLowerCase();
+            return String(searchableText || '').toLowerCase().includes(q);
+        }
+    };
+}
+</script>
+{{ animation_styles() }}
+{% endblock %}

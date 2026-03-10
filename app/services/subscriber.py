@@ -209,6 +209,8 @@ class Subscribers(ListResponseMixin):
         data = payload.model_dump()
         category = data.pop("category", None)
         data.pop("organization_id", None)
+        if data.get("user_type") is None:
+            data["user_type"] = UserType.customer
         if not data.get("subscriber_number"):
             generated = numbering.generate_number(
                 db,

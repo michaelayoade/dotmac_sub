@@ -1,0 +1,41 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}Billing Settings - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Billing & Invoice Settings", subtitle="Billing cycle, invoice numbering, payment terms, and blocking rules", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") %}{% endcall %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("Recurring Billing", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Enabled</label><select name="billing_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.billing_enabled == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.billing_enabled != 'true' %}selected{% endif %}>Disabled</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Period</label><select name="payment_period" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="monthly" {% if billing.payment_period == 'monthly' %}selected{% endif %}>Monthly</option><option value="quarterly" {% if billing.payment_period == 'quarterly' %}selected{% endif %}>Quarterly</option><option value="annual" {% if billing.payment_period == 'annual' %}selected{% endif %}>Annual</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Day (1-28)</label><input type="number" name="billing_day" min="1" max="28" value="{{ billing.billing_day or '1' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Use Customer Creation Date</label><select name="use_creation_date" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.use_creation_date == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing.use_creation_date != 'true' %}selected{% endif %}>No</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Due (days after invoice)</label><input type="number" name="payment_due_days" value="{{ billing.payment_due_days or '14' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Blocking Period (days after due)</label><input type="number" name="blocking_period_days" value="{{ billing.blocking_period_days or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Deactivation Period (days)</label><input type="number" name="deactivation_period_days" value="{{ billing.deactivation_period_days or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">0 = disabled</p></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Minimum Balance</label><input type="number" step="0.01" name="minimum_balance" value="{{ billing.minimum_balance or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Billing Notifications</label><select name="send_billing_notifications" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.send_billing_notifications == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing.send_billing_notifications != 'true' %}selected{% endif %}>No</option></select></div>
+        </div>
+        {% endcall %}
+        {% call card("Document Numbering", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Number Format</label><input type="text" name="invoice_number_format" value="{{ billing.invoice_number_format or 'INV{year}{month}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Variables: {year}, {month}, {day}, {next}, {next|N} for zero-padded</p></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Receipt Number Format</label><input type="text" name="receipt_number_format" value="{{ billing.receipt_number_format or 'RCP{year}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Credit Note Format</label><input type="text" name="credit_note_format" value="{{ billing.credit_note_format or 'CN{year}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+        </div>
+        {% endcall %}
+        {% call card("Proforma & Options", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Proforma Invoices</label><select name="proforma_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.proforma_enabled == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.proforma_enabled != 'true' %}selected{% endif %}>Disabled</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zero-Total Invoices</label><select name="zero_total_invoices" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.zero_total_invoices == 'true' %}selected{% endif %}>Allow</option><option value="false" {% if billing.zero_total_invoices != 'true' %}selected{% endif %}>Prevent</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice PDF Caching</label><select name="invoice_caching" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.invoice_caching == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.invoice_caching != 'true' %}selected{% endif %}>Disabled</option></select></div>
+        </div>
+        {% endcall %}
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Billing Settings</button></div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

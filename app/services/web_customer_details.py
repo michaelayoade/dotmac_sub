@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -23,6 +25,8 @@ from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
+
+logger = logging.getLogger(__name__)
 
 
 def _dedupe_accounts(accounts):

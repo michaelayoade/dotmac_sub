@@ -1,24 +1,39 @@
+import logging
+
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Organization, Subscriber
 from app.services.response import list_response
 
+logger = logging.getLogger(__name__)
+
+_MAX_SEARCH_LIMIT = 50
+
+
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards in user input."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 def search(db: Session, query: str, limit: int = 20) -> list[dict]:
     term = (query or "").strip()
     if not term:
         return []
-    like_term = f"%{term}%"
+    limit = min(limit, _MAX_SEARCH_LIMIT)
+    escaped = _escape_like(term)
+    like_term = f"%{escaped}%"
     people = (
         db.query(Subscriber)
         .filter(
+            Subscriber.is_active.is_(True),
             or_(
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
                 Subscriber.email.ilike(like_term),
-            )
+            ),
         )
+        .order_by(Subscriber.last_name, Subscriber.first_name)
         .limit(limit)
         .all()
     )
@@ -30,6 +45,7 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
                 Organization.domain.ilike(like_term),
             )
         )
+        .order_by(Organization.name)
         .limit(limit)
         .all()
     )

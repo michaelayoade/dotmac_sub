@@ -5,14 +5,97 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.network import OLTDevice
+from app.models.network_monitoring import NetworkDevice
 from app.services import network as network_service
 
 if TYPE_CHECKING:
     from app.models.network import Port
 
 logger = logging.getLogger(__name__)
+
+
+def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
+    """Treat monitoring devices with names ending in OLT as OLT list members."""
+    return device.name.strip().lower().endswith("olt")
+
+
+def resolve_olt_device_for_network_device(db: Session, device: NetworkDevice) -> OLTDevice:
+    """Return a dedicated OLTDevice for a promoted NetworkDevice, creating one when missing."""
+    if device.mgmt_ip:
+        matched = db.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)).first()
+        if matched:
+            return matched
+    if device.hostname:
+        matched = db.scalars(select(OLTDevice).where(OLTDevice.hostname == device.hostname)).first()
+        if matched:
+            return matched
+
+    matched = db.scalars(select(OLTDevice).where(OLTDevice.name == device.name)).first()
+    if matched:
+        return matched
+
+    payload = {
+        "name": device.name,
+        "hostname": device.hostname,
+        "mgmt_ip": device.mgmt_ip,
+        "vendor": device.vendor,
+        "model": device.model,
+        "serial_number": device.serial_number,
+        "notes": device.notes,
+        "is_active": bool(device.is_active),
+    }
+    try:
+        return network_service.olt_devices.create(db=db, payload=payload)
+    except IntegrityError:
+        db.rollback()
+        if device.mgmt_ip:
+            matched = db.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)).first()
+            if matched:
+                return matched
+        if device.hostname:
+            matched = db.scalars(select(OLTDevice).where(OLTDevice.hostname == device.hostname)).first()
+            if matched:
+                return matched
+        matched = db.scalars(select(OLTDevice).where(OLTDevice.name == device.name)).first()
+        if matched:
+            return matched
+        raise
+
+
+def _status_presenter(raw_status: str | None) -> tuple[str, str]:
+    status = (raw_status or "").strip().lower()
+    if status == "online":
+        return "Online", "online"
+    if status == "offline":
+        return "Offline", "offline"
+    if status == "degraded":
+        return "Degraded", "warning"
+    if status:
+        return status.replace("_", " ").title(), "default"
+    return "Unknown", "default"
+
+
+def _find_linked_monitoring_status(
+    *,
+    olt: OLTDevice,
+    by_mgmt_ip: dict[str, NetworkDevice],
+    by_hostname: dict[str, NetworkDevice],
+    by_name: dict[str, NetworkDevice],
+) -> tuple[str, str]:
+    linked: NetworkDevice | None = None
+    if olt.mgmt_ip:
+        linked = by_mgmt_ip.get(olt.mgmt_ip)
+    if linked is None and olt.hostname:
+        linked = by_hostname.get(olt.hostname)
+    if linked is None and olt.name:
+        linked = by_name.get(olt.name)
+    status_raw = linked.status.value if (linked and linked.status) else None
+    return _status_presenter(status_raw)
 
 
 def get_cpe_ports(db: Session, cpe_id: object) -> list[Port]:
@@ -205,7 +288,7 @@ def devices_filter_data(
 
 def olts_list_page_data(db: Session) -> dict[str, object]:
     """Return OLT list payload with per-OLT stats."""
-    olts = network_service.olt_devices.list(
+    raw_olts = network_service.olt_devices.list(
         db=db,
         is_active=True,
         order_by="name",
@@ -215,7 +298,7 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
     )
 
     olt_stats = {}
-    for olt in olts:
+    for olt in raw_olts:
         pon_ports = network_service.pon_ports.list(
             db=db,
             olt_id=str(olt.id),
@@ -227,7 +310,47 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
         )
         olt_stats[str(olt.id)] = {"pon_ports": len(pon_ports)}
 
-    stats = {"total": len(olts), "active": sum(1 for o in olts if o.is_active)}
+    promoted_olts = [
+        device
+        for device in db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all()
+        if device.is_active and _network_device_is_olt_candidate(device)
+    ]
+    promoted_olt_records = [resolve_olt_device_for_network_device(db, device) for device in promoted_olts]
+    all_olts_by_id = {str(olt.id): olt for olt in raw_olts}
+    for olt in promoted_olt_records:
+        all_olts_by_id[str(olt.id)] = olt
+
+    all_olts = sorted(all_olts_by_id.values(), key=lambda olt: str(olt.name or "").lower())
+    monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
+    by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
+    by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
+    by_name = {d.name: d for d in monitoring_devices if d.name}
+
+    olts = []
+    for olt in all_olts:
+        status_label, status_variant = _find_linked_monitoring_status(
+            olt=olt,
+            by_mgmt_ip=by_mgmt_ip,
+            by_hostname=by_hostname,
+            by_name=by_name,
+        )
+        olts.append(
+            {
+            "id": str(olt.id),
+            "name": olt.name,
+            "hostname": olt.hostname,
+            "vendor": olt.vendor,
+            "model": olt.model,
+            "mgmt_ip": olt.mgmt_ip,
+            "is_active": bool(olt.is_active),
+            "runtime_status_label": status_label,
+            "runtime_status_variant": status_variant,
+            "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
+            "detail_url": f"/admin/network/olts/{olt.id}",
+            "edit_url": f"/admin/network/olts/{olt.id}/edit",
+        }
+        )
+
+    stats = {"total": len(olts), "active": sum(1 for o in olts if o["is_active"])}
 
     return {"olts": olts, "olt_stats": olt_stats, "stats": stats}
-

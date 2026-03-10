@@ -12,6 +12,7 @@ This module provides reusable utilities for:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, TypeVar
 
@@ -203,3 +204,24 @@ def validate_positive_decimal(value: Decimal | None, label: str) -> Decimal | No
     if value is not None and value < 0:
         raise HTTPException(status_code=400, detail=f"{label} cannot be negative")
     return value
+
+
+def parse_date_filter(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+    """Parse a YYYY-MM-DD string into a UTC-aware datetime for query filtering.
+
+    Args:
+        value: Date string in ISO format (YYYY-MM-DD), or None/empty.
+        end_of_day: If True, return 23:59:59 instead of 00:00:00.
+
+    Returns:
+        UTC-aware datetime or None if the input is empty/invalid.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = date.fromisoformat(text)
+    except (ValueError, TypeError):
+        return None
+    t = time.max if end_of_day else time.min
+    return datetime.combine(parsed, t, tzinfo=UTC)

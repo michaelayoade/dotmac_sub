@@ -1,0 +1,2541 @@
+# Outstanding Features to Implement
+
+Total unchecked items across docs: **834**
+
+## 01_smartolt_features.md
+Unchecked items: 38
+
+- [ ] **Network Dashboard KPI cards**: Add real-time ONU status summary (online/offline/low signal counts) to the network monitoring dashboard
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:21`
+- [ ] **ONU status breakdown**: Show offline reason categories (power fail, loss of signal, N/A) not just total counts
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:22`
+- [ ] **Low signal alerts**: Warning vs Critical thresholds for optical signal levels
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:23`
+- [ ] **Daily ONU status graph**: Time-series chart showing ONU online/offline/signal-loss trends over 24h
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:24`
+- [ ] **ONU authorization trend**: Bar chart of new ONU authorizations per day
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:25`
+- [ ] **OLT health sidebar**: Temperature, uptime, and alert status per OLT at a glance
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:26`
+- [ ] **PON outage table**: Dedicated view showing which PON ports have outages, affected ONU count, cause, duration
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:27`
+- [ ] **Activity feed**: Recent events (config backups, device reboots) in a live feed panel
+  - context: `Section 1: SmartOLT Feature Analysis | 1.1 Dashboard — Real-Time ONU/OLT Overview`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:28`
+- [ ] **OLT hardware inventory**: Show card slots, card types, port counts, firmware versions per OLT
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:46`
+- [ ] **OLT card management**: View card status and trigger card reboot from UI
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:47`
+- [ ] **PON port detail view**: Per-port ONU count, admin state, auto-negotiation, signal levels, descriptions
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:48`
+- [ ] **Uplink port monitoring**: MTU, wavelength, temperature, PVID, tagged VLANs per uplink
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:49`
+- [ ] **VLAN management per OLT**: CRUD for VLANs with purpose tagging (TR069, Management, Internet), DHCP snooping toggle, ONU count per VLAN
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:50`
+- [ ] **OLT settings view**: Consolidated view of IP, credentials, SNMP, hardware/software detection
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:51`
+- [ ] **Config backup history**: Show when auto-config backups were saved per OLT
+  - context: `Section 1: SmartOLT Feature Analysis | 1.2 OLT List & Details`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:52`
+- [ ] **ONT detail dashboard**: Comprehensive single-page view combining device identity, customer info, optical signals, and network config
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:74`
+- [ ] **Live optical signal display**: Show ONU/OLT Rx signal in dBm with color-coded thresholds and distance estimate
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:75`
+- [ ] **Remote device actions**: Get status, show running-config, reboot, disable from DotMac Sub UI (via SmartOLT API or direct)
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:76`
+- [ ] **Traffic graphs per ONT**: Real-time and historical traffic charts per customer device
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:77`
+- [ ] **Signal level graphs**: Historical signal strength trending per ONT
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:78`
+- [ ] **Speed profile management**: View/configure speed profiles (bandwidth) per ONT from subscriber detail page
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:79`
+- [ ] **Ethernet port status**: Show LAN port status (up/down, mode, DHCP) per ONT
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:80`
+- [ ] **WiFi management**: View/configure WiFi SSIDs on customer ONTs remotely
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:81`
+- [ ] **TR069 deep view**: CPU usage, RAM, uptime, pending provisions, with expandable sections for PPP interface, port forwarding, LAN DHCP, LAN ports, wireless, hosts, security, voice lines, device logs, firmware management
+  - context: `Section 1: SmartOLT Feature Analysis | 1.3 Customer ONT Detail Page`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:82`
+- [ ] **Advanced ONT list filtering**: Multi-dimensional filtering (by OLT, zone, signal quality, VLAN, ONT type, profile)
+  - context: `Section 1: SmartOLT Feature Analysis | 1.4 Configured ONT List & Diagnostics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:95`
+- [ ] **Signal quality column**: Color-coded signal strength in the ONT list view
+  - context: `Section 1: SmartOLT Feature Analysis | 1.4 Configured ONT List & Diagnostics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:96`
+- [ ] **Bulk diagnostics view**: List all ONTs sorted by signal quality for proactive maintenance
+  - context: `Section 1: SmartOLT Feature Analysis | 1.4 Configured ONT List & Diagnostics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:97`
+- [ ] **Zone/ODB grouping**: Group ONTs by zone and ODB splitter for field operations
+  - context: `Section 1: SmartOLT Feature Analysis | 1.4 Configured ONT List & Diagnostics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:98`
+- [ ] **Unconfigured device queue**: Show newly discovered but unprovisioned ONTs from SmartOLT
+  - context: `Section 1: SmartOLT Feature Analysis | 1.5 Unconfigured Devices & Auto-Authorization`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:111`
+- [ ] **Auto-authorization rules**: Define rules for automatic ONU authorization based on OLT/port/zone
+  - context: `Section 1: SmartOLT Feature Analysis | 1.5 Unconfigured Devices & Auto-Authorization`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:112`
+- [ ] **Authorization presets**: Pre-configured profiles for one-click ONT provisioning
+  - context: `Section 1: SmartOLT Feature Analysis | 1.5 Unconfigured Devices & Auto-Authorization`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:113`
+- [ ] **Deferred authorization**: Queue an ONU for later authorization (field tech workflow)
+  - context: `Section 1: SmartOLT Feature Analysis | 1.5 Unconfigured Devices & Auto-Authorization`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:114`
+- [ ] **Zone management**: Define and manage geographic zones for ONT organization
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:127`
+- [ ] **ODB/Splitter management**: Track optical distribution boxes (splitters) and map ONTs to them
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:128`
+- [ ] **ONU type library**: Maintain a catalog of supported ONT hardware types with specifications
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:129`
+- [ ] **Speed profile management**: Define bandwidth profiles (download/upload) reusable across subscribers
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:130`
+- [ ] **SmartOLT audit log integration**: Pull or display SmartOLT action logs within DotMac Sub
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:131`
+- [ ] **OLT-scoped access control**: Restrict technician access to specific OLTs (restriction groups concept)
+  - context: `Section 1: SmartOLT Feature Analysis | 1.6 SmartOLT Settings & User Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/01_smartolt_features.md:132`
+
+## 02_selfcare_and_messages.md
+Unchecked items: 64
+
+- [ ] **Live subscriber count per offer**: Display the current number of active subscribers on each catalog offer directly in the offers list table, eliminating the need to navigate into each offer to see adoption
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:25`
+- [ ] **Online subscriber count per offer**: Show how many subscribers on each plan are currently online (via RADIUS session data), giving operators instant insight into active usage per tier
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:26`
+- [ ] **Download/Upload speed columns in offer list**: Add sortable speed columns (download Mbps, upload Mbps) to the catalog offers table so operators can scan bandwidth tiers at a glance without opening each offer
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:27`
+- [ ] **Plan statistics action button**: Add a per-offer action icon that opens a statistics view showing subscriber adoption over time, churn rate, revenue contribution, and online vs offline breakdown for that specific plan
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:28`
+- [ ] **Bulk plan migration tool**: Add a "transfer subscribers" action per offer that allows operators to move all subscribers from one plan to another (e.g., during plan consolidation or price changes), with preview of affected subscribers and confirmation step
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:29`
+- [ ] **Partner/reseller filter on catalog**: Add a reseller filter dropdown on the catalog offers list page so multi-tenant operators can view offers scoped to a specific partner/reseller organization
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:30`
+- [ ] **Visible/Active status toggle filters**: Add quick-toggle filters (Visible, Active/Inactive/Archived) at the top of the catalog list to show/hide plans by their portal visibility and lifecycle status
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Catalog List Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:31`
+- [ ] **Data cap plan type**: Enhance `CatalogOffer` to explicitly support capped data plans (e.g., "20GB data") with a `data_cap_gb` field, distinct from unlimited plans that have no cap but may have speed tiers
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Capped vs Unlimited Plan Support`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:34`
+- [ ] **Plan naming convention enforcement**: Add admin guidance or validation suggesting consistent plan naming (e.g., "{Speed} Mbps Fiber", "Unlimited {Tier}") to prevent the inconsistency visible in Splynx (e.g., "unlimited 1.5" vs "Unlimited Basic")
+  - context: `Section 2: Selfcare Portal & Messaging | 2.1 Internet Tariff Plans -- Admin Catalog View | Capped vs Unlimited Plan Support`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:35`
+- [ ] **Separate recurring charges view**: Create a dedicated "Recurring Charges" sub-tab under Catalog that lists non-internet recurring services (static IP blocks, leased lines, device rentals, last-mile charges) separately from internet plans
+  - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:55`
+- [ ] **Static IP add-on tiers**: Pre-define standard IP allocation add-ons (/32, /30, /29, /28) with automatic pricing and IPAM integration, so operators can assign IP blocks as recurring charges linked to the IP address management system
+  - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:56`
+- [ ] **Leased line / dedicated circuit plans**: Support a "dedicated" plan type with committed information rate (CIR) guarantees, separate from shared residential plans, with distinct billing and SLA terms
+  - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:57`
+- [ ] **Device replacement as recurring service**: Allow "device rental" or "device replacement" to be configured as a recurring charge add-on that auto-bills monthly, separate from one-time installation fees
+  - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:58`
+- [ ] **Add-on subscriber count**: Show the count of active subscribers using each add-on/recurring charge in the catalog list, matching the visibility Splynx provides
+  - context: `Section 2: Selfcare Portal & Messaging | 2.2 Recurring Tariff Plans | Recurring Charge Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:59`
+- [ ] **Dedicated one-time fees view**: Create a "One-Time Fees" sub-tab under Catalog listing all non-recurring charges (installation, support calls, relocations, device replacements) with enabled/disabled toggle
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:83`
+- [ ] **Enabled/disabled toggle per fee**: Add a quick-toggle "Enabled" column (green/red badge) allowing operators to temporarily disable a one-time fee without deleting it from the catalog
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:84`
+- [ ] **Installation fee variants**: Support multiple installation fee types (aerial fiber vs ground fiber, with different pricing) as distinct one-time catalog items selectable during service provisioning
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:85`
+- [ ] **Referral bonus as catalog item**: Allow a "Referral Bonus" one-time credit item in the catalog that can be automatically applied when a referral code is validated, integrating with the billing credit system
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:86`
+- [ ] **Zero-cost service items**: Support 0.00 priced one-time items for tracking purposes (e.g., "Faulty Device Replacement" at no charge still creates a service order and audit trail even though no invoice is generated)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:87`
+- [ ] **One-time fee application from service order**: When creating a service order (provisioning), allow operators to select applicable one-time fees from the catalog to automatically generate an invoice line item alongside the recurring subscription charge
+  - context: `Section 2: Selfcare Portal & Messaging | 2.3 One-Time Tariff Plans | One-Time Fee Catalog`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:88`
+- [ ] **Bundle catalog type**: Add a "Bundle" offer type that groups multiple catalog offers (e.g., internet plan + static IP add-on + router rental) into a single purchasable package with a combined or discounted price
+  - context: `Section 2: Selfcare Portal & Messaging | 2.4 Bundle Plans | Service Bundles`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:104`
+- [ ] **Bundle pricing modes**: Support bundle pricing as either (a) sum of component prices with a percentage discount, (b) a flat bundle price overriding component prices, or (c) "buy X get Y free" where purchasing one component unlocks another at no cost
+  - context: `Section 2: Selfcare Portal & Messaging | 2.4 Bundle Plans | Service Bundles`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:105`
+- [ ] **Bundle component management**: Admin UI for composing bundles by selecting component offers, setting per-component quantities, and defining which components are mandatory vs optional
+  - context: `Section 2: Selfcare Portal & Messaging | 2.4 Bundle Plans | Service Bundles`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:106`
+- [ ] **Customer portal bundle display**: Show available bundles on the customer self-service portal with a comparison view highlighting the savings vs purchasing components individually
+  - context: `Section 2: Selfcare Portal & Messaging | 2.4 Bundle Plans | Service Bundles`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:107`
+- [ ] **Bundle subscription tracking**: When a subscriber purchases a bundle, create linked subscriptions for each component but track them under a single bundle identifier for billing and lifecycle management
+  - context: `Section 2: Selfcare Portal & Messaging | 2.4 Bundle Plans | Service Bundles`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:108`
+- [ ] **Mass message composition page**: Create an admin page at `/admin/notifications/mass-send` with a form for composing and sending bulk messages to filtered subscriber groups
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:139`
+- [ ] **Subscriber status filter**: Filter recipients by subscriber status (active, suspended, canceled, pending) so operators can target only active customers or specifically reach suspended ones with reactivation offers
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:140`
+- [ ] **Plan/offer filter**: Filter recipients by their current catalog offer/tariff plan, enabling targeted communications like "upgrade available" messages to subscribers on lower-tier plans
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:141`
+- [ ] **Location/area filter**: Filter recipients by service address location, POP site, or region zone for geographically targeted messages (e.g., planned maintenance in a specific area)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:142`
+- [ ] **NAS/access device filter**: Filter recipients by the NAS device or OLT serving their connection, enabling precise targeting for device-specific maintenance windows or outage notifications
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:143`
+- [ ] **Billing type filter**: Filter by billing mode (prepaid/postpaid) for billing-specific communications (e.g., payment reminders for postpaid, top-up reminders for prepaid)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:144`
+- [ ] **Reseller/partner filter**: Scope mass messages to subscribers belonging to a specific reseller/partner organization for partner-specific communications
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:145`
+- [ ] **Label/tag-based targeting**: Filter recipients using subscriber tags/labels for custom segmentation (e.g., "VIP", "beta-tester", "referral-program")
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:146`
+- [ ] **Service type filter**: Filter by access type (fiber, fixed wireless, DSL) for technology-specific announcements
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:147`
+- [ ] **Multi-channel send**: Support sending the same message via Email, SMS, or both simultaneously, with a channel selector and a "send to billing email" toggle for financial communications
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:148`
+- [ ] **Recipient preview and count**: Before sending, display a preview showing the total number of matching recipients and a sample list, so operators can verify their filters before committing
+  - context: `Section 2: Selfcare Portal & Messaging | 2.5 Mass Message Sending -- Recipient Targeting | Mass Messaging -- Recipient Targeting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:149`
+- [ ] **Rich-text email editor**: Integrate a rich-text editor (e.g., TipTap or TinyMCE) for mass message composition, supporting bold, italic, lists, links, tables, images, and raw HTML editing
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:171`
+- [ ] **Message template loader**: Add a "Load template" dropdown that populates the subject and body from existing `NotificationTemplate` records, with a "Load" button to apply the selected template
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:172`
+- [ ] **File attachment support**: Allow uploading file attachments (PDF, images) to mass messages, stored via the existing `file_storage` service and attached to outgoing emails
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:173`
+- [ ] **Financial document auto-attachment**: Allow toggling automatic attachment of invoices, credit notes, proforma invoices, or payment receipts to mass emails, with date range and status filters to select which documents to include
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:174`
+- [ ] **Conditional send on document existence**: Add a "Only send if financial document exists" toggle that skips recipients who have no matching financial documents in the selected date range, preventing irrelevant email sends
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:175`
+- [ ] **Preview before send**: Add a "Preview" button that renders the message with a sample recipient's data (name, account number) so operators can verify the final output before sending
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:176`
+- [ ] **Test send**: Add a "Send as test" button that sends the composed message to the logged-in admin's email address for review before mass distribution
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:177`
+- [ ] **Template variable placeholders**: Support placeholder variables in message templates (e.g., `{{customer_name}}`, `{{account_number}}`, `{{balance}}`, `{{plan_name}}`) that auto-resolve per recipient during send
+  - context: `Section 2: Selfcare Portal & Messaging | 2.6 Mass Message Sending -- Composition & Financial Attachments | Message Composition`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:178`
+- [ ] **Payment totals by provider widget**: Add a summary table to the billing overview dashboard showing transaction count and total amount grouped by payment provider/method (Paystack, Flutterwave, bank transfer, cash, etc.)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.7 Payment Totals Summary (Finance Context) | Payment Provider Summary`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:204`
+- [ ] **Payment provider badges**: Use color-coded badges for each payment provider type in summary tables and payment lists for quick visual identification
+  - context: `Section 2: Selfcare Portal & Messaging | 2.7 Payment Totals Summary (Finance Context) | Payment Provider Summary`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:205`
+- [ ] **Period-filtered payment summary**: Allow filtering the payment provider summary by date range (daily, weekly, monthly, custom) to track collection trends per channel
+  - context: `Section 2: Selfcare Portal & Messaging | 2.7 Payment Totals Summary (Finance Context) | Payment Provider Summary`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:206`
+- [ ] **Provider performance comparison**: Show percentage of total collections per provider alongside absolute amounts, helping operators identify which payment channels are most effective
+  - context: `Section 2: Selfcare Portal & Messaging | 2.7 Payment Totals Summary (Finance Context) | Payment Provider Summary`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:207`
+- [ ] **Mass message history page**: Create an admin page at `/admin/notifications/mass-send/history` showing a table of all mass messages sent, with columns for ID, channel, subject, created timestamp, status, recipient count, and actions
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:230`
+- [ ] **Delivery status per recipient**: Track and display delivery status (sent, delivered, failed, bounced) per individual recipient within a mass message campaign, not just the aggregate status
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:231`
+- [ ] **Status filter on history**: Add a status dropdown filter (All, Sent, Failed, Pending) and a date range picker to filter the mass message history
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:232`
+- [ ] **Recipient count display**: Show the total number of recipients targeted by each mass message in the history list (e.g., "129 recipients") with a link to view the full recipient list
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:233`
+- [ ] **Resend failed messages**: Add a "Resend" action per mass message that re-queues delivery only to recipients whose original delivery failed or bounced
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:234`
+- [ ] **Message view action**: Add a "View" action that opens the full message content, recipient list, and per-recipient delivery status in a detail page
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:235`
+- [ ] **Export message history**: Allow exporting the mass message history (CSV/Excel) with delivery statistics for compliance and reporting
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:236`
+- [ ] **Campaign analytics**: Show per-campaign metrics: total sent, delivered, failed, bounce rate, and delivery time distribution
+  - context: `Section 2: Selfcare Portal & Messaging | 2.8 Mass Message History & Delivery Tracking | Message Delivery History`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:237`
+- [ ] **Plan comparison page**: Add a customer-facing page showing all available plans in a side-by-side comparison grid with speed, price, data cap, and included features, allowing customers to evaluate upgrade options
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Plan Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:252`
+- [ ] **Self-service plan change request**: Allow customers to request a plan change (upgrade or downgrade) from the portal, which creates a service order for admin approval or auto-provisions if configured
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Plan Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:253`
+- [ ] **Plan change cost preview**: Before confirming a plan change, show the customer the prorated cost difference, new monthly amount, and effective date
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Plan Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:254`
+- [ ] **Current plan usage dashboard**: Show customers their current plan details alongside real-time usage data (bandwidth consumed, data cap remaining for capped plans, session uptime)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Plan Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:255`
+- [ ] **Plan recommendation engine**: Based on a customer's historical usage patterns, suggest optimal plans (e.g., "You regularly exceed your 20GB cap -- consider upgrading to Unlimited Basic for 18,812.50 NGN/month")
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Plan Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:256`
+- [ ] **Customer notification inbox**: Add an in-app notification center in the customer portal showing messages sent by the ISP (service outage alerts, subscription notifications, billing reminders)
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Notifications`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:259`
+- [ ] **Notification preferences**: Allow customers to manage their notification preferences (opt-in/opt-out per channel: email, SMS, in-app) from their profile settings
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Notifications`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:260`
+- [ ] **Service outage alerts**: Display active service outage notifications prominently on the customer dashboard when their area or NAS device is affected
+  - context: `Section 2: Selfcare Portal & Messaging | 2.9 Customer Self-Service Portal Enhancements | Customer Portal -- Notifications`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/02_selfcare_and_messages.md:261`
+
+## 03_customer_module.md
+Unchecked items: 73
+
+- [ ] **Add Comments/To-Dos widget to subscriber detail page** -- Implement an inline notes/to-do panel on the right side of the subscriber detail view. Each comment should capture author, timestamp, and support a simple to-do checkbox. Use HTMX for add/toggle without full page reload. Model: `SubscriberNote` with fields `id`, `subscriber_id`, `author_id`, `content`, `is_todo`, `is_completed`, `created_at`.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:24`
+- [ ] **Add persistent account balance header bar** -- Display a sticky/persistent info bar at the top of all subscriber detail tabs showing subscriber name, account number, current balance, and status badge. This gives support staff immediate financial context regardless of which tab they are viewing.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:25`
+- [ ] **Add "Login as Customer" impersonation action** -- Implement admin ability to impersonate a subscriber's portal session for troubleshooting. Requires: session token generation scoped to subscriber, audit log entry on impersonation start/end, visual banner in the customer portal indicating impersonation mode.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:26`
+- [ ] **Add "Send Welcome Message" action** -- Allow re-sending the welcome/onboarding email from the subscriber detail page. Pull template from notification templates, pre-fill with subscriber data.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:27`
+- [ ] **Add "Send Message" quick action** -- Enable sending ad-hoc email/SMS to the subscriber directly from their detail page without navigating to a separate communication module.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:28`
+- [ ] **Add integrated ticket summary on subscriber detail** -- Show ticket counts (open/closed) and quick-create link directly on the subscriber detail page header area, similar to the Splynx Tickets dropdown.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:29`
+- [ ] **Add labels/tags system for subscribers** -- Implement a tagging system with typeahead search. Model: `SubscriberLabel` (many-to-many). Tags should be filterable on the subscriber list page. Use cases: VIP, corporate, problematic, referral-source, etc.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:30`
+- [ ] **Add separate billing email field** -- Allow subscribers to have a distinct billing email address separate from their primary contact email. This is common for corporate accounts where invoices go to accounts@company.com but service notifications go to IT staff.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:31`
+- [ ] **Add subscriber category field** -- Add a Business/Residential/Government/NGO category enum to the subscriber model. This enables segmentation in reports and different billing/dunning rules per category.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:32`
+- [ ] **Add coverage notes field** -- Add a free-text field for recording signal coverage information, site survey notes, or installation constraints for the subscriber's location.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:33`
+- [ ] **Add base station / PON port reference** -- Display the network infrastructure reference (OLT port, base station, PON port) directly on the subscriber information panel for quick network troubleshooting context.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:34`
+- [ ] **Add GPS coordinates and embedded map to subscriber detail** -- Display an embedded map (Leaflet/OpenStreetMap) on the subscriber information tab showing the subscriber's location pin. Store latitude/longitude on the subscriber model. Consider integration with the existing GIS module.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:35`
+- [ ] **Add recent activity feed to subscriber detail** -- Show a timeline of recent events (payments received, invoices generated, status changes, service orders) at the bottom of the subscriber detail page. Source from the existing audit/event system. Limit to last 10-20 items with pagination.
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:36`
+- [ ] **Add prev/next subscriber navigation** -- Implement previous/next arrows on the subscriber detail page header to allow cycling through subscribers in the current list context (preserving filters/sort order).
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:37`
+- [ ] **Add multiple phone numbers support** -- Allow storing multiple phone numbers (comma-separated or as a JSON array) with labels (primary, secondary, WhatsApp, etc.).
+  - context: `Section 3: Splynx Customer Module | 3.1 Customer Detail - Information Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:38`
+- [ ] **Add real-time service online/offline status indicator** -- Query RADIUS accounting or session data to show whether the subscriber's service is currently online. Display as a green/red badge on the services table. Consider polling via HTMX every 30-60 seconds or using the existing RADIUS sync task data.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:55`
+- [ ] **Add "Invoiced Until" column to subscriptions list** -- Show the date through which the subscriber has been invoiced for each subscription. This is critical for billing staff to see at a glance whether the subscriber is paid ahead or due for invoicing.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:56`
+- [ ] **Add service login (RADIUS username) column** -- Display the RADIUS login/username associated with each subscription directly in the services table for quick network troubleshooting.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:57`
+- [ ] **Add IPv4 address column to subscriptions list** -- Show the assigned IP address for each active service directly in the table. Source from RADIUS accounting or static IP assignment records.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:58`
+- [ ] **Add bandwidth rule indicator** -- Show whether a bandwidth shaping/FUP rule is applied to the service. Display as a badge (e.g., "No rule", "FUP Active", "Throttled").
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:59`
+- [ ] **Add "Add Bundle" capability** -- Allow creating service bundles that combine multiple service types (internet + voice, internet + IPTV) as a single billable item with a combined price.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:60`
+- [ ] **Add "Add Recurring Service" for non-internet charges** -- Support adding generic recurring charges (equipment rental, static IP fee, premium support) as separate line items on the subscriber's account, distinct from internet service subscriptions.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:61`
+- [ ] **Add inline service action icons** -- Expand the actions column on the subscriptions table to include quick-action icons: edit, view sessions, view traffic, view usage stats, schedule change, disable/enable, delete. Use HTMX modals or slide-out panels to avoid full page navigation.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:62`
+- [ ] **Add service view filter (Active/Disabled/All)** -- Add a dropdown filter above the subscriptions table to toggle between active, disabled/suspended, and all services for the subscriber.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:63`
+- [ ] **Add quick service creation modal** -- Implement a modal dialog for adding a new service directly from the subscriber's Services tab. Start with plan selection, then dynamically reveal additional fields (description, custom price, start date, IP assignment) based on the selected plan.
+  - context: `Section 3: Splynx Customer Module | 3.2 Customer Detail - Services Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:64`
+- [ ] **Add per-subscriber billing configuration panel** -- Implement a billing config section on the subscriber detail that allows overriding organization-level defaults: billing day, payment due days, blocking period, deactivation period, minimum balance, auto-create invoices toggle, send billing notifications toggle. Store as per-subscriber overrides that fall back to organization defaults.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:105`
+- [ ] **Add "Next Block" / future actions preview** -- Show a panel on the billing tab indicating when the subscriber will be blocked/suspended based on current balance and billing rules. Display as a badge: "In the next billing cycle" or specific date.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:106`
+- [ ] **Add per-subscriber reminder settings** -- Allow overriding organization-level reminder settings per subscriber: enable/disable reminders, message type (email/SMS/both), and configurable reminder day offsets (e.g., 5 days before, 2 days before, on due date).
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:107`
+- [ ] **Add proforma invoice support** -- Implement proforma invoices as a separate document type with its own numbering sequence. Support auto-generation based on configurable schedule. Allow conversion of proforma to final invoice.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:108`
+- [ ] **Add credit note with invoice linking** -- Enhance credit note creation to allow linking against specific invoices. Show a searchable table of the subscriber's invoices (with paid/unpaid status) when creating a credit note.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:109`
+- [ ] **Add "Future Items" capability** -- Allow adding line items that will automatically appear on the next recurring invoice. Use cases: one-time installation fees, equipment charges, prorated adjustments.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:110`
+- [ ] **Add payment creation with invoice linking** -- When recording a payment, allow linking it to one or more specific invoices. Include fields for receipt number, transaction ID, TIN, and separate internal comment vs. customer-visible note.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:111`
+- [ ] **Add statement generation** -- Implement account statement generation with configurable date range, opening/closing balance, transaction listing, and "Send to customer" action (email/download).
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:112`
+- [ ] **Add separate billing address** -- Allow subscribers to have a distinct billing address (name, street, ZIP, city) separate from their service/installation address.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:113`
+- [ ] **Add document type badges with color coding** -- On the finance documents table, display document type as color-coded badges: Recurring Invoice (blue), One-time Invoice (indigo), Proforma (violet), Credit Note (amber), Payment (emerald).
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:114`
+- [ ] **Add per-subscriber payment method assignment** -- Allow assigning a default payment method per subscriber from the organization's configured payment providers. Display the assigned method prominently in the billing tab header.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:115`
+- [ ] **Add partner/reseller commission percentage** -- Store a commission percentage per subscriber for reseller/partner billing. This enables automatic commission calculation on the subscriber's revenue.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:116`
+- [ ] **Add blocking and deactivation period controls** -- Implement configurable grace periods: blocking period (service suspension after payment due) and deactivation period (full service termination after blocking). These cascade: due date -> blocking -> deactivation.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:117`
+- [ ] **Add transaction ledger with column customization** -- Implement a transactions sub-tab showing all debits and credits with configurable columns. Allow users to show/hide columns (date, description, debit, credit, balance, category, customer ID, type) via a modal column picker.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:118`
+- [ ] **Add one-time invoice creation from subscriber context** -- Allow creating ad-hoc one-time invoices directly from the subscriber's billing tab with line items, VAT calculation, and auto-generated invoice numbers.
+  - context: `Section 3: Splynx Customer Module | 3.3 Customer Detail - Billing Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:119`
+- [ ] **Add subscriber statistics tab with live bandwidth graph** -- Implement a Statistics tab on the subscriber detail page showing a real-time bandwidth usage chart. Query RADIUS accounting or VictoriaMetrics for per-subscriber traffic data. Display upload/download as a time-series line chart with configurable time intervals (1 min, 5 min, 15 min).
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:138`
+- [ ] **Add online sessions panel** -- Show currently active RADIUS sessions for the subscriber: login, data transferred (in/out), session start time, duration, IP address, MAC address, NAS device. Source from RADIUS accounting tables.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:139`
+- [ ] **Add period summary statistics card** -- Display aggregate statistics for a selectable period: total sessions, total errors, total online time, total download (GB), total upload (GB). Use RADIUS accounting data aggregated by the existing bandwidth tasks.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:140`
+- [ ] **Add daily usage chart** -- Implement a stacked bar chart showing daily download and upload usage over the selected period. Include chart/table toggle to view the same data in tabular format.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:141`
+- [ ] **Add daily average bandwidth graph** -- Show a time-series chart of average bandwidth speeds with Max, Average, and Last speed statistics. Support Daily/Hourly/Weekly graph type selection.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:142`
+- [ ] **Add FUP (Fair Usage Policy) statistics panel** -- If FUP/data cap policies are configured on the subscriber's plan, show current usage against allowance: traffic consumed vs. bonus/allowance, broken down by day/week/month.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:143`
+- [ ] **Add session history table** -- Display a paginated, sortable table of all RADIUS sessions for the subscriber with connect/disconnect times, duration, data transferred, IP, MAC, and NAS device. Include date range filter.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:144`
+- [ ] **Add per-service statistics filtering** -- When a subscriber has multiple services, allow filtering statistics by specific service or viewing aggregated data for all services.
+  - context: `Section 3: Splynx Customer Module | 3.4 Customer Detail - Statistics Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:145`
+- [ ] **Add Documents tab to subscriber detail page** -- Implement a dedicated Documents tab showing all files associated with the subscriber. Model: use existing `StoredFile` model with `entity_type=subscriber` and `entity_id=subscriber.id`. Display in a sortable table with columns: ID, uploaded by, status, source, title, date, description, actions.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:161`
+- [ ] **Add document upload from subscriber context** -- Allow uploading files (contracts, ID copies, site photos, agreements) directly from the subscriber's Documents tab. Validate file type and size per the existing file upload rules.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:162`
+- [ ] **Add document generation from templates** -- Implement contract/document generation using configurable templates. Templates should support variable substitution (subscriber name, address, plan details, pricing). Generate as PDF using the existing PDF export infrastructure.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:163`
+- [ ] **Add CRM interaction logging** -- Allow recording customer interaction notes (phone calls, site visits, complaints) as document entries on the subscriber. Fields: type (call/visit/email/complaint), title, description, date, author. This provides a chronological customer relationship history.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:164`
+- [ ] **Add document type filtering** -- Add a Type dropdown filter on the documents table to filter by document category: All, Contracts, CRM Calls, Uploaded Files, Generated Documents.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:165`
+- [ ] **Add document send-to-customer action** -- Allow sending a document to the subscriber via email directly from the documents table action buttons.
+  - context: `Section 3: Splynx Customer Module | 3.5 Customer Detail - Documents Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:166`
+- [ ] **Add CPE management tab to subscriber detail** -- Implement a CPE tab showing all customer premises equipment associated with the subscriber. Display existing CPE devices in a card/table layout with status indicators.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:188`
+- [ ] **Add CPE device registration form** -- Allow adding CPE devices with fields: title, IP/host, API login, API password (encrypted using credential_crypto), API port, device type (MikroTik/Ubiquiti/Generic), QoS shaping toggle, QoS target subnet, linked service ID.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:189`
+- [ ] **Add CPE device type support** -- Define a `CPEDeviceType` enum supporting common ISP CPE types: MikroTik, Ubiquiti, TP-Link, Huawei, Generic. The type selection should determine available management features.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:190`
+- [ ] **Add QoS/shaping configuration per CPE** -- Allow configuring bandwidth shaping parameters on the CPE device record: enable/disable toggle, target subnet, and link to the subscriber's service plan speed limits.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:191`
+- [ ] **Add CPE-to-service linking** -- Allow associating a CPE device with a specific subscriber service. This enables per-service QoS enforcement and helps track which equipment serves which subscription.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:192`
+- [ ] **Store CPE credentials encrypted** -- Use the existing `credential_crypto` module to encrypt CPE API passwords at rest. Display with show/hide toggle in the UI.
+  - context: `Section 3: Splynx Customer Module | 3.6 Customer Detail - CPE Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:193`
+- [ ] **Add Communication tab to subscriber detail** -- Implement a Communication tab showing the full history of all messages sent to/from the subscriber. Sub-tabs: Email, SMS, In-App Notifications.
+  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:206`
+- [ ] **Add email communication history** -- Display all emails sent to the subscriber in a chronological list: sender, recipient, subject, date/time, delivery status, and expandable preview. Source from the existing notification delivery records.
+  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:207`
+- [ ] **Add SMS communication history** -- Display all SMS messages sent to the subscriber with delivery status tracking.
+  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:208`
+- [ ] **Add messaging integration placeholder** -- Add a Messengers sub-tab as a future integration point for WhatsApp Business API, Telegram bot, and other messaging platforms. Show a configuration notice when no integrations are active.
+  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:209`
+- [ ] **Add SMTP configuration warning** -- Display a prominent warning banner on the Communication tab when the organization's SMTP settings are not configured, with a link to system settings.
+  - context: `Section 3: Splynx Customer Module | 3.7 Customer Detail - Communication Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:210`
+- [ ] **Add DNS Security tab (future consideration)** -- Plan for a DNS security integration tab that could support DNS-based content filtering and threat protection services per subscriber. This is lower priority but represents a value-added service opportunity for ISPs.
+  - context: `Section 3: Splynx Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:222`
+- [ ] **Implement graceful integration error states** -- When integration tabs are shown but not configured, display a clear, user-friendly error message with a link to the configuration page rather than a raw error or blank page.
+  - context: `Section 3: Splynx Customer Module | 3.8 Customer Detail - DNS Security Tab | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:223`
+- [ ] **Implement tabbed subscriber detail layout** -- Reorganize the subscriber detail page into a tabbed interface with these tabs: Information, Services, Billing, Statistics, Documents, CPE, Communication. Use HTMX for tab switching without full page reload. Preserve the current URL with tab query parameter for bookmarkability.
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:239`
+- [ ] **Add persistent subscriber header across all tabs** -- Implement a fixed header bar that persists across all subscriber detail tabs showing: subscriber name, account number, status badge, current balance. This provides constant context for support staff.
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:240`
+- [ ] **Add dynamic column configuration for all data tables** -- Implement a column show/hide modal (similar to the existing `dynamic-table-config.js`) across all major data tables on the subscriber detail page. Persist user preferences per table.
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:241`
+- [ ] **Add table-level search for all sub-tables** -- Ensure all data tables within subscriber detail tabs have inline search/filter capability using HTMX with debounce.
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:242`
+- [ ] **Add entries-per-page control on all tables** -- Add a "Show N entries" dropdown (25, 50, 100) on all paginated tables within the subscriber detail view.
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:243`
+- [ ] **Add row-level bulk actions on data tables** -- Implement checkbox selection on table rows with bulk action toolbar (e.g., bulk send invoices, bulk mark as paid, bulk delete documents).
+  - context: `Section 3: Splynx Customer Module | 3.9 Cross-Cutting UI/UX Improvements | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/03_customer_module.md:244`
+
+## 04_administration.md
+Unchecked items: 221
+
+- [ ] Add a unified Administration hub page at `/admin/system` that groups all system functions into categorized sections (Core, Logs, Information, Reports) with icon-labeled links
+  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:17`
+- [ ] Add a search/filter input on the administration hub to quickly locate admin functions by keyword
+  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:18`
+- [ ] Ensure every log viewer, report, and configuration tool is accessible from this single hub page rather than requiring sidebar navigation alone
+  - context: `Section 4: Splynx Administration | 4.1 Administration Dashboard`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:19`
+- [ ] Add avatar/photo upload support for admin user profiles displayed in the user list table
+  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:31`
+- [ ] Add a "Partner" or "Organization" filter dropdown on the users list page to scope by reseller/partner affiliation
+  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:32`
+- [ ] Display phone number column in the admin users table
+  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:33`
+- [ ] Add an "Impersonate" action button per admin user allowing super-admins to log in as another user for troubleshooting
+  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:34`
+- [ ] Support configurable page size (25/50/100) on the users list table
+  - context: `Section 4: Splynx Administration | 4.2 Administrators Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:35`
+- [ ] Add ISP-specific predefined role templates: engineer, noc, frontdesk, operations-support, procurement, project, sales, technical-support, and technician
+  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:47`
+- [ ] Add a "View members" action on each role to quickly see which users are assigned to it
+  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:48`
+- [ ] Distinguish between system-protected roles (edit only) and custom roles (edit + delete) in the UI
+  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:49`
+- [ ] Add a display Title field separate from the role Name/slug for user-friendly labeling
+  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:50`
+- [ ] Add a "customer-creator" role with limited permissions scoped to subscriber creation only
+  - context: `Section 4: Splynx Administration | 4.3 Roles Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:51`
+- [ ] Add real-time "Customers online" count to the resellers list page showing currently-connected subscriber sessions per partner
+  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:63`
+- [ ] Add clickable customer count on the resellers table that navigates to the filtered subscribers list for that partner
+  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:64`
+- [ ] Display per-partner summary statistics (total customers, online customers) as sortable columns on the reseller index page
+  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:65`
+- [ ] Add a partner/reseller dashboard card showing distribution of subscribers across all partners
+  - context: `Section 4: Splynx Administration | 4.4 Partners Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:66`
+- [ ] Add a sales agent/commission tracking module with per-agent revenue attribution
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:78`
+- [ ] Create a consolidated agent commission report with period filtering (date range selector)
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:79`
+- [ ] Add an "Agent report" sub-view showing per-agent detail with commissioned transactions and unpaid totals
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:80`
+- [ ] Add a "Customer report" sub-view showing which customers were acquired by which agent
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:81`
+- [ ] Include a totals summary row in commission reports (total commissioned transactions, unpaid total, commission)
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:82`
+- [ ] Support commission calculation rules (percentage-based, flat-rate, tiered) configurable per agent
+  - context: `Section 4: Splynx Administration | 4.5 Agents Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:83`
+- [ ] Add a Locations management page that defines geographical service regions with customer counts and real-time online counts
+  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:95`
+- [ ] Link tax rules/rates to specific locations for location-based tax calculation on invoices
+  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:96`
+- [ ] Display location-scoped subscriber statistics (total count, online count) on the locations management page
+  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:97`
+- [ ] Allow filtering subscribers, services, and billing reports by location
+  - context: `Section 4: Splynx Administration | 4.6 Locations Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:98`
+- [ ] Add a dedicated API Keys management page at `/admin/system/api-keys` for creating and managing API access tokens
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:110`
+- [ ] Support named API keys with descriptive labels (e.g., "Paystack Integration", "Mobile App", "Monitoring System")
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:111`
+- [ ] Scope API keys to specific partner/organization for multi-tenant API access control
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:112`
+- [ ] Add API key usage tracking (last used timestamp, request count) visible in the keys table
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:113`
+- [ ] Support API key rotation with graceful deprecation period for old keys
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:114`
+- [ ] Add ability to restrict API key permissions to specific endpoints/operations
+  - context: `Section 4: Splynx Administration | 4.7 API Keys Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:115`
+- [ ] Add an API request audit log page at `/admin/system/audit/api` showing all API calls with timestamp, key used, operation, and result
+  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:127`
+- [ ] Add filter controls: customer ID lookup, date range, API key selector, and operation type dropdown
+  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:128`
+- [ ] Log API request/response details viewable from an expand/detail action
+  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:129`
+- [ ] Add rate limiting visibility -- show which API keys are approaching or exceeding rate limits
+  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:130`
+- [ ] Support CSV/JSON export of API audit logs for compliance
+  - context: `Section 4: Splynx Administration | 4.8 API Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:131`
+- [ ] Enhance the existing audit log to capture all admin operations including view, edit, create, and delete actions across all modules
+  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:143`
+- [ ] Add an "Administrator" column/filter to see actions by specific admin users
+  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:144`
+- [ ] Add an "Operation type" filter (view, edit, create, delete, login, export) for targeted auditing
+  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:145`
+- [ ] Log "View" operations for sensitive data access (customer PII, financial data) to comply with data protection regulations
+  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:146`
+- [ ] Add Customer ID cross-reference filter to see all admin operations related to a specific subscriber
+  - context: `Section 4: Splynx Administration | 4.9 Operations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:147`
+- [ ] Add an internal/system operations log that captures automated batch processing events (Celery task operations, scheduled jobs, system-triggered status changes)
+  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:159`
+- [ ] Display sub-second timestamps for internal operations to support debugging of batch processing sequences
+  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:160`
+- [ ] Separate internal/automated operations from human-initiated operations in the audit log for clearer analysis
+  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:161`
+- [ ] Add batch operation grouping to collapse rapid-fire sequential operations into summarized entries
+  - context: `Section 4: Splynx Administration | 4.10 Internal System Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:162`
+- [ ] Add a customer portal activity log at `/admin/system/audit/portal` tracking all subscriber portal login/logout and self-service actions
+  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:174`
+- [ ] Track login timestamps, session duration (derived from login-to-logout), and IP addresses for security monitoring
+  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:175`
+- [ ] Add failed login attempt tracking for subscriber accounts with alert thresholds
+  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:176`
+- [ ] Generate portal usage statistics (daily active users, peak login times, average session duration)
+  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:177`
+- [ ] Add geographic/IP-based anomaly detection for subscriber portal logins
+  - context: `Section 4: Splynx Administration | 4.11 Portal Activity Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:178`
+- [ ] Add a RADIUS session search tool at `/admin/network/sessions` allowing lookup by IP, IPv6, MAC address, and username
+  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:190`
+- [ ] Support date range filtering for historical session searches
+  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:191`
+- [ ] Add a "Search scope" selector to search across customer statistics, accounting records, or active sessions
+  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:192`
+- [ ] Display session results with connection duration, data usage, NAS device, and assigned IP information
+  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:193`
+- [ ] Add a "currently online" quick filter to see all active sessions in real time
+  - context: `Section 4: Splynx Administration | 4.12 Session Search`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:194`
+- [ ] Add a system log file viewer at `/admin/system/logs` showing Celery task execution logs, cron job outputs, and error logs
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:206`
+- [ ] Display log file sizes and last-modified timestamps for quick health assessment
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:207`
+- [ ] Add a log viewer with syntax highlighting, search, and tail-follow capability for real-time monitoring
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:208`
+- [ ] Organize logs by category (API errors, billing tasks, backup operations, daily maintenance tasks)
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:209`
+- [ ] Add log rotation and retention policy configuration from the admin UI
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:210`
+- [ ] Show backup operation logs (critical backup, full backup, RADIUS failover backup) with success/failure status
+  - context: `Section 4: Splynx Administration | 4.13 File/Cron Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:211`
+- [ ] Add an email delivery log at `/admin/notifications/email-log` showing all outbound emails with recipient, subject, type, status, and timestamp
+  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:223`
+- [ ] Track email delivery status (queued, sent, delivered, bounced, failed) per message
+  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:224`
+- [ ] Add email resend capability from the log for failed deliveries
+  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:225`
+- [ ] Support filtering by recipient email, date range, status, and email type/template
+  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:226`
+- [ ] Link email log entries to the subscriber they relate to for cross-reference from subscriber detail pages
+  - context: `Section 4: Splynx Administration | 4.14 Email Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:227`
+- [ ] Add an SMS delivery log at `/admin/notifications/sms-log` tracking all outbound SMS messages
+  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:239`
+- [ ] Display SMS delivery status with clear success/error indicators and error detail messages
+  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:240`
+- [ ] Track SMS cost per message for provider billing reconciliation
+  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:241`
+- [ ] Add SMS retry capability for failed deliveries from the log view
+  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:242`
+- [ ] Add SMS delivery rate statistics (success rate, failure rate, average delivery time) as summary cards above the log table
+  - context: `Section 4: Splynx Administration | 4.15 SMS Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:243`
+- [ ] Add a "Scheduled Changes" dashboard at `/admin/provisioning/scheduled` showing all future-dated status transitions and service changes
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:255`
+- [ ] Support scheduling customer status changes (active to inactive, suspended to active) for a future date
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:256`
+- [ ] Support scheduling service/plan changes (upgrades, downgrades) for a future date with price preview
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:257`
+- [ ] Show separate sections for planned status changes and planned service changes
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:258`
+- [ ] Add calendar view option for visualizing scheduled changes across dates
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:259`
+- [ ] Send notification reminders before scheduled changes take effect
+  - context: `Section 4: Splynx Administration | 4.16 Planned Customer Status and Service Changes`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:260`
+- [ ] Add a subscriber status change history log showing all status transitions with who/what initiated them
+  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:272`
+- [ ] Distinguish between manual admin actions (show admin name/email) and automated system actions (show "[SYSTEM]")
+  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:273`
+- [ ] Add status transition arrow display format (e.g., "active -> blocked") for clear visual representation
+  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:274`
+- [ ] Track bulk automated operations (e.g., dunning/collections blocking) with timestamp patterns for operational analysis
+  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:275`
+- [ ] Add a "reverse" or "undo" action for recent manual status changes
+  - context: `Section 4: Splynx Administration | 4.17 Customer Status and Service Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:276`
+- [ ] Add a subscription/service status change log showing status transitions and plan migrations together
+  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:288`
+- [ ] Track both service status changes (Active -> Paused -> Disabled) and plan changes (Basic -> Compact) in the same log
+  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:289`
+- [ ] Show the service/plan name as a clickable link to the subscription detail page
+  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:290`
+- [ ] Filter service changes by administrator to track who is making operational changes
+  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:291`
+- [ ] Add plan change impact analysis showing price difference when a plan migration is logged
+  - context: `Section 4: Splynx Administration | 4.18 Service Status Changes Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:292`
+- [ ] Add an accounting integration sync log at `/admin/integrations/accounting` with tabs for Customers, Invoices, Credit Notes, and Payments
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:304`
+- [ ] Track sync status per entity (Ok, Error, Pending) with external accounting system reference IDs
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:305`
+- [ ] Display detailed sync error messages for failed synchronizations
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:306`
+- [ ] Add "Modified" flag to identify records that have changed since last sync
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:307`
+- [ ] Support re-sync/retry for failed individual records from the log view
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:308`
+- [ ] Add bulk re-sync capability for all errored records
+  - context: `Section 4: Splynx Administration | 4.19 Accounting Integrations Log`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:309`
+- [ ] Add per-provider email delivery logs for each configured email service (Mailjet, SendGrid, SES, etc.)
+  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:321`
+- [ ] Show provider-specific delivery metrics (open rate, click rate, bounce rate) when the provider API supports it
+  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:322`
+- [ ] Display graceful empty/inactive state when a provider integration is not configured, rather than error messages
+  - context: `Section 4: Splynx Administration | 4.20 Mailjet Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:323`
+- [ ] Add a payment gateway transaction log at `/admin/billing/payment-logs` showing all payment provider events
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:335`
+- [ ] Display payment transaction status with color-coded badges (success=green, error=red, pending=amber)
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:336`
+- [ ] Log detailed error messages for failed transactions (authentication failures, insufficient funds, expired tokens)
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:337`
+- [ ] Show payment reference IDs and provider-specific transaction identifiers for reconciliation
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:338`
+- [ ] Add payment event timeline per transaction (initiated -> processing -> success/failure)
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:339`
+- [ ] Support filtering by payment status, provider, date range, and customer
+  - context: `Section 4: Splynx Administration | 4.21 Paystack Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:340`
+- [ ] Add a system information page at `/admin/system/about` showing application version, build date, and environment details
+  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:352`
+- [ ] Display current subscriber count against any configured limits for capacity planning
+  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:353`
+- [ ] Show database size, active connections, and system resource utilization
+  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:354`
+- [ ] Add version update check capability to notify admins of available updates
+  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:355`
+- [ ] Display deployment environment metadata (Python version, FastAPI version, PostgreSQL version, Redis version)
+  - context: `Section 4: Splynx Administration | 4.22 License Information`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:356`
+- [ ] Add an in-app help/documentation link from the admin sidebar that opens contextual help for the current page
+  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:368`
+- [ ] Create a searchable knowledge base or help center integrated into the admin UI
+  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:369`
+- [ ] Add "Getting Started" guided setup wizard for new deployments
+  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:370`
+- [ ] Include FAQ section accessible from the admin help menu
+  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:371`
+- [ ] Add contextual help tooltips on complex form fields referencing relevant documentation
+  - context: `Section 4: Splynx Administration | 4.23 Documentation / Knowledge Base`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:372`
+- [ ] Add a reseller commission report at `/admin/reports/reseller-commissions` with period filtering
+  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:384`
+- [ ] Create three sub-views: consolidated (all resellers), per-reseller detail, and per-customer attribution
+  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:385`
+- [ ] Track commissioned transactions, unpaid totals, and earned commissions per reseller
+  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:386`
+- [ ] Support configurable commission structures per reseller (percentage, flat, tiered)
+  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:387`
+- [ ] Add commission payout tracking and export for accounting
+  - context: `Section 4: Splynx Administration | 4.24 Resellers Commission Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:388`
+- [ ] Add a subscriber growth/status chart to the admin dashboard showing daily subscriber counts by status over time
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:400`
+- [ ] Display time-series lines for: New, Active, Suspended/Blocked, Inactive/Canceled, and Total subscribers
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:401`
+- [ ] Add date range picker for customizable reporting periods (7d, 30d, 90d, 1y, custom)
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:402`
+- [ ] Highlight inflection points and anomalies (sudden drops or spikes) with annotations
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:403`
+- [ ] Calculate and display growth rate metrics (daily, weekly, monthly net subscriber change)
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:404`
+- [ ] Add chart export capability (PNG, PDF) for management reporting
+  - context: `Section 4: Splynx Administration | 4.25 Customers Chart`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:405`
+- [ ] Add a bandwidth usage report per plan at `/admin/reports/usage-by-plan` showing aggregate download/upload totals per tariff plan
+  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:417`
+- [ ] Display service count per plan alongside usage data for per-subscriber average calculation
+  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:418`
+- [ ] Filter by partner/reseller and location for scoped usage analysis
+  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:419`
+- [ ] Support "By counters" and "By sessions" calculation types for different RADIUS accounting methods
+  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:420`
+- [ ] Add usage trend visualization (chart) showing per-plan consumption growth over time
+  - context: `Section 4: Splynx Administration | 4.26 Internet Plan Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:421`
+- [ ] Add a per-subscriber bandwidth usage report at `/admin/reports/customer-usage` showing individual data consumption
+  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:433`
+- [ ] Include subscriber details (name, plan, IP, phone) alongside download/upload totals for context
+  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:434`
+- [ ] Support custom field columns (building type, service area) in the usage report
+  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:435`
+- [ ] Add data export (CSV/Excel) for the per-customer usage report
+  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:436`
+- [ ] Flag heavy users (top percentile consumers) for network capacity planning
+  - context: `Section 4: Splynx Administration | 4.27 Customer Internet Usage Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:437`
+- [ ] Add a "Future charges" preview at `/admin/billing/upcoming-charges` showing pending scheduled billing events before execution
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:449`
+- [ ] Add a "Daily receipt" report showing all financial transactions processed on a given day
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:450`
+- [ ] Add a "Charge history" log showing historical billing execution results
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:451`
+- [ ] Include account balance alongside charge amount to identify subscribers who will go negative
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:452`
+- [ ] Add a "Generate/Process" action to manually trigger pending charge processing
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:453`
+- [ ] Filter by partner and location for scoped financial operations
+  - context: `Section 4: Splynx Administration | 4.28 Finance Logs`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:454`
+- [ ] Add a revenue-per-plan report at `/admin/reports/revenue-per-plan` with period-over-period comparison
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:466`
+- [ ] Include a bar chart visualization showing top plans by revenue with main period vs. comparison period
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:467`
+- [ ] Display plan price, transaction count, invoiced amount, discounts applied, and net charge totals in a detail table
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:468`
+- [ ] Support period-over-period comparison (e.g., this month vs. last month) with difference calculation
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:469`
+- [ ] Filter by plan, partner/reseller, and location for segmented analysis
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:470`
+- [ ] Show currency-formatted values appropriate to the organization's locale
+  - context: `Section 4: Splynx Administration | 4.29 Financial Report Per Plan`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:471`
+- [ ] Enhance the existing invoices report to include VAT/tax breakdown columns (VAT amount, net amount, total)
+  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:483`
+- [ ] Add color-coded payment status badges (Paid=green, Unpaid=rose, Partial=amber, Overdue=red)
+  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:484`
+- [ ] Support custom field columns in the invoice report (building type, service area, etc.)
+  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:485`
+- [ ] Add invoice number formatting with configurable prefix/pattern (e.g., date-based sequences)
+  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:486`
+- [ ] Add bulk invoice export (PDF batch, CSV summary) from the report view
+  - context: `Section 4: Splynx Administration | 4.30 Invoice Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:487`
+- [ ] Add a customer statements report at `/admin/billing/statements` showing per-customer financial summaries with opening and closing balances
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:499`
+- [ ] Add a "Finance customers report" sub-tab summarizing financial status per customer
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:500`
+- [ ] Add a "Receivables aging report" sub-tab showing outstanding balances bucketed by age (30/60/90/120+ days)
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:501`
+- [ ] Support bulk PDF statement generation for all customers or a filtered subset
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:502`
+- [ ] Add "Send to customers" bulk action to email statements to all subscribers
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:503`
+- [ ] Include transaction type filtering (invoices only, payments only, all transactions)
+  - context: `Section 4: Splynx Administration | 4.31 Statements Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:504`
+- [ ] Add a tax report at `/admin/reports/tax` showing per-invoice tax details with VAT rate, net amount, and tax amount
+  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:516`
+- [ ] Add a "Tax totals" summary sub-tab aggregating total tax collected by rate/category
+  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:517`
+- [ ] Include document number, customer reference, and transaction description for audit-ready reporting
+  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:518`
+- [ ] Support multi-rate tax reporting (different VAT rates for different service types)
+  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:519`
+- [ ] Add tax report export in formats required by local tax authorities
+  - context: `Section 4: Splynx Administration | 4.32 Tax Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:520`
+- [ ] Add a custom prices and discounts report at `/admin/reports/custom-pricing` listing all non-standard pricing overrides and active discounts
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:532`
+- [ ] Show the difference between standard tariff price and custom unit price for each subscriber
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:533`
+- [ ] Display discount type (percentage, fixed amount), value, and validity period
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:534`
+- [ ] Filter by partner, location, plan, and discount type
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:535`
+- [ ] Add alerts for expiring discounts (discounts ending within 30 days)
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:536`
+- [ ] Support bulk discount expiration/renewal from the report view
+  - context: `Section 4: Splynx Administration | 4.33 Custom Prices and Discounts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:537`
+- [ ] Add a revenue by category report at `/admin/reports/revenue-categories` showing income breakdown by service/transaction type
+  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:549`
+- [ ] Calculate and display ARPU (Average Revenue Per User/Service) per category
+  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:550`
+- [ ] Show invoice count, transaction count, gross income, tax, and net income per category
+  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:551`
+- [ ] Track data top-up revenue separately from subscription revenue
+  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:552`
+- [ ] Support period filtering and partner scoping for multi-tenant revenue analysis
+  - context: `Section 4: Splynx Administration | 4.34 Transactions Categories Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:553`
+- [ ] Add a customer contracts management module at `/admin/legal/contracts` with lifecycle tracking
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:565`
+- [ ] Create three contract views: Pending Signature, Expiring Soon (within configurable window), and Signed/Active
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:566`
+- [ ] Support digital contract signing workflow (generate -> send -> track -> archive)
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:567`
+- [ ] Add contract expiration alerting for contracts expiring within 30/60/90 days
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:568`
+- [ ] Link contracts to subscriber records and display contract status on subscriber detail page
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:569`
+- [ ] Support contract template management for standardized service agreements
+  - context: `Section 4: Splynx Administration | 4.35 Customer Contracts Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:570`
+- [ ] Add an MRR (Monthly Recurring Revenue) net change report at `/admin/reports/mrr` showing month-over-month subscriber and revenue movement
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:582`
+- [ ] Track new service activations, cancellations/churn, and net change per month
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:583`
+- [ ] Display month-start and month-end subscriber counts for cohort tracking
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:584`
+- [ ] Filter by year, partner, and location for segmented analysis
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:585`
+- [ ] Add MRR trend chart visualization with trendline projection
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:586`
+- [ ] Calculate MRR expansion (upgrades) and contraction (downgrades) separately from new/churn
+  - context: `Section 4: Splynx Administration | 4.36 Monthly Recurring Revenue (MRR) Net Change Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:587`
+- [ ] Add a new services/activations report at `/admin/reports/new-services` listing all newly provisioned services with activation details
+  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:599`
+- [ ] Include customer name, plan, price, activation date, status, and physical address
+  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:600`
+- [ ] Add status filtering (Active, Blocked, Disabled) to see activation success rates
+  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:601`
+- [ ] Show connection identifiers (PPPoE username, IP address) for technical cross-reference
+  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:602`
+- [ ] Calculate activation metrics: average time-to-activate, activation success rate, revenue from new services
+  - context: `Section 4: Splynx Administration | 4.37 New Services Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:603`
+- [ ] Add a configurable data export tool at `/admin/system/export` supporting multiple entity types (subscribers, services, invoices, payments)
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:615`
+- [ ] Allow column/attribute selection for custom export schemas
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:616`
+- [ ] Support multiple delimiters (comma, tab, semicolon) and file formats (CSV, Excel, JSON)
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:617`
+- [ ] Add "First row contains column names" toggle for header inclusion
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:618`
+- [ ] Support status and partner filtering before export
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:619`
+- [ ] Save export configurations as templates for recurring exports
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:620`
+- [ ] Add scheduled/automated export capability (e.g., weekly subscriber export to SFTP)
+  - context: `Section 4: Splynx Administration | 4.38 Service Export`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:621`
+- [ ] Add a support ticket reporting module at `/admin/reports/tickets` (if/when ticketing is added to DotMac Sub)
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:633`
+- [ ] Include SLA compliance reporting (response time vs. target, resolution time vs. target)
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:634`
+- [ ] Add agent performance metrics (tickets resolved, average resolution time, customer satisfaction score)
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:635`
+- [ ] Track ticket lifecycle stages with timing metrics per stage
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:636`
+- [ ] Add "Cost of support" analysis calculating support cost per subscriber
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:637`
+- [ ] Include customer feedback/satisfaction scoring for closed tickets
+  - context: `Section 4: Splynx Administration | 4.39 Ticket Reports`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:638`
+- [ ] Add a customer referral program module with referrer/referee tracking
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:650`
+- [ ] Create a referral report at `/admin/reports/referrals` showing referral chains with bonus amounts
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:651`
+- [ ] Track referral lifecycle: invitation sent -> account created -> service activated -> bonus credited
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:652`
+- [ ] Support configurable referral bonuses (credit note, discount, cash) for both referrer and referee
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:653`
+- [ ] Auto-generate credit notes when referred customers activate service
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:654`
+- [ ] Add referral link/code generation for subscribers to share via portal
+  - context: `Section 4: Splynx Administration | 4.40 Referral System Report`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:655`
+- [ ] Add a prepaid voucher/refill card management module for ISPs that offer prepaid internet plans
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:667`
+- [ ] Track voucher batches (series) with inventory counts: active, used, expired, disabled
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:668`
+- [ ] Display monetary totals per batch (amount used, amount active, amount expired)
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:669`
+- [ ] Support voucher generation in bulk batches with configurable denominations
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:670`
+- [ ] Add voucher redemption tracking linked to subscriber accounts
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:671`
+- [ ] Filter voucher statistics by partner for reseller-scoped prepaid operations
+  - context: `Section 4: Splynx Administration | 4.41 Refill Cards Statistics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:672`
+- [ ] Add DNS-based threat intelligence integration support for ISP network security
+  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:684`
+- [ ] Create a DNS threats dashboard showing blocked domains, threat categories, and affected subscribers
+  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:685`
+- [ ] Support integration with DNS threat intelligence providers (Whalebone, Cisco Umbrella, etc.)
+  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:686`
+- [ ] Archive DNS threat events with subscriber attribution for security incident investigation
+  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:687`
+- [ ] Add threat statistics reporting (threats blocked per day, top threat categories, most-targeted subscribers)
+  - context: `Section 4: Splynx Administration | 4.42 DNS Threats Archive`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/04_administration.md:688`
+
+## 07_maps_speedtest_dns.md
+Unchecked items: 87
+
+- [ ] **Toggleable layer filter panel**: Add a collapsible right-side panel (like Splynx) with checkboxes to show/hide: Subscribers (Online), Subscribers (Offline), OLTs, ONTs, CPEs, Pop Sites, FDH Cabinets, Splice Closures, Fiber Routes, NAS Devices, Leads/Prospects
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Layer Controls`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:33`
+- [ ] **Apply/refresh button for filters**: Allow users to select multiple layers and apply them in a batch rather than individual toggles, reducing map re-renders
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Layer Controls`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:34`
+- [ ] **Remember layer preferences**: Persist the user's last-selected layer combination in localStorage or a user preference setting so it loads their preferred view on return
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Layer Controls`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:35`
+- [ ] **Cluster markers at zoom levels**: Implement Leaflet.markercluster to group dense subscriber/device clusters at country/region zoom levels, expanding on zoom-in
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Layer Controls`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:36`
+- [ ] **Online/offline subscriber pins**: Color-code subscriber markers by connection status (emerald for online via RADIUS session, rose for offline), pulling real-time status from RADIUS accounting or device polling
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Subscriber Status on Map`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:39`
+- [ ] **Subscriber count overlay**: At zoomed-out levels, show cluster badges with counts (e.g., "247 online, 13 offline") for each geographic region
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Subscriber Status on Map`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:40`
+- [ ] **Lead/prospect layer**: Show potential customer locations from a leads pipeline (if/when a CRM leads feature is added) with distinct markers, allowing field teams to plan door-to-door sales routes
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Subscriber Status on Map`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:41`
+- [ ] **Device status heatmap layer**: Overlay a heatmap showing areas with high device failure rates or low signal quality, using opacity gradients based on alarm density
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Data Enrichment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:44`
+- [ ] **Coverage area polygons**: Draw service coverage zones (e.g., FTTH coverage by POP site radius, wireless sector coverage areas) as semi-transparent polygons on the map
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Data Enrichment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:45`
+- [ ] **Signal quality color coding**: Color ONT markers by optical signal level (green > -25 dBm, yellow -25 to -28 dBm, red < -28 dBm) for at-a-glance fiber health
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Data Enrichment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:46`
+- [ ] **Search/locate on map**: Add a search bar that lets users type a subscriber name, address, or device serial number and fly to that location on the map
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Data Enrichment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:47`
+- [ ] **Map export/print**: Provide a "Print map" or "Export as image" button for including network map views in reports and proposals
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map Data Enrichment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:48`
+- [ ] **Full-screen toggle**: Add a full-screen button to maximize the map view beyond the admin layout constraints
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map UX Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:51`
+- [ ] **Satellite/terrain tile switching**: Allow users to switch between OpenStreetMap street view, satellite imagery, and terrain views for field planning
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map UX Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:52`
+- [ ] **Distance measurement tool**: A point-to-point distance ruler overlay for planning fiber runs or estimating cable lengths
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map UX Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:53`
+- [ ] **Draw/annotate mode**: Let technicians draw temporary annotations (planned routes, problem areas) on the map that can be saved as planning notes
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.1 Maps -- GIS Network Mapping | Map UX Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:54`
+- [ ] **Speed test results model**: Create a `SpeedTestResult` model with fields: `id` (UUID), `subscriber_id` (FK), `ip_address`, `tested_at` (timestamp), `download_mbps` (Decimal), `upload_mbps` (Decimal), `ping_ms` (Decimal), `jitter_ms` (Decimal, optional), `server_location` (str), `test_source` (enum: manual, scheduled, subscriber_portal, api), `created_at`
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Data Collection`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:79`
+- [ ] **Speed test list view**: Admin page at `/admin/network/speedtest` showing a sortable, filterable table of all speed test results with columns: Subscriber, IP, Date, Download (Mbps), Upload (Mbps), Ping (ms), Source
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Data Collection`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:80`
+- [ ] **Speed test API endpoint**: REST endpoint `POST /api/v1/speedtest/results` for ingesting speed test results from external tools (LibreSpeed, Ookla embedded, or custom scripts running on CPE devices)
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Data Collection`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:81`
+- [ ] **Manual speed test entry**: "Add Result" form for technicians to manually log speed test results with subscriber lookup, date/time picker, and speed fields
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Data Collection`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:82`
+- [ ] **Subscriber-linked results**: Link speed test results to subscriber records so tests appear on the subscriber detail page under a "Speed Tests" tab, showing historical test results for that customer
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:85`
+- [ ] **Auto-correlation by IP**: When a speed test result arrives with only an IP address, automatically match it to the subscriber via active RADIUS session or DHCP lease mapping
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:86`
+- [ ] **Scheduled speed test tasks**: Celery task to trigger periodic speed tests against subscriber CPE devices (via TR-069/ACS or embedded test agents), storing results automatically
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:87`
+- [ ] **Customer portal speed test**: Embed a LibreSpeed or custom speed test widget in the customer portal (`/portal/speedtest`) so subscribers can run tests from their browser, with results automatically saved to their account
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:88`
+- [ ] **Speed test dashboard**: Summary cards showing: average download/upload across all tests, worst-performing subscribers, tests below plan threshold, trend over time
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Analytics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:91`
+- [ ] **Plan vs actual comparison**: Compare speed test results against the subscriber's catalog plan speed (e.g., plan is 50 Mbps, tests average 42 Mbps) and flag subscribers consistently below threshold (e.g., < 80% of plan speed)
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Analytics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:92`
+- [ ] **Speed test trend chart**: Per-subscriber line chart showing download/upload speed over time, with the plan speed as a reference line
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Analytics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:93`
+- [ ] **Geographic speed heatmap**: Overlay average speed test results on the network map to identify areas with poor performance, colored from green (fast) to red (slow)
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Analytics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:94`
+- [ ] **Speed test export**: CSV/Excel export of speed test results with date range and subscriber filters for regulatory reporting or internal QA
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Analytics`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:95`
+- [ ] **Low-speed alert rule**: Configurable monitoring rule that triggers an alert when a subscriber's speed test results drop below a configurable percentage of their plan speed for N consecutive tests
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Alerting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:98`
+- [ ] **Bulk speed test report**: Scheduled report showing all subscribers whose latest speed test is below threshold, useful for NOC morning reviews
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.2 SpeedTest Results -- Subscriber Speed Test Tracking | Speed Test Alerting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:99`
+- [ ] **Weathermap topology editor**: Admin tool to define the network topology as a visual diagram -- drag and drop network devices (routers, switches, OLTs, core devices) onto a canvas and draw links between them to represent physical/logical connections
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Network Weathermap Core`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:122`
+- [ ] **Link bandwidth overlays**: Color-code each link on the weathermap based on real-time bandwidth utilization: green (0-25%), yellow (25-50%), orange (50-75%), red (75-100%), with numeric labels showing current throughput (e.g., "450 Mbps / 1 Gbps")
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Network Weathermap Core`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:123`
+- [ ] **Device status nodes**: Show each device on the weathermap as a node with status indicator (green = online, red = offline, amber = degraded), displaying key metrics in a tooltip on hover (CPU, memory, uptime, interface count)
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Network Weathermap Core`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:124`
+- [ ] **Auto-discovery topology**: Optionally auto-generate the weathermap layout from LLDP/CDP neighbor data collected via SNMP, reducing manual topology drawing
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Network Weathermap Core`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:125`
+- [ ] **SNMP interface polling integration**: Pull real-time interface bandwidth from SNMP polling tasks (already partially built in `app/tasks/snmp.py`) and feed it into the weathermap link overlays
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Data Sources`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:128`
+- [ ] **VictoriaMetrics/Prometheus data source**: Query time-series bandwidth data from VictoriaMetrics (MCP server already configured) to populate weathermap link utilization
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Data Sources`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:129`
+- [ ] **Historical playback**: Allow scrubbing through a time slider to replay network utilization over the past 24h/7d, useful for identifying peak-hour congestion patterns
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Data Sources`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:130`
+- [ ] **Weathermap page route**: New page at `/admin/network/weathermap` under the Network section, with an "Open in new window" button for NOC wall display
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Display`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:133`
+- [ ] **Auto-refresh**: HTMX polling (every 30-60 seconds) to update link colors and bandwidth values without full page reload
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Display`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:134`
+- [ ] **Zoom and pan**: Support zooming into sections of large topologies with smooth pan/zoom interactions
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Display`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:135`
+- [ ] **Multiple weathermap views**: Support multiple named weathermap configurations (e.g., "Core Network", "Distribution Layer", "Regional POPs") for ISPs with layered network architectures
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Display`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:136`
+- [ ] **Threshold alerts on map**: Flash or pulse links that are above a configurable utilization threshold (e.g., > 85%) to draw NOC operator attention
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Display`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:137`
+- [ ] **Aggregate bandwidth summary**: Show total aggregate upstream bandwidth and utilization at the top of the weathermap as a summary stat
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:140`
+- [ ] **Click-through to device detail**: Clicking a device node navigates to its full device detail page; clicking a link shows interface-level traffic graphs
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:141`
+- [ ] **Dark mode NOC theme**: A dedicated dark/high-contrast "NOC mode" optimized for wall-mounted displays with large fonts and minimal chrome
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:142`
+- [ ] **Weathermap export**: Export the current weathermap view as PNG/SVG for inclusion in status reports and capacity planning documents
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.3 Network Weathermap -- Topology & Traffic Visualization | Weathermap Enhancements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:143`
+- [ ] **DNS threat provider integration framework**: Build an abstract integration layer for DNS security providers (Whalebone, Cisco Umbrella, Cloudflare Gateway, NextDNS) with a common data model for threat events: `subscriber_ip`, `domain_queried`, `threat_type` (malware, phishing, botnet, cryptomining, adware), `action_taken` (blocked, allowed, redirected), `timestamp`, `severity`
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Security Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:165`
+- [ ] **Whalebone API connector**: First-class integration with Whalebone's API to pull DNS threat data, configurable under System > Settings with fields: API key, API region, polling interval
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Security Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:166`
+- [ ] **DNS threat dashboard**: Admin page at `/admin/network/dns-threats` showing: total threats blocked (24h/7d/30d), top threat categories (pie chart), top targeted subscribers, top blocked domains, threat trend line chart
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Security Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:167`
+- [ ] **DNS threat settings page**: Configuration form for setting up DNS security provider credentials, enabling/disabling the feature, and selecting the API region
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Security Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:168`
+- [ ] **Subscriber DNS threat tab**: On the subscriber detail page, add a "DNS Security" tab showing threat events associated with that subscriber's IP addresses, with counts by category and a table of recent blocked queries
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | Per-Subscriber DNS Threat Visibility`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:171`
+- [ ] **Infected device detection**: Flag subscribers whose IPs generate an unusually high volume of malware/botnet DNS queries, suggesting a compromised device on their network
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | Per-Subscriber DNS Threat Visibility`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:172`
+- [ ] **Subscriber notification on infection**: Optionally send an email or in-app notification to subscribers when their connection shows signs of malware activity, with remediation guidance
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | Per-Subscriber DNS Threat Visibility`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:173`
+- [ ] **DNS threat alert rules**: Create monitoring alert rules that trigger when: a subscriber exceeds N blocked DNS queries in a time window, a new botnet C&C domain is detected, or a critical-severity threat is identified
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Threat Alerting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:176`
+- [ ] **NOC DNS threat feed**: Real-time feed of DNS threat events in the network monitoring dashboard, filterable by severity and threat type
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Threat Alerting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:177`
+- [ ] **Threat escalation to alert policies**: Route DNS threat alerts through the existing alert notification policy system (email, on-call rotation) for critical threats like active botnet participation
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Threat Alerting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:178`
+- [ ] **DNS threat trend report**: Periodic report (daily/weekly) showing DNS threat volumes, new threat categories, most-affected subscribers, and comparison to previous period
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Analytics & Reporting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:181`
+- [ ] **Top blocked domains list**: Table of most frequently blocked domains across all subscribers, with threat category and first/last seen timestamps
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Analytics & Reporting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:182`
+- [ ] **Geographic threat map**: Overlay DNS threat density on the network map, showing which geographic areas have the highest concentration of security events
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Analytics & Reporting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:183`
+- [ ] **Regulatory compliance export**: Export DNS threat data in formats suitable for regulatory reporting (e.g., national CERT incident reporting requirements)
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | 7.4 DNS Threats -- DNS-Based Security Monitoring | DNS Analytics & Reporting`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:184`
+- [ ] Speed test results model and list view -- fundamental for service quality management
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Critical Priority (Core ISP operations, high user impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:191`
+- [ ] Subscriber-linked speed test results -- essential for customer support troubleshooting
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Critical Priority (Core ISP operations, high user impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:192`
+- [ ] Plan vs actual speed comparison -- identifies service delivery issues proactively
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Critical Priority (Core ISP operations, high user impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:193`
+- [ ] Toggleable map layer filter panel -- improves usability of the existing map
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Critical Priority (Core ISP operations, high user impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:194`
+- [ ] Online/offline subscriber status pins on map -- immediate operational visibility
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Critical Priority (Core ISP operations, high user impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:195`
+- [ ] Speed test API endpoint for external tool integration -- enables automated data collection
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:198`
+- [ ] Customer portal speed test widget -- reduces support calls, empowers subscribers
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:199`
+- [ ] Network weathermap core (topology + link bandwidth overlays) -- standard NOC tool
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:200`
+- [ ] DNS threat provider integration framework -- growing ISP security requirement
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:201`
+- [ ] DNS threat dashboard with blocked query statistics -- security visibility
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:202`
+- [ ] Speed test trend chart per subscriber -- supports QoS troubleshooting
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | High Priority (Significant operational value)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:203`
+- [ ] Weathermap auto-refresh and NOC display mode -- operational efficiency
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:206`
+- [ ] Speed test geographic heatmap -- capacity planning tool
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:207`
+- [ ] Subscriber DNS threat tab -- support agent context
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:208`
+- [ ] Low-speed alert rules -- proactive quality management
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:209`
+- [ ] Marker clustering on map -- performance at scale
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:210`
+- [ ] Coverage area polygons on map -- sales and planning tool
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:211`
+- [ ] VictoriaMetrics data source for weathermap -- leverages existing infrastructure
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Medium Priority (Enhances existing features meaningfully)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:212`
+- [ ] Auto-discovery topology from LLDP/CDP -- reduces manual setup
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:215`
+- [ ] Weathermap historical playback -- capacity planning
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:216`
+- [ ] DNS geographic threat map -- advanced analytics
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:217`
+- [ ] Map distance measurement tool -- field planning aid
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:218`
+- [ ] Map draw/annotate mode -- planning collaboration
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:219`
+- [ ] Multiple named weathermap configurations -- large network support
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:220`
+- [ ] Scheduled speed test tasks via TR-069 -- automated QA
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:221`
+- [ ] Regulatory DNS threat compliance export -- market-specific requirement
+  - context: `Section 7: Maps, Speed Tests, Network Weathermap & DNS Threats | Priority Summary | Lower Priority (Nice-to-have, future roadmap)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/07_maps_speedtest_dns.md:222`
+
+## 08_config.md
+Unchecked items: 183
+
+- [ ] **Centralized settings hub page** -- Build an `/admin/system/settings-hub` page that displays all configuration sections as categorized card groups (System, Billing, Network, Notifications, Integrations, Tools), with a global search bar that filters settings by name/description in real time using HTMX
+  - context: `Section 8: System Configuration | 8.1 Configuration Hub & Navigation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:15`
+- [ ] **Settings search with typeahead** -- Add a search input at the top of the settings hub that performs fuzzy matching across all setting names, descriptions, and category labels, returning direct links to the relevant settings section
+  - context: `Section 8: System Configuration | 8.1 Configuration Hub & Navigation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:16`
+- [ ] **Category tab filtering** -- Implement colored pill/tab buttons at the top of the settings hub (matching module accent colors from the design system: slate for System, emerald for Billing, blue for Network, rose for Notifications, violet for Catalog) to filter visible sections
+  - context: `Section 8: System Configuration | 8.1 Configuration Hub & Navigation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:17`
+- [ ] **Settings breadcrumb navigation** -- Ensure every settings sub-page has breadcrumb navigation back to the settings hub (e.g., Settings Hub > Finance > Billing Automation)
+  - context: `Section 8: System Configuration | 8.1 Configuration Hub & Navigation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:18`
+- [ ] **Quick-access settings sidebar section** -- Add a "Configuration" section in the admin sidebar that expands to show the most-used settings categories, rather than burying all settings under a single "System" menu item
+  - context: `Section 8: System Configuration | 8.1 Configuration Hub & Navigation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:19`
+- [ ] **Company information settings page** -- Create an `/admin/system/company-info` settings page with fields for: company name, billing URL, address (street 1, street 2, ZIP, city, country with ISO dropdown), primary email, phone numbers, company registration ID, VAT number, and bank details (account number, bank name, branch/address)
+  - context: `Section 8: System Configuration | 8.2 Company Information & Branding | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:29`
+- [ ] **Default tax configuration** -- Add a "Default system tax" dropdown on the company info page that selects from configured tax rates, with a note explaining location-based tax overrides
+  - context: `Section 8: System Configuration | 8.2 Company Information & Branding | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:30`
+- [ ] **PDF template selection per document type** -- Add dropdown selectors on the company info page for: Invoice PDF template, Credit Note PDF template, Proforma Invoice PDF template, Quote PDF template, Payment Receipt PDF template, and Statement PDF template, each pulling from a template library
+  - context: `Section 8: System Configuration | 8.2 Company Information & Branding | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:31`
+- [ ] **Per-reseller company info overrides** -- Allow reseller/partner organizations to override company information (name, address, logo, bank details, PDF templates) so their customers see partner-branded documents
+  - context: `Section 8: System Configuration | 8.2 Company Information & Branding | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:32`
+- [ ] **Partner commission percentage** -- Add a configurable commission percentage field per reseller/partner, used in revenue-sharing calculations
+  - context: `Section 8: System Configuration | 8.2 Company Information & Branding | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:33`
+- [ ] **System file manager** -- Build an `/admin/system/files` page listing all system-uploaded files (logos, favicons, legal documents, branding assets) in a table with columns: title, filename, file size, upload date, and actions (preview, edit title, download, delete)
+  - context: `Section 8: System Configuration | 8.3 File Manager | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:43`
+- [ ] **File categorization** -- Allow tagging files by category (Logo, Favicon, Legal Document, Template Asset, Branding) with a filter dropdown above the file list
+  - context: `Section 8: System Configuration | 8.3 File Manager | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:44`
+- [ ] **File preview in modal** -- For image files, show a thumbnail preview on hover or in a modal when clicking "Preview"; for PDFs, show an embedded PDF viewer
+  - context: `Section 8: System Configuration | 8.3 File Manager | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:45`
+- [ ] **Drag-and-drop file upload** -- Add a drag-and-drop zone at the top of the file manager for quick uploads, in addition to the standard upload button
+  - context: `Section 8: System Configuration | 8.3 File Manager | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:46`
+- [ ] **File usage tracking** -- Show where each file is referenced (e.g., "Used in: Invoice PDF template, Customer Portal logo") to prevent accidental deletion of files in active use
+  - context: `Section 8: System Configuration | 8.3 File Manager | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:47`
+- [ ] **Notification template library** -- Build an `/admin/system/templates` page listing all notification/communication templates in a searchable, filterable table with columns: name, description, category, channel (Email/SMS/In-App), last modified date, and actions
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:57`
+- [ ] **Template categorization by type** -- Add a dropdown filter to filter templates by type: Customer Portal, Admin Notifications, Billing, Support/Tickets, Network Alerts, Provisioning, Welcome/Onboarding
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:58`
+- [ ] **Template editor with variable support** -- Create a template editor form with a rich text area (or code editor for HTML templates) that shows available template variables (e.g., `{{ subscriber.name }}`, `{{ invoice.total }}`) in a sidebar reference panel
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:59`
+- [ ] **Template duplication** -- Add a "Duplicate" action on each template row so operators can clone an existing template and modify it rather than building from scratch
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:60`
+- [ ] **Template preview with sample data** -- Add a "Preview" button that renders the template with sample/mock data so the operator can see exactly what the subscriber will receive before saving
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:61`
+- [ ] **ISP-specific template set** -- Pre-seed templates for common ISP scenarios: welcome email, service activation, payment received, payment overdue, service suspension warning, service restored, maintenance scheduled, loss of signal (LOS) alert, installation progress update, ticket acknowledgement, and compensation notification
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:62`
+- [ ] **SMS template support** -- Alongside email templates, support SMS templates with character count display and variable substitution, with a note about SMS character limits
+  - context: `Section 8: System Configuration | 8.4 Notification & Communication Templates | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:63`
+- [ ] **Default landing page selection** -- Add a setting to choose the default landing page when accessing the system root URL: Admin Portal, Customer Portal, or Reseller Portal
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:73`
+- [ ] **Admin portal title customization** -- Add a "Title for admin pages" text field in system settings that appears in the browser tab/title bar for the admin portal
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:74`
+- [ ] **Force two-factor authentication for admins** -- Add a toggle to require all admin users to enable 2FA, with no option for individual admins to disable it once enforced
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:75`
+- [ ] **Password reset policy settings** -- Create a "Password Reset" settings section with: enable/disable toggle, reset code validity period (hours), maximum reset attempts per validity period, reset method (Email or SMS), email template selector, SMS template text with variable placeholders, configurable character set for reset codes, and configurable code length
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:76`
+- [ ] **Server-side table processing settings** -- Add a toggle to enable/disable server-side processing for data tables across the admin UI, with a configurable search debounce delay (in milliseconds) to control HTMX search request frequency
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:77`
+- [ ] **@mention notification settings** -- Add toggles to enable/disable @mention notifications for individual users and group mentions, with selectable notification templates for each
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:78`
+- [ ] **Document encryption settings** -- Add a "Documents Encryption" section to encrypt PDF documents (invoices, statements) attached to outgoing emails, with options to select which document types to encrypt and how to derive the password (e.g., portal login, custom field, or static password per account type)
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:79`
+- [ ] **OAuth provider configuration** -- Add a settings section for configuring OAuth providers (Google, Microsoft) with client app name, client ID, and client secret fields for enabling OAuth-based email sending and login
+  - context: `Section 8: System Configuration | 8.5 System Preferences & Security | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:80`
+- [ ] **API configuration page** -- Build an `/admin/system/api-config` settings page with fields for: System API base URL, CORS domain whitelist (or a "Trust all domains" toggle), and API URL validation toggle
+  - context: `Section 8: System Configuration | 8.6 API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:90`
+- [ ] **API rate limiting configuration** -- Add configurable rate limits for API endpoints (requests per minute per API key), with separate limits for read vs. write operations
+  - context: `Section 8: System Configuration | 8.6 API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:91`
+- [ ] **API key management** -- Add a section to manage API keys with: create new key, set permissions/scopes per key, set expiration dates, view last-used timestamp, and revoke keys
+  - context: `Section 8: System Configuration | 8.6 API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:92`
+- [ ] **Webhook configuration** -- Add a webhooks settings section where operators can register external URLs to receive POST callbacks on specific events (subscriber created, payment received, service order completed, etc.)
+  - context: `Section 8: System Configuration | 8.6 API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:93`
+- [ ] **Subscriber login format configuration** -- Add settings for auto-generating subscriber login usernames with a configurable format pattern using variables: `{id}`, `{email}`, `{phone}`, `{rand_number}`, `{rand_string}`, `{year}`, `{month}`, `{day}`, and a configurable character set for random generation
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:103`
+- [ ] **Subscriber password generation policy** -- Add settings for: available characters in generated passwords, minimum password length, and a toggle to show/hide the "Generate Password" button on subscriber forms
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:104`
+- [ ] **Two-factor authentication for customer portal** -- Add 2FA settings for the customer portal: enable/disable toggle, method (Email or SMS), email template selector, SMS template with code variable, configurable code character set, and code length
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:105`
+- [ ] **Subscriber welcome message automation** -- Add a "Welcome Message" settings section with: enable/disable toggle, delivery channel (Email, SMS, or Both), trigger condition (on status change to Active, or on creation), configurable send delay (immediately, 1 hour, 1 day, etc.), and email/SMS template selector
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:106`
+- [ ] **Default billing type setting** -- Add a setting to choose the default billing type for new subscribers: Recurring (Postpaid), Prepaid (Daily), or Prepaid (Custom)
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:107`
+- [ ] **Statistics display format** -- Add a setting to choose whether bandwidth statistics graphs display in bits per second (bps) or bytes per second (Bps)
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:108`
+- [ ] **Maximum search results limit** -- Add a configurable maximum number of subscribers to return in search/typeahead results to prevent performance issues on large databases
+  - context: `Section 8: System Configuration | 8.7 Customer/Subscriber Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:109`
+- [ ] **Customer portal general settings** -- Build a portal configuration page with: language/locale selector, authentication field choice (Login, Email, or Phone), password reset settings (enable, method, templates), and a configurable "Need help?" URL for the login page
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:119`
+- [ ] **Customer portal per-reseller branding** -- Allow per-reseller portal configuration with: custom portal title, GDPR compliance toggle, and selectable menu items to show/hide portal sections
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:120`
+- [ ] **Customer portal dashboard widget toggles** -- Add toggles to control which widgets appear on the customer portal dashboard: payment due amount, account suspension notice, live bandwidth usage graph, active FUP/CAP services, and applied FUP rules
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:121`
+- [ ] **Customer portal profile field permissions** -- Add per-field permission settings for customer profile fields (login, name, email, billing email, phone, street, ZIP, city, payment method, password) with options: View Only, Edit Allowed, or Hidden
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:122`
+- [ ] **Customer portal internet statistics visibility** -- Add toggles to control which statistics are visible to customers: daily usage graphs, period totals, bandwidth usage graph, FUP statistics, current speed limits, monthly data limits (CAP), session statistics, and session termination cause
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:123`
+- [ ] **Customer portal contract/document notifications** -- Add configurable subject and body templates for contract-related notifications sent via the portal, with variable support (`{{ contract.title }}`, `{{ company.name }}`)
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:124`
+- [ ] **Mobile app integration** -- Add settings to configure mobile app download links (Google Play App ID, App Store App ID) shown on the customer portal login page
+  - context: `Section 8: System Configuration | 8.8 Customer Portal Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:125`
+- [ ] **Email sending configuration** -- Build an `/admin/system/email-config` settings page with: sender display name, sender email address (From), admin notification email, and a master enable/disable toggle for outbound email
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:135`
+- [ ] **SMTP transport settings** -- Add SMTP configuration fields: host, port, encryption method (None, SSL, TLS/STARTTLS), verify SSL certificate toggle, authentication toggle with username and password (encrypted with credential_crypto)
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:136`
+- [ ] **Email rate limiting** -- Add an "Emails per hour" limit setting to prevent exceeding SMTP provider rate limits, with 0 meaning unlimited
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:137`
+- [ ] **Email testing/debug mode** -- Add a "Redirect all emails to" field that, when set, routes all outgoing emails to a single test address instead of actual recipients (for staging/testing)
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:138`
+- [ ] **Email BCC for compliance** -- Add a "Copy email (BCC)" field to BCC all outgoing emails to a compliance or archive address
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:139`
+- [ ] **Email expiration** -- Add a "Days until expiration" setting for queued emails, after which unsent emails are discarded from the outgoing queue
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:140`
+- [ ] **Per-reseller email settings** -- Allow resellers to configure their own sender name, sender email, and SMTP credentials so emails to their customers come from the reseller's domain
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:141`
+- [ ] **Email delivery log link** -- Show a link to the email delivery log from the email config page so operators can quickly check delivery status after configuration changes
+  - context: `Section 8: System Configuration | 8.9 Email & SMTP Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:142`
+- [ ] **Data retention policy settings** -- Build an `/admin/system/data-retention` settings page with configurable retention periods for: admin audit logs, API request logs, internal system logs, portal access logs, subscriber usage statistics, background task logs, and background task result files
+  - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:152`
+- [ ] **Retention period dropdowns** -- Provide dropdown selectors with predefined retention options (1 month, 3 months, 6 months, 1 year, 2 years, 3 years, 5 years, Indefinite) for each log/data category
+  - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:153`
+- [ ] **Automated cleanup Celery task** -- Create a scheduled Celery task that runs daily/weekly to purge data older than the configured retention periods, with a summary report logged after each run
+  - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:154`
+- [ ] **Reset to defaults** -- Add a "Reset" button next to each retention setting that restores the system default retention period
+  - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:155`
+- [ ] **Compliance note** -- Display a warning banner on the data retention page noting that retention policies should comply with local regulatory requirements (e.g., GDPR, local telecom regulations)
+  - context: `Section 8: System Configuration | 8.10 Log Rotation & Data Retention | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:156`
+- [ ] **Invoice auto-generation settings** -- Add a "Finance Automation" settings section with: enable/disable automatic invoice issuing, confirmation period (days before auto-confirming draft invoices), confirmation time of day, preview generation offset (days before billing day), and date mode selection (billing date vs. actual issuance date)
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:166`
+- [ ] **Automatic service blocking rules** -- Add an "Automatic Blocking" settings section with: enable blocking period processing, blocking execution time (time of day), enable deactivation period processing, separate toggle for prepaid customer deactivation, toggle for blocking on one-time invoices, and toggles to process blocking on weekends and holidays
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:167`
+- [ ] **Dashboard billing notification** -- Add a toggle to show/hide a dashboard notification banner on the billing confirmation day, alerting admins that invoices are ready for review
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:168`
+- [ ] **Automatic IP reclamation** -- Add settings to automatically release IP addresses and archive service credentials for inactive prepaid customers after a configurable period (in months), freeing resources back to the pool
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:169`
+- [ ] **Per-partner preview generation** -- Add a toggle to generate billing previews separately for each reseller/partner organization
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:170`
+- [ ] **Holiday-aware blocking** -- Integrate with the localization/holiday calendar so that automatic blocking respects configured public holidays and weekends
+  - context: `Section 8: System Configuration | 8.11 Finance Automation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:171`
+- [ ] **Recurring billing configuration** -- Add a billing settings page with: billing enabled toggle, payment period (monthly/quarterly/annual), default payment method selector, billing day of month (1-28) with a visual calendar showing the billing/blocking/deactivation timeline, toggle to use customer creation date as billing day, payment due period (days after invoice), blocking period (days after due date or "Same as due date"), deactivation period (days after blocking or "Disabled"), minimum balance threshold, and send billing notifications toggle
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:181`
+- [ ] **Billing day visual calendar** -- Display an interactive calendar widget showing the billing day highlighted in green, blocking period in amber, and deactivation period in rose, helping operators visualize the customer lifecycle timeline
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:182`
+- [ ] **Prepaid billing settings** -- Add a "Prepaid" settings section with: issue invoice after payment toggle, default line item text, default tax rate, auto-associate invoices with payments, and deactivation period for prepaid accounts
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:183`
+- [ ] **Invoice numbering configuration** -- Add configurable invoice number format with template variables: `{year}`, `{month}`, `{day}`, `{partner_id}`, `{customer_id}`, `{location_id}`, `{rand_number}`, `{rand_string}`, `{next}` (auto-increment), and `{var|length}` for zero-padded numbers
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:184`
+- [ ] **Receipt numbering configuration** -- Separate receipt number format configuration with the same variable system, plus `{type}` for payment type
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:185`
+- [ ] **Proforma invoice automation** -- Add settings for: enable auto proforma invoice generation, generation day of month, proforma payment period, create proforma for current/next month, and proforma number pattern
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:186`
+- [ ] **Credit note numbering** -- Add configurable credit note number format (e.g., `CN{year}{partner_id|2}{next|6}`) with the same variable system
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:187`
+- [ ] **Zero-total invoice toggle** -- Add a toggle to allow/prevent generation of invoices with a zero total amount
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:188`
+- [ ] **Invoice caching** -- Add a toggle to enable PDF invoice caching for performance (generate once, serve cached copy)
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:189`
+- [ ] **Bulk update existing customers** -- When changing billing settings that only apply to new customers, show a prominent "Update existing customers" button with a confirmation dialog to apply changes retroactively
+  - context: `Section 8: System Configuration | 8.12 Billing & Invoice Settings | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:190`
+- [ ] **Payment methods management page** -- Build a payment methods settings page listing all configured payment methods in a table with: name, active status badge, and edit/delete actions, plus an "Add" button
+  - context: `Section 8: System Configuration | 8.13 Payment Methods & Providers | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:200`
+- [ ] **Payment method form** -- Create a form to add/edit payment methods with: name, active/inactive toggle, payment type (Cash, Bank Transfer, Online Gateway, Card, Voucher/Refill), and optional integration settings (API keys, merchant IDs) stored encrypted
+  - context: `Section 8: System Configuration | 8.13 Payment Methods & Providers | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:201`
+- [ ] **Payment method ordering** -- Allow drag-and-drop reordering of payment methods to control the display order in customer-facing payment forms
+  - context: `Section 8: System Configuration | 8.13 Payment Methods & Providers | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:202`
+- [ ] **Online payment gateway integration settings** -- For gateway-type payment methods (Paystack, Flutterwave, Remita), show additional fields for API credentials, callback URLs, and a "Test Connection" button
+  - context: `Section 8: System Configuration | 8.13 Payment Methods & Providers | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:203`
+- [ ] **Payment method usage statistics** -- Show a small usage count or percentage next to each payment method indicating how many active customers use it, helping operators understand which methods are most popular
+  - context: `Section 8: System Configuration | 8.13 Payment Methods & Providers | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:204`
+- [ ] **Transaction category management** -- Build a transaction categories settings page with a list of categories (with default/system categories marked and non-deletable), plus the ability to add custom ISP-specific categories like: Installation Cost, Equipment Replacement, IP Address Fees, Relocation Fees, Withholding Tax, Stamp Duty, Credit Notes
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:216`
+- [ ] **Transaction category mapping per service type** -- Add a mapping configuration that assigns default transaction categories to each service type context: Internet service (service, discount, top-up), Recurring service (service, discount), One-time service (service), and Bundle service (service, discount, activation fee, cancellation fee)
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:217`
+- [ ] **Enable transaction categories per plan type** -- Add toggles to enable/disable transaction category selection in tariff/plan edit forms, per plan type (Internet, Recurring, One-time, Bundle)
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:218`
+- [ ] **Accounting software category mapping** -- Add an accounting integration section that maps internal transaction categories to external accounting software categories (e.g., QuickBooks, Xero), with a "Load categories" button to pull available categories from the connected accounting platform
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:219`
+- [ ] **Accounting tax rate mapping** -- Add a tax rate mapping page that links internal tax rates to external accounting software tax codes, with a "Load tax rates" button to sync from the accounting platform
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:220`
+- [ ] **Accounting category sync status** -- Show a "Last synced" timestamp and "Reload" button for accounting categories and tax rates, with visual indicators for unmapped items that need attention
+  - context: `Section 8: System Configuration | 8.14 Transaction Categories & Accounting Integration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:221`
+- [ ] **Payment pairing/reconciliation rules** -- Add a settings page for configuring how imported bank payments are automatically matched to customers: primary match field (Customer ID, Account Number, Phone, Email), secondary match field (optional), invoice match field (Invoice Number), and proforma invoice match field
+  - context: `Section 8: System Configuration | 8.15 Payment Pairing & Reconciliation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:231`
+- [ ] **Smart payment matching** -- Implement fuzzy matching logic that attempts multiple pairing strategies in order: exact invoice number match, exact customer ID match, amount + date match, then flagging unmatched payments for manual review
+  - context: `Section 8: System Configuration | 8.15 Payment Pairing & Reconciliation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:232`
+- [ ] **Unmatched payment queue** -- When automatic pairing fails, route the payment to an "Unmatched Payments" queue where operators can manually pair them to customers/invoices
+  - context: `Section 8: System Configuration | 8.15 Payment Pairing & Reconciliation | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:233`
+- [ ] **Multi-wave billing reminder system** -- Build a billing reminders settings page with: master enable toggle, delivery channel (Email, SMS, or Both), send time of day, and up to 3 configurable reminder waves
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:243`
+- [ ] **Per-wave reminder configuration** -- For each reminder wave, configure: days before/after due date (or "Disabled"), email subject line, email template selector, and SMS template selector
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:244`
+- [ ] **Reminder payment method filter** -- Add a toggle to send reminders only to customers using specific payment methods (e.g., skip reminders for auto-debit customers), with a multi-select for applicable methods
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:245`
+- [ ] **Attach unpaid invoices to reminders** -- Add a toggle to automatically attach the relevant unpaid invoice PDF to reminder emails
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:246`
+- [ ] **Per-reseller reminder settings** -- Allow resellers to override the global reminder settings with their own wave timing, templates, and send preferences
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:247`
+- [ ] **Reminder schedule calendar view** -- Display a visual calendar showing the billing day, each reminder wave, blocking date, and deactivation date on a timeline, so operators can see the full dunning schedule at a glance
+  - context: `Section 8: System Configuration | 8.16 Billing Reminders | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:248`
+- [ ] **Multi-channel billing notification waves** -- Build a billing notifications settings page with separate tabs for notification contexts: Recurring Billing, Prepaid Billing, Card Expiration, Service Events, and Contract Events
+  - context: `Section 8: System Configuration | 8.17 Billing Notifications (Prepaid/Recurring) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:258`
+- [ ] **Prepaid notification wave configuration** -- For prepaid billing, configure: notification send time (hour of day), a "Blocking wave" (sent on the day of blocking with email/SMS template), and multiple pre-blocking warning waves (e.g., 5 days before, 1 day before) each with: enable toggle, days before blocking, channel (Email/SMS/Both), template selectors, and optional BCC address
+  - context: `Section 8: System Configuration | 8.17 Billing Notifications (Prepaid/Recurring) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:259`
+- [ ] **BCC per notification wave** -- Add a BCC email field per notification wave so specific stakeholders (e.g., finance team, account managers) can be copied on blocking or overdue notifications
+  - context: `Section 8: System Configuration | 8.17 Billing Notifications (Prepaid/Recurring) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:260`
+- [ ] **Notification scheduling** -- Configure the exact time of day notifications are sent, separate from the blocking execution time, to ensure customers receive advance notice at a reasonable hour
+  - context: `Section 8: System Configuration | 8.17 Billing Notifications (Prepaid/Recurring) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:261`
+- [ ] **Tax rate management page** -- Build a tax configuration page listing all tax rates with: name, rate percentage, group name (optional), active/archived status badge, and edit/delete actions
+  - context: `Section 8: System Configuration | 8.18 Tax Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:271`
+- [ ] **Add individual tax rates** -- Support creating tax rates with: name, percentage rate, optional tax group assignment, and active/archived status
+  - context: `Section 8: System Configuration | 8.18 Tax Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:272`
+- [ ] **Tax groups** -- Support tax groups that combine multiple tax rates (e.g., "State Tax" + "Federal Tax" grouped as "Combined Tax"), applied as a single selection on invoices
+  - context: `Section 8: System Configuration | 8.18 Tax Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:273`
+- [ ] **Archive/restore taxes** -- Instead of hard-deleting tax rates (which may be referenced by historical invoices), support archiving with a filter to show Active, Archived, or All
+  - context: `Section 8: System Configuration | 8.18 Tax Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:274`
+- [ ] **Location-based tax rules** -- Add support for location-based tax overrides where different regions/states can have different default tax rates, automatically applied based on subscriber location
+  - context: `Section 8: System Configuration | 8.18 Tax Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:275`
+- [ ] **Plan change refund policy** -- Add a settings section for configuring what happens when a subscriber changes plans mid-cycle: "Refund unused money" (prorate and credit), "No refund" (forfeit remaining period), or "Do not create transaction" (silent switch)
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:285`
+- [ ] **Plan change fees** -- Add configurable fees for: upgrading to a more expensive plan (flat amount), downgrading to a less expensive plan (flat amount), and a tax rate to apply to these fees
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:286`
+- [ ] **Invoice timing on plan change** -- Add a setting for when to generate the invoice for the new plan: "During next billing cycle" or "Immediately on change"
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:287`
+- [ ] **Prepaid plan change rollover** -- For prepaid subscribers changing plans, add a "Rollover expiration" setting controlling whether unused credit/time carries over: "End of period", "Immediate", or "No rollover"
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:288`
+- [ ] **Discount transfer on plan change** -- Add a toggle to automatically transfer active discounts from the old service to the new service when a subscriber changes plans
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:289`
+- [ ] **Per-reseller plan change rules** -- Allow resellers to override plan change policies for their customer base
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:290`
+- [ ] **Minimum invoice amount** -- Add a "Minimum invoice amount" field to suppress invoice generation for trivially small prorated amounts
+  - context: `Section 8: System Configuration | 8.19 Plan Change / Service Upgrade Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:291`
+- [ ] **RADIUS reject IP configuration** -- Add a RADIUS settings section for configuring reject IP ranges assigned to subscribers based on authentication failure reason: user not found, account blocked/inactive, negative balance/overdue, incorrect MAC address, and incorrect password. Each range helps operators diagnose authentication issues
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:301`
+- [ ] **RADIUS NAS type templates** -- Add a NAS type selector that loads pre-configured RADIUS attribute templates for specific NAS vendors (MikroTik, Cisco, Ubiquiti, etc.)
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:302`
+- [ ] **RADIUS debug/logging controls** -- Add RADIUS debug settings with: enable debug toggle (auto-disables after 60 minutes to prevent log bloat), debug verbosity level (0-10), output destinations (file, console, syslog), and a link to view the debug log file
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:303`
+- [ ] **RADIUS session management** -- Add utility buttons to: restart the RADIUS server and clear all online sessions, with confirmation dialogs warning about service impact
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:304`
+- [ ] **RADIUS MAC binding** -- Add settings for MAC address binding: bind MAC on first connect toggle, maximum unique MAC addresses per service, and toggle to overwrite the oldest MAC when the limit is reached
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:305`
+- [ ] **IP pool location linking** -- Add a toggle to link IP pool assignment to subscriber location, with a fallback to "Location = All" pools when no location-specific pool matches
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:306`
+- [ ] **Periodic RADIUS restart schedule** -- Add settings for automatic periodic RADIUS server restarts to prevent memory leaks: enable toggle, frequency (weekly/monthly), day of week/month, and time of day
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:307`
+- [ ] **RADIUS administrative access** -- Add a toggle to allow/deny administrative access from unknown NAS devices, with a configurable default NAS ID for unrecognized sources
+  - context: `Section 8: System Configuration | 8.20 RADIUS Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:308`
+- [ ] **NetFlow accounting configuration** -- Add a NetFlow settings page with: max session idle timeout (seconds), max session duration before splitting (hours), minimum bytes threshold for recording traffic, daemon rotation interval (seconds), NetFlow listen port, and data file retention settings (max lifetime and unit)
+  - context: `Section 8: System Configuration | 8.21 NetFlow Accounting | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:318`
+- [ ] **NetFlow data retention** -- Add configurable retention for NetFlow data files with automatic cleanup of expired files to manage disk usage
+  - context: `Section 8: System Configuration | 8.21 NetFlow Accounting | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:319`
+- [ ] **CPE management configuration** -- Add a CPE settings page with: bandwidth unit base (1000 vs. 1024 for KB), MikroTik API connection settings (debug toggle with auto-off, connection attempts, timeout seconds)
+  - context: `Section 8: System Configuration | 8.22 CPE (Customer Premises Equipment) Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:329`
+- [ ] **QoS configuration** -- Add a QoS settings section with: reverse in/out toggle (for correcting traffic direction), default queue types for download and upload, custom QoS rules editor (with format: Name, Network, In, Out, Limit-at, Priority), and default simple queue target network
+  - context: `Section 8: System Configuration | 8.22 CPE (Customer Premises Equipment) Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:330`
+- [ ] **CPE-based customer blocking** -- Add settings for blocking customers via CPE NAT rules: enable toggle, redirect IP address (captive portal/walled garden), redirect port, allowing blocked customers to see a "payment required" page instead of losing all connectivity
+  - context: `Section 8: System Configuration | 8.22 CPE (Customer Premises Equipment) Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:331`
+- [ ] **Default DHCP configuration template** -- Add a DHCP default config section for provisioning CPE devices: enable toggle, DHCP server name, interface, lease time (minutes), network/gateway/pool range, DNS servers, and WINS servers
+  - context: `Section 8: System Configuration | 8.22 CPE (Customer Premises Equipment) Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:332`
+- [ ] **WLAN management toggle** -- Add a toggle to enable/disable wireless LAN management features for supported CPE devices
+  - context: `Section 8: System Configuration | 8.22 CPE (Customer Premises Equipment) Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:333`
+- [ ] **Network monitoring vendor registry** -- Build a monitoring configuration page with a manageable list of equipment vendors (MikroTik, Cisco, Ubiquiti, Huawei, TP-Link, etc.) used for categorizing monitored devices
+  - context: `Section 8: System Configuration | 8.23 Monitoring Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:343`
+- [ ] **Monitoring device type registry** -- Add a configurable list of device types (Router, Switch, Server, Access Point, CPE, OLT, ONT, Firewall) used to classify monitored network equipment
+  - context: `Section 8: System Configuration | 8.23 Monitoring Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:344`
+- [ ] **Monitoring notification groups** -- Add configurable monitoring groups (e.g., "Core Infrastructure", "Access Layer", "Customer CPE") with per-group notification settings, allowing different escalation policies for different equipment tiers
+  - context: `Section 8: System Configuration | 8.23 Monitoring Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:345`
+- [ ] **Monitoring alert thresholds** -- Add configurable default thresholds per device type for: CPU usage, memory usage, interface utilization, uptime, and response time, triggering alerts when thresholds are exceeded
+  - context: `Section 8: System Configuration | 8.23 Monitoring Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:346`
+- [ ] **MikroTik API integration settings** -- Add a dedicated MikroTik API configuration page with: API debug mode (auto-off after 60 min), connection attempts, timeout, and accounting options (min bytes, max timeout, max session time, RRD graph generation)
+  - context: `Section 8: System Configuration | 8.24 MikroTik API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:356`
+- [ ] **Bandwidth shaping configuration** -- Add shaping method settings for: Simple Queue shaping (reverse in/out, queue types), PCQ shaping (chain definitions, routing, RADIUS integration), and configurable defaults for download/upload queue types
+  - context: `Section 8: System Configuration | 8.24 MikroTik API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:357`
+- [ ] **MikroTik firewall rule templates** -- Add a firewall rules template editor for MikroTik routers, with pre-built rule sets for: subscriber blocking (redirect to captive portal), address list management, and allowed resources. Support template variables like `{{ALLOWED_RESOURCES_ADDRESS_LIST}}` and `{{SYSTEM_IP_ADDRESS}}`
+  - context: `Section 8: System Configuration | 8.24 MikroTik API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:358`
+- [ ] **Mass router configuration push** -- Add a "Mass update all routers" action button that pushes the current firewall/QoS/shaping configuration to all connected MikroTik NAS devices, with progress tracking and error reporting
+  - context: `Section 8: System Configuration | 8.24 MikroTik API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:359`
+- [ ] **Allowed resources whitelist** -- Add a configurable list of IP addresses/hostnames that remain accessible to blocked subscribers (payment portal, captive portal, DNS)
+  - context: `Section 8: System Configuration | 8.24 MikroTik API Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:360`
+- [ ] **Fair Usage Policy configuration** -- Add a FUP settings page with: custom subscriber field for per-customer reset date override, monthly reset schedule for prepaid daily limits, monthly reset trigger for recurring limits (tied to billing day), weekly limit reset day (Monday or Sunday), and a toggle to send notifications to subscribers when FUP rules are applied
+  - context: `Section 8: System Configuration | 8.25 Fair Usage Policy (FUP) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:370`
+- [ ] **FUP notification templates** -- Link FUP notification settings to configurable templates so operators can customize the message subscribers receive when their usage reaches a threshold or limit
+  - context: `Section 8: System Configuration | 8.25 Fair Usage Policy (FUP) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:371`
+- [ ] **FUP threshold levels** -- Add support for multiple FUP threshold levels (e.g., 75% warning, 90% warning, 100% enforcement) with different actions and notifications at each level
+  - context: `Section 8: System Configuration | 8.25 Fair Usage Policy (FUP) | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:372`
+- [ ] **NAS type management** -- Build a NAS types configuration page listing supported NAS vendors/types with: name, MikroTik API support indicator (Yes/No), and edit/delete actions
+  - context: `Section 8: System Configuration | 8.26 NAS Types Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:382`
+- [ ] **NAS type capabilities** -- For each NAS type, configure supported capabilities: API management, SNMP monitoring, SSH access, CoA (Change of Authorization) support, and RADIUS accounting
+  - context: `Section 8: System Configuration | 8.26 NAS Types Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:383`
+- [ ] **Custom NAS type creation** -- Allow adding custom NAS types for vendor-specific equipment not in the default list, with configurable RADIUS attributes and API endpoints
+  - context: `Section 8: System Configuration | 8.26 NAS Types Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:384`
+- [ ] **IPv6 auto-assignment settings** -- Add IPv6 configuration with: enable auto-assignment toggle, network pool selection for auto-assignment, assignment target field selector (IPv6 network attribute on the service), and default prefix for manual selection
+  - context: `Section 8: System Configuration | 8.27 IPv6 Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:394`
+- [ ] **Bulk IPv6 update** -- Add a "Update IPv6 on all services" bulk action button that applies the current IPv6 auto-assignment configuration to all existing customer services, with a confirmation dialog and progress indicator
+  - context: `Section 8: System Configuration | 8.27 IPv6 Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:395`
+- [ ] **Dual-stack support settings** -- Add settings to control whether new services are provisioned with IPv4-only, IPv6-only, or dual-stack by default
+  - context: `Section 8: System Configuration | 8.27 IPv6 Configuration | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:396`
+- [ ] **IP network category management** -- Add an IP network categories settings page for organizing IP pools into logical groups (e.g., Production, Development, Corporate, Management), with add/edit/delete actions and color coding for visual distinction in the IP management interface
+  - context: `Section 8: System Configuration | 8.28 IP Network Categories | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:406`
+- [ ] **OLT board model registry** -- Add a configurable registry of supported OLT board models (for Huawei and other vendors) with: board model name, number of ports, port type (GPON/EPON/XGS-PON), and vendor association
+  - context: `Section 8: System Configuration | 8.29 Huawei OLT Board Support | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:416`
+- [ ] **Auto-discovery board mapping** -- When auto-discovering OLT boards, match discovered board models against the registry to automatically set port counts and capabilities
+  - context: `Section 8: System Configuration | 8.29 Huawei OLT Board Support | Improvements`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:417`
+- [ ] Centralized settings hub page with search (8.1)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:424`
+- [ ] Company information settings page (8.2)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:425`
+- [ ] Email/SMTP configuration (8.9)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:426`
+- [ ] Invoice auto-generation and billing automation settings (8.11)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:427`
+- [ ] Recurring billing configuration with calendar visualization (8.12)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:428`
+- [ ] Tax rate management (8.18)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:429`
+- [ ] RADIUS configuration with reject IPs and session management (8.20)
+  - context: `Section 8: System Configuration | Priority Summary | P0 -- Critical (Core system functionality gaps)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:430`
+- [ ] Notification template library with variable support (8.4)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:433`
+- [ ] Payment methods management (8.13)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:434`
+- [ ] Multi-wave billing reminder system (8.16)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:435`
+- [ ] Billing notifications for prepaid/recurring (8.17)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:436`
+- [ ] Transaction category management (8.14)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:437`
+- [ ] Plan change refund and fee configuration (8.19)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:438`
+- [ ] Data retention policy settings (8.10)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:439`
+- [ ] Finance automation blocking rules (8.11)
+  - context: `Section 8: System Configuration | Priority Summary | P1 -- High (Revenue and compliance impact)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:440`
+- [ ] Customer portal configuration with field permissions (8.8)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:443`
+- [ ] Subscriber login/password generation settings (8.7)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:444`
+- [ ] Per-reseller company info and email overrides (8.2, 8.9)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:445`
+- [ ] Payment pairing/reconciliation rules (8.15)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:446`
+- [ ] MikroTik API integration settings (8.24)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:447`
+- [ ] CPE management configuration (8.22)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:448`
+- [ ] FUP configuration (8.25)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:449`
+- [ ] Monitoring configuration (8.23)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:450`
+- [ ] NAS type management (8.26)
+  - context: `Section 8: System Configuration | Priority Summary | P2 -- Medium (Operational efficiency)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:451`
+- [ ] System file manager with categorization (8.3)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:454`
+- [ ] System preferences and security hardening (8.5)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:455`
+- [ ] API configuration and key management (8.6)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:456`
+- [ ] Accounting software integration mapping (8.14)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:457`
+- [ ] NetFlow accounting configuration (8.21)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:458`
+- [ ] IPv6 auto-assignment settings (8.27)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:459`
+- [ ] IP network categories (8.28)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:460`
+- [ ] Huawei OLT board registry (8.29)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:461`
+- [ ] Mobile app integration settings (8.8)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:462`
+- [ ] Document encryption settings (8.5)
+  - context: `Section 8: System Configuration | Priority Summary | P3 -- Low (Nice-to-have enhancements)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/08_config.md:463`
+
+## 09_helpdesk_scheduling.md
+Unchecked items: 75
+
+- [ ] **Add helpdesk email configuration settings** -- Provide configurable fields for sender name, sender email address, and CC/copy email for all ticket notifications. Allow operators to brand outgoing support emails with their ISP name (e.g., "DOTMAC SUPPORT") and route copies to a shared helpdesk inbox.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Email & Notification Settings`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:16`
+- [ ] **Add toggle for ticket email notifications** -- Allow admins to enable/disable email sending when tickets are updated, and separately control whether file attachments are included in notification emails.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Email & Notification Settings`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:17`
+- [ ] **Add admin panel real-time notifications for tickets** -- Send in-app notifications to admin users when they are online and a ticket is created, updated, or assigned to them. Display a notification badge or toast in the admin sidebar.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Email & Notification Settings`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:18`
+- [ ] **Add configurable additional fields for tickets** -- Allow operators to define custom fields on tickets (e.g., site location, equipment serial number, signal level) with a configurable limit on the number of visible additional fields.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Email & Notification Settings`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:19`
+- [ ] **Implement scheduled ticket auto-assignment** -- Automatically assign incoming tickets to available support agents based on a scheduling project. During scheduled hours, tickets are routed to on-duty agents; outside those hours, they fall back to configurable default admins.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Ticket Auto-Assignment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:23`
+- [ ] **Add round-robin ticket assignment** -- Support assignment strategies including random admin selection, round-robin rotation, and least-loaded agent. Allow configuration of which admins are eligible for auto-assignment.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Ticket Auto-Assignment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:24`
+- [ ] **Add notification routing for ticket assignment** -- Configure how assignment notifications are sent (to random admin, specific admin, or group of admins) to ensure timely ticket pickup.
+  - context: `Section 9: Helpdesk & Scheduling | 9.1 Helpdesk Ticket Configuration | Ticket Auto-Assignment`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:25`
+- [ ] **Add configurable ticket status definitions** -- Allow operators to define custom ticket statuses with separate display titles for agents and customers (e.g., agent sees "Waiting on customer" while customer sees "Awaiting your answer"), color-coded labels (Info, Success, Warning, Default), and open/closed/unresolved marking.
+  - context: `Section 9: Helpdesk & Scheduling | 9.2 Ticket Status Workflow | Status Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:36`
+- [ ] **Add ticket status-action linking** -- Automatically transition ticket status based on lifecycle events: set status to "New" on creation, "Work in Progress" on opening, "Resolved" on closing, and configurable statuses on customer reply and agent reply.
+  - context: `Section 9: Helpdesk & Scheduling | 9.2 Ticket Status Workflow | Status Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:37`
+- [ ] **Add dashboard icons for ticket statuses** -- Display distinctive icons for each ticket status on the admin dashboard (e.g., open arrow for New, headset for Work in Progress, checkmark for Resolved, clock for Waiting on Customer, people icon for Waiting on Agent).
+  - context: `Section 9: Helpdesk & Scheduling | 9.2 Ticket Status Workflow | Status Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:38`
+- [ ] **Add ticket status dashboard visibility control** -- Allow operators to configure which ticket statuses appear on the admin dashboard and which are hidden (e.g., hide "Waiting on customer" from dashboard counts to reduce noise).
+  - context: `Section 9: Helpdesk & Scheduling | 9.2 Ticket Status Workflow | Status Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:39`
+- [ ] **Add configurable ticket type taxonomy** -- Create a management interface for ISP-specific ticket types organized by category. Pre-seed with common ISP categories: Network Faults (fiber, radio, power), Billing (payment, subscription), Service Requests (installation, migration, plan changes), and Equipment (CPE, router, ONT issues).
+  - context: `Section 9: Helpdesk & Scheduling | 9.3 Ticket Types (ISP-Specific Categories) | Ticket Type Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:50`
+- [ ] **Add default ticket type setting** -- Allow operators to set a default ticket type (e.g., "Inquiry") that is pre-selected when creating new tickets, reducing clicks for the most common ticket type.
+  - context: `Section 9: Helpdesk & Scheduling | 9.3 Ticket Types (ISP-Specific Categories) | Ticket Type Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:51`
+- [ ] **Add ticket type color coding** -- Assign colors to ticket type categories so agents can visually distinguish network outage tickets from billing inquiries at a glance in the ticket list view.
+  - context: `Section 9: Helpdesk & Scheduling | 9.3 Ticket Types (ISP-Specific Categories) | Ticket Type Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:52`
+- [ ] **Add ticket type to service order linkage** -- When a ticket type maps to a service action (e.g., "Plan Upgrade", "Migration", "Drop Cable Installation"), offer a one-click option to create a linked service order from the ticket.
+  - context: `Section 9: Helpdesk & Scheduling | 9.3 Ticket Types (ISP-Specific Categories) | Ticket Type Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:53`
+- [ ] **Add ticket group management** -- Allow operators to create ticket groups representing organizational teams (NOC, Helpdesk, Tech Support, Finance, Sales) and regional teams (e.g., Lagos Team, Abuja PMs). Assign agents to one or more groups.
+  - context: `Section 9: Helpdesk & Scheduling | 9.4 Ticket Groups & Agent Assignment | Team-Based Ticket Routing`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:64`
+- [ ] **Add default ticket group routing** -- Configure default groups for tickets coming from different sources: API-created tickets route to one group (e.g., Helpdesk), customer portal tickets to another (e.g., Any/auto-detect), and email-created tickets to a configurable default.
+  - context: `Section 9: Helpdesk & Scheduling | 9.4 Ticket Groups & Agent Assignment | Team-Based Ticket Routing`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:65`
+- [ ] **Add regional ticket routing** -- Route tickets to region-specific teams based on the subscriber's location or POP site, ensuring local technicians handle local issues.
+  - context: `Section 9: Helpdesk & Scheduling | 9.4 Ticket Groups & Agent Assignment | Team-Based Ticket Routing`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:66`
+- [ ] **Add group-based ticket visibility** -- Allow agents to see only tickets assigned to their groups, with supervisors having cross-group visibility. Support group-level SLA tracking and performance metrics.
+  - context: `Section 9: Helpdesk & Scheduling | 9.4 Ticket Groups & Agent Assignment | Team-Based Ticket Routing`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:67`
+- [ ] **Add per-event ticket notification toggles** -- Provide individual enable/disable switches for each ticket notification event: creation, assignment, status change, new message, new note, close, reopen, and watcher updates. Support both email and SMS channels.
+  - context: `Section 9: Helpdesk & Scheduling | 9.5 Ticket Notifications | Notification Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:78`
+- [ ] **Add ticket notification templates with placeholders** -- Allow customization of notification subject lines and body text using template variables such as `{ticket_id}`, `{ticket_subject}`, `{customer_name}`, `{agent_name}`, `{status}`. Pre-populate with sensible defaults.
+  - context: `Section 9: Helpdesk & Scheduling | 9.5 Ticket Notifications | Notification Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:79`
+- [ ] **Add ticket watcher notifications** -- Allow agents to "watch" tickets they are interested in and receive notifications on status changes and new activity, even if they are not the assigned agent.
+  - context: `Section 9: Helpdesk & Scheduling | 9.5 Ticket Notifications | Notification Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:80`
+- [ ] **Add separate customer vs. admin notification paths** -- Route different notification content to customers (simplified, branded) versus admins (detailed, with internal context), ensuring customers never see internal notes or technical details.
+  - context: `Section 9: Helpdesk & Scheduling | 9.5 Ticket Notifications | Notification Configuration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:81`
+- [ ] **Add canned response library** -- Create a management interface for pre-written response templates that agents can insert into ticket replies with one click. Support rich text formatting and template variables.
+  - context: `Section 9: Helpdesk & Scheduling | 9.6 Canned Responses | Quick Response Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:92`
+- [ ] **Add canned response groups** -- Organize canned responses into groups (e.g., "Help Desk/Support", "NOC", "Billing") so agents can quickly find relevant templates for their department.
+  - context: `Section 9: Helpdesk & Scheduling | 9.6 Canned Responses | Quick Response Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:93`
+- [ ] **Add personal vs. shared canned responses** -- Allow agents to create personal canned responses visible only to them, alongside shared organizational responses visible to all agents or specific groups.
+  - context: `Section 9: Helpdesk & Scheduling | 9.6 Canned Responses | Quick Response Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:94`
+- [ ] **Add canned response search and quick-insert** -- In the ticket reply editor, provide a searchable dropdown or keyboard shortcut (e.g., typing `/` followed by keywords) to find and insert canned responses without leaving the reply interface.
+  - context: `Section 9: Helpdesk & Scheduling | 9.6 Canned Responses | Quick Response Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:95`
+- [ ] **Add embeddable support ticket widget** -- Provide a configurable pop-up or embedded widget that ISP operators can place on their public website, allowing customers to submit support tickets without logging into the customer portal.
+  - context: `Section 9: Helpdesk & Scheduling | 9.7 Ticket Widget (Customer-Facing) | Public Support Widget`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:106`
+- [ ] **Add widget appearance customization** -- Allow operators to customize the widget button text, colors (background and text), alignment (left/right), pixel offset, and form title to match their website branding.
+  - context: `Section 9: Helpdesk & Scheduling | 9.7 Ticket Widget (Customer-Facing) | Public Support Widget`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:107`
+- [ ] **Add widget form configuration** -- Configure which fields appear on the widget form: subject, description, priority selector (enable/disable), ticket type selector (enable/disable), file attachment capability, and custom thank-you message after submission.
+  - context: `Section 9: Helpdesk & Scheduling | 9.7 Ticket Widget (Customer-Facing) | Public Support Widget`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:108`
+- [ ] **Add widget embed code generator** -- Generate a copy-paste JavaScript snippet that operators can add to any external webpage, with automatic HTTPS support and lazy loading.
+  - context: `Section 9: Helpdesk & Scheduling | 9.7 Ticket Widget (Customer-Facing) | Public Support Widget`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:109`
+- [ ] **Add email-to-ticket conversion** -- Monitor configured incoming mailboxes and automatically create tickets from received emails, or append to existing tickets when the email subject contains a recognizable ticket number pattern.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:120`
+- [ ] **Add ticket number regex matching** -- Use a configurable regex pattern (e.g., `#(?P<number>\d{1,})`) to identify ticket references in email subject lines and thread replies into existing tickets.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:121`
+- [ ] **Add incoming mailbox configuration** -- Allow operators to configure one or more incoming mailboxes with email address, default ticket group, default ticket type, and default priority. Support enable/disable per mailbox.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:122`
+- [ ] **Add email deny list / spam filtering** -- Provide a deny list to block ticket creation from specific email addresses, domains, or patterns. Track filtered counts per day and total for monitoring spam volume.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:123`
+- [ ] **Add HTML email sanitization** -- Sanitize incoming HTML emails using a purification library before storing ticket content, preventing XSS and rendering issues while preserving formatting.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:124`
+- [ ] **Add admin email forwarding support** -- Allow admins to forward customer emails to the helpdesk inbox and have them automatically converted to tickets, with the original sender identified as the ticket requester.
+  - context: `Section 9: Helpdesk & Scheduling | 9.8 Email-to-Ticket (Inboxes) | Email Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:125`
+- [ ] **Add ticket automation rules engine** -- Create a rules-based automation system that monitors ticket attributes and applies changes after configurable time thresholds. Rules specify current status, current priority, time elapsed, target status, and target priority.
+  - context: `Section 9: Helpdesk & Scheduling | 9.9 Ticket Automation | Automation Rules`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:136`
+- [ ] **Add time-based ticket escalation** -- Automatically escalate ticket priority when a ticket remains unresolved beyond a defined time threshold (e.g., escalate from Medium to High after 4 hours, from High to Critical after 8 hours).
+  - context: `Section 9: Helpdesk & Scheduling | 9.9 Ticket Automation | Automation Rules`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:137`
+- [ ] **Add SLA-based status transitions** -- Automatically change ticket status based on SLA timers (e.g., move "Waiting on agent" tickets to "Overdue" if no agent response within configured SLA window).
+  - context: `Section 9: Helpdesk & Scheduling | 9.9 Ticket Automation | Automation Rules`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:138`
+- [ ] **Add automation rule priority ordering** -- Allow operators to set execution priority for automation rules so that more specific rules take precedence over general ones, preventing conflicts.
+  - context: `Section 9: Helpdesk & Scheduling | 9.9 Ticket Automation | Automation Rules`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:139`
+- [ ] **Add scheduling workflow definitions** -- Create a management interface for defining named workflows that govern how field tasks progress through stages. Pre-seed with common ISP workflows: Installation, Maintenance, Migration, and Troubleshooting.
+  - context: `Section 9: Helpdesk & Scheduling | 9.10 Scheduling Workflows | Workflow Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:150`
+- [ ] **Add workflow step configuration** -- Allow operators to define the steps within each workflow (e.g., Installation Workflow: Survey > Schedule > Deploy Equipment > Configure > Test > Sign-off), with required/optional designations per step.
+  - context: `Section 9: Helpdesk & Scheduling | 9.10 Scheduling Workflows | Workflow Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:151`
+- [ ] **Add workflow-to-service-order linking** -- Automatically apply the appropriate workflow when a service order is created based on the order type (new installation, plan change, migration, repair).
+  - context: `Section 9: Helpdesk & Scheduling | 9.10 Scheduling Workflows | Workflow Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:152`
+- [ ] **Add workflow status tracking** -- Display workflow progress visually (progress bar or step indicator) on service order detail pages so agents and customers can see where the task is in its lifecycle.
+  - context: `Section 9: Helpdesk & Scheduling | 9.10 Scheduling Workflows | Workflow Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:153`
+- [ ] **Add field team definitions** -- Create a management interface for defining field technician teams. Support both named teams (e.g., "Fiber Installation Team", "Radio Team") and individual technician entries.
+  - context: `Section 9: Helpdesk & Scheduling | 9.11 Scheduling Teams | Field Team Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:164`
+- [ ] **Add team member assignment** -- Assign technicians to one or more teams, with skill-based categorization (fiber splicing, radio alignment, CPE installation, power systems).
+  - context: `Section 9: Helpdesk & Scheduling | 9.11 Scheduling Teams | Field Team Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:165`
+- [ ] **Add team-based task routing** -- Route scheduled tasks to the appropriate team based on task type, location, and required skills. Support load-balancing across team members.
+  - context: `Section 9: Helpdesk & Scheduling | 9.11 Scheduling Teams | Field Team Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:166`
+- [ ] **Add team capacity management** -- Track team member availability, current task load, and geographic coverage to optimize task assignment and scheduling.
+  - context: `Section 9: Helpdesk & Scheduling | 9.11 Scheduling Teams | Field Team Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:167`
+- [ ] **Add task template management** -- Create a library of reusable task templates for common field operations. Pre-seed with ISP-relevant templates: signal confirmation, IP configuration, device provisioning, equipment deployment, client onboarding, power verification, and NMS registration.
+  - context: `Section 9: Helpdesk & Scheduling | 9.12 Task Templates | Task Template Library`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:178`
+- [ ] **Add task template categories** -- Organize templates by technology type (Fiber, Radio, Power) and operation type (Installation, Maintenance, Migration, Troubleshooting) for quick filtering.
+  - context: `Section 9: Helpdesk & Scheduling | 9.12 Task Templates | Task Template Library`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:179`
+- [ ] **Add task template auto-population** -- When creating a new scheduled task, allow selection of a template that pre-fills the task description, checklist items, estimated duration, required skills, and equipment list.
+  - context: `Section 9: Helpdesk & Scheduling | 9.12 Task Templates | Task Template Library`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:180`
+- [ ] **Add composite task templates** -- Support templates that create multiple linked sub-tasks (e.g., "FIBER (ALL)" creates a sequence of fiber-specific tasks from survey through sign-off).
+  - context: `Section 9: Helpdesk & Scheduling | 9.12 Task Templates | Task Template Library`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:181`
+- [ ] **Add checklist template management** -- Create a library of reusable checklists that can be attached to scheduled tasks and service orders. Each checklist contains ordered items that technicians must complete and mark off in the field.
+  - context: `Section 9: Helpdesk & Scheduling | 9.13 Checklist Templates | Checklist Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:192`
+- [ ] **Add ISP-specific checklist items** -- Pre-seed checklist templates with ISP field work items: connect/disconnect client, signal verification, equipment installation/removal/repair, cable installation, power confirmation, NMS registration, VPN setup, and customer sign-off.
+  - context: `Section 9: Helpdesk & Scheduling | 9.13 Checklist Templates | Checklist Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:193`
+- [ ] **Add checklist completion tracking** -- Track checklist completion percentage on task detail and list views. Require all mandatory checklist items to be completed before a task can be marked as finished.
+  - context: `Section 9: Helpdesk & Scheduling | 9.13 Checklist Templates | Checklist Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:194`
+- [ ] **Add checklist photo evidence** -- Allow technicians to attach photos to individual checklist items as proof of completion (e.g., photo of signal meter reading, photo of installed equipment, photo of cable routing).
+  - context: `Section 9: Helpdesk & Scheduling | 9.13 Checklist Templates | Checklist Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:195`
+- [ ] **Add checklist-to-workflow integration** -- Link checklist templates to workflow steps so that the appropriate checklist is automatically attached when a task reaches a specific workflow stage.
+  - context: `Section 9: Helpdesk & Scheduling | 9.13 Checklist Templates | Checklist Management`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:196`
+- [ ] **Add project type management** -- Define project types that represent the technology domain: Fiber, Radio, Power, Business Development, and a Default catch-all. Use types for team routing and skill matching.
+  - context: `Section 9: Helpdesk & Scheduling | 9.14 Project Types & Categories | Project Classification`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:207`
+- [ ] **Add project category management** -- Define project categories that represent the work activity: New Installation, Troubleshooting, Migration, Retrieval, Fiber Maintenance, Radio Maintenance. Use categories for reporting and SLA assignment.
+  - context: `Section 9: Helpdesk & Scheduling | 9.14 Project Types & Categories | Project Classification`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:208`
+- [ ] **Add two-dimensional project classification** -- Support filtering and reporting by both type (technology) and category (activity), enabling queries like "all Fiber Installation projects" or "all Troubleshooting tasks regardless of technology".
+  - context: `Section 9: Helpdesk & Scheduling | 9.14 Project Types & Categories | Project Classification`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:209`
+- [ ] **Add project type/category defaults on service orders** -- Automatically set project type and category when creating service orders based on the subscription type and order reason, reducing manual data entry.
+  - context: `Section 9: Helpdesk & Scheduling | 9.14 Project Types & Categories | Project Classification`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:210`
+- [ ] **Add team-level scheduling notifications** -- Enable/disable notifications at the team level so all team members receive relevant task updates for their assigned group.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:221`
+- [ ] **Add task assignment notifications** -- Send Email + SMS notifications when a task is assigned to a technician, using configurable message templates with task details, location, and scheduled time.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:222`
+- [ ] **Add task change notifications** -- Send notifications on configurable events: project change, related task change, priority change, status change, scheduling change, and customer linkage changes. Allow individual toggle per event type.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:223`
+- [ ] **Add task comment and attachment notifications** -- Notify watchers when comments are added/edited/deleted and when attachments are added/deleted on tasks, keeping the team informed of activity.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:224`
+- [ ] **Add worklog notifications** -- Notify relevant parties when technicians log time against a task, providing visibility into field work progress.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:225`
+- [ ] **Add checklist change notifications** -- Notify watchers when checklist items are added, completed, or unchecked, providing real-time progress updates on field work.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:226`
+- [ ] **Add task reminder notifications** -- Send configurable reminders before scheduled task time (e.g., 3 hours before, 1 hour before, 30 minutes before) via Email + SMS to ensure technicians are prepared and en route.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:227`
+- [ ] **Add daily task digest notifications** -- Send a daily digest email at a configurable time (e.g., 16:00) summarizing the day's completed, pending, and upcoming tasks for each team or individual.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:228`
+- [ ] **Add task watcher auto-enrollment** -- Automatically add the task reporter (creator) to the watcher list, with an option to disable this behavior. Allow manual addition/removal of watchers.
+  - context: `Section 9: Helpdesk & Scheduling | 9.15 Scheduling Notifications | Scheduling Notification System`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:229`
+- [ ] **Add ticket-to-task conversion** -- Allow agents to create a scheduled field task directly from a helpdesk ticket with one click, pre-populating the task with ticket details, customer information, and location.
+  - context: `Section 9: Helpdesk & Scheduling | 9.16 Helpdesk-Scheduling Integration | Cross-Module Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:240`
+- [ ] **Add linked ticket/task visibility** -- When a ticket has an associated scheduled task (and vice versa), display a linked item panel showing status, assignee, and scheduled time on both the ticket detail and task detail views.
+  - context: `Section 9: Helpdesk & Scheduling | 9.16 Helpdesk-Scheduling Integration | Cross-Module Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:241`
+- [ ] **Add ticket resolution from task completion** -- When a linked scheduled task is completed, automatically prompt or auto-close the associated helpdesk ticket with a completion note summarizing the field work performed.
+  - context: `Section 9: Helpdesk & Scheduling | 9.16 Helpdesk-Scheduling Integration | Cross-Module Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:242`
+- [ ] **Add unified timeline view** -- On the customer detail page, show a combined timeline of helpdesk tickets and scheduled tasks, providing a complete service history for each subscriber.
+  - context: `Section 9: Helpdesk & Scheduling | 9.16 Helpdesk-Scheduling Integration | Cross-Module Integration`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/09_helpdesk_scheduling.md:243`
+
+## 10_leads_inventory.md
+Unchecked items: 85
+
+- [ ] **Create a `Lead` model** with fields: id (UUID), full_name, email, phone_number, source, partner/reseller, location, city, street, zip_code, geo_data, score (numeric lead scoring), billing_email, status (enum), pipeline_stage_id (FK), owner_id (FK to User), organization_id (FK), notes, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:21`
+- [ ] **Create a `LeadPipelineStage` model** with fields: id (UUID), name (e.g., "New Enquiry", "Contacted"), stage_type (enum: new, in_progress, won, lost), position (integer for ordering), organization_id, is_default (boolean), created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:22`
+- [ ] **Build pipeline stage CRUD service** (`app/services/lead_pipeline.py`) with create, list (ordered by position), update, delete, and reorder operations
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:23`
+- [ ] **Build lead pipeline configuration UI** at `/admin/leads/pipeline` showing a table of stages with drag-to-reorder or up/down position controls, edit/delete actions, and an "Add Stage" button
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:24`
+- [ ] **Implement default pipeline seeding** with 6 stages on organization creation: New Enquiry (new), Contacted (in_progress), Qualification (in_progress), Activation (in_progress), Won (won), Lost (lost)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:25`
+- [ ] **Map pipeline stages to lead statuses** so that moving a lead to a "Won" stage automatically sets the lead's status to "won" and moving to "Lost" sets it to "lost"
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:26`
+- [ ] **Add pipeline stage association to quote workflow** so that quote acceptance/denial automatically advances the lead through the pipeline (e.g., quote accepted -> Won stage)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.1 Lead Pipeline Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:27`
+- [ ] **Create a `LeadFieldConfig` model** for customizable lead fields: id, field_name, field_label, field_type (enum: text, email, phone, select, number, date, geo), is_required (boolean), is_visible (boolean), position (integer), category (enum: main, additional), organization_id, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:38`
+- [ ] **Build lead field configuration UI** at `/admin/leads/settings/fields` with a table listing all configured fields, their type, position controls, visibility toggles, and delete actions
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:39`
+- [ ] **Support custom fields** beyond the default set -- allow admins to add organization-specific fields (e.g., "Referrer", "Building Name", "Apartment Number") with configurable types
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:40`
+- [ ] **Implement field ordering** with drag-to-reorder or up/down arrow controls that persist position in the database
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:41`
+- [ ] **Add a "Default fields shown" setting** to control how many fields are visible by default on the lead list view before requiring column expansion
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:42`
+- [ ] **Seed default lead fields** on organization creation: Full name, Phone number, Email, Source, Location, City, Street, ZIP Code, Geo data, Score, Date added, Billing email
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.2 Lead Fields Configuration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:43`
+- [ ] **Create a `LeadSignupWidget` model** with fields: id, title, button_text, thank_you_message, use_https, default_partner_id, default_owner_id, default_location, default_pipeline_stage_id, show_tariff_selection, tariff_selection_required, include_vat_in_price, show_terms_checkbox, organization_id, is_active, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:54`
+- [ ] **Create a `LeadSignupWidgetField` model** linking fields to widgets: id, widget_id (FK), field_config_id (FK), position, is_required, is_visible
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:55`
+- [ ] **Build a public lead capture endpoint** at `/public/leads/signup/<widget_id>` that renders a standalone, embeddable form styled with the ISP's branding
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:56`
+- [ ] **Generate embeddable widget code** (iframe or JavaScript snippet) that ISPs can paste into their external websites to capture leads directly into DotMac Sub
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:57`
+- [ ] **Build widget configuration UI** at `/admin/leads/widgets` for managing multiple signup widgets with different configurations per location, partner, or campaign
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:58`
+- [ ] **Allow tariff/offer selection on the signup form** so prospects can choose their desired service plan during lead submission, pre-populating the subscription intent
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:59`
+- [ ] **Auto-assign leads** to the configured pipeline stage, owner, partner, and location based on widget settings
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:60`
+- [ ] **Display a configurable thank-you message** after form submission and optionally redirect to a custom URL
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:61`
+- [ ] **Support Terms & Conditions checkbox** with a link to the organization's legal documents (integrating with existing DotMac Sub legal document management)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.3 Signup Widget (Public Lead Capture Form) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:62`
+- [ ] **Create a `LeadNotificationConfig` model** for per-organization notification settings: id, organization_id, due_notifications_enabled, due_notification_time, due_notification_template_id, reminder_template_id, quote_auto_notify, quote_notify_channel (enum: email, sms, both), quote_email_template_id, quote_sms_template_id, quote_email_bcc, quote_send_delay_hours, notification_days (JSON array), notification_hours (JSON array), admin_notify_channel, admin_accept_template_id, admin_reject_template_id
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:73`
+- [ ] **Implement lead due date notifications** via a Celery task (`app/tasks/leads.py`) that runs daily, checks for leads with upcoming due dates, and sends notifications at the configured time
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:74`
+- [ ] **Implement quote notification auto-sending** that triggers after a quote is created, respecting the configured delay, allowed days, and allowed hours before dispatching
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:75`
+- [ ] **Add admin notification on lead accept/reject** so that when a prospect accepts or rejects a quote, the assigned admin/owner receives an email with the appropriate template
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:76`
+- [ ] **Implement CRM reminder notifications** that alert lead owners about follow-up tasks on leads that have been idle for a configurable period
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:77`
+- [ ] **Integrate with existing DotMac Sub notification system** by creating new EventType values: LEAD_CREATED, LEAD_UPDATED, LEAD_STAGE_CHANGED, QUOTE_CREATED, QUOTE_ACCEPTED, QUOTE_REJECTED, LEAD_CONVERTED
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:78`
+- [ ] **Support notification scheduling** with configurable business days and business hours to prevent sending lead-related notifications outside working hours
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.4 Lead Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:79`
+- [ ] **Create a `Quote` model** with fields: id (UUID), quote_number (string, auto-generated), lead_id (FK), organization_id, status (enum: draft, sent, on_review, accepted, denied, expired), items (JSON or related QuoteItem table), subtotal, tax_amount, total, currency, expiration_date, created_by (FK to User), notes, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:90`
+- [ ] **Create a `QuoteItem` model** with fields: id, quote_id (FK), description, offer_id (FK, optional -- link to catalog offer), quantity, unit_price, discount_percent, line_total
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:91`
+- [ ] **Implement configurable quote numbering** with a pattern system supporting variables: {year}, {month}, {day}, {next} (auto-incrementing sequence), {lead_id}, {partner_id}, {location_id}, {rand_string}, {rand_number}
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:92`
+- [ ] **Add quote expiration setting** at the organization level (default: 10 days), with automatic status transition to "expired" via a Celery task that runs daily
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:93`
+- [ ] **Build quote CRUD service** (`app/services/quotes.py`) with create, list, get, update, send, accept, reject, and expire operations
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:94`
+- [ ] **Build quote management UI** at `/admin/leads/<lead_id>/quotes` for creating and managing quotes associated with a lead
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:95`
+- [ ] **Generate PDF quotes** using the existing invoice PDF generation pattern, branded with the organization's logo and details
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:96`
+- [ ] **Link quotes to catalog offers** so that line items can reference existing service plans, ensuring pricing consistency
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.5 Quote & Finance Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:97`
+- [ ] **Implement OTP-based quote verification** so that when a prospect clicks accept/reject on a quote, they must verify their identity via a one-time password sent to their email or phone
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.6 Quote Accept Settings (OTP Verification) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:108`
+- [ ] **Create a `QuoteOTP` model** with fields: id, quote_id, code (hashed), channel (enum: email, sms), expires_at, is_used, created_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.6 Quote Accept Settings (OTP Verification) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:109`
+- [ ] **Add OTP settings to organization configuration** with configurable validity period (default: 1 hour), email template, and SMS text template
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.6 Quote Accept Settings (OTP Verification) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:110`
+- [ ] **Build a public quote review page** at `/public/quotes/<token>` where prospects can view the quote details and accept or reject with OTP verification
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.6 Quote Accept Settings (OTP Verification) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:111`
+- [ ] **Integrate OTP delivery** with existing DotMac Sub email and SMS services
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.6 Quote Accept Settings (OTP Verification) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:112`
+- [ ] **Implement IMAP email integration for leads** that monitors a configured mailbox and automatically creates or updates leads based on incoming emails
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:123`
+- [ ] **Add IMAP connection settings** to the lead configuration: IMAP server, port, username, password (encrypted via credential_crypto), SSL toggle, folder to monitor
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:124`
+- [ ] **Implement email open/click tracking** by embedding tracking pixels in outbound lead emails and tracking link click-throughs
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:125`
+- [ ] **Create an `EmailTracking` model** with fields: id, lead_id, email_message_id, event_type (enum: sent, delivered, opened, clicked, bounced), event_data (JSON), tracked_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:126`
+- [ ] **Build email tracking dashboard** showing open rates, click rates, and bounce rates for lead-related communications
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:127`
+- [ ] **Auto-associate inbound emails with leads** by matching sender email address to existing lead records
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.7 IMAP Integration | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:128`
+- [ ] **Implement lead-to-subscriber conversion** that creates a Subscriber record from a Lead record, transferring all relevant data (name, email, phone, address, location, selected tariff/offer)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:139`
+- [ ] **Support multiple conversion types**: (a) Convert to active subscriber without invoice, (b) Convert to active subscriber with invoice auto-generated, (c) Convert to new subscriber with proforma invoice
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:140`
+- [ ] **Add conversion settings to organization configuration**: default conversion type, default subscriber status after conversion, default "won" pipeline status
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:141`
+- [ ] **Automatically set lead pipeline stage to "Won"** upon successful conversion
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:142`
+- [ ] **Create a service order on conversion** that triggers the existing provisioning workflow for the new subscriber's selected service plan
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:143`
+- [ ] **Preserve lead history** after conversion by linking the converted subscriber back to the original lead record for CRM reporting
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:144`
+- [ ] **Build a conversion confirmation dialog** at `/admin/leads/<lead_id>/convert` that shows a summary of what will be created (subscriber, subscription, invoice) and allows the admin to review before confirming
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:145`
+- [ ] **Support bulk lead conversion** for scenarios where multiple qualified leads need to be converted simultaneously (e.g., new estate rollout)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.8 Lead Conversion Settings | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:146`
+- [ ] **Create a `StockLocation` model** with fields: id (UUID), name, location_type (enum: warehouse, branch, field_office, vehicle), address, city, state, geo_coordinates, contact_person, contact_phone, organization_id, is_active, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.9 Inventory -- Stock Locations | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:157`
+- [ ] **Build stock location CRUD service** (`app/services/inventory.py`) with create, list, get, update, and delete (soft-delete) operations
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.9 Inventory -- Stock Locations | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:158`
+- [ ] **Build stock location management UI** at `/admin/inventory/locations` with a table showing all locations, type badges, and edit/delete actions
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.9 Inventory -- Stock Locations | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:159`
+- [ ] **Support multiple location types** beyond just "Warehouse" -- include Branch, Field Office, Technician Vehicle for tracking equipment in transit or assigned to field teams
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.9 Inventory -- Stock Locations | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:160`
+- [ ] **Link stock locations to POP sites** by allowing a stock location to be associated with an existing network POP site for geographic context
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.9 Inventory -- Stock Locations | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:161`
+- [ ] **Create an `InventoryCategory` model** with fields: id (UUID), title, description, parent_category_id (FK, nullable -- for hierarchical categories), organization_id, is_active, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.10 Inventory -- Equipment Categories | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:172`
+- [ ] **Build inventory category CRUD service** with standard operations and support for hierarchical nesting (e.g., CPE -> ONU, CPE -> Router)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.10 Inventory -- Equipment Categories | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:173`
+- [ ] **Build category management UI** at `/admin/inventory/categories` with a table listing categories, edit/delete actions, and an "Add Category" button
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.10 Inventory -- Equipment Categories | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:174`
+- [ ] **Seed default ISP categories** on organization creation: Router, Switch, Access Point, UPS, Server, CPE, ONU/ONT, Fiber Cable, Splitter, Patch Panel, SFP Module, Media Converter, Other
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.10 Inventory -- Equipment Categories | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:175`
+- [ ] **Link inventory categories to network device types** so that when a CPE is assigned from inventory to a subscriber, the corresponding network device record is created or updated
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.10 Inventory -- Equipment Categories | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:176`
+- [ ] **Create an `InventoryItem` model** with fields: id (UUID), name, sku, category_id (FK), stock_location_id (FK), quantity_on_hand, quantity_reserved, quantity_available (computed), low_stock_threshold, unit_cost, serial_number_tracking (boolean), organization_id, is_active, created_at, updated_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:187`
+- [ ] **Create an `InventoryTransaction` model** for tracking stock movements: id, item_id (FK), transaction_type (enum: receive, issue, transfer, adjust, return), quantity, from_location_id, to_location_id, reference_type (enum: service_order, subscriber, manual), reference_id, performed_by (FK to User), notes, created_at
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:188`
+- [ ] **Implement low stock notification alerts** via a Celery task that checks inventory levels against per-item thresholds and sends notifications to configured administrators
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:189`
+- [ ] **Add low stock settings to organization configuration**: enable/disable toggle, default threshold, notification channel (email/SMS/both), notification template, recipient list
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:190`
+- [ ] **Build inventory notification settings UI** at `/admin/inventory/settings/notifications` with threshold configuration, template selection, and recipient management
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:191`
+- [ ] **Integrate with existing DotMac Sub notification system** by adding EventType values: INVENTORY_LOW_STOCK, INVENTORY_OUT_OF_STOCK, INVENTORY_RECEIVED, INVENTORY_ISSUED
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:192`
+- [ ] **Support "Update existing products" bulk action** to apply new notification settings to all existing inventory items at once
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.11 Inventory -- Low Stock Notifications | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:193`
+- [ ] **Build inventory list view** at `/admin/inventory` showing all items with columns: SKU, Name, Category, Location, Quantity On Hand, Quantity Available, Status (in-stock/low/out-of-stock), Actions
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:203`
+- [ ] **Build inventory item detail view** at `/admin/inventory/<id>` showing item details, stock levels across locations, transaction history, and linked subscriber assignments
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:204`
+- [ ] **Implement stock receive workflow** for recording incoming equipment deliveries with quantity, supplier reference, and location
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:205`
+- [ ] **Implement stock issue workflow** for assigning equipment to subscribers or service orders, decrementing available quantity
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:206`
+- [ ] **Implement stock transfer workflow** for moving equipment between stock locations (e.g., warehouse to branch to technician vehicle)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:207`
+- [ ] **Implement serial number tracking** for high-value items (routers, ONTs, switches) where each unit is individually tracked by serial number and MAC address
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:208`
+- [ ] **Link inventory to service orders** so that when a provisioning service order is created, required equipment is reserved from inventory and issued upon installation completion
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:209`
+- [ ] **Link inventory to subscriber records** so that each subscriber's detail page shows assigned equipment (CPE, ONU, router) with serial numbers
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:210`
+- [ ] **Build inventory dashboard** with KPI cards: Total items, Low stock items, Out of stock items, Items issued this month, and a category breakdown chart
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:211`
+- [ ] **Support barcode/QR code scanning** for stock receive and issue operations (future enhancement for mobile field teams)
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:212`
+- [ ] **Implement inventory import from CSV** for bulk loading initial stock records
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:213`
+- [ ] **Build inventory reports** showing stock valuation, movement history, turnover rates, and per-location breakdowns
+  - context: `Section 10: Leads/CRM & Inventory Management | 10.12 Inventory -- Core Inventory Management (Inferred from Configuration) | Proposed Improvements for DotMac Sub`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/10_leads_inventory.md:214`
+
+## 11_integrations_tools.md
+Unchecked items: 8
+
+- [ ] Add a VoIP/PBX integration connector supporting 3CX and FreePBX platforms, enabling click-to-call from subscriber detail pages and automatic call logging
+  - context: `Section 11: Integrations & Admin Tools | 11.3 Third-Party Platform Integrations | Screenshot: 3CX Integration (VoIP/PBX)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:82`
+- [ ] Build an embedded integration frame component that loads external integration UIs within the DotMac admin panel with Reload and "Open in new window" controls
+  - context: `Section 11: Integrations & Admin Tools | 11.3 Third-Party Platform Integrations | Screenshot: 3CX Integration (VoIP/PBX)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:83`
+- [ ] Implement connection health monitoring for embedded integrations that shows a clear error state (with troubleshooting guidance) when the external service is unreachable
+  - context: `Section 11: Integrations & Admin Tools | 11.3 Third-Party Platform Integrations | Screenshot: 3CX Integration (VoIP/PBX)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:84`
+- [ ] Extend the existing payment provider framework (currently supporting Paystack and Flutterwave) to add Stripe as a payment gateway connector with support for card payments, bank transfers, and recurring billing via Stripe Subscriptions
+  - context: `Section 11: Integrations & Admin Tools | 11.4 Payment Gateway Integrations | Screenshots: Add-ons Marketplace (payment providers visible)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:117`
+- [ ] Add a PayPal integration connector supporting PayPal Checkout, PayPal subscriptions, and IPN (Instant Payment Notification) webhooks
+  - context: `Section 11: Integrations & Admin Tools | 11.4 Payment Gateway Integrations | Screenshots: Add-ons Marketplace (payment providers visible)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:118`
+- [ ] Add a Remita integration connector (important for Nigerian ISPs) supporting: invoice generation, payment collection, direct debit mandates, and payment status webhooks
+  - context: `Section 11: Integrations & Admin Tools | 11.4 Payment Gateway Integrations | Screenshots: Add-ons Marketplace (payment providers visible)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:119`
+- [ ] Add a SagePay (Opayo) integration connector for South African market ISPs
+  - context: `Section 11: Integrations & Admin Tools | 11.4 Payment Gateway Integrations | Screenshots: Add-ons Marketplace (payment providers visible)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:120`
+- [ ] Add a Moneris integration connector for Canadian market ISPs
+  - context: `Section 11: Integrations & Admin Tools | 11.4 Payment Gateway Integrations | Screenshots: Add-ons Marketplace (payment providers visible)`
+  - source: `/root/projects/dotmac_sub/docs/feature_improvements/11_integrations_tools.md:121`

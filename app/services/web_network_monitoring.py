@@ -15,8 +15,19 @@ logger = logging.getLogger(__name__)
 _VICTORIAMETRICS_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 
 
+def active_monitoring_devices(db: Session) -> list:
+    """Return active monitoring devices for health refresh jobs."""
+    from app.models.network_monitoring import NetworkDevice
+
+    return (
+        db.query(NetworkDevice)
+        .filter(NetworkDevice.is_active.is_(True))
+        .all()
+    )
+
+
 def monitoring_page_data(
-    db: Session, *, format_duration, format_bps
+    db: Session, *, format_duration, format_bps, query: str | None = None
 ) -> dict[str, object]:
     """Return payload for network monitoring dashboard.
 
@@ -29,6 +40,7 @@ def monitoring_page_data(
         db,
         format_duration=format_duration,
         format_bps=format_bps,
+        query=query,
     )
 
     # Add bandwidth context
@@ -52,6 +64,9 @@ def monitoring_page_data(
 
     # Network activity feed (Phase 6E — recent audit events)
     data["network_activity"] = _get_network_activity_feed(db, limit=15)
+
+    data["query"] = (query or "").strip()
+    data["last_refreshed_at"] = datetime.now(UTC)
 
     return data
 

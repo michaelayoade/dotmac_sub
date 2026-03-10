@@ -1,6 +1,9 @@
 """Tests for TR-069 service."""
 
 from datetime import UTC, datetime
+from unittest.mock import patch
+
+import pytest
 
 from app.models.tr069 import Tr069Event, Tr069JobStatus
 from app.schemas.tr069 import (
@@ -14,6 +17,8 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
 )
 from app.services import tr069 as tr069_service
+from app.services import web_network_tr069 as web_network_tr069_service
+from app.services.genieacs import GenieACSError
 
 
 def test_create_acs_server(db_session):
@@ -342,3 +347,57 @@ def test_delete_acs_server(db_session):
     tr069_service.acs_servers.delete(db_session, server.id)
     db_session.refresh(server)
     assert server.is_active is False
+
+
+def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
+    """Sync should not fail when GenieACS _id has long OUI/product_class segments."""
+    fake_devices = [
+        {
+            "_id": "DISCOVERYSERVICE-DISCOVERYSERVICE-brxvwNZRjQ",
+            "_lastInform": "2026-03-03T23:54:59.764Z",
+        }
+    ]
+
+    with patch("app.services.tr069.GenieACSClient") as mock_client_cls:
+        client = mock_client_cls.return_value
+        client.list_devices.return_value = fake_devices
+        # Keep parser behavior that returns long segments.
+        client.parse_device_id.return_value = (
+            "DISCOVERYSERVICE",
+            "DISCOVERYSERVICE",
+            "brxvwNZRjQ",
+        )
+        client.extract_parameter_value.return_value = None
+
+        result = tr069_service.cpe_devices.sync_from_genieacs(db_session, str(acs_server.id))
+
+    assert result["created"] == 1
+    created = tr069_service.cpe_devices.list(
+        db_session,
+        acs_server_id=str(acs_server.id),
+        is_active=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=1,
+        offset=0,
+    )[0]
+    assert created.oui == "DISCOVER"
+    assert created.product_class == "DISCOVERYSERVICE"
+
+
+def test_create_acs_server_requires_reachable_genieacs(db_session):
+    """Create should validate GenieACS endpoint before persisting."""
+    values = {
+        "name": "GenieACS",
+        "base_url": "http://localhost:7557",
+        "is_active": True,
+        "notes": None,
+    }
+
+    with patch("app.services.web_network_tr069.GenieACSClient") as mock_client_cls:
+        mock_client_cls.return_value.count_devices.side_effect = GenieACSError("Request error: Connection refused")
+
+        with pytest.raises(ValueError) as exc_info:
+            web_network_tr069_service.create_acs_server(db_session, values)
+
+    assert "Failed to connect to GenieACS" in str(exc_info.value)

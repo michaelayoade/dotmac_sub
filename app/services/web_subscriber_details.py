@@ -4,11 +4,19 @@ import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy.orm import Session
+from sqlalchemy import String, cast, select
+from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus
 from app.models.catalog import ContractTerm, OfferStatus, SubscriptionStatus
-from app.models.network import FdhCabinet, FiberSpliceClosure
+from app.models.network import (
+    CPEDevice,
+    FdhCabinet,
+    FiberSpliceClosure,
+    OntAssignment,
+)
+from app.models.network_monitoring import SpeedTestResult
 from app.models.subscriber import Address, Subscriber, SubscriberChannel
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import audit as audit_service
@@ -18,6 +26,18 @@ from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
+
+
+def _format_attachment_size(size_bytes: object) -> str:
+    try:
+        size = int(str(size_bytes))
+    except (TypeError, ValueError):
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
 
 
 def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -173,6 +193,75 @@ def build_subscriber_geocode_target(primary_address):
     }
 
 
+def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
+    """Collect ONT/CPE devices and direct management links for subscriber detail."""
+    equipment: list[dict[str, object]] = []
+
+    ont_assignments = (
+        db.query(OntAssignment)
+        .options(joinedload(OntAssignment.ont_unit))
+        .filter(
+            OntAssignment.subscriber_id == subscriber_id,
+            OntAssignment.active.is_(True),
+        )
+        .order_by(OntAssignment.created_at.desc())
+        .all()
+    )
+    for assignment in ont_assignments:
+        ont = assignment.ont_unit
+        if not ont:
+            continue
+        status_value = (
+            ont.online_status.value
+            if getattr(ont, "online_status", None) is not None
+            and hasattr(ont.online_status, "value")
+            else str(getattr(ont, "online_status", "") or "")
+        ).strip().lower()
+        equipment.append(
+            {
+                "type": "ONT",
+                "model": ont.model or ont.name or "ONT",
+                "serial": ont.serial_number or "-",
+                "online": status_value == "online",
+                "detail_url": f"/admin/network/onts/{ont.id}",
+                "tr069_url": f"/admin/network/onts/{ont.id}?tab=tr069",
+            }
+        )
+
+    cpe_rows = db.execute(
+        select(
+            CPEDevice.id,
+            cast(CPEDevice.device_type, String).label("device_type"),
+            cast(CPEDevice.status, String).label("status"),
+            CPEDevice.model,
+            CPEDevice.vendor,
+            CPEDevice.serial_number,
+            CPEDevice.mac_address,
+        )
+        .where(CPEDevice.subscriber_id == subscriber_id)
+        .order_by(CPEDevice.created_at.desc())
+    ).all()
+    for cpe in cpe_rows:
+        cpe_type = str(getattr(cpe, "device_type", "") or "CPE")
+        status_value = str(getattr(cpe, "status", "") or "").strip().lower()
+        equipment.append(
+            {
+                "type": cpe_type.upper(),
+                "model": (cpe.model or cpe.vendor or cpe_type.upper()),
+                "serial": (cpe.serial_number or cpe.mac_address or "-"),
+                "online": status_value == "active",
+                "detail_url": f"/admin/network/cpes/{cpe.id}",
+            }
+        )
+
+    primary_ont = next((item for item in equipment if item.get("type") == "ONT"), None)
+    return {
+        "equipment": equipment,
+        "primary_ont_url": (primary_ont or {}).get("detail_url"),
+        "primary_ont_tr069_url": (primary_ont or {}).get("tr069_url"),
+    }
+
+
 def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     """Collect subscriber detail page data from multiple services."""
     subscriptions = []
@@ -182,7 +271,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             db=db,
             subscriber_id=str(subscriber.id),
             offer_id=None,
-            status=None,
+            status=SubscriptionStatus.active.value,
             order_by="created_at",
             order_dir="desc",
             limit=10,
@@ -240,10 +329,13 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 offset=0,
             )
             balance_due = sum(
-                Decimal(str(getattr(inv, "balance_due", 0) or 0))
-                for inv in invoices
-                if inv.status
-                in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+                (
+                    Decimal(str(getattr(inv, "balance_due", 0) or 0))
+                    for inv in invoices
+                    if inv.status
+                    in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+                ),
+                Decimal("0.00"),
             )
             credit_notes = billing_service.credit_notes.list(
                 db=db,
@@ -257,9 +349,12 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 offset=0,
             )
             available_credit = sum(
-                Decimal(str(note.total or 0)) - Decimal(str(note.applied_total or 0))
-                for note in credit_notes
-                if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+                (
+                    Decimal(str(note.total or 0)) - Decimal(str(note.applied_total or 0))
+                    for note in credit_notes
+                    if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+                ),
+                Decimal("0.00"),
             )
             current_balance = balance_due + available_credit
     except Exception:
@@ -350,6 +445,8 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
 
     map_data = build_subscriber_map_data(db, subscriber, primary_address)
     geocode_target = build_subscriber_geocode_target(primary_address)
+    speedtest_snapshot = _build_speedtest_snapshot(db, subscriber_id, subscriptions)
+    equipment_snapshot = _build_equipment_snapshot(db, subscriber_id)
 
     return {
         "accounts": accounts,
@@ -364,6 +461,88 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         "organization_members": organization_members,
         "map_data": map_data,
         "geocode_target": geocode_target,
+        **speedtest_snapshot,
+        **equipment_snapshot,
+    }
+
+
+def _build_speedtest_snapshot(db: Session, subscriber_id, subscriptions: list) -> dict[str, object]:
+    plan_download = 0.0
+    plan_upload = 0.0
+    for subscription in subscriptions:
+        offer = getattr(subscription, "offer", None)
+        if not offer:
+            continue
+        plan_download = float(getattr(offer, "speed_download_mbps", 0) or 0)
+        plan_upload = float(getattr(offer, "speed_upload_mbps", 0) or 0)
+        if plan_download > 0 or plan_upload > 0:
+            break
+
+    try:
+        tests = (
+            db.query(SpeedTestResult)
+            .filter(SpeedTestResult.subscriber_id == subscriber_id)
+            .order_by(SpeedTestResult.tested_at.desc())
+            .limit(30)
+            .all()
+        )
+    except ProgrammingError as exc:
+        # Some environments are behind on migrations and may not have speed_test_results yet.
+        # Fail open so subscriber detail still renders.
+        db.rollback()
+        if "speed_test_results" in str(exc).lower():
+            return {
+                "speedtests": [],
+                "speedtest_performance_rows": [],
+                "speedtest_chart": {"labels": [], "download": [], "upload": []},
+                "speedtest_plan": {
+                    "download_mbps": plan_download,
+                    "upload_mbps": plan_upload,
+                },
+                "speedtest_underperforming_count": 0,
+            }
+        raise
+
+    performance_rows = []
+    underperforming_count = 0
+    for test in tests:
+        down = float(test.download_mbps or 0)
+        up = float(test.upload_mbps or 0)
+        down_ratio = (down / plan_download) if plan_download > 0 else None
+        up_ratio = (up / plan_upload) if plan_upload > 0 else None
+        performance_ratio = min(
+            [ratio for ratio in (down_ratio, up_ratio) if ratio is not None] or [1.0]
+        )
+        is_underperforming = performance_ratio < 0.8
+        if is_underperforming:
+            underperforming_count += 1
+        performance_rows.append(
+            {
+                "test": test,
+                "down_ratio_pct": round((down_ratio or 0) * 100, 1) if down_ratio is not None else None,
+                "up_ratio_pct": round((up_ratio or 0) * 100, 1) if up_ratio is not None else None,
+                "is_underperforming": is_underperforming,
+            }
+        )
+
+    chart_source = list(reversed(tests[:12]))
+    chart = {
+        "labels": [
+            item.tested_at.strftime("%m-%d %H:%M") if item.tested_at else ""
+            for item in chart_source
+        ],
+        "download": [round(float(item.download_mbps or 0), 2) for item in chart_source],
+        "upload": [round(float(item.upload_mbps or 0), 2) for item in chart_source],
+    }
+    return {
+        "speedtests": tests,
+        "speedtest_performance_rows": performance_rows,
+        "speedtest_chart": chart,
+        "speedtest_plan": {
+            "download_mbps": plan_download,
+            "upload_mbps": plan_upload,
+        },
+        "speedtest_underperforming_count": underperforming_count,
     }
 
 
@@ -404,6 +583,23 @@ def build_subscriber_timeline(db: Session, subscriber_id):
         comment_text = str(metadata.get("comment") or "").strip()
         is_todo = bool(metadata.get("is_todo"))
         is_completed = bool(metadata.get("is_completed"))
+        attachments: list[dict[str, str]] = []
+        raw_attachments = metadata.get("attachments")
+        if isinstance(raw_attachments, list):
+            for item in raw_attachments:
+                if not isinstance(item, dict):
+                    continue
+                attachment_id = str(item.get("id") or "").strip()
+                if not attachment_id:
+                    continue
+                filename = str(item.get("filename") or "Attachment").strip() or "Attachment"
+                attachments.append(
+                    {
+                        "id": attachment_id,
+                        "filename": filename,
+                        "size_label": _format_attachment_size(item.get("size")),
+                    }
+                )
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
         if comment_text:
@@ -416,8 +612,10 @@ def build_subscriber_timeline(db: Session, subscriber_id):
                 "type": "audit",
                 "title": (event.action or "Activity").replace("_", " ").title(),
                 "detail": detail,
+                "is_comment": bool(comment_text),
                 "is_todo": is_todo,
                 "is_completed": is_completed,
+                "attachments": attachments,
                 "time": (
                     event.occurred_at.strftime("%b %d, %Y %H:%M")
                     if event.occurred_at

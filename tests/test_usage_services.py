@@ -3,9 +3,12 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from app.models.catalog import AccessCredential
 from app.models.usage import UsageSource
 from app.schemas.usage import (
     QuotaBucketCreate,
+    RadiusAccountingSessionCreate,
+    RadiusAccountingSessionUpdate,
     QuotaBucketUpdate,
     UsageRecordCreate,
 )
@@ -86,6 +89,73 @@ def test_list_sessions_by_subscription(db_session, subscription):
     )
     # Just verify the list call works (may return empty list)
     assert isinstance(sessions, list)
+
+
+def test_radius_accounting_session_create_writes_back_subscription_mac(
+    db_session, subscription
+):
+    credential = AccessCredential(
+        subscriber_id=subscription.subscriber_id,
+        username="10005030",
+        secret_hash="hashed-secret",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    db_session.refresh(credential)
+
+    session = usage_service.radius_accounting_sessions.create(
+        db_session,
+        RadiusAccountingSessionCreate(
+            subscription_id=subscription.id,
+            access_credential_id=credential.id,
+            session_id="acct-start-1",
+            status_type="start",
+            session_start=datetime.now(UTC),
+            calling_station_id="aabbccddeeff",
+        ),
+    )
+
+    assert session.subscription_id == subscription.id
+    db_session.refresh(subscription)
+    assert subscription.mac_address == "AA:BB:CC:DD:EE:FF"
+
+
+def test_radius_accounting_session_update_writes_back_subscription_mac(
+    db_session, subscription
+):
+    credential = AccessCredential(
+        subscriber_id=subscription.subscriber_id,
+        username="10005030",
+        secret_hash="hashed-secret",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    db_session.refresh(credential)
+
+    session = usage_service.radius_accounting_sessions.create(
+        db_session,
+        RadiusAccountingSessionCreate(
+            subscription_id=subscription.id,
+            access_credential_id=credential.id,
+            session_id="acct-start-2",
+            status_type="start",
+            session_start=datetime.now(UTC),
+        ),
+    )
+
+    usage_service.radius_accounting_sessions.update(
+        db_session,
+        str(session.id),
+        RadiusAccountingSessionUpdate(
+            calling_station_id="aa:bb:cc:dd:ee:11",
+            output_octets=1024,
+        ),
+    )
+
+    db_session.refresh(subscription)
+    assert subscription.mac_address == "AA:BB:CC:DD:EE:11"
 
 
 def test_create_usage_record(db_session, subscription):

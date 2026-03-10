@@ -416,5 +416,4 @@ class OntActions:
                 message=f"Factory reset failed: {e}",
             )
 
-
 ont_actions = OntActions()

@@ -62,6 +62,7 @@ from app.services.common import (
     round_money,
     validate_enum,
 )
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
@@ -88,6 +89,8 @@ class PaymentMethods(ListResponseMixin):
                 data["method_type"] = validate_enum(
                     default_method, PaymentMethodType, "method_type"
                 )
+        if data.get("token"):
+            data["token"] = encrypt_credential(data["token"])
         method = PaymentMethod(**data)
         db.add(method)
         db.commit()
@@ -142,11 +145,21 @@ class PaymentMethods(ListResponseMixin):
                 PaymentMethod.id != method.id,
                 PaymentMethod.is_default.is_(True),
             ).update({"is_default": False})
+        if "token" in data and data["token"]:
+            data["token"] = encrypt_credential(data["token"])
         for key, value in data.items():
             setattr(method, key, value)
         db.commit()
         db.refresh(method)
         return method
+
+    @staticmethod
+    def get_decrypted_token(db: Session, method_id: str) -> str | None:
+        """Retrieve and decrypt the payment token for a payment method."""
+        method = get_by_id(db, PaymentMethod, method_id)
+        if not method or not method.token:
+            return None
+        return decrypt_credential(method.token)
 
     @staticmethod
     def delete(db: Session, method_id: str):
@@ -184,6 +197,8 @@ class BankAccounts(ListResponseMixin):
                 BankAccount.account_id == payload.account_id,
                 BankAccount.is_default.is_(True),
             ).update({"is_default": False})
+        if data.get("token"):
+            data["token"] = encrypt_credential(data["token"])
         bank_account = BankAccount(**data)
         db.add(bank_account)
         db.commit()
@@ -245,6 +260,8 @@ class BankAccounts(ListResponseMixin):
                 BankAccount.id != bank_account.id,
                 BankAccount.is_default.is_(True),
             ).update({"is_default": False})
+        if "token" in data and data["token"]:
+            data["token"] = encrypt_credential(data["token"])
         for key, value in data.items():
             setattr(bank_account, key, value)
         db.commit()

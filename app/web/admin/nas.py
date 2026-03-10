@@ -1,9 +1,8 @@
 """Admin NAS device management web routes."""
 from urllib.parse import quote_plus
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -96,6 +95,7 @@ def nas_index(
     partner_org_id: str | None = None,
     online_status: str | None = None,
     search: str | None = None,
+    refresh: str | None = None,
     page: int = Query(1, ge=1),
 ):
     """NAS device management dashboard."""
@@ -108,6 +108,7 @@ def nas_index(
         partner_org_id=partner_org_id,
         online_status=online_status,
         search=search,
+        refresh=refresh,
         page=page,
         limit=25,
     )
@@ -165,7 +166,7 @@ def device_create(
     # Management credentials
     ssh_username: str = Form(None),
     ssh_password: str = Form(None),
-    ssh_port: int = Form(22),
+    ssh_port: int = Form(120),
     ssh_key: str = Form(None),
     api_url: str = Form(None),
     api_username: str = Form(None),
@@ -387,7 +388,7 @@ def device_update(
     # Management credentials
     ssh_username: str = Form(None),
     ssh_password: str = Form(None),
-    ssh_port: int = Form(22),
+    ssh_port: int = Form(120),
     ssh_key: str = Form(None),
     api_url: str = Form(None),
     api_username: str = Form(None),
@@ -662,6 +663,26 @@ def device_test_mikrotik_api(device_id: str, db: Session = Depends(get_db)):
             f"/admin/network/nas/devices/{device_id}?tab=vendor-specific&api_test_status=error&api_test_message={quote_plus(str(exc))}",
             status_code=303,
         )
+
+
+@router.post("/devices/{device_id}/vendor/mikrotik/bootstrap-script", response_class=PlainTextResponse)
+def device_generate_mikrotik_bootstrap_script(device_id: str, db: Session = Depends(get_db)):
+    """Generate RouterOS bootstrap script and rotate app-side API credentials."""
+    data = nas_service.generate_mikrotik_bootstrap_script_for_device(
+        db,
+        device_id=device_id,
+        username="dotmacapi",
+        api_port=8728,
+        rest_port=443,
+    )
+    header = [
+        "# Dotmac generated MikroTik setup script",
+        "# Credentials were saved to this NAS device in Dotmac.",
+        f"# API URL: {data['api_url']}",
+        f"# Username: {data['username']}",
+        "",
+    ]
+    return PlainTextResponse("\n".join(header) + data["script"] + "\n")
 
 
 @router.get("/devices/{device_id}/live-bandwidth")

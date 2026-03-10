@@ -19,7 +19,7 @@ router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 @router.get(
     "/payment-arrangements",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:arrangement:read"))],
 )
 def payment_arrangements_list(
     request: Request,
@@ -52,7 +52,7 @@ def payment_arrangements_list(
 @router.get(
     "/payment-arrangements/{arrangement_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:arrangement:read"))],
 )
 def payment_arrangements_detail(
     request: Request,
@@ -86,7 +86,7 @@ def payment_arrangements_detail(
 @router.post(
     "/payment-arrangements/{arrangement_id}/approve",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:arrangement:write"))],
 )
 def payment_arrangements_approve(
     arrangement_id: UUID,
@@ -104,7 +104,7 @@ def payment_arrangements_approve(
 @router.post(
     "/payment-arrangements/{arrangement_id}/cancel",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:arrangement:write"))],
 )
 def payment_arrangements_cancel(
     arrangement_id: UUID,

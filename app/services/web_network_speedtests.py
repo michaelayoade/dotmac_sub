@@ -17,7 +17,7 @@ from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid, validate_enum
 
 
-def _parse_float(raw: str | None) -> float | None:
+def _parse_float(raw: object | None) -> float | None:
     value = str(raw or "").strip()
     if not value:
         return None
@@ -58,13 +58,13 @@ def parse_speedtest_form(form) -> dict[str, object]:
 
 
 def validate_speedtest_values(values: dict[str, object]) -> str | None:
-    download = values.get("download_mbps")
-    upload = values.get("upload_mbps")
+    download = _parse_float(values.get("download_mbps"))
+    upload = _parse_float(values.get("upload_mbps"))
     if download is None or download < 0:
         return "Download speed is required and must be >= 0."
     if upload is None or upload < 0:
         return "Upload speed is required and must be >= 0."
-    latency = values.get("latency_ms")
+    latency = _parse_float(values.get("latency_ms"))
     if latency is not None and latency < 0:
         return "Latency must be >= 0."
     return None
@@ -94,8 +94,8 @@ def create_speedtest(db: Session, values: dict[str, object]) -> SpeedTestResult:
         if payload.get(field):
             payload[field] = coerce_uuid(str(payload[field]))
     payload["source"] = validate_enum(str(payload.get("source") or SpeedTestSource.manual.value), SpeedTestSource, "source")
-    payload["download_mbps"] = float(payload.get("download_mbps") or 0)
-    payload["upload_mbps"] = float(payload.get("upload_mbps") or 0)
+    payload["download_mbps"] = _parse_float(payload.get("download_mbps")) or 0.0
+    payload["upload_mbps"] = _parse_float(payload.get("upload_mbps")) or 0.0
     item = SpeedTestResult(**payload)
     db.add(item)
     db.commit()
@@ -291,6 +291,7 @@ def list_page_data(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict[str, object]:
+    invalid_filter_error: str | None = None
     query = (
         db.query(SpeedTestResult)
         .options(
@@ -304,19 +305,37 @@ def list_page_data(
 
     subscriber_filter = str(subscriber_id or "").strip()
     if subscriber_filter:
-        query = query.filter(SpeedTestResult.subscriber_id == coerce_uuid(subscriber_filter))
+        try:
+            query = query.filter(SpeedTestResult.subscriber_id == coerce_uuid(subscriber_filter))
+        except (TypeError, ValueError):
+            invalid_filter_error = "Invalid subscriber filter."
+            subscriber_filter = ""
 
     device_filter = str(network_device_id or "").strip()
     if device_filter:
-        query = query.filter(SpeedTestResult.network_device_id == coerce_uuid(device_filter))
+        try:
+            query = query.filter(SpeedTestResult.network_device_id == coerce_uuid(device_filter))
+        except (TypeError, ValueError):
+            invalid_filter_error = "Invalid network device filter."
+            device_filter = ""
 
     pop_filter = str(pop_site_id or "").strip()
     if pop_filter:
-        query = query.filter(SpeedTestResult.pop_site_id == coerce_uuid(pop_filter))
+        try:
+            query = query.filter(SpeedTestResult.pop_site_id == coerce_uuid(pop_filter))
+        except (TypeError, ValueError):
+            invalid_filter_error = "Invalid POP site filter."
+            pop_filter = ""
 
     source_filter = str(source or "").strip().lower()
     if source_filter:
-        query = query.filter(SpeedTestResult.source == validate_enum(source_filter, SpeedTestSource, "source"))
+        try:
+            query = query.filter(
+                SpeedTestResult.source == validate_enum(source_filter, SpeedTestSource, "source")
+            )
+        except ValueError:
+            invalid_filter_error = "Invalid source filter."
+            source_filter = ""
 
     if date_from:
         try:
@@ -377,6 +396,7 @@ def list_page_data(
             "date_from": str(date_from or "").strip(),
             "date_to": str(date_to or "").strip(),
         },
+        "invalid_filter_error": invalid_filter_error,
         **speedtest_form_reference_data(db),
     }
 

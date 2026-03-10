@@ -1,29 +1,22 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
-from app.services import nas as nas_service
-from app.services import backup_alerts as backup_alerts_service
-from app.services import web_network_core_runtime as core_runtime
-from app.services import web_network_core_devices_forms as core_devices_forms
-from app.services import web_network_cpes as web_network_cpes_service
-from app.services import web_network_ip as web_network_ip_service
-from app.services import web_network_dns_threats as web_network_dns_threats_service
-from app.services import web_network_olts as web_network_olts_service
-from app.services import web_network_speedtests as web_network_speedtests_service
-from app.services import web_network_weathermap as web_network_weathermap_service
-from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import network_map as network_map_service
 from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
-from app.models.network import OLTDevice, OltConfigBackup, OltConfigBackupType
-from app.models.subscriber import Address, AddressType, Subscriber
-from app.models.notification import Notification, NotificationChannel, NotificationStatus
+from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
 from app.models.network_monitoring import (
+    DeviceMetric,
     DeviceRole,
     DeviceStatus,
+    DnsThreatAction,
+    DnsThreatEvent,
+    DnsThreatSeverity,
+    InterfaceStatus,
+    MetricType,
     NetworkDevice,
     NetworkDeviceBandwidthGraph,
     NetworkDeviceBandwidthGraphSource,
@@ -31,22 +24,44 @@ from app.models.network_monitoring import (
     PopSite,
     SpeedTestResult,
     SpeedTestSource,
-    DnsThreatAction,
-    DnsThreatEvent,
-    DnsThreatSeverity,
-    DeviceMetric,
-    MetricType,
 )
-from app.models.tr069 import Tr069JobStatus
-from app.models.tr069 import Tr069Job
-from app.schemas.network import CPEDeviceCreate, IPAssignmentCreate, IPv4AddressCreate, IPv6AddressCreate
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
+from app.models.radius import RadiusClient, RadiusServer
+from app.models.subscriber import Address, AddressType, Subscriber
+from app.models.tr069 import Tr069Job, Tr069JobStatus
+from app.schemas.catalog import NasDeviceCreate
+from app.schemas.network import (
+    CPEDeviceCreate,
+    IPAssignmentCreate,
+    IPv4AddressCreate,
+    IPv6AddressCreate,
+)
 from app.schemas.network_monitoring import NetworkDeviceCreate
 from app.schemas.tr069 import Tr069CpeDeviceCreate, Tr069JobCreate
-from app.services import network_monitoring as monitoring_service
+from app.services import backup_alerts as backup_alerts_service
+from app.services import nas as nas_service
 from app.services import network as network_service
+from app.services import network_map as network_map_service
+from app.services import network_monitoring as monitoring_service
+from app.services import snmp_discovery as snmp_discovery_service
 from app.services import tr069 as tr069_service
+from app.services import web_network_core_devices as web_network_core_devices_service
+from app.services import web_network_core_devices_forms as core_devices_forms
 from app.services import web_network_core_devices_views as core_devices_views
-from app.schemas.catalog import NasDeviceCreate
+from app.services import web_network_core_runtime as core_runtime
+from app.services import web_network_cpes as web_network_cpes_service
+from app.services import web_network_dns_threats as web_network_dns_threats_service
+from app.services import web_network_ip as web_network_ip_service
+from app.services import web_network_olts as web_network_olts_service
+from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services import web_network_tr069 as web_network_tr069_service
+from app.services import web_network_weathermap as web_network_weathermap_service
+from app.services.credential_crypto import is_encrypted
+from app.services.network import olt_ssh as olt_ssh_service
 from app.web.admin import nas as nas_web
 
 
@@ -141,6 +156,108 @@ def test_get_ping_status_unreachable(monkeypatch):
     monkeypatch.setattr(nas_service.subprocess, "run", _fake_run)
     status = nas_service.get_ping_status("192.0.2.11")
     assert status == {"state": "unreachable", "label": "Unreachable"}
+
+
+def test_collect_interface_snapshot_uses_ifdescr_suffix_when_alias_missing(monkeypatch):
+    device = NetworkDevice(name="SNMP Core", mgmt_ip="192.0.2.200", snmp_enabled=True)
+
+    def _fake_bulk_walk(_device, oid, timeout=20):
+        data = {
+            ".1.3.6.1.2.1.2.2.1.2": [
+                'IF-MIB::ifDescr.7 = STRING: "ether7 => AP-Tower-01"',
+            ],
+            ".1.3.6.1.2.1.31.1.1.1.1": [
+                'IF-MIB::ifName.7 = STRING: "ether7"',
+            ],
+            ".1.3.6.1.2.1.31.1.1.1.18": [],
+            ".1.3.6.1.2.1.2.2.1.8": [
+                "IF-MIB::ifOperStatus.7 = INTEGER: up(1)",
+            ],
+            ".1.3.6.1.2.1.31.1.1.1.15": [
+                "IF-MIB::ifHighSpeed.7 = Gauge32: 1000",
+            ],
+            ".1.3.6.1.2.1.2.2.1.6": [],
+        }
+        return data[oid]
+
+    monkeypatch.setattr(snmp_discovery_service, "_run_snmpbulkwalk", _fake_bulk_walk)
+
+    snapshots = snmp_discovery_service.collect_interface_snapshot(device)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].name == "ether7"
+    assert snapshots[0].description == "AP-Tower-01"
+    assert snapshots[0].status.value == "up"
+    assert snapshots[0].speed_mbps == 1000
+
+
+def test_apply_interface_snapshot_removes_stale_interfaces():
+    device = SimpleNamespace(id="device-1")
+    stale = SimpleNamespace(id="iface-stale", name="ether9", description="Old AP")
+    current = SimpleNamespace(
+        id="iface-current",
+        name="ether1",
+        description="Existing Uplink",
+        status=InterfaceStatus.down,
+        speed_mbps=100,
+    )
+
+    class _Query:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return list(self.rows)
+
+    class _Session:
+        def __init__(self):
+            self.executed = []
+            self.deleted = []
+            self.added = []
+            self.committed = False
+
+        def query(self, _model):
+            return _Query([stale, current])
+
+        def execute(self, statement):
+            self.executed.append(statement)
+
+        def delete(self, iface):
+            self.deleted.append(iface)
+
+        def add(self, iface):
+            self.added.append(iface)
+
+        def commit(self):
+            self.committed = True
+
+    session = _Session()
+    created, updated = snmp_discovery_service.apply_interface_snapshot(
+        session,
+        device,
+        [
+            snmp_discovery_service.InterfaceSnapshot(
+                index="1",
+                name="ether1",
+                description="Existing Uplink",
+                status=InterfaceStatus.up,
+                speed_mbps=1000,
+                mac_address=None,
+            )
+        ],
+        create_missing=True,
+    )
+
+    assert created == 0
+    assert updated == 1
+    assert current.status == InterfaceStatus.up
+    assert current.speed_mbps == 1000
+    assert session.deleted == [stale]
+    assert len(session.executed) == 5
+    assert session.committed is True
 
 
 def test_get_mikrotik_api_status_success(db_session, monkeypatch):
@@ -578,6 +695,82 @@ def test_trigger_backup_for_core_device_without_nas_mapping_returns_error(db_ses
     assert "no linked nas device" in msg.lower()
 
 
+def test_core_device_update_syncs_linked_nas_ip_and_radius_client(db_session):
+    core = NetworkDevice(
+        name="Edge Router",
+        mgmt_ip="192.0.2.10",
+        role=DeviceRole.edge,
+        status=DeviceStatus.offline,
+        is_active=True,
+    )
+    db_session.add(core)
+    db_session.flush()
+
+    nas = NasDevice(
+        name="Edge Router NAS",
+        vendor=NasVendor.mikrotik,
+        ip_address="192.0.2.10",
+        management_ip="192.0.2.10",
+        nas_ip="192.0.2.10",
+        network_device_id=core.id,
+    )
+    server = RadiusServer(name="Primary RADIUS", host="127.0.0.1")
+    db_session.add_all([nas, server])
+    db_session.flush()
+
+    client = RadiusClient(
+        server_id=server.id,
+        nas_device_id=nas.id,
+        client_ip="192.0.2.10",
+        shared_secret_hash="secret-hash",
+        description=nas.name,
+        is_active=True,
+    )
+    db_session.add(client)
+    db_session.commit()
+
+    result = core_devices_forms.update_device(
+        db_session,
+        core,
+        {
+            "name": "Edge Router",
+            "hostname": None,
+            "mgmt_ip": "192.0.2.20",
+            "role": DeviceRole.edge,
+            "pop_site_id": None,
+            "parent_device_id": None,
+            "vendor": None,
+            "model": None,
+            "serial_number": None,
+            "device_type": None,
+            "ping_enabled": False,
+            "snmp_enabled": False,
+            "send_notifications": False,
+            "notification_delay_minutes": 0,
+            "snmp_port": None,
+            "snmp_version": None,
+            "snmp_community": None,
+            "snmp_username": None,
+            "snmp_auth_protocol": None,
+            "snmp_auth_secret": None,
+            "snmp_priv_protocol": None,
+            "snmp_priv_secret": None,
+            "notes": None,
+            "is_active": True,
+        },
+    )
+
+    assert result.error is None
+    db_session.refresh(core)
+    db_session.refresh(nas)
+    db_session.refresh(client)
+    assert core.mgmt_ip == "192.0.2.20"
+    assert nas.management_ip == "192.0.2.20"
+    assert nas.ip_address == "192.0.2.20"
+    assert nas.nas_ip == "192.0.2.20"
+    assert client.client_ip == "192.0.2.20"
+
+
 def test_cpe_notes_metadata_round_trip():
     notes = "[winbox_host:192.0.2.1]\n[api_host:192.0.2.2]\n[api_port:8728]\n[api_user:admin]\nInstalled in suite A"
     meta, cleaned = web_network_cpes_service.parse_cpe_notes_metadata(notes)
@@ -1003,6 +1196,42 @@ def test_core_device_validate_values_rejects_parent_cycle(db_session):
     assert "cycle" in error.lower()
 
 
+def test_core_device_create_allows_save_when_ping_probe_fails(db_session, monkeypatch):
+    monkeypatch.setattr(core_devices_forms, "run_ping_probe", lambda host: False)
+
+    values = {
+        "name": "Reachability OLT",
+        "hostname": None,
+        "mgmt_ip": "192.0.2.250",
+        "role": DeviceRole.access,
+        "device_type": None,
+        "pop_site_id": None,
+        "parent_device_id": None,
+        "ping_enabled": True,
+        "snmp_enabled": False,
+        "send_notifications": True,
+        "notification_delay_minutes": 0,
+        "snmp_port": None,
+        "snmp_version": None,
+        "snmp_community": None,
+        "snmp_username": None,
+        "snmp_auth_protocol": None,
+        "snmp_auth_secret": None,
+        "snmp_priv_protocol": None,
+        "snmp_priv_secret": None,
+        "notes": None,
+        "is_active": True,
+        "host": "192.0.2.250",
+    }
+
+    result = core_devices_forms.create_device(db_session, values)
+
+    assert result.device is not None
+    assert result.error is None
+    assert result.warning == "Ping probe failed. Check the management IP/hostname."
+    assert result.device.last_ping_ok is False
+
+
 def test_ping_device_respects_notification_delay_before_offline(db_session, pop_site, monkeypatch):
     device = monitoring_service.network_devices.create(
         db_session,
@@ -1275,6 +1504,78 @@ def test_backup_overview_page_data_search_and_sort(db_session):
     assert filtered["rows"][0]["device_name"] == "NAS Searchable"
 
 
+def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_session):
+    for idx in range(500):
+        db_session.add(OntUnit(serial_number=f"AA-{idx:04d}", is_active=True))
+    target = OntUnit(serial_number="ZZ-TARGET-ONT", is_active=True, mgmt_ip_address="10.55.66.77")
+    db_session.add(target)
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(
+        tab="onts",
+        db=db_session,
+        search="ZZ-TARGET-ONT",
+    )
+    serials = {ont.serial_number for ont in payload["onts"]}
+    assert "ZZ-TARGET-ONT" in serials
+
+
+def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(db_session):
+    promoted = NetworkDevice(
+        name="Aggregation OLT",
+        hostname="agg-olt.local",
+        mgmt_ip="192.0.2.210",
+        vendor="Huawei",
+        model="MA5800",
+        role=DeviceRole.aggregation,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    core = NetworkDevice(
+        name="Aggregation SW1",
+        hostname="agg-sw1.local",
+        mgmt_ip="192.0.2.211",
+        vendor="Cisco",
+        model="NCS",
+        role=DeviceRole.aggregation,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add_all([promoted, core])
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(tab="core", db=db_session)
+
+    assert payload["stats"]["core_total"] == 1
+    assert payload["stats"]["olt_total"] == 1
+    assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
+    assert [olt["name"] for olt in payload["olts"]] == ["Aggregation OLT"]
+    assert payload["olts"][0]["detail_url"].startswith("/admin/network/olts/")
+    assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")).first() is not None
+
+
+def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
+    promoted = NetworkDevice(
+        name="Metro OLT",
+        hostname="metro-olt.local",
+        mgmt_ip="192.0.2.220",
+        vendor="ZTE",
+        model="C320",
+        role=DeviceRole.access,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(promoted)
+    db_session.commit()
+
+    payload = web_network_core_devices_service.olts_list_page_data(db_session)
+
+    assert payload["stats"]["total"] == 1
+    assert payload["olts"][0]["name"] == "Metro OLT"
+    assert payload["olts"][0]["detail_url"].startswith("/admin/network/olts/")
+    assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.220")).first() is not None
+
+
 def test_queue_backup_failure_notification_queues_notification(db_session, monkeypatch):
     values = {
         "alert_notifications_enabled": True,
@@ -1494,6 +1795,148 @@ def test_test_olt_connection_handles_missing_ip(db_session):
     ok, message = web_network_olts_service.test_olt_connection(db_session, str(olt.id))
     assert ok is False
     assert "management ip" in message.lower()
+
+
+def test_olt_form_values_parse_access_fields():
+    values = web_network_olts_service.parse_form_values(
+        {
+            "name": "Metro OLT",
+            "ssh_username": "netops",
+            "ssh_password": "replace-me",
+            "ssh_port": "2222",
+            "netconf_enabled": "true",
+            "netconf_port": "830",
+            "is_active": "true",
+        }
+    )
+
+    assert values["ssh_username"] == "netops"
+    assert values["ssh_password"] == "replace-me"
+    assert values["ssh_port"] == 2222
+    assert values["netconf_enabled"] is True
+    assert values["netconf_port"] == 830
+
+
+def test_olt_validate_values_rejects_invalid_access_fields(db_session):
+    error = web_network_olts_service.validate_values(
+        db_session,
+        {
+            "name": "Metro OLT",
+            "ssh_username": None,
+            "ssh_port": 22,
+            "netconf_enabled": True,
+            "netconf_port": 830,
+        },
+    )
+    assert error == "SSH username is required when NETCONF is enabled"
+
+    error = web_network_olts_service.validate_values(
+        db_session,
+        {
+            "name": "Metro OLT",
+            "ssh_username": "netops",
+            "ssh_port": 70000,
+            "netconf_enabled": False,
+            "netconf_port": 830,
+        },
+    )
+    assert error == "SSH port must be between 1 and 65535"
+
+
+def test_update_olt_keeps_existing_ssh_password_when_blank(db_session):
+    olt = OLTDevice(name="Keep Secret OLT", ssh_password="existing-secret")
+    db_session.add(olt)
+    db_session.commit()
+
+    updated, error = web_network_olts_service.update_olt(
+        db_session,
+        str(olt.id),
+        {
+            "name": "Keep Secret OLT",
+            "hostname": None,
+            "mgmt_ip": None,
+            "vendor": None,
+            "model": None,
+            "serial_number": None,
+            "ssh_username": "netops",
+            "ssh_password": None,
+            "ssh_port": 22,
+            "netconf_enabled": False,
+            "netconf_port": None,
+            "notes": None,
+            "is_active": True,
+        },
+    )
+
+    assert error is None
+    assert updated is not None
+    db_session.refresh(olt)
+    assert olt.ssh_username == "netops"
+    assert is_encrypted(olt.ssh_password) is True
+
+
+def test_create_payload_encrypts_olt_ssh_password(monkeypatch):
+    monkeypatch.setattr(
+        web_network_olts_service,
+        "encrypt_credential",
+        lambda value: f"enc-test:{value}" if value else value,
+    )
+    payload = web_network_olts_service.create_payload(
+        {
+            "name": "Metro OLT",
+            "hostname": None,
+            "mgmt_ip": None,
+            "vendor": "Huawei",
+            "model": "MA5800",
+            "serial_number": None,
+            "ssh_username": "netops",
+            "ssh_password": "secret",
+            "ssh_port": 22,
+            "netconf_enabled": False,
+            "netconf_port": None,
+            "notes": None,
+            "is_active": True,
+        }
+    )
+    assert payload.ssh_password == "enc-test:secret"
+
+
+def test_olt_model_policy_resolution():
+    olt = OLTDevice(name="OLT One", vendor="Huawei", model="MA5800")
+    policy = olt_ssh_service.resolve_policy(olt)
+    assert policy.key == "huawei_ma5800"
+    assert "aes256-ctr" in policy.ciphers
+
+
+def test_olt_model_policy_resolution_rejects_unknown():
+    olt = OLTDevice(name="OLT Unknown", vendor="Huawei", model="EA5801")
+    with pytest.raises(ValueError):
+        olt_ssh_service.resolve_policy(olt)
+
+
+def test_test_olt_ssh_connection_service_wrapper(db_session, monkeypatch):
+    olt = OLTDevice(
+        name="OLT SSH",
+        mgmt_ip="198.51.100.51",
+        vendor="Huawei",
+        model="MA5608T",
+        ssh_username="netops",
+        ssh_password="plain:secret",
+    )
+    db_session.add(olt)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        olt_ssh_service,
+        "test_connection",
+        lambda _olt: (True, "SSH connection test successful", "huawei_ma5608t"),
+    )
+    ok, message, policy_key = web_network_olts_service.test_olt_ssh_connection(
+        db_session, str(olt.id)
+    )
+    assert ok is True
+    assert "huawei_ma5608t" in message
+    assert policy_key == "huawei_ma5608t"
 
 
 def test_ip_pool_create_rejects_overlapping_cidr(db_session):

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import GponChannel, OnuCapability, OnuType, PonType
-from app.services.common import coerce_uuid
+from app.services.common import apply_ordering, coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,12 @@ class OnuTypes:
         if search:
             stmt = stmt.where(OnuType.name.ilike(f"%{search}%"))
 
-        col = getattr(OnuType, order_by, OnuType.name)
-        stmt = stmt.order_by(col.desc() if order_dir == "desc" else col.asc())
+        allowed_columns = {
+            "name": OnuType.name,
+            "pon_type": OnuType.pon_type,
+            "created_at": OnuType.created_at,
+        }
+        stmt = apply_ordering(stmt, order_by, order_dir, allowed_columns)
         stmt = stmt.limit(limit).offset(offset)
         return list(db.scalars(stmt).all())
 
@@ -96,7 +100,7 @@ class OnuTypes:
         if not onu_type:
             raise HTTPException(status_code=404, detail="ONU type not found")
         for key, value in kwargs.items():
-            if value is not None and hasattr(onu_type, key):
+            if hasattr(onu_type, key):
                 setattr(onu_type, key, value)
         db.commit()
         db.refresh(onu_type)

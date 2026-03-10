@@ -199,7 +199,7 @@ def get_usage_charge(charge_id: str, db: Session = Depends(get_db)):
 def post_usage_charge(
     charge_id: str, payload: UsageChargePostRequest, db: Session = Depends(get_db)
 ):
-    return usage_service.usage_charges.post_charge(db, charge_id, payload)
+    return usage_service.usage_charges.post(db, charge_id, payload)
 
 
 @router.post(
@@ -221,7 +221,7 @@ def post_usage_charges_batch(
     dependencies=[Depends(require_permission("usage:write"))],
 )
 def run_usage_rating(payload: UsageRatingRunRequest, db: Session = Depends(get_db)):
-    return usage_service.usage_ratings.run(db, payload)
+    return usage_service.usage_rating_runs.run(db, payload)
 
 
 @router.get(
@@ -238,7 +238,7 @@ def list_usage_rating_runs(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return usage_service.usage_ratings.list_runs_response(
+    return usage_service.usage_rating_runs.list_runs_response(
         db, started_by, order_by, order_dir, limit, offset
     )
 
@@ -250,7 +250,7 @@ def list_usage_rating_runs(
     dependencies=[Depends(require_permission("usage:read"))],
 )
 def get_usage_rating_run(run_id: str, db: Session = Depends(get_db)):
-    return usage_service.usage_ratings.get_run(db, run_id)
+    return usage_service.usage_rating_runs.get_run(db, run_id)
 
 
 @router.delete(

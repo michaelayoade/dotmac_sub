@@ -23,17 +23,35 @@ function formatBytes(bytes) {
     return value.toFixed(value < 10 ? 2 : 1) + ' ' + units[i];
 }
 
+function parseSsePayload(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+        return JSON.parse(raw);
+    } catch (_e) {
+        // Fallback for legacy payloads serialized with single quotes
+        try {
+            return JSON.parse(String(raw).replace(/'/g, '"'));
+        } catch (_e2) {
+            return null;
+        }
+    }
+}
+
 // Bandwidth chart Alpine.js component
 function bandwidthChart(config = {}) {
     return {
         // Configuration
         subscriptionId: config.subscriptionId || null,
-        apiBasePath: config.apiBasePath || '/api/bandwidth',
+        apiBasePath: config.apiBasePath || '/api/v1/bandwidth',
         useMyEndpoints: config.useMyEndpoints || false, // Use /my/ endpoints for customer portal
+        enableLive: config.enableLive !== false,
 
         // State
         chart: null,
         eventSource: null,
+        reconnectTimer: null,
+        isDestroyed: false,
         loading: true,
         error: null,
 
@@ -63,8 +81,17 @@ function bandwidthChart(config = {}) {
         get totalRxFormatted() { return formatBytes(this.totalRx); },
         get totalTxFormatted() { return formatBytes(this.totalTx); },
 
+        formatTimeLabel(timestamp) {
+            const dt = new Date(timestamp);
+            if (this.timeRange === '7d' || this.timeRange === '30d') {
+                return dt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            }
+            return dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        },
+
         // Initialize
         async init() {
+            this.isDestroyed = false;
             await this.loadData();
             this.initChart();
             this.connectSSE();
@@ -72,12 +99,18 @@ function bandwidthChart(config = {}) {
 
         // Cleanup
         destroy() {
+            this.isDestroyed = true;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
             if (this.eventSource) {
                 this.eventSource.close();
                 this.eventSource = null;
             }
             if (this.chart) {
                 DotmacCharts.unregisterChart(this.getChartId());
+                this.chart = null;
             }
         },
 
@@ -162,11 +195,21 @@ function bandwidthChart(config = {}) {
             if (!canvas) return;
 
             const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            const existing = window.Chart && window.Chart.getChart ? window.Chart.getChart(canvas) : null;
+            if (existing && !existing._destroyed) {
+                try {
+                    existing.destroy();
+                } catch (_e) {
+                    // Ignore stale instance errors
+                }
+            }
 
             // Prepare data
-            const labels = this.seriesData.map(d => new Date(d.timestamp));
+            const labels = this.seriesData.map(d => this.formatTimeLabel(d.timestamp));
             const rxData = this.seriesData.map(d => d.rx_bps / 1000000); // Convert to Mbps
             const txData = this.seriesData.map(d => d.tx_bps / 1000000);
+            const sparseSeries = labels.length <= 1;
 
             const data = {
                 labels: labels,
@@ -177,6 +220,7 @@ function bandwidthChart(config = {}) {
                         color: DotmacCharts.colors.accent[500],
                         fillColor: DotmacCharts.colors.accent[500] + '40',
                         fill: true,
+                        pointRadius: sparseSeries ? 3 : 0,
                     },
                     {
                         label: 'Upload',
@@ -184,6 +228,7 @@ function bandwidthChart(config = {}) {
                         color: DotmacCharts.colors.primary[500],
                         fillColor: DotmacCharts.colors.primary[500] + '40',
                         fill: true,
+                        pointRadius: sparseSeries ? 3 : 0,
                     },
                 ],
             };
@@ -191,14 +236,6 @@ function bandwidthChart(config = {}) {
             const options = {
                 scales: {
                     x: {
-                        type: 'time',
-                        time: {
-                            displayFormats: {
-                                minute: 'HH:mm',
-                                hour: 'HH:mm',
-                                day: 'MMM d',
-                            },
-                        },
                         grid: {
                             display: false,
                         },
@@ -211,6 +248,10 @@ function bandwidthChart(config = {}) {
                     },
                 },
                 plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                    },
                     tooltip: {
                         callbacks: {
                             label: (context) => {
@@ -228,6 +269,7 @@ function bandwidthChart(config = {}) {
             // Destroy existing chart if any
             if (this.chart) {
                 this.chart.destroy();
+                this.chart = null;
             }
 
             this.chart = DotmacCharts.createAreaChart(ctx, data, options);
@@ -236,20 +278,26 @@ function bandwidthChart(config = {}) {
 
         // Connect to SSE for real-time updates
         connectSSE() {
+            if (this.isDestroyed) return;
+            if (!this.enableLive) return;
             if (this.eventSource) {
                 this.eventSource.close();
+                this.eventSource = null;
             }
 
-            // Only connect SSE for short time ranges
-            if (this.timeRange !== '1h' && this.timeRange !== '24h') {
+            // Keep live streaming only for 1h to avoid excessive chart updates.
+            if (this.timeRange !== '1h') {
                 return;
             }
 
             try {
-                this.eventSource = new EventSource(this.getLiveEndpoint());
+                const source = new EventSource(this.getLiveEndpoint());
+                this.eventSource = source;
 
-                this.eventSource.addEventListener('bandwidth', (event) => {
-                    const data = JSON.parse(event.data);
+                source.addEventListener('bandwidth', (event) => {
+                    if (this.isDestroyed || this.eventSource !== source) return;
+                    const data = parseSsePayload(event.data);
+                    if (!data) return;
                     this.currentRx = data.rx_bps || 0;
                     this.currentTx = data.tx_bps || 0;
 
@@ -259,27 +307,45 @@ function bandwidthChart(config = {}) {
 
                     // Add new point to chart
                     if (this.chart && this.chart.data.labels) {
+                        if (!this.chart.canvas || !this.chart.ctx) {
+                            return;
+                        }
+                        if (!this.chart.data.datasets || this.chart.data.datasets.length < 2) {
+                            return;
+                        }
                         const now = new Date();
-                        this.chart.data.labels.push(now);
+                        this.chart.data.labels.push(this.formatTimeLabel(now));
                         this.chart.data.datasets[0].data.push(this.currentRx / 1000000);
                         this.chart.data.datasets[1].data.push(this.currentTx / 1000000);
 
-                        // Remove old points (keep last 3600 for 1h view)
-                        const maxPoints = this.timeRange === '1h' ? 3600 : 86400;
+                        // Keep chart lightweight to avoid client-side rendering loops.
+                        const maxPoints = 900;
                         while (this.chart.data.labels.length > maxPoints) {
                             this.chart.data.labels.shift();
                             this.chart.data.datasets[0].data.shift();
                             this.chart.data.datasets[1].data.shift();
                         }
 
-                        this.chart.update('none'); // Update without animation
+                        try {
+                            this.chart.update('none'); // Update without animation
+                        } catch (e) {
+                            console.warn('Bandwidth chart update skipped:', e);
+                        }
                     }
                 });
 
-                this.eventSource.addEventListener('error', (event) => {
+                source.addEventListener('error', (event) => {
                     console.error('SSE error:', event);
-                    // Reconnect after 5 seconds
-                    setTimeout(() => this.connectSSE(), 5000);
+                    if (this.eventSource === source) {
+                        source.close();
+                        this.eventSource = null;
+                    }
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                    }
+                    this.reconnectTimer = setTimeout(() => {
+                        this.connectSSE();
+                    }, 5000);
                 });
 
             } catch (e) {
@@ -303,25 +369,34 @@ function bandwidthChart(config = {}) {
 function bandwidthWidget(config = {}) {
     return {
         subscriptionId: config.subscriptionId || null,
-        apiBasePath: config.apiBasePath || '/api/bandwidth',
+        apiBasePath: config.apiBasePath || '/api/v1/bandwidth',
         useMyEndpoints: config.useMyEndpoints || false,
 
         currentRx: 0,
         currentTx: 0,
         loading: true,
         eventSource: null,
+        reconnectTimer: null,
+        isDestroyed: false,
 
         get currentRxFormatted() { return formatBps(this.currentRx); },
         get currentTxFormatted() { return formatBps(this.currentTx); },
 
         async init() {
+            this.isDestroyed = false;
             await this.loadCurrent();
             this.connectSSE();
         },
 
         destroy() {
+            this.isDestroyed = true;
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
             if (this.eventSource) {
                 this.eventSource.close();
+                this.eventSource = null;
             }
         },
 
@@ -352,17 +427,32 @@ function bandwidthWidget(config = {}) {
         },
 
         connectSSE() {
+            if (this.isDestroyed) return;
             try {
-                this.eventSource = new EventSource(this.getLiveEndpoint());
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+                const source = new EventSource(this.getLiveEndpoint());
+                this.eventSource = source;
 
-                this.eventSource.addEventListener('bandwidth', (event) => {
-                    const data = JSON.parse(event.data);
+                source.addEventListener('bandwidth', (event) => {
+                    if (this.isDestroyed || this.eventSource !== source) return;
+                    const data = parseSsePayload(event.data);
+                    if (!data) return;
                     this.currentRx = data.rx_bps || 0;
                     this.currentTx = data.tx_bps || 0;
                 });
 
-                this.eventSource.addEventListener('error', () => {
-                    setTimeout(() => this.connectSSE(), 5000);
+                source.addEventListener('error', () => {
+                    if (this.eventSource === source) {
+                        source.close();
+                        this.eventSource = null;
+                    }
+                    if (this.reconnectTimer) {
+                        clearTimeout(this.reconnectTimer);
+                    }
+                    this.reconnectTimer = setTimeout(() => this.connectSSE(), 5000);
                 });
             } catch (e) {
                 console.error('SSE connection failed:', e);

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select

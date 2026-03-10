@@ -1,0 +1,29 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}CPE Management - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+<div class="relative space-y-6">
+    {% call page_header(title="CPE Management", subtitle="QoS, customer blocking via NAT, DHCP defaults, and WLAN management", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="blue", color2="cyan") %}{% endcall %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("CPE Management", color="blue") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">1 KB Definition</label><input type="text" name="kb_base" value="{{ cpe.kb_base or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Debug</label><input type="text" name="api_debug" value="{{ cpe.api_debug or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Timeout (s)</label><input type="text" name="api_timeout" value="{{ cpe.api_timeout or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">API Attempts</label><input type="text" name="api_attempts" value="{{ cpe.api_attempts or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reverse In/Out</label><input type="text" name="qos_reverse" value="{{ cpe.qos_reverse or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">CPE Blocking</label><input type="text" name="blocking_enabled" value="{{ cpe.blocking_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Redirect IP</label><input type="text" name="redirect_ip" value="{{ cpe.redirect_ip or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Redirect Port</label><input type="text" name="redirect_port" value="{{ cpe.redirect_port or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP</label><input type="text" name="dhcp_enabled" value="{{ cpe.dhcp_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Lease Time</label><input type="text" name="dhcp_lease_time" value="{{ cpe.dhcp_lease_time or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">WLAN Management</label><input type="text" name="wlan_management" value="{{ cpe.wlan_management or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+        </div>
+        {% endcall %}
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 transition">Save Configuration</button></div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

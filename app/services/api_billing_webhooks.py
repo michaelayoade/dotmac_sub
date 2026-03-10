@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.models.billing import PaymentProviderType
 from app.schemas.billing import PaymentProviderEventIngest
 from app.services import billing as billing_service
-from app.services.flutterwave import verify_webhook_signature as verify_flutterwave_signature
+from app.services.flutterwave import (
+    verify_webhook_signature as verify_flutterwave_signature,
+)
 from app.services.paystack import verify_webhook_signature as verify_paystack_signature
 
 _paystack_logger = logging.getLogger(__name__)

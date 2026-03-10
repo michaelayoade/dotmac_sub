@@ -65,6 +65,28 @@
                 Apply
             </button>
         </form>
+        <form method="GET" action="/admin/network/core-devices" class="contents">
+            {% if role_filter %}
+            <input type="hidden" name="role" value="{{ role_filter }}">
+            {% endif %}
+            {% if search_filter %}
+            <input type="hidden" name="search" value="{{ search_filter }}">
+            {% endif %}
+            {% if pop_site_filter %}
+            <input type="hidden" name="pop_site_id" value="{{ pop_site_filter }}">
+            {% endif %}
+            {% if device_type_filter %}
+            <input type="hidden" name="device_type" value="{{ device_type_filter }}">
+            {% endif %}
+            {% if status_filter %}
+            <input type="hidden" name="status" value="{{ status_filter }}">
+            {% endif %}
+            <input type="hidden" name="refresh" value="1">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition-all hover:bg-blue-100 dark:border-blue-700/50 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.64 18.36A9 9 0 0018.36 5.64M18.36 18.36A9 9 0 015.64 5.64"/></svg>
+                Refresh
+            </button>
+        </form>
         <a href="/admin/network/core-devices/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5">
             <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             Add Device

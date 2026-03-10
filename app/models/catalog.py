@@ -747,7 +747,7 @@ class NasDevice(Base):
     # Network Configuration (renamed from ip_address for clarity)
     ip_address: Mapped[str | None] = mapped_column(String(64))  # Keep for backward compat
     management_ip: Mapped[str | None] = mapped_column(String(64))
-    management_port: Mapped[int | None] = mapped_column(Integer, default=22)
+    management_port: Mapped[int | None] = mapped_column(Integer, default=120)
     nas_ip: Mapped[str | None] = mapped_column(String(64))  # IP used in RADIUS requests
 
     # RADIUS Configuration

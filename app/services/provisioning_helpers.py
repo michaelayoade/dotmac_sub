@@ -2,12 +2,10 @@
 
 import ipaddress
 import logging
-from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
@@ -21,56 +19,24 @@ from app.models.network import (
     IPv4Address,
     IPv6Address,
     IPVersion,
+    OLTDevice,
+    OntUnit,
 )
 from app.models.provisioning import (
-    AppointmentStatus,
-    InstallAppointment,
-    ProvisioningRun,
-    ProvisioningRunStatus,
-    ProvisioningStep,
-    ProvisioningStepType,
-    ProvisioningTask,
     ProvisioningVendor,
     ProvisioningWorkflow,
     ServiceOrder,
-    ServiceOrderStatus,
-    ServiceStateTransition,
-    TaskStatus,
 )
-from app.models.tr069 import Tr069CpeDevice
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import IPAssignmentCreate
-from app.schemas.provisioning import (
-    InstallAppointmentCreate,
-    InstallAppointmentUpdate,
-    ProvisioningRunCreate,
-    ProvisioningRunStart,
-    ProvisioningRunUpdate,
-    ProvisioningStepCreate,
-    ProvisioningStepUpdate,
-    ProvisioningTaskCreate,
-    ProvisioningTaskUpdate,
-    ProvisioningWorkflowCreate,
-    ProvisioningWorkflowUpdate,
-    ServiceOrderCreate,
-    ServiceOrderUpdate,
-    ServiceStateTransitionCreate,
-    ServiceStateTransitionUpdate,
-)
 from app.services import network as network_service
 from app.services import settings_spec
 from app.services.common import (
-    apply_ordering,
-    apply_pagination,
     coerce_uuid,
     validate_enum,
 )
-from app.services.crud import CRUDManager
-from app.services.events import emit_event
-from app.services.events.types import EventType
-from app.services.provisioning_adapters import get_provisioner
-from app.services.query_builders import apply_active_state, apply_optional_equals
+from app.services.credential_crypto import decrypt_credential
 from app.services.secrets import resolve_secret
-from app.validators import provisioning as provisioning_validators
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +370,31 @@ def _extend_provisioning_context(
             context["genieacs_device_id"] = (
                 f"{tr069_device.oui}-{tr069_device.product_class}-{tr069_device.serial_number}"
             )
+
+    # Resolve ACS server details for ManagementServer push
+    acs_server_id = context.get("tr069_acs_server_id")
+    if not acs_server_id and context.get("ont_id"):
+        ont = db.get(OntUnit, context["ont_id"])
+        if ont and ont.olt_device_id:
+            olt = db.get(OLTDevice, str(ont.olt_device_id))
+            if olt and olt.tr069_acs_server_id:
+                acs_server_id = str(olt.tr069_acs_server_id)
+    if not acs_server_id:
+        default_id = settings_spec.resolve_value(
+            db, SettingDomain.tr069, "default_acs_server_id"
+        )
+        if default_id:
+            acs_server_id = str(default_id)
+
+    if acs_server_id:
+        acs_server = db.get(Tr069AcsServer, acs_server_id)
+        if acs_server and acs_server.cwmp_url:
+            context["acs_server"] = {
+                "cwmp_url": acs_server.cwmp_url,
+                "cwmp_username": acs_server.cwmp_username,
+                "cwmp_password": decrypt_credential(acs_server.cwmp_password),
+            }
+
     return context
 
 

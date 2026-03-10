@@ -1,0 +1,30 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% block title %}Payment Methods - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Payment Methods", subtitle="Configure available payment methods for customer billing", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>', color="emerald", color2="teal") %}{% endcall %}
+    {% call card("Configured Payment Methods", color="emerald") %}
+    {% if payment_methods %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead><tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400"><th class="px-4 py-3">Name</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Actions</th></tr></thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for m in payment_methods %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ m.name }}</td>
+                    <td class="px-4 py-3">{% if m.is_active %}{{ status_badge("Active", "active", size="sm") }}{% else %}{{ status_badge("Inactive", "neutral", size="sm") }}{% endif %}</td>
+                    <td class="px-4 py-3 text-sm"><a href="/admin/billing/providers/{{ m.id }}" class="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400">Edit</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No payment methods configured", "Payment methods are managed via the Billing > Providers section.") }}
+    {% endif %}
+    {% endcall %}
+</div>
+{{ animation_styles() }}
+{% endblock %}

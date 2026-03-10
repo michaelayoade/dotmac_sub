@@ -13,44 +13,44 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a "Module Manager" admin page at `/admin/system/modules` that displays all DotMac Sub functional modules (Billing, Catalog, Network, Provisioning, VPN, GIS, Notifications, Reports) as toggle-able cards
-- [ ] Implement per-module feature flags stored in the `DomainSetting` model with domain `modules`, allowing granular enable/disable of sub-features (e.g., within Billing: invoices, payments, credit notes, payment statements)
-- [ ] Add a Finance module toggle panel controlling visibility of: Invoice dashboard, Credit notes, Proforma invoices, Payment history, Payment statements, Refill/voucher cards
-- [ ] Add a Catalog module toggle panel controlling visibility of: Internet plans, FUP policies, Bundle offers, One-time charges, Recurring charges
-- [ ] Add a Customer module toggle panel controlling visibility of: Additional discounts, Voucher management, Customer services view
-- [ ] Add a Networking module toggle panel controlling visibility of: Network sites, CPE management, TR-069 (GenieACS), Router management, IPv4/IPv6 network pools, Hardware inventory
-- [ ] Add top-level feature toggles for: Inventory tracking, Helpdesk/Tickets, Scheduling, Voice/VoIP, Lead management CRM
-- [ ] Ensure disabled modules are hidden from the admin sidebar, API routes return 404, and the customer portal hides corresponding sections
-- [ ] Create a service `app/services/module_manager.py` that caches module states in Redis and provides `is_module_enabled(module_name)` helper used by route guards and template context
+- [x] Build a "Module Manager" admin page at `/admin/system/modules` that displays all DotMac Sub functional modules (Billing, Catalog, Network, Provisioning, VPN, GIS, Notifications, Reports) as toggle-able cards
+- [x] Implement per-module feature flags stored in the `DomainSetting` model with domain `modules`, allowing granular enable/disable of sub-features (e.g., within Billing: invoices, payments, credit notes, payment statements)
+- [x] Add a Finance module toggle panel controlling visibility of: Invoice dashboard, Credit notes, Proforma invoices, Payment history, Payment statements, Refill/voucher cards
+- [x] Add a Catalog module toggle panel controlling visibility of: Internet plans, FUP policies, Bundle offers, One-time charges, Recurring charges
+- [x] Add a Customer module toggle panel controlling visibility of: Additional discounts, Voucher management, Customer services view
+- [x] Add a Networking module toggle panel controlling visibility of: Network sites, CPE management, TR-069 (GenieACS), Router management, IPv4/IPv6 network pools, Hardware inventory
+- [x] Add top-level feature toggles for: Inventory tracking, Helpdesk/Tickets, Scheduling, Voice/VoIP, Lead management CRM
+- [x] Ensure disabled modules are hidden from the admin sidebar, API routes return 404, and the customer portal hides corresponding sections
+- [x] Create a service `app/services/module_manager.py` that caches module states in Redis and provides `is_module_enabled(module_name)` helper used by route guards and template context
 
 ### Screenshot: Add-ons Marketplace (Page 1 & 2)
 **Splynx Feature:** An "Add-ons" marketplace listing installable extensions with columns for Name, Version, Description, and file size. Extensions include: splynx-3cx (SIP Framework), splynx-agent (Agents add-on), splynx-ai (AI add-on), splynx-azure-sso (Azure SSO), splynx-billing-config (Billing Config), splynx-cashdesk (Cashdesk add-on), splynx-genieacs (GenieACS), splynx-google-maps-v3, splynx-mailjet, splynx-mikrotik-discoverer-and-export (MikroTik discovery), splynx-moneris (payment), splynx-netcube, splynx-paymentexpress, splynx-paypal (PayPal), splynx-paystack (Paystack), splynx-portal (Self-care portal), splynx-portalino, splynx-powercode (PowerCode), splynx-quickbooks (QuickBooks), splynx-raisecom, splynx-realms, splynx-remita (Remita), splynx-resellers (Resellers), splynx-sagepay (SagePay), splynx-speedtest, splynx-ssh-terminal, splynx-stripe (Stripe), splynx-ticket-feedback, splynx-whatsapp (WhatsApp), splynx-xero (Xero), splynx-zoho-books (Zoho Books). Each has Install/Update/Enable/Disable status badges.
 
 **DotMac Sub Improvements:**
 
-- [ ] Design an "Integrations Hub" page at `/admin/integrations/marketplace` showing all available and installed integration connectors as a card grid with status badges (Installed, Available, Update Available)
-- [ ] Implement an integration connector model (`IntegrationConnector`) tracking: name, version, type (payment/accounting/messaging/network/crm), status (enabled/disabled/not_installed), configuration JSON, and last_sync timestamp
-- [ ] Build a connector registry pattern in `app/services/integrations/registry.py` that auto-discovers connectors from `app/services/integrations/connectors/` directory
-- [ ] Add version tracking and update-available indicators for each connector, with a "Check for updates" action button
+- [x] Design an "Integrations Hub" page at `/admin/integrations/marketplace` showing all available and installed integration connectors as a card grid with status badges (Installed, Available, Update Available)
+- [x] Implement an integration connector model (`IntegrationConnector`) tracking: name, version, type (payment/accounting/messaging/network/crm), status (enabled/disabled/not_installed), configuration JSON, and last_sync timestamp
+- [x] Build a connector registry pattern in `app/services/integrations/registry.py` that auto-discovers connectors from `app/services/integrations/connectors/` directory
+- [x] Add version tracking and update-available indicators for each connector, with a "Check for updates" action button
 
 ### Screenshot: Install Module Form
 **Splynx Feature:** A custom module installation form under Integrations > Install module, with fields for Module name, Title, Type (Simple dropdown), and a Config section with Root (dropdown for where the module appears in navigation) and Icon (Font Awesome icon code). After installation, users are redirected to an "Additional fields" page to define module properties.
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a custom integration registration form at `/admin/integrations/register` allowing admins to register custom webhook-based integrations with: name, display title, type (simple/webhook/oauth), root navigation section, icon selection (from Heroicons library)
-- [ ] After registration, redirect to a configuration page where admins define custom fields, webhook endpoints, authentication method, and data mapping rules
-- [ ] Support a "Simple" integration type that embeds an external URL in an iframe within the admin panel, and a "Webhook" type that sends/receives HTTP callbacks
+- [x] Build a custom integration registration form at `/admin/integrations/register` allowing admins to register custom webhook-based integrations with: name, display title, type (simple/webhook/oauth), root navigation section, icon selection (from Heroicons library)
+- [x] After registration, redirect to a configuration page where admins define custom fields, webhook endpoints, authentication method, and data mapping rules
+- [x] Support a "Simple" integration type that embeds an external URL in an iframe within the admin panel, and a "Webhook" type that sends/receives HTTP callbacks
 
 ### Screenshot: Modules List (Installed)
 **Splynx Feature:** A "Modules list" table showing 20 installed modules with columns: Name (e.g., huawei_supported_boards, splynx_huawei_module, splynx_admin_agents, splynx_admin_mailjet, splynx_cashdesk, splynx_customer_cpe_reset, splynx_olt_autodiscover, splynx_portal_social_registration, splynx_trust_agents, splynx_network_weathermap, splynx_paystack_addon, splynx_moneris_addon, splynx_referral_system, splynx_speedtest, splynx_ssh_terminal), Title, Root location, Type (Simple/Add-on), a "Relay portal status for portal" indicator, and Actions (edit/delete with color-coded enable/disable buttons in green and red).
 
 **DotMac Sub Improvements:**
 
-- [ ] Create an "Installed Integrations" management table at `/admin/integrations/installed` with columns: Name, Title, Root (navigation location), Type (Simple/Add-on/Webhook), Relay to Portal (yes/no toggle), Status (Enabled/Disabled badge), and Actions (edit config, disable, uninstall)
-- [ ] Add bulk actions for enable/disable all selected integrations
-- [ ] Show integration health status with a traffic-light indicator (green = healthy, amber = degraded/warnings, red = errors/unreachable)
-- [ ] Implement an integration activity log showing last 50 API calls per connector with status codes and response times
+- [x] Create an "Installed Integrations" management table at `/admin/integrations/installed` with columns: Name, Title, Root (navigation location), Type (Simple/Add-on/Webhook), Relay to Portal (yes/no toggle), Status (Enabled/Disabled badge), and Actions (edit config, disable, uninstall)
+- [x] Add bulk actions for enable/disable all selected integrations
+- [x] Show integration health status with a traffic-light indicator (green = healthy, amber = degraded/warnings, red = errors/unreachable)
+- [x] Implement an integration activity log showing last 50 API calls per connector with status codes and response times
 
 ---
 
@@ -61,14 +61,14 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a Webhook/Hooks management page at `/admin/integrations/hooks` with a table showing all registered hooks: ID, Title, Type (CLI/Web/Internal), Enabled status, last triggered timestamp, success rate percentage, and Actions
-- [ ] Support two hook types: **Web hooks** (HTTP POST to external URLs on events) and **CLI hooks** (execute local scripts/commands on events)
-- [ ] Create a hook registration form with fields: title, type, URL/command, HTTP method (for web), authentication (Bearer token, Basic auth, HMAC signature), retry policy (max retries, backoff), and event filters (which DotMac events trigger this hook)
-- [ ] Map hooks to the existing DotMac event system (`app/services/events/`) so any `EventType` can trigger configured hooks
-- [ ] Add a hook test button that sends a sample payload and displays the response inline
-- [ ] Implement hook duplication (clone an existing hook configuration)
-- [ ] Add a hook execution log page showing: timestamp, event type, hook title, request payload, response status, response body, and latency
-- [ ] Integrate with popular automation platforms by providing pre-built hook templates for: n8n, Zapier, Make (Integromat), and custom REST APIs
+- [x] Build a Webhook/Hooks management page at `/admin/integrations/hooks` with a table showing all registered hooks: ID, Title, Type (CLI/Web/Internal), Enabled status, last triggered timestamp, success rate percentage, and Actions
+- [x] Support two hook types: **Web hooks** (HTTP POST to external URLs on events) and **CLI hooks** (execute local scripts/commands on events)
+- [x] Create a hook registration form with fields: title, type, URL/command, HTTP method (for web), authentication (Bearer token, Basic auth, HMAC signature), retry policy (max retries, backoff), and event filters (which DotMac events trigger this hook)
+- [x] Map hooks to the existing DotMac event system (`app/services/events/`) so any `EventType` can trigger configured hooks
+- [x] Add a hook test button that sends a sample payload and displays the response inline
+- [x] Implement hook duplication (clone an existing hook configuration)
+- [x] Add a hook execution log page showing: timestamp, event type, hook title, request payload, response status, response body, and latency
+- [x] Integrate with popular automation platforms by providing pre-built hook templates for: n8n, Zapier, Make (Integromat), and custom REST APIs
 
 ---
 
@@ -88,12 +88,12 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a QuickBooks Online integration connector in `app/services/integrations/connectors/quickbooks.py` that syncs: invoices, payments, credit notes, and customer records bidirectionally
-- [ ] Add a Xero accounting integration connector as an alternative to QuickBooks
-- [ ] Add a Sage accounting integration connector for African market support
-- [ ] Create a generic accounting sync framework in `app/services/integrations/accounting_sync.py` with a common interface that all accounting connectors implement: `sync_invoices()`, `sync_payments()`, `sync_customers()`, `get_sync_status()`
-- [ ] Build a sync dashboard showing last sync time, records synced, errors, and a manual "Sync Now" button per accounting connector
-- [ ] Implement field mapping configuration allowing admins to map DotMac fields to accounting platform fields (e.g., DotMac invoice number -> QuickBooks reference number)
+- [x] Build a QuickBooks Online integration connector in `app/services/integrations/connectors/quickbooks.py` that syncs: invoices, payments, credit notes, and customer records bidirectionally
+- [x] Add a Xero accounting integration connector as an alternative to QuickBooks
+- [x] Add a Sage accounting integration connector for African market support
+- [x] Create a generic accounting sync framework in `app/services/integrations/accounting_sync.py` with a common interface that all accounting connectors implement: `sync_invoices()`, `sync_payments()`, `sync_customers()`, `get_sync_status()`
+- [x] Build a sync dashboard showing last sync time, records synced, errors, and a manual "Sync Now" button per accounting connector
+- [x] Implement field mapping configuration allowing admins to map DotMac fields to accounting platform fields (e.g., DotMac invoice number -> QuickBooks reference number)
 
 ### Screenshot: WhatsApp Config Integration
 **Splynx Feature:** A WhatsApp Config integration page under Config > Integrations. The page shows "File not found" indicating the WhatsApp add-on is installed but the configuration file is missing. Has Reload and "Open in new window" buttons.
@@ -196,10 +196,10 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build an invoice cache management page at `/admin/billing/cache` showing: total cached invoices, cache size on disk/S3, oldest cached invoice date, and actions to clear cache (all, by date range, by customer)
-- [ ] Implement invoice PDF caching in the existing `app/services/billing_invoice_pdf.py` service, storing rendered PDFs in S3/object storage with cache invalidation when invoice data changes
-- [ ] Add a "Regenerate" button per invoice that clears and re-renders the cached PDF (useful after template changes)
-- [ ] Add cache statistics to the system health dashboard showing cache hit rate, storage usage, and average generation time
+- [x] Build an invoice cache management page at `/admin/billing/cache` showing: total cached invoices, cache size on disk/S3, oldest cached invoice date, and actions to clear cache (all, by date range, by customer)
+- [x] Implement invoice PDF caching in the existing `app/services/billing_invoice_pdf.py` service, storing rendered PDFs in S3/object storage with cache invalidation when invoice data changes
+- [x] Add a "Regenerate" button per invoice that clears and re-renders the cached PDF (useful after template changes)
+- [x] Add cache statistics to the system health dashboard showing cache hit rate, storage usage, and average generation time
 
 ---
 
@@ -210,13 +210,13 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a "Batch Geocode" tool at `/admin/system/tools/geocode` that geocodes subscriber addresses to GPS coordinates using a configurable geocoding provider (Google Maps, OpenStreetMap Nominatim, or Mapbox)
-- [ ] Add filter controls: date range, subscriber status, "Overwrite existing coordinates" toggle (default: No, skip subscribers that already have coordinates)
-- [ ] Show a geocoding log table with: subscriber name, address, resulting coordinates, status (success/failed/skipped), and timestamp
-- [ ] Process geocoding as a Celery background task with progress reporting via HTMX
-- [ ] Add a per-subscriber "Geocode" button on the subscriber detail page that geocodes a single subscriber's address on demand
-- [ ] Integrate with the existing GIS module to automatically update map markers after batch geocoding
-- [ ] Implement rate limiting to respect geocoding API quotas (configurable requests-per-second)
+- [x] Build a "Batch Geocode" tool at `/admin/system/tools/geocode` that geocodes subscriber addresses to GPS coordinates using a configurable geocoding provider (Google Maps, OpenStreetMap Nominatim, or Mapbox)
+- [x] Add filter controls: date range, subscriber status, "Overwrite existing coordinates" toggle (default: No, skip subscribers that already have coordinates)
+- [x] Show a geocoding log table with: subscriber name, address, resulting coordinates, status (success/failed/skipped), and timestamp
+- [x] Process geocoding as a Celery background task with progress reporting via HTMX
+- [x] Add a per-subscriber "Geocode" button on the subscriber detail page that geocodes a single subscriber's address on demand
+- [x] Integrate with the existing GIS module to automatically update map markers after batch geocoding
+- [x] Implement rate limiting to respect geocoding API quotas (configurable requests-per-second)
 
 ---
 
@@ -227,13 +227,13 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a "Restore Deleted Records" tool at `/admin/system/tools/restore` that searches soft-deleted subscribers by: ID, login/username, name, email, or phone number
-- [ ] Implement full cascade restoration: when restoring a subscriber, also restore their subscriptions, invoices, payments, service orders, RADIUS accounts, and network assignments
-- [ ] Show a preview of what will be restored before executing (subscriber details + count of related records by type)
-- [ ] Add a restoration audit log entry recording who restored the record and when
-- [ ] Implement a configurable retention period for soft-deleted records (e.g., 90 days) after which they are permanently purged
-- [ ] Add a "Recently Deleted" quick-view showing the last 20 deleted subscribers with one-click restore buttons
-- [ ] Ensure the existing `is_active` soft-delete pattern across DotMac models supports this recovery workflow
+- [x] Build a "Restore Deleted Records" tool at `/admin/system/tools/restore` that searches soft-deleted subscribers by: ID, login/username, name, email, or phone number
+- [x] Implement full cascade restoration: when restoring a subscriber, also restore their subscriptions, invoices, payments, service orders, RADIUS accounts, and network assignments
+- [x] Show a preview of what will be restored before executing (subscriber details + count of related records by type)
+- [x] Add a restoration audit log entry recording who restored the record and when
+- [x] Implement a configurable retention period for soft-deleted records (e.g., 90 days) after which they are permanently purged
+- [x] Add a "Recently Deleted" quick-view showing the last 20 deleted subscribers with one-click restore buttons
+- [x] Ensure the existing `is_active` soft-delete pattern across DotMac models supports this recovery workflow
 
 ---
 
@@ -244,13 +244,13 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build a "Service Migration" tool at `/admin/provisioning/migrate` that lists all subscribers and their current service assignments with filters for: reseller/partner, location/POP site, subscriber status, current plan, and current NAS/router
-- [ ] Display a migration-ready table with columns: Status (color badge), Subscriber ID, Portal login, Full name, Phone, Current plan, Assigned IPs, Router/NAS, MAC address, OLT/Base station port, and a Select checkbox
-- [ ] Implement bulk service migration actions: Change plan (move selected subscribers from Plan A to Plan B), Change router/NAS (reassign to a different NAS device), Change IP pool (reassign from one IP pool to another), Change OLT port (reassign fiber connections)
-- [ ] Add a migration preview step showing exactly what will change for each selected subscriber before executing
-- [ ] Process migrations as a Celery background task with rollback capability if RADIUS re-provisioning fails
-- [ ] Generate a migration report after completion showing: total migrated, successful, failed (with error details), and subscribers requiring manual intervention
-- [ ] Add a migration scheduling option to execute the migration during a maintenance window (e.g., 2:00 AM)
+- [x] Build a "Service Migration" tool at `/admin/provisioning/migrate` that lists all subscribers and their current service assignments with filters for: reseller/partner, location/POP site, subscriber status, current plan, and current NAS/router
+- [x] Display a migration-ready table with columns: Status (color badge), Subscriber ID, Portal login, Full name, Phone, Current plan, Assigned IPs, Router/NAS, MAC address, OLT/Base station port, and a Select checkbox
+- [x] Implement bulk service migration actions: Change plan (move selected subscribers from Plan A to Plan B), Change router/NAS (reassign to a different NAS device), Change IP pool (reassign from one IP pool to another), Change OLT port (reassign fiber connections)
+- [x] Add a migration preview step showing exactly what will change for each selected subscriber before executing
+- [x] Process migrations as a Celery background task with rollback capability if RADIUS re-provisioning fails
+- [x] Generate a migration report after completion showing: total migrated, successful, failed (with error details), and subscribers requiring manual intervention
+- [x] Add a migration scheduling option to execute the migration during a maintenance window (e.g., 2:00 AM)
 
 ---
 
@@ -261,13 +261,13 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Add a read-only database inspection tool at `/admin/system/tools/db-inspector` that allows super-admins to view table schemas, row counts, and run SELECT-only queries against the DotMac database
-- [ ] Gate access behind a separate password confirmation step with a prominent warning about data sensitivity
-- [ ] Restrict to SELECT queries only (no INSERT/UPDATE/DELETE) with query validation before execution
-- [ ] Add query result export to CSV
-- [ ] Log all database inspection queries to the audit trail with the admin user, query text, and timestamp
-- [ ] Limit access to users with a specific `system:db_admin` permission, separate from general admin permissions
-- [ ] Add database statistics overview: table sizes, row counts, index usage, and slow query log summary
+- [x] Add a read-only database inspection tool at `/admin/system/tools/db-inspector` that allows super-admins to view table schemas, row counts, and run SELECT-only queries against the DotMac database
+- [x] Gate access behind a separate password confirmation step with a prominent warning about data sensitivity
+- [x] Restrict to SELECT queries only (no INSERT/UPDATE/DELETE) with query validation before execution
+- [x] Add query result export to CSV
+- [x] Log all database inspection queries to the audit trail with the admin user, query text, and timestamp
+- [x] Limit access to users with a specific `system:db_admin` permission, separate from general admin permissions
+- [x] Add database statistics overview: table sizes, row counts, index usage, and slow query log summary
 
 ---
 
@@ -278,12 +278,12 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
-- [ ] Build an integrated speed test feature accessible from the customer portal at `/portal/speedtest` using an open-source speed test library (LibreSpeed or similar)
-- [ ] Store speed test results in a `SpeedTestResult` model with: subscriber_id, download_speed, upload_speed, latency, jitter, test_server, timestamp, and user_agent
-- [ ] Show speed test history on the subscriber detail page in the admin panel with a chart showing speed trends over time
-- [ ] Add speed test result comparison against the subscriber's plan bandwidth to flag under-performing connections
-- [ ] Allow admins to view aggregated speed test analytics: average speeds by plan, by location, by time of day
-- [ ] Add a "Clear speed test history" admin tool for data management
+- [x] Build an integrated speed test feature accessible from the customer portal at `/portal/speedtest` using an open-source speed test library (LibreSpeed or similar)
+- [x] Store speed test results in a `SpeedTestResult` model with: subscriber_id, download_speed, upload_speed, latency, jitter, test_server, timestamp, and user_agent
+- [x] Show speed test history on the subscriber detail page in the admin panel with a chart showing speed trends over time
+- [x] Add speed test result comparison against the subscriber's plan bandwidth to flag under-performing connections
+- [x] Allow admins to view aggregated speed test analytics: average speeds by plan, by location, by time of day
+- [x] Add a "Clear speed test history" admin tool for data management
 
 ---
 

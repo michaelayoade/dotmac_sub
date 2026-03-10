@@ -1,0 +1,173 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Speed Test - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="rounded-3xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Connection Speed Test</h1>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Run an on-demand browser speed test and save the result to your account history.</p>
+            </div>
+            <a href="/portal/services" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">Back to Services</a>
+        </div>
+        {% if saved %}
+        <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300">Speed test result saved successfully.</div>
+        {% endif %}
+
+        <form id="speedtest-save-form" method="POST" action="/portal/speedtest" class="mt-5">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="download_mbps" id="result-download">
+            <input type="hidden" name="upload_mbps" id="result-upload">
+            <input type="hidden" name="latency_ms" id="result-latency">
+            <input type="hidden" name="jitter_ms" id="result-jitter">
+            <input type="hidden" name="server_name" value="Portal Browser Test">
+            <input type="hidden" name="subscription_id" value="{{ active_subscription_id or '' }}">
+            <div class="grid gap-4 sm:grid-cols-4">
+                <div class="rounded-2xl bg-cyan-50 p-4 dark:bg-cyan-900/20">
+                    <p class="text-xs uppercase tracking-wide text-cyan-600 dark:text-cyan-300">Download</p>
+                    <p id="metric-download" class="mt-1 text-2xl font-bold text-cyan-700 dark:text-cyan-300">0.00 Mbps</p>
+                </div>
+                <div class="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-900/20">
+                    <p class="text-xs uppercase tracking-wide text-emerald-600 dark:text-emerald-300">Upload</p>
+                    <p id="metric-upload" class="mt-1 text-2xl font-bold text-emerald-700 dark:text-emerald-300">0.00 Mbps</p>
+                </div>
+                <div class="rounded-2xl bg-amber-50 p-4 dark:bg-amber-900/20">
+                    <p class="text-xs uppercase tracking-wide text-amber-600 dark:text-amber-300">Latency</p>
+                    <p id="metric-latency" class="mt-1 text-2xl font-bold text-amber-700 dark:text-amber-300">0.00 ms</p>
+                </div>
+                <div class="rounded-2xl bg-violet-50 p-4 dark:bg-violet-900/20">
+                    <p class="text-xs uppercase tracking-wide text-violet-600 dark:text-violet-300">Jitter</p>
+                    <p id="metric-jitter" class="mt-1 text-2xl font-bold text-violet-700 dark:text-violet-300">0.00 ms</p>
+                </div>
+            </div>
+            <div class="mt-5 flex flex-wrap items-center gap-3">
+                <button type="button" id="run-speedtest-btn" class="inline-flex items-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">Run Speed Test</button>
+                <button type="submit" id="save-speedtest-btn" disabled class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-5 py-2.5 text-sm font-semibold text-stone-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">Save Result</button>
+                <span id="speedtest-status" class="text-sm text-stone-500 dark:text-stone-400">Ready</span>
+            </div>
+        </form>
+    </div>
+
+    <div class="rounded-3xl border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Recent Speed Test History</h2>
+        <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full divide-y divide-stone-200 dark:divide-stone-700">
+                <thead>
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">Date</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">Download</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">Upload</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">Latency</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-stone-500">Source</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
+                    {% for row in speedtest_history %}
+                    <tr>
+                        <td class="px-3 py-2 text-sm text-stone-700 dark:text-stone-300">{{ row.tested_at.strftime('%Y-%m-%d %H:%M') if row.tested_at else '-' }}</td>
+                        <td class="px-3 py-2 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ '%.2f'|format(row.download_mbps or 0) }} Mbps</td>
+                        <td class="px-3 py-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ '%.2f'|format(row.upload_mbps or 0) }} Mbps</td>
+                        <td class="px-3 py-2 text-sm text-amber-600 dark:text-amber-400">{{ '%.2f'|format(row.latency_ms or 0) }} ms</td>
+                        <td class="px-3 py-2 text-sm text-stone-700 dark:text-stone-300">{{ row.source.value | title }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-stone-500">No tests recorded yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function mean(values) {
+    if (!values.length) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stddev(values) {
+    if (values.length < 2) return 0;
+    const avg = mean(values);
+    const variance = values.reduce((sum, value) => sum + Math.pow(value - avg, 2), 0) / values.length;
+    return Math.sqrt(variance);
+}
+
+async function probeLatency(samples = 5) {
+    const points = [];
+    for (let i = 0; i < samples; i += 1) {
+        const started = performance.now();
+        await fetch(`/portal/speedtest/probe-download?size_mb=1&r=${Date.now()}-${i}`, { cache: 'no-store' });
+        points.push(performance.now() - started);
+    }
+    return { latency: mean(points), jitter: stddev(points) };
+}
+
+async function probeDownload(sizeMb = 8) {
+    const started = performance.now();
+    const response = await fetch(`/portal/speedtest/probe-download?size_mb=${sizeMb}&r=${Date.now()}`, { cache: 'no-store' });
+    const blob = await response.blob();
+    const elapsedSeconds = (performance.now() - started) / 1000;
+    const bits = blob.size * 8;
+    return bits / elapsedSeconds / 1000000;
+}
+
+async function probeUpload(sizeMb = 4) {
+    const bytes = sizeMb * 1024 * 1024;
+    const payload = new Uint8Array(bytes);
+    crypto.getRandomValues(payload.subarray(0, Math.min(65536, bytes)));
+    const started = performance.now();
+    await fetch('/portal/speedtest/probe-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: payload,
+    });
+    const elapsedSeconds = (performance.now() - started) / 1000;
+    return (bytes * 8) / elapsedSeconds / 1000000;
+}
+
+(function initSpeedTest() {
+    const runBtn = document.getElementById('run-speedtest-btn');
+    const saveBtn = document.getElementById('save-speedtest-btn');
+    const status = document.getElementById('speedtest-status');
+    const metricDown = document.getElementById('metric-download');
+    const metricUp = document.getElementById('metric-upload');
+    const metricLatency = document.getElementById('metric-latency');
+    const metricJitter = document.getElementById('metric-jitter');
+
+    runBtn?.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        saveBtn.disabled = true;
+        status.textContent = 'Running latency test...';
+
+        try {
+            const ping = await probeLatency(4);
+            metricLatency.textContent = `${ping.latency.toFixed(2)} ms`;
+            metricJitter.textContent = `${ping.jitter.toFixed(2)} ms`;
+
+            status.textContent = 'Running download test...';
+            const download = await probeDownload(8);
+            metricDown.textContent = `${download.toFixed(2)} Mbps`;
+
+            status.textContent = 'Running upload test...';
+            const upload = await probeUpload(4);
+            metricUp.textContent = `${upload.toFixed(2)} Mbps`;
+
+            document.getElementById('result-download').value = download.toFixed(2);
+            document.getElementById('result-upload').value = upload.toFixed(2);
+            document.getElementById('result-latency').value = ping.latency.toFixed(2);
+            document.getElementById('result-jitter').value = ping.jitter.toFixed(2);
+
+            status.textContent = 'Complete. Save this result to your history.';
+            saveBtn.disabled = false;
+        } catch (error) {
+            status.textContent = 'Speed test failed. Please retry.';
+            console.error(error);
+        } finally {
+            runBtn.disabled = false;
+        }
+    });
+})();
+</script>
+{% endblock %}

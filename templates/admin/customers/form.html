@@ -1,6 +1,10 @@
 {% extends "layouts/admin.html" %}
 
-{% block title %}{{ 'Edit' if customer else 'New' }} {{ customer_type | title }} - Admin{% endblock %}
+{% set form_mode = form_mode | default('customer') %}
+{% set entity_label = 'Subscriber' if form_mode == 'subscriber' else 'Customer' %}
+
+{% set title_subject = entity_label if form_mode == 'subscriber' else (customer_type | title if customer else entity_label) %}
+{% block title %}{{ 'Edit' if customer else 'New' }} {{ title_subject }} - Admin{% endblock %}
 
 {% block content %}
 <div x-data="customerForm()" class="space-y-6">
@@ -15,15 +19,15 @@
         <nav class="flex items-center gap-2 text-sm mb-4">
             <a href="{{ return_url or '/admin/customers' }}" class="text-slate-500 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition">{{ return_label or 'Customers' }}</a>
             <svg class="h-4 w-4 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <span class="text-slate-900 dark:text-white font-medium">{{ 'Edit' if customer else 'New' }} {{ customer_type | title if customer else 'Customer' }}</span>
+            <span class="text-slate-900 dark:text-white font-medium">{{ 'Edit' if customer else 'New' }} {{ title_subject }}</span>
         </nav>
         <div class="flex items-center gap-4">
             <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 shadow-lg shadow-amber-500/25">
                 <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
             </div>
             <div>
-                <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{{ 'Edit' if customer else 'New' }} {{ customer_type | title if customer else 'Customer' }}</h1>
-                <p class="text-sm text-slate-500 dark:text-slate-400">{% if customer %}Update customer information{% else %}Create a new customer record{% endif %}</p>
+                <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{{ 'Edit' if customer else 'New' }} {{ title_subject }}</h1>
+                <p class="text-sm text-slate-500 dark:text-slate-400">{% if customer %}Update {{ entity_label | lower }} information{% else %}Create a new {{ entity_label | lower }} record{% endif %}</p>
             </div>
         </div>
     </header>
@@ -49,7 +53,7 @@
         {% if not customer %}
         <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="mb-4">
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Customer Type</h2>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ 'Subscriber Type' if form_mode == 'subscriber' else 'Customer Type' }}</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Select whether this is an individual or a business</p>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -536,15 +540,66 @@
             {% endif %}
         </div>
 
+        {% if form_mode == 'subscriber' %}
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+            <button type="button" @click="sections.subscriber = !sections.subscriber"
+                    class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    </div>
+                    <div>
+                        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Subscriber Account</h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Account identity and provisioning defaults</p>
+                    </div>
+                </div>
+                <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.subscriber ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="sections.subscriber" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                <div class="p-6 space-y-5">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                        <div>
+                            <label for="subscriber_number" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Subscriber Number</label>
+                            <input type="text" name="subscriber_number" id="subscriber_number"
+                                   value="{{ subscriber_form.subscriber_number if subscriber_form is defined else '' }}"
+                                   placeholder="Auto-generated if blank"
+                                   class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                        </div>
+                        <div>
+                            {% set selected_subscriber_category = subscriber_form.subscriber_category if subscriber_form is defined else 'residential' %}
+                            <label for="subscriber_category" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Subscriber Category</label>
+                            <select name="subscriber_category" id="subscriber_category"
+                                    class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                <option value="residential" {% if selected_subscriber_category == 'residential' %}selected{% endif %}>Residential</option>
+                                <option value="business" {% if selected_subscriber_category == 'business' %}selected{% endif %}>Business</option>
+                                <option value="government" {% if selected_subscriber_category == 'government' %}selected{% endif %}>Government</option>
+                                <option value="ngo" {% if selected_subscriber_category == 'ngo' %}selected{% endif %}>NGO</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="subscriber_notes" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Subscriber Notes</label>
+                        <textarea name="subscriber_notes" id="subscriber_notes" rows="3" placeholder="Operational notes for this subscriber account..."
+                                  class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ subscriber_form.subscriber_notes if subscriber_form is defined else '' }}</textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Form Actions -->
         <div class="flex items-center justify-between rounded-2xl border border-slate-200/60 bg-white px-6 py-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <a href="/admin/customers" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            <a href="{{ return_url or '/admin/customers' }}" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
                 Cancel
             </a>
             <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {% if form_mode == 'subscriber' %}
+                {{ 'Update' if customer else 'Create' }} Subscriber
+                {% else %}
                 {{ 'Update' if customer else 'Create' }} <span x-text="customerType === 'person' ? 'Person' : 'Organization'">{{ customer_type | title }}</span>
+                {% endif %}
             </button>
         </div>
     </form>
@@ -559,7 +614,8 @@ function customerForm() {
             address: {{ 'true' if customer else 'false' }},
             status: {{ 'true' if customer else 'false' }},
             orgBasic: true,
-            contacts: false
+            contacts: false,
+            subscriber: true
         }
     };
 }
@@ -627,6 +683,32 @@ function customerForm() {
 
         rows.querySelectorAll("[data-contact-row]").forEach((row) => wireRow(row, rows));
         updateRemoveButtons(rows);
+    });
+})();
+
+(function () {
+    const formValues = {{ form_values_json | default('{}') | safe }};
+    if (!formValues || typeof formValues !== "object") return;
+
+    const form = document.querySelector("form[method='POST']");
+    if (!form) return;
+
+    Object.entries(formValues).forEach(([name, rawValue]) => {
+        const elements = form.querySelectorAll(`[name="${name}"]`);
+        if (!elements.length) return;
+        elements.forEach((element) => {
+            const value = rawValue ?? "";
+            if (element.type === "radio") {
+                element.checked = element.value === String(value);
+                return;
+            }
+            if (element.type === "checkbox") {
+                const normalized = String(value).toLowerCase();
+                element.checked = !["", "false", "0", "none", "null"].includes(normalized);
+                return;
+            }
+            element.value = value;
+        });
     });
 })();
 </script>

@@ -1,4 +1,11 @@
-"""Ledger entry management service."""
+"""Ledger entry management service.
+
+Ledger entries are immutable financial records. Once created, they cannot
+be modified. To correct an entry, create a reversing entry using the
+``reverse()`` method.
+"""
+
+import logging
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -13,6 +20,13 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
+
+_REVERSE_TYPE = {
+    LedgerEntryType.debit: LedgerEntryType.credit,
+    LedgerEntryType.credit: LedgerEntryType.debit,
+}
 
 
 class LedgerEntries(ListResponseMixin):
@@ -35,6 +49,18 @@ class LedgerEntries(ListResponseMixin):
         entry = get_by_id(db, LedgerEntry, entry_id)
         if not entry:
             raise HTTPException(status_code=404, detail="Ledger entry not found")
+        return entry
+
+    @staticmethod
+    def update(db: Session, entry_id: str, payload: LedgerEntryUpdate):
+        entry = get_by_id(db, LedgerEntry, entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Ledger entry not found")
+        updates = payload.model_dump(exclude_unset=True)
+        for field, value in updates.items():
+            setattr(entry, field, value)
+        db.commit()
+        db.refresh(entry)
         return entry
 
     @staticmethod
@@ -74,25 +100,42 @@ class LedgerEntries(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, entry_id: str, payload: LedgerEntryUpdate):
-        entry = get_by_id(db, LedgerEntry, entry_id)
-        if not entry:
+    def reverse(db: Session, entry_id: str, memo: str | None = None) -> LedgerEntry:
+        """Create a reversing entry for an existing ledger entry.
+
+        This is the correct way to 'undo' a ledger entry — ledger entries
+        are immutable and must never be modified directly.
+
+        Args:
+            db: Database session.
+            entry_id: ID of the entry to reverse.
+            memo: Optional memo for the reversing entry.
+
+        Returns:
+            The newly created reversing LedgerEntry.
+        """
+        original = get_by_id(db, LedgerEntry, entry_id)
+        if not original:
             raise HTTPException(status_code=404, detail="Ledger entry not found")
-        data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", entry.account_id))
-        invoice_id = data.get("invoice_id", entry.invoice_id)
-        payment_id = data.get("payment_id", entry.payment_id)
-        _validate_ledger_linkages(
-            db,
-            account_id,
-            str(invoice_id) if invoice_id else None,
-            str(payment_id) if payment_id else None,
+        if not original.is_active:
+            raise HTTPException(status_code=400, detail="Ledger entry is already inactive")
+        reversed_type = _REVERSE_TYPE[original.entry_type]
+        reversal = LedgerEntry(
+            account_id=original.account_id,
+            invoice_id=original.invoice_id,
+            payment_id=original.payment_id,
+            entry_type=reversed_type,
+            source=original.source,
+            amount=original.amount,
+            currency=original.currency,
+            memo=memo or f"Reversal of ledger entry {entry_id}",
         )
-        for key, value in data.items():
-            setattr(entry, key, value)
+        db.add(reversal)
+        original.is_active = False
         db.commit()
-        db.refresh(entry)
-        return entry
+        db.refresh(reversal)
+        logger.info("Reversed ledger entry %s with new entry %s", entry_id, reversal.id)
+        return reversal
 
     @staticmethod
     def delete(db: Session, entry_id: str):

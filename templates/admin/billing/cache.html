@@ -1,0 +1,123 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, metric_row %}
+
+{% block title %}Invoice Cache - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Invoice PDF Cache",
+        subtitle="Manage cached invoice PDFs and invalidate stale artifacts",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+        color="emerald",
+        color2="teal"
+    ) %}{% endcall %}
+
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">{{ notice }}</div>
+    {% endif %}
+
+    <div class="grid gap-4 md:grid-cols-4">
+        {% call card("Cached invoices", color="emerald") %}
+            <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total_cached_invoices }}</p>
+        {% endcall %}
+        {% call card("Cache size", color="emerald") %}
+            <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.cache_size_label }}</p>
+        {% endcall %}
+        {% call card("Oldest cache", color="emerald") %}
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.oldest_cached_at.strftime('%Y-%m-%d %H:%M') if stats.oldest_cached_at else 'N/A' }}</p>
+        {% endcall %}
+        {% call card("Hit rate", color="emerald") %}
+            <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ '%.2f'|format(stats.hit_rate_pct) }}%</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Avg generation {{ stats.avg_generation_label }}</p>
+        {% endcall %}
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-3">
+        <div class="lg:col-span-2 rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Cached Invoice PDFs</h2>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 bg-slate-50 dark:border-slate-700/50 dark:bg-slate-800/70">
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Invoice</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Customer</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Cached at</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Size</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for row in rows %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ row.invoice_number }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.account_name }}</td>
+                            <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">{{ row.cached_at.strftime('%Y-%m-%d %H:%M') if row.cached_at else '-' }}</td>
+                            <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">{{ row.cache_size_label }}</td>
+                            <td class="px-4 py-3 text-right">
+                                <a href="/admin/billing/invoices/{{ row.invoice_id }}" class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">View</a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No cached invoices found for current filter.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            {% call card("Filter", color="emerald") %}
+            <form method="GET" action="/admin/billing/cache" class="space-y-3">
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-500">From date</label>
+                    <input type="date" name="date_from" value="{{ filters.date_from }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-500">To date</label>
+                    <input type="date" name="date_to" value="{{ filters.date_to }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                </div>
+                <div>
+                    <label class="mb-1 block text-xs font-medium text-slate-500">Customer account</label>
+                    <select name="account_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">All customers</option>
+                        {% for account in accounts %}
+                        <option value="{{ account.id }}" {% if filters.account_id == (account.id|string) %}selected{% endif %}>{{ account.full_name or account.email or account.id }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Apply Filter</button>
+            </form>
+            {% endcall %}
+
+            {% call card("Clear Cache", color="emerald") %}
+            <form method="POST" action="/admin/billing/cache/clear" class="space-y-2">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="mode" value="all" />
+                <button type="submit" class="w-full rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">Clear All Cache</button>
+            </form>
+            <form method="POST" action="/admin/billing/cache/clear" class="space-y-2">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="mode" value="date_range" />
+                <input type="date" name="date_from" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                <input type="date" name="date_to" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                <button type="submit" class="w-full rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">Clear By Date Range</button>
+            </form>
+            <form method="POST" action="/admin/billing/cache/clear" class="space-y-2">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="mode" value="account" />
+                <select name="account_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for account in accounts %}
+                    <option value="{{ account.id }}">{{ account.full_name or account.email or account.id }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="w-full rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-300">Clear By Customer</button>
+            </form>
+            {% endcall %}
+        </div>
+    </div>
+</div>
+{% endblock %}

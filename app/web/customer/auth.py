@@ -1,6 +1,6 @@
 """Customer portal authentication using local credentials or RADIUS."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -15,9 +15,14 @@ def get_current_customer_from_request(request: Request, db: Session) -> dict | N
 
 
 @router.get("/login", response_class=HTMLResponse)
-def customer_login_page(request: Request, error: str | None = None, next: str | None = None):
+def customer_login_page(
+    request: Request,
+    error: str | None = None,
+    next: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Display the customer login page."""
-    return web_customer_auth_service.customer_login_page(request, error, next)
+    return web_customer_auth_service.customer_login_page(request, db, error, next)
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -35,14 +40,14 @@ def customer_login_submit(
     )
 
 
-@router.get("/logout")
+@router.post("/logout")
 def customer_logout(request: Request):
     """Log out the current customer."""
     return web_customer_auth_service.customer_logout(request)
 
 
-@router.get("/stop-impersonation")
-def customer_stop_impersonation(request: Request, next: str = "/admin/customers"):
+@router.post("/stop-impersonation")
+def customer_stop_impersonation(request: Request, next: str = Form("/admin/subscribers")):
     """Stop customer impersonation and return to admin."""
     return web_customer_auth_service.customer_stop_impersonation(request, next)
 
@@ -53,7 +58,7 @@ def customer_session_info(request: Request, db: Session = Depends(get_db)):
     return web_customer_auth_service.customer_session_info(request, db)
 
 
-@router.get("/refresh")
-def customer_refresh(request: Request):
+@router.post("/refresh")
+def customer_refresh(request: Request, db: Session = Depends(get_db)):
     """Refresh the customer session cookie."""
-    return web_customer_auth_service.customer_refresh(request)
+    return web_customer_auth_service.customer_refresh(request, db)

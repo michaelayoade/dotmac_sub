@@ -1,0 +1,29 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}Subscriber Settings - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Subscriber Settings", subtitle="Login generation, passwords, welcome messages, and portal 2FA", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="indigo", color2="violet") %}{% endcall %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("Subscriber Settings", color="indigo") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Login Username Format</label><input type="text" name="login_format" value="{{ subscriber_settings.login_format or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password Length</label><input type="text" name="password_length" value="{{ subscriber_settings.password_length or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password Character Set</label><input type="text" name="password_charset" value="{{ subscriber_settings.password_charset or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Welcome Message</label><input type="text" name="welcome_enabled" value="{{ subscriber_settings.welcome_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Welcome Channel</label><input type="text" name="welcome_channel" value="{{ subscriber_settings.welcome_channel or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Welcome Delay</label><input type="text" name="welcome_delay" value="{{ subscriber_settings.welcome_delay or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default Billing Type</label><input type="text" name="default_billing_type" value="{{ subscriber_settings.default_billing_type or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Max Search Results</label><input type="text" name="max_search_results" value="{{ subscriber_settings.max_search_results or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Statistics Format</label><input type="text" name="stats_format" value="{{ subscriber_settings.stats_format or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Portal 2FA</label><input type="text" name="portal_2fa_enabled" value="{{ subscriber_settings.portal_2fa_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Portal 2FA Method</label><input type="text" name="portal_2fa_method" value="{{ subscriber_settings.portal_2fa_method or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+        </div>
+        {% endcall %}
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 transition">Save Configuration</button></div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

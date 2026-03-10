@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Organization, Subscriber
 from app.services import subscriber as subscriber_service
+
+logger = logging.getLogger(__name__)
 
 
 def parse_customer_ref(value: str | None) -> tuple[str | None, str | None]:

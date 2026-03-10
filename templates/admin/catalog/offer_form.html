@@ -42,10 +42,10 @@
                         } %}
                         {% for cat in plan_categories %}
                         <label class="relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors
-                            {% if offer.plan_category == cat %}border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/20 dark:text-violet-300{% else %}border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500{% endif %}">
+                            {% if offer.plan_category == cat %}border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300{% else %}border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500{% endif %}">
                             <input type="radio" name="plan_category" value="{{ cat }}" {% if offer.plan_category == cat %}checked{% endif %}
                                 class="sr-only peer"
-                                onchange="this.form.querySelectorAll('[name=plan_category]').forEach(r => { r.closest('label').className = r.checked ? 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/20 dark:text-violet-300' : 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500'; })">
+                                onchange="this.form.querySelectorAll('[name=plan_category]').forEach(r => { r.closest('label').className = r.checked ? 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-900/30 dark:text-violet-300' : 'relative flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-3 transition-colors border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500'; })">
                             {{ category_icons.get(cat, '') | safe }}
                             <span class="text-sm font-medium">{{ category_labels.get(cat, cat | replace("_", " ") | title) }}</span>
                         </label>
@@ -84,7 +84,7 @@
                 <div class="flex flex-col gap-3">
                     <label class="flex items-center gap-2">
                         <input type="checkbox" name="hide_on_admin_portal" value="true" {% if offer.hide_on_admin_portal %}checked{% endif %}
-                            class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                         <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Hide on admin portal</span>
                     </label>
                     <p class="ml-6 text-xs text-slate-500 dark:text-slate-400">When enabled, this tariff will not appear in the main admin tariff list (use for internal or deprecated plans).</p>
@@ -102,7 +102,7 @@
                     <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="show_on_customer_portal" value="true" {% if offer.show_on_customer_portal %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Show on Customer Portal</span>
                         </label>
                         <p class="ml-6 mt-1 text-xs text-slate-500 dark:text-slate-400">Display this plan on the customer self-service portal.</p>
@@ -110,7 +110,7 @@
                     <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="available_for_services" value="true" {% if offer.available_for_services %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Available for New Services</span>
                         </label>
                         <p class="ml-6 mt-1 text-xs text-slate-500 dark:text-slate-400">Allow this plan to be selected for new subscriptions.</p>
@@ -382,17 +382,17 @@
                     </div>
 
                     <div>
-                        <label for="radius_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Profile <span class="text-red-500">*</span></label>
-                        <select name="radius_profile_id" id="radius_profile_id" required
+                        <label for="radius_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">RADIUS Profile</label>
+                        <select name="radius_profile_id" id="radius_profile_id"
                             class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="" disabled {% if not offer.radius_profile_id %}selected{% endif %}>Select a profile</option>
+                            <option value="" {% if not offer.radius_profile_id %}selected{% endif %}>Auto-generate from offer speeds</option>
                             {% for profile in radius_profiles %}
                             <option value="{{ profile.id }}" {% if offer.radius_profile_id|string == profile.id|string %}selected{% endif %}>
                                 {{ profile.name }}
                             </option>
                             {% endfor %}
                         </select>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required. Controls authentication and service attributes (bandwidth/QoS).</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to auto-create and link a MikroTik profile from this offer's name and speeds.</p>
                     </div>
 
                     <div>
@@ -444,7 +444,7 @@
                     <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="is_active" value="true" {% if offer.is_active %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
                         </label>
                     </div>
@@ -470,7 +470,7 @@
                             <input type="checkbox" name="addon_link_{{ addon_id }}" value="true"
                                 {% if is_linked %}checked{% endif %}
                                 @change="expanded = $event.target.checked"
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <div>
                                 <span class="font-medium text-slate-900 dark:text-white">{{ addon.name }}</span>
                                 {% if addon.addon_type %}
@@ -488,7 +488,7 @@
                                 <label class="flex items-center gap-2">
                                     <input type="checkbox" name="addon_required_{{ addon_id }}" value="true"
                                         {% if link_data.get('is_required') %}checked{% endif %}
-                                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                        class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                                     <span class="text-sm text-slate-700 dark:text-slate-300">Required</span>
                                 </label>
                             </div>
@@ -618,21 +618,21 @@
                     <div class="sm:col-span-2">
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="with_vat" value="true" {% if offer.with_vat %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Prices include VAT</span>
                         </label>
                     </div>
                     <div class="sm:col-span-2">
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="available_for_services" value="true" {% if offer.available_for_services %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Available for services</span>
                         </label>
                     </div>
                     <div class="sm:col-span-2">
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="show_on_customer_portal" value="true" {% if offer.show_on_customer_portal %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:text-primary-500 focus:ring-primary-500">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Show on customer portal</span>
                         </label>
                     </div>

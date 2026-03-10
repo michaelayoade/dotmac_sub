@@ -19,6 +19,7 @@ def get_dashboard_stats(db: Session) -> dict[str, object]:
     from app.models.audit import AuditEvent
     from app.models.auth import ApiKey
     from app.models.rbac import Role
+    from app.services import billing_invoice_pdf as billing_invoice_pdf_service
     from app.services import system_health as system_health_service
     from app.services.web_system_users import get_user_stats
 
@@ -65,6 +66,7 @@ def get_dashboard_stats(db: Session) -> dict[str, object]:
         .limit(10)
         .all()
     )
+    invoice_cache = billing_invoice_pdf_service.get_cache_dashboard_stats(db)
 
     return {
         "user_stats": user_stats,
@@ -75,7 +77,10 @@ def get_dashboard_stats(db: Session) -> dict[str, object]:
             "uptime": health.get("uptime_display", "--"),
             "cpu_count": health.get("cpu_count", 0),
             "memory_pct": health.get("memory", {}).get("used_pct", "--"),
+            "memory_pct_value": health.get("memory", {}).get("used_pct_value"),
             "disk_pct": health.get("disk", {}).get("used_pct", "--"),
+            "disk_pct_value": health.get("disk", {}).get("used_pct_value"),
         },
+        "invoice_cache_summary": invoice_cache,
         "recent_audits": recent_audits,
     }

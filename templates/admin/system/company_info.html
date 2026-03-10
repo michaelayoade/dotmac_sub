@@ -1,0 +1,111 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, action_button, animation_styles %}
+
+{% block title %}Company Information - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Company Information",
+        subtitle="Manage company details, address, and bank information used on invoices and communications",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}{% endcall %}
+
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        {# Company Details #}
+        {% call card("Company Details", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Company Name</label>
+                <input type="text" name="company_name" value="{{ info.company_name or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Dotmac Technologies Ltd">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing System URL</label>
+                <input type="url" name="billing_url" value="{{ info.billing_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://billing.example.com">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Registration ID</label>
+                <input type="text" name="company_registration_id" value="{{ info.company_registration_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">VAT Number</label>
+                <input type="text" name="company_vat_number" value="{{ info.company_vat_number or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Partner Commission %</label>
+                <input type="number" step="0.01" name="partner_commission_pct" value="{{ info.partner_commission_pct or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="0.00">
+            </div>
+        </div>
+        {% endcall %}
+
+        {# Address #}
+        {% call card("Address", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Street Address Line 1</label>
+                <input type="text" name="company_address_street1" value="{{ info.company_address_street1 or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Street Address Line 2</label>
+                <input type="text" name="company_address_street2" value="{{ info.company_address_street2 or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">City</label>
+                <input type="text" name="company_address_city" value="{{ info.company_address_city or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">ZIP / Postal Code</label>
+                <input type="text" name="company_address_zip" value="{{ info.company_address_zip or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Country</label>
+                <input type="text" name="company_address_country" value="{{ info.company_address_country or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Nigeria">
+            </div>
+        </div>
+        {% endcall %}
+
+        {# Contact #}
+        {% call card("Contact Information", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Email Address</label>
+                <input type="email" name="company_email" value="{{ info.company_email or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Phone Number</label>
+                <input type="tel" name="company_phone" value="{{ info.company_phone or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="+234 801 234 5678">
+            </div>
+        </div>
+        {% endcall %}
+
+        {# Bank Details #}
+        {% call card("Bank Details", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Bank Name</label>
+                <input type="text" name="company_bank_name" value="{{ info.company_bank_name or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Account Number</label>
+                <input type="text" name="company_bank_account" value="{{ info.company_bank_account or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Branch / Address</label>
+                <input type="text" name="company_bank_branch" value="{{ info.company_bank_branch or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        {% endcall %}
+
+        <div class="flex justify-end">
+            <button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Company Information</button>
+        </div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

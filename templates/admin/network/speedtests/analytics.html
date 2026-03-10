@@ -1,0 +1,126 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}Speed Test Analytics - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "sky") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Speed Test Analytics",
+        subtitle="Aggregate quality trends by plan, location, and hour",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3v18h18M7 14l3-3 3 2 4-5"/></svg>',
+        color="cyan",
+        color2="sky"
+    ) %}
+        <a href="/admin/network/speedtests" class="inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-white px-4 py-2.5 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-700 dark:bg-slate-800 dark:text-cyan-300">
+            Back to Results
+        </a>
+    {% endcall %}
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/speedtests/analytics" class="flex items-end gap-3">
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Window</label>
+                <input type="number" name="days" min="1" max="365" value="{{ days }}" class="w-40 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700">Apply</button>
+            <p class="text-sm text-slate-500 dark:text-slate-400">{{ total_results }} records in scope</p>
+        </form>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+            <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Average Speeds by Plan</h2>
+            </div>
+            <table class="min-w-full">
+                <thead>
+                    <tr class="bg-slate-50/60 dark:bg-slate-800/40">
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Plan</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Tests</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Avg Download</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Avg Upload</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in by_plan[:15] %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.plan }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.count }}</td>
+                        <td class="px-4 py-3 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ row.avg_download }} Mbps</td>
+                        <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ row.avg_upload }} Mbps</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-4 py-8 text-center text-sm text-slate-500">No data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+            <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Average Speeds by Location</h2>
+            </div>
+            <table class="min-w-full">
+                <thead>
+                    <tr class="bg-slate-50/60 dark:bg-slate-800/40">
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Location</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Tests</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Avg Download</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Avg Upload</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in by_location[:15] %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.location }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ row.count }}</td>
+                        <td class="px-4 py-3 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ row.avg_download }} Mbps</td>
+                        <td class="px-4 py-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ row.avg_upload }} Mbps</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-4 py-8 text-center text-sm text-slate-500">No data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Average Speeds by Time of Day</h2>
+        <div class="mt-4 h-80">
+            <canvas id="speedHourlyChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const hourlyData = {{ by_hour | tojson }};
+const labels = hourlyData.map((row) => `${String(row.hour).padStart(2, '0')}:00`);
+const down = hourlyData.map((row) => row.avg_download || 0);
+const up = hourlyData.map((row) => row.avg_upload || 0);
+const ctx = document.getElementById('speedHourlyChart');
+if (ctx && typeof Chart !== 'undefined') {
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Download (Mbps)', data: down, borderColor: '#0891b2', backgroundColor: 'rgba(8,145,178,0.18)', tension: 0.25, fill: true },
+                { label: 'Upload (Mbps)', data: up, borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.15)', tension: 0.25, fill: true },
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Mbps' } },
+            },
+        },
+    });
+}
+</script>
+{% endblock %}

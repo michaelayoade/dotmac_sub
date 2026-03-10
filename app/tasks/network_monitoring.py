@@ -1,0 +1,93 @@
+"""Celery tasks for periodic network monitoring health refresh."""
+
+from __future__ import annotations
+
+import logging
+
+from app.celery_app import celery_app
+from app.db import SessionLocal
+from app.models.network_monitoring import NetworkDevice
+from app.services import web_network_core_runtime as core_runtime_service
+from app.services.network_vendor_polling import refresh_device_from_vendor_api
+
+logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="app.tasks.network_monitoring.refresh_core_device_ping")
+def refresh_core_device_ping() -> dict[str, int]:
+    """Refresh ping status for active devices with ping enabled."""
+    session = SessionLocal()
+    try:
+        devices = (
+            session.query(NetworkDevice)
+            .filter(NetworkDevice.is_active.is_(True))
+            .filter(NetworkDevice.ping_enabled.is_(True))
+            .all()
+        )
+        summary = core_runtime_service.refresh_devices_health(
+            session,
+            devices,
+            include_snmp=False,
+            max_workers=12,
+        )
+        session.commit()
+        return summary
+    except Exception:
+        session.rollback()
+        logger.exception("Periodic ping refresh failed")
+        raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.network_monitoring.refresh_core_device_snmp")
+def refresh_core_device_snmp() -> dict[str, int]:
+    """Refresh SNMP health + metrics for active SNMP-enabled devices."""
+    session = SessionLocal()
+    checked = 0
+    updated = 0
+    failed = 0
+    try:
+        devices = (
+            session.query(NetworkDevice)
+            .filter(NetworkDevice.is_active.is_(True))
+            .filter(NetworkDevice.snmp_enabled.is_(True))
+            .all()
+        )
+        for device in devices:
+            checked += 1
+            try:
+                handled, success = refresh_device_from_vendor_api(session, device)
+                if handled:
+                    if success:
+                        updated += 1
+                    else:
+                        failed += 1
+                else:
+                    core_runtime_service.snmp_check_device(session, str(device.id))
+                    if device.last_snmp_ok:
+                        core_runtime_service.discover_interfaces_and_health(session, device)
+                        updated += 1
+                    else:
+                        failed += 1
+            except Exception:
+                session.rollback()
+                failed += 1
+                logger.exception("SNMP refresh failed for device %s", device.id)
+                # Re-open a clean transaction after rollback and mark failure if possible.
+                try:
+                    device_fresh = session.get(NetworkDevice, device.id)
+                    if device_fresh:
+                        core_runtime_service.mark_discovery_failure(session, device_fresh)
+                except Exception:
+                    session.rollback()
+            finally:
+                session.commit()
+
+        return {"checked": checked, "updated": updated, "failed": failed}
+    except Exception:
+        session.rollback()
+        logger.exception("Periodic SNMP refresh failed")
+        raise
+    finally:
+        session.close()

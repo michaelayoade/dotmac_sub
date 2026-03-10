@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.domain_settings import SettingDomain
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services.audit_helpers import (
@@ -17,7 +18,8 @@ from app.services.audit_helpers import (
     log_audit_event,
     model_to_dict,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
+from app.services.settings_spec import resolve_value
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -25,6 +27,10 @@ router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
+
+
+def _render_template_fragment(template_name: str, context: dict) -> str:
+    return templates.env.get_template(template_name).render(context)
 
 
 def _coerce_uuid_or_none(value: str | None) -> UUID | None:
@@ -41,12 +47,14 @@ def _base_context(
 ) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    auth = getattr(request.state, "auth", None) or {}
     return {
         "request": request,
         "active_page": active_page,
         "active_menu": active_menu,
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "can_write_network": bool(auth) and has_permission(auth, db, "network:write"),
     }
 
 
@@ -55,10 +63,34 @@ def network_devices_consolidated(
     request: Request,
     tab: str = "core",
     search: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
     db: Session = Depends(get_db),
 ):
     """Consolidated view of all network devices - core, OLTs, ONTs/CPE."""
-    page_data = web_network_core_devices_service.consolidated_page_data(tab, db, search)
+    page_data = web_network_core_devices_service.consolidated_page_data(
+        tab,
+        db,
+        search,
+    )
+    core_per_page_options = [25, 50, 100, 200]
+    selected_per_page = per_page if per_page in core_per_page_options else 50
+    all_core_devices = list(page_data.get("core_devices") or [])
+    total_core = len(all_core_devices)
+    total_pages = max(1, (total_core + selected_per_page - 1) // selected_per_page)
+    current_page = max(1, min(page, total_pages))
+    start_idx = (current_page - 1) * selected_per_page
+    end_idx = start_idx + selected_per_page
+    page_data["core_devices"] = all_core_devices[start_idx:end_idx]
+    page_data["core_per_page_options"] = core_per_page_options
+    page_data["core_pagination"] = {
+        "page": current_page,
+        "per_page": selected_per_page,
+        "total": total_core,
+        "total_pages": total_pages,
+        "has_prev": current_page > 1,
+        "has_next": current_page < total_pages,
+    }
     context = _base_context(request, db, active_page="network-devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/network-devices/index.html", context)
@@ -107,7 +139,49 @@ def core_devices_list(
         pop_site_id=pop_site_id,
         search=search,
     )
+    refresh_param = (request.query_params.get("refresh") or "").strip().lower()
+    force_refresh = refresh_param in {"1", "true", "yes", "on"}
+    refresh_summary: dict[str, int] | None = None
+    try:
+        ping_interval_seconds = int(
+            str(resolve_value(db, SettingDomain.network_monitoring, "core_device_ping_interval_seconds") or 120)
+        )
+    except (TypeError, ValueError):
+        ping_interval_seconds = 120
+    try:
+        snmp_interval_seconds = int(
+            str(
+                resolve_value(
+                    db,
+                    SettingDomain.network_monitoring,
+                    "core_device_snmp_walk_interval_seconds",
+                )
+                or 300
+            )
+        )
+    except (TypeError, ValueError):
+        snmp_interval_seconds = 300
+    devices = page_data.get("devices")
+    if isinstance(devices, list) and devices:
+        refresh_summary = web_network_core_runtime_service.refresh_stale_devices_health(
+            db,
+            devices,
+            ping_interval_seconds=ping_interval_seconds,
+            snmp_interval_seconds=snmp_interval_seconds,
+            include_snmp=True,
+            force=force_refresh,
+        )
+        if refresh_summary.get("checked", 0) > 0:
+            page_data = web_network_core_devices_service.list_page_data(
+                db,
+                role,
+                status,
+                device_type=device_type,
+                pop_site_id=pop_site_id,
+                search=search,
+            )
     context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context["refresh_summary"] = refresh_summary
     context.update(page_data)
     return templates.TemplateResponse("admin/network/core-devices/index.html", context)
 
@@ -206,7 +280,10 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"name": device.name, "mgmt_ip": device.mgmt_ip or None},
     )
-    return RedirectResponse(f"/admin/network/core-devices/{device.id}", status_code=303)
+    target_url = f"/admin/network/core-devices/{device.id}"
+    if result.warning:
+        target_url = f"{target_url}?error={quote_plus(result.warning)}"
+    return RedirectResponse(target_url, status_code=303)
 
 
 @router.get("/core-devices/parent-options", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
@@ -269,6 +346,8 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
         request.query_params.get("interface_id"),
         format_duration=_format_duration,
         format_bps=_format_bps,
+        message=request.query_params.get("message"),
+        error=request.query_params.get("error"),
     )
     if not page_data:
         return templates.TemplateResponse(
@@ -281,6 +360,28 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
     context.update(page_data)
     context["activities"] = activities
     return templates.TemplateResponse("admin/network/core-devices/detail.html", context)
+
+
+@router.post("/core-devices/{device_id}/provisioning-access", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_provisioning_access_update(
+    device_id: str,
+    ssh_username: str = Form(""),
+    ssh_password: str | None = Form(None),
+    shared_secret: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    ok, msg = web_network_core_devices_service.update_provisioning_access_for_device(
+        db,
+        device_id=device_id,
+        ssh_username=ssh_username,
+        ssh_password=ssh_password,
+        shared_secret=shared_secret,
+    )
+    key = "message" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}?{key}={quote_plus(msg)}",
+        status_code=303,
+    )
 
 
 @router.get("/core-devices/{device_id}/snmp-oids", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
@@ -590,7 +691,7 @@ def core_device_backup_settings_update(
     enabled: bool = Form(False),
     ssh_username: str = Form(""),
     ssh_password: str | None = Form(None),
-    ssh_port: int = Form(22),
+    ssh_port: int = Form(120),
     backup_type: str = Form("commands"),
     backup_commands: str | None = Form("export"),
     hours_csv: str | None = Form(None),
@@ -838,18 +939,32 @@ def core_device_discover_interfaces(request: Request, device_id: str, db: Sessio
         )
 
     refresh = request.query_params.get("refresh", "true").lower() != "false"
-    headers = {}
-    if refresh:
-        headers["HX-Refresh"] = "true"
-    else:
-        headers["HX-Trigger"] = "snmp-discovered"
-    return HTMLResponse(
+    message_html = (
         '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 '
         'dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">'
         f"Discovery complete: {created} new, {updated} updated interfaces."
-        "</div>",
-        headers=headers,
+        "</div>"
     )
+    if refresh:
+        return HTMLResponse(message_html, headers={"HX-Refresh": "true"})
+
+    page_data = web_network_core_devices_service.detail_page_data(
+        db,
+        device_id,
+        interface_id=request.query_params.get("interface_id"),
+        format_duration=_format_duration,
+        format_bps=_format_bps,
+    )
+    if not page_data:
+        return HTMLResponse(message_html)
+    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context.update(page_data)
+    context["oob_swap"] = True
+    interfaces_card_html = _render_template_fragment(
+        "admin/network/core-devices/_interfaces_card.html",
+        context,
+    )
+    return HTMLResponse(message_html + interfaces_card_html)
 
 
 @router.post("/core-devices/{device_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
@@ -928,4 +1043,7 @@ def core_device_update(request: Request, device_id: str, db: Session = Depends(g
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata_payload,
     )
-    return RedirectResponse(f"/admin/network/core-devices/{device.id}", status_code=303)
+    target_url = f"/admin/network/core-devices/{device.id}"
+    if result.warning:
+        target_url = f"{target_url}?error={quote_plus(result.warning)}"
+    return RedirectResponse(target_url, status_code=303)

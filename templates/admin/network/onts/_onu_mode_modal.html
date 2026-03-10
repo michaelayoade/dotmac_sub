@@ -103,8 +103,8 @@
                 {# PPPoE Password — conditional on WAN mode #}
                 <div x-show="wanMode === 'pppoe'" x-transition x-cloak>
                     <label for="pppoe_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Password</label>
-                    <input type="text" name="pppoe_password" id="pppoe_password"
-                           value="{{ ont.pppoe_password or '' }}"
+                    <input type="password" name="pppoe_password" id="pppoe_password"
+                           value=""
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                            placeholder="PPPoE password">
                 </div>

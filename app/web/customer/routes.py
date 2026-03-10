@@ -1,18 +1,49 @@
 """Customer portal web routes."""
 
+import asyncio
+import json
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
+import anyio
 
-from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
+from app.models.bandwidth import BandwidthSample
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.services.bandwidth import bandwidth_samples
 from app.services import customer_portal
+from app.services.metrics_store import get_metrics_store
+from app.services import web_network_speedtests as web_network_speedtests_service
 from app.web.customer.auth import get_current_customer_from_request
+from app.web.customer.branding import get_customer_templates
 
-templates = Jinja2Templates(directory="templates")
+templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
+
+
+def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
+    account_id, session_subscription_id = customer_portal.resolve_customer_account(customer, db)
+    account_id_str = str(account_id) if account_id else None
+
+    if session_subscription_id:
+        subscription = db.get(Subscription, session_subscription_id)
+        if subscription and (
+            not account_id_str or str(subscription.subscriber_id) == account_id_str
+        ):
+            return subscription
+
+    if not account_id_str:
+        return None
+
+    try:
+        return bandwidth_samples.get_user_active_subscription(db, {"account_id": account_id_str})
+    except HTTPException:
+        return None
 
 
 @router.get("", response_class=HTMLResponse)
@@ -127,7 +158,7 @@ def customer_invoice_detail(
 @router.get("/usage", response_class=HTMLResponse)
 def customer_usage(
     request: Request,
-    period: str = "current",
+    period: str = Query("current", pattern="^(current|last)$"),
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -152,6 +183,256 @@ def customer_usage(
             "active_page": "usage",
         },
     )
+
+
+@router.get("/bandwidth/my/series")
+def customer_bandwidth_series(
+    request: Request,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    interval: str = Query(default="auto", pattern="^(auto|1m|5m|1h)$"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    subscription = _resolve_customer_subscription(db, customer)
+    if not subscription:
+        return JSONResponse({"data": [], "total": 0, "source": "postgres"})
+
+    result = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_series,
+        db,
+        subscription.id,
+        start_at,
+        end_at,
+        interval,
+    )
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.get("/bandwidth/my/stats")
+def customer_bandwidth_stats(
+    request: Request,
+    period: str = Query(default="24h", pattern="^(1h|24h|7d|30d)$"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    subscription = _resolve_customer_subscription(db, customer)
+    if not subscription:
+        return JSONResponse(
+            {
+                "current_rx_bps": 0,
+                "current_tx_bps": 0,
+                "peak_rx_bps": 0,
+                "peak_tx_bps": 0,
+                "total_rx_bytes": 0,
+                "total_tx_bytes": 0,
+                "sample_count": 0,
+            }
+        )
+
+    stats = anyio.from_thread.run(
+        bandwidth_samples.get_bandwidth_stats,
+        db,
+        subscription.id,
+        period,
+    )
+    return JSONResponse(stats)
+
+
+@router.get("/bandwidth/my/live")
+def customer_bandwidth_live(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    subscription = _resolve_customer_subscription(db, customer)
+    if not subscription:
+        return JSONResponse({"detail": "No active subscription found"}, status_code=404)
+
+    subscription_id = subscription.id
+
+    async def event_generator():
+        metrics_store = get_metrics_store()
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            current = {"rx_bps": 0.0, "tx_bps": 0.0}
+            try:
+                current = await metrics_store.get_current_bandwidth(str(subscription_id))
+            except Exception:
+                pass
+
+            try:
+                if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
+                    sse_db = SessionLocal()
+                    try:
+                        cutoff = datetime.now(UTC) - timedelta(minutes=2)
+                        latest_sample = (
+                            sse_db.query(BandwidthSample)
+                            .filter(
+                                BandwidthSample.subscription_id == subscription_id,
+                                BandwidthSample.sample_at >= cutoff,
+                            )
+                            .order_by(BandwidthSample.sample_at.desc())
+                            .first()
+                        )
+                        if latest_sample:
+                            current = {
+                                "rx_bps": float(latest_sample.rx_bps or 0),
+                                "tx_bps": float(latest_sample.tx_bps or 0),
+                            }
+                    finally:
+                        sse_db.close()
+            except Exception:
+                pass
+
+            now = datetime.now(UTC)
+            yield {
+                "event": "bandwidth",
+                "data": json.dumps(
+                    {
+                        "timestamp": now.isoformat(),
+                        "rx_bps": float(current.get("rx_bps", 0) or 0),
+                        "tx_bps": float(current.get("tx_bps", 0) or 0),
+                    }
+                ),
+            }
+            await asyncio.sleep(1)
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/speedtest", response_class=HTMLResponse)
+def customer_speedtest(
+    request: Request,
+    saved: str | None = None,
+    subscription_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Customer portal speed test."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/speedtest", status_code=303
+        )
+
+    account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
+        customer, db
+    )
+    subscriber_id = account_id or (str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None)
+    if not subscriber_id:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Subscriber account not found"},
+            status_code=404,
+        )
+    selected_subscription = subscription_id or resolved_subscription_id
+    page_data = web_network_speedtests_service.portal_page_data(
+        db,
+        subscriber_id=subscriber_id,
+        subscription_id=selected_subscription,
+    )
+
+    return templates.TemplateResponse(
+        "customer/services/speedtest.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "saved": bool(saved),
+            "active_page": "speedtest",
+        },
+    )
+
+
+@router.post("/speedtest", response_class=HTMLResponse)
+def customer_speedtest_submit(
+    request: Request,
+    download_mbps: float = Form(...),
+    upload_mbps: float = Form(...),
+    latency_ms: float | None = Form(None),
+    jitter_ms: float | None = Form(None),
+    server_name: str | None = Form(None),
+    subscription_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
+        customer, db
+    )
+    subscriber_id = account_id or (str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None)
+    if not subscriber_id:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Subscriber account not found"},
+            status_code=404,
+        )
+
+    web_network_speedtests_service.create_customer_speedtest(
+        db,
+        subscriber_id=subscriber_id,
+        subscription_id=subscription_id or resolved_subscription_id,
+        download_mbps=download_mbps,
+        upload_mbps=upload_mbps,
+        latency_ms=latency_ms,
+        jitter_ms=jitter_ms,
+        server_name=server_name,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return RedirectResponse("/portal/speedtest?saved=1", status_code=303)
+
+
+@router.get("/speedtest/probe-download")
+def customer_speedtest_probe_download(
+    request: Request,
+    size_mb: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download payload for browser speed test probing."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    payload = (b"dotmac-speedtest-" * 4096) * size_mb
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+_PROBE_UPLOAD_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
+
+
+@router.post("/speedtest/probe-upload")
+def customer_speedtest_probe_upload(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Upload probe endpoint for browser speed test."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    content_length = int(request.headers.get("content-length", 0))
+    if content_length > _PROBE_UPLOAD_MAX_BYTES:
+        return JSONResponse(
+            {"detail": f"Payload too large (max {_PROBE_UPLOAD_MAX_BYTES} bytes)"},
+            status_code=413,
+        )
+    return JSONResponse({"bytes_received": content_length})
 
 
 @router.get("/account", response_class=HTMLResponse)
@@ -393,7 +674,22 @@ def customer_update_profile(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    # In real implementation, update customer profile
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id:
+        from app.models.subscriber import Subscriber
+
+        subscriber = db.get(Subscriber, subscriber_id)
+        if subscriber:
+            name_parts = name.strip().split(None, 1)
+            subscriber.first_name = name_parts[0] if name_parts else name.strip()
+            subscriber.last_name = name_parts[1] if len(name_parts) > 1 else ""
+            subscriber.email = email.strip()
+            subscriber.phone = phone.strip() if phone else None
+            db.commit()
+            db.refresh(subscriber)
+            # Refresh customer dict with updated values
+            customer = get_current_customer_from_request(request, db)
+
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
@@ -536,7 +832,7 @@ def customer_submit_change_plan(
             url=f"/portal/services/{subscription_id}?plan_changed=true",
             status_code=303,
         )
-    except Exception as exc:
+    except ValueError as exc:
         error_ctx = customer_portal.get_change_plan_error_context(
             db, str(subscription_id)
         )
@@ -551,6 +847,11 @@ def customer_submit_change_plan(
             },
             status_code=400,
         )
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception("Plan change error for %s", subscription_id)
+        raise
 
 
 @router.get("/change-requests", response_class=HTMLResponse)
@@ -675,7 +976,7 @@ def customer_submit_payment_arrangement(
             url="/portal/billing/arrangements?submitted=true",
             status_code=303,
         )
-    except Exception as exc:
+    except ValueError as exc:
         account_id = customer.get("account_id")
         account_id_str = str(account_id) if account_id else None
         error_ctx = customer_portal.get_arrangement_error_context(db, account_id_str)
@@ -690,6 +991,11 @@ def customer_submit_payment_arrangement(
             },
             status_code=400,
         )
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception("Payment arrangement error")
+        raise
 
 
 @router.get("/billing/arrangements/{arrangement_id}", response_class=HTMLResponse)

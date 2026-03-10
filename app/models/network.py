@@ -530,6 +530,14 @@ class OLTDevice(Base):
     vendor: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     serial_number: Mapped[str | None] = mapped_column(String(120))
+    ssh_username: Mapped[str | None] = mapped_column(String(120))
+    ssh_password: Mapped[str | None] = mapped_column(String(255))
+    ssh_port: Mapped[int | None] = mapped_column(Integer, default=22)
+    netconf_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    netconf_port: Mapped[int | None] = mapped_column(Integer, default=830)
+    tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -544,6 +552,7 @@ class OLTDevice(Base):
     power_units = relationship("OltPowerUnit", back_populates="olt")
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
+    tr069_acs_server = relationship("Tr069AcsServer")
 
 
 class OltConfigBackupType(enum.Enum):

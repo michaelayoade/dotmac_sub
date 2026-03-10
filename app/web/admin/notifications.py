@@ -260,8 +260,8 @@ def notification_template_test(
 ):
     """Send a test notification using this template."""
     from app.services import email as email_service
-    from app.services.integrations.connectors import whatsapp as whatsapp_service
     from app.services import sms as sms_service
+    from app.services.integrations.connectors import whatsapp as whatsapp_service
 
     try:
         template = notification_service.templates.get(db=db, template_id=str(template_id))

@@ -89,7 +89,7 @@ def _ssh_client(conn: dict) -> paramiko.SSHClient:
         pkey = paramiko.RSAKey.from_private_key_file(conn["private_key_path"])
     client.connect(
         hostname=conn["host"],
-        port=int(conn.get("port") or 22),
+        port=int(conn.get("port") or 120),
         username=conn.get("username"),
         password=conn.get("password"),
         pkey=pkey,
@@ -261,6 +261,43 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             return f"{oui}-{product_class}-{serial_number}"
         return None
 
+    def _resolve_acs_parameters(self, context: dict, config: dict) -> dict[str, str]:
+        """Build ManagementServer parameters from ACS server context.
+
+        Returns TR-069 ManagementServer parameters if an ACS server
+        is present in the provisioning context and push_acs_config
+        is not explicitly disabled.
+        """
+        if not config.get("push_acs_config", True):
+            return {}
+
+        acs = context.get("acs_server")
+        if not acs:
+            return {}
+
+        cwmp_url = acs.get("cwmp_url")
+        if not cwmp_url:
+            return {}
+
+        data_model = config.get("data_model", "Device")
+        prefix = f"{data_model}.ManagementServer"
+
+        params: dict[str, str] = {
+            f"{prefix}.URL": cwmp_url,
+        }
+        cwmp_username = acs.get("cwmp_username")
+        if cwmp_username:
+            params[f"{prefix}.Username"] = cwmp_username
+        cwmp_password = acs.get("cwmp_password")
+        if cwmp_password:
+            params[f"{prefix}.Password"] = cwmp_password
+
+        inform_interval = str(config.get("periodic_inform_interval", 3600))
+        params[f"{prefix}.PeriodicInformEnable"] = "true"
+        params[f"{prefix}.PeriodicInformInterval"] = inform_interval
+
+        return params
+
     def _execute(self, context: dict, config: dict | None, step: str) -> ProvisioningResult:
         config = config or {}
         device_id = self._resolve_device_id(context, config)
@@ -284,6 +321,13 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         parameters = config.get("parameters") or {}
         get_parameters = config.get("get_parameters") or []
         refresh_object = config.get("refresh_object")
+
+        # Auto-include ACS ManagementServer parameters when available
+        acs_params = self._resolve_acs_parameters(context, config)
+        if acs_params:
+            merged_parameters = dict(acs_params)
+            merged_parameters.update(parameters)  # User params take precedence
+            parameters = merged_parameters
 
         if parameters:
             result = client.set_parameter_values(

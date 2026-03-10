@@ -1,0 +1,264 @@
+{#
+   Data Grid Usage Examples
+   ========================
+   This file demonstrates how to use the data_grid component for different entity types.
+   It is NOT a real page — it's a reference for developers.
+#}
+{% extends "layouts/admin.html" %}
+{% from "components/data/data_grid.html" import data_grid, cell, cell_link, cell_status,
+    cell_badge, cell_date, cell_currency, cell_mono, cell_boolean, cell_actions,
+    cell_bandwidth, cell_custom %}
+
+{% block content %}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 1: Subscribers Table
+   - Sortable columns, column picker, search, pagination
+   - Link with secondary text, status badge, date, actions
+   ────────────────────────────────────────────────────── #}
+
+{% set status_map = {
+    "active": "active",
+    "suspended": "warning",
+    "canceled": "error",
+    "pending": "pending",
+} %}
+
+{% call(row) data_grid(
+    table_id="subscribers-grid",
+    items=subscribers,
+    columns=[
+        {"key": "name",       "label": "Subscriber",  "sortable": true},
+        {"key": "email",      "label": "Email",       "hidden": true},
+        {"key": "phone",      "label": "Phone",       "hidden": true},
+        {"key": "type",       "label": "Type"},
+        {"key": "status",     "label": "Status"},
+        {"key": "created_at", "label": "Created",     "sortable": true},
+        {"key": "actions",    "label": "",             "align": "right", "always_visible": true},
+    ],
+    color="amber",
+    htmx_url="/admin/subscribers",
+    create_url="/admin/subscribers/new",
+    create_label="Add Subscriber",
+    empty_title="No subscribers found",
+    empty_message="Get started by adding your first subscriber.",
+    empty_action_label="Add Subscriber",
+    empty_action_href="/admin/subscribers/new",
+    page=page,
+    total_pages=total_pages,
+    total=total,
+    per_page=per_page,
+    current_sort=sort,
+    current_dir=dir,
+    search_value=search,
+    selectable=true
+) %}
+    {{ cell_link("name",
+        row.display_name or (row.first_name ~ " " ~ row.last_name),
+        "/admin/subscribers/" ~ row.id,
+        row.email,
+        color="amber") }}
+    {{ cell("email", row.email) }}
+    {{ cell("phone", row.phone) }}
+    {{ cell_badge("type", row.user_type.value|title,
+        "info" if row.user_type.value == "person" else "purple") }}
+    {{ cell_status("status", row.status.value|title,
+        status_map.get(row.status.value, "default")) }}
+    {{ cell_date("created_at", row.created_at) }}
+    {{ cell_actions("actions", [
+        {"href": "/admin/subscribers/" ~ row.id, "icon": "view", "title": "View details", "color": "amber"},
+        {"href": "/admin/subscribers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit"},
+    ]) }}
+{% endcall %}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 2: Invoices Table
+   - Currency display, financial focus
+   - Status variants for billing states
+   ────────────────────────────────────────────────────── #}
+
+{% set inv_status = {
+    "draft": "draft",
+    "sent": "info",
+    "paid": "paid",
+    "overdue": "overdue",
+    "void": "inactive",
+} %}
+
+{% call(row) data_grid(
+    table_id="invoices-grid",
+    items=invoices,
+    columns=[
+        {"key": "number",     "label": "Invoice #",   "sortable": true},
+        {"key": "subscriber", "label": "Subscriber"},
+        {"key": "total",      "label": "Amount",      "align": "right", "sortable": true},
+        {"key": "balance",    "label": "Balance Due",  "align": "right", "hidden": true},
+        {"key": "status",     "label": "Status"},
+        {"key": "due_at",     "label": "Due Date",    "sortable": true},
+        {"key": "issued_at",  "label": "Issued",      "hidden": true},
+        {"key": "actions",    "label": "",             "align": "right", "always_visible": true},
+    ],
+    color="emerald",
+    htmx_url="/admin/billing/invoices",
+    create_url="/admin/billing/invoices/new",
+    create_label="New Invoice",
+    empty_title="No invoices found",
+    page=page, total_pages=total_pages, total=total, per_page=per_page,
+    current_sort=sort, current_dir=dir, search_value=search
+) %}
+    {{ cell_link("number",
+        "#" ~ (row.invoice_number or row.id|string|truncate(8, true, "")),
+        "/admin/billing/invoices/" ~ row.id,
+        color="emerald") }}
+    {{ cell_link("subscriber",
+        row.account.display_name if row.account else "—",
+        "/admin/subscribers/" ~ row.account_id if row.account else "#") }}
+    {{ cell_currency("total", row.total) }}
+    {{ cell_currency("balance", row.balance_due) }}
+    {{ cell_status("status", row.status.value|replace("_", " ")|title,
+        inv_status.get(row.status.value, "default")) }}
+    {{ cell_date("due_at", row.due_at) }}
+    {{ cell_date("issued_at", row.issued_at) }}
+    {{ cell_actions("actions", [
+        {"href": "/admin/billing/invoices/" ~ row.id, "icon": "view", "title": "View invoice", "color": "emerald"},
+        {"href": "/admin/billing/invoices/" ~ row.id ~ "/pdf", "icon": "download", "title": "Download PDF"},
+    ]) }}
+{% endcall %}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 3: NAS Devices Table
+   - Technical data: IPs in mono, bandwidth, booleans
+   - Hidden columns for detailed inspection
+   ────────────────────────────────────────────────────── #}
+
+{% set nas_status = {
+    "active": "online",
+    "maintenance": "maintenance",
+    "decommissioned": "decommissioned",
+    "inactive": "inactive",
+} %}
+
+{% call(row) data_grid(
+    table_id="nas-grid",
+    items=nas_devices,
+    columns=[
+        {"key": "name",        "label": "Device",      "sortable": true},
+        {"key": "vendor",      "label": "Vendor"},
+        {"key": "ip",          "label": "IP Address"},
+        {"key": "mgmt_ip",     "label": "Mgmt IP",     "hidden": true},
+        {"key": "status",      "label": "Status"},
+        {"key": "subs",        "label": "Subscribers",  "align": "right"},
+        {"key": "backup",      "label": "Backup",       "hidden": true},
+        {"key": "last_seen",   "label": "Last Seen",    "hidden": true},
+        {"key": "actions",     "label": "",              "align": "right", "always_visible": true},
+    ],
+    color="cyan",
+    htmx_url="/admin/nas",
+    create_url="/admin/nas/new",
+    create_label="Add NAS",
+    empty_title="No NAS devices found",
+    page=page, total_pages=total_pages, total=total, per_page=per_page,
+    current_sort=sort, current_dir=dir, search_value=search
+) %}
+    {{ cell_link("name", row.name, "/admin/nas/" ~ row.id, row.model or "", color="cyan") }}
+    {{ cell_badge("vendor", row.vendor.value|title if row.vendor else "—") }}
+    {{ cell_mono("ip", row.ip_address) }}
+    {{ cell_mono("mgmt_ip", row.management_ip) }}
+    {{ cell_status("status", row.status.value|title, nas_status.get(row.status.value, "default")) }}
+    {{ cell("subs", row.current_subscriber_count, class="text-right tabular-nums") }}
+    {{ cell_boolean("backup", row.backup_enabled) }}
+    {{ cell_date("last_seen", row.last_seen_at, format="datetime") }}
+    {{ cell_actions("actions", [
+        {"href": "/admin/nas/" ~ row.id, "icon": "view", "title": "View device", "color": "cyan"},
+        {"href": "/admin/nas/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit device"},
+    ]) }}
+{% endcall %}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 4: Catalog Offers Table
+   - Bandwidth cell, custom cell escape hatch
+   ────────────────────────────────────────────────────── #}
+
+{% call(row) data_grid(
+    table_id="offers-grid",
+    items=offers,
+    columns=[
+        {"key": "name",     "label": "Plan",      "sortable": true},
+        {"key": "type",     "label": "Type"},
+        {"key": "speed",    "label": "Speed"},
+        {"key": "price",    "label": "Price",     "align": "right"},
+        {"key": "status",   "label": "Status"},
+        {"key": "portal",   "label": "Portal",    "hidden": true},
+        {"key": "actions",  "label": "",           "align": "right", "always_visible": true},
+    ],
+    color="violet",
+    htmx_url="/admin/catalog",
+    create_url="/admin/catalog/new",
+    create_label="New Plan",
+    page=page, total_pages=total_pages, total=total, per_page=per_page,
+    current_sort=sort, current_dir=dir
+) %}
+    {{ cell_link("name", row.name, "/admin/catalog/" ~ row.id, row.code or "", color="violet") }}
+    {{ cell_badge("type", row.service_type.value|title,
+        "info" if row.service_type.value == "internet" else "purple") }}
+    {{ cell_bandwidth("speed", row.speed_download_mbps, row.speed_upload_mbps) }}
+    {{ cell_currency("price", row.offer_prices[0].amount if row.offer_prices else 0) }}
+    {{ cell_status("status", row.status.value|title,
+        "active" if row.status.value == "active" else "inactive") }}
+    {{ cell_boolean("portal", row.show_on_customer_portal) }}
+    {{ cell_actions("actions", [
+        {"href": "/admin/catalog/" ~ row.id, "icon": "view", "title": "View plan", "color": "violet"},
+        {"href": "/admin/catalog/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit plan"},
+    ]) }}
+{% endcall %}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 5: Using cell_custom for complex content
+   ────────────────────────────────────────────────────── #}
+
+{# cell_custom provides an escape hatch when typed cells don't fit:
+
+   {% call cell_custom("my_col") %}
+       <div class="flex items-center gap-3">
+           <div class="h-10 w-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-sm font-bold">
+               {{ row.first_name[0] }}{{ row.last_name[0] }}
+           </div>
+           <div>
+               <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ row.display_name }}</p>
+               <p class="text-xs text-slate-500">{{ row.account_number }}</p>
+           </div>
+       </div>
+   {% endcall %}
+#}
+
+
+{# ──────────────────────────────────────────────────────
+   EXAMPLE 6: Using filters parameter
+   ────────────────────────────────────────────────────── #}
+
+{# Pass pre-rendered filter HTML to the toolbar:
+
+   {% set status_filter %}
+   <select name="status_filter"
+           hx-get="/admin/subscribers"
+           hx-target="#subscribers-grid-wrapper"
+           hx-swap="outerHTML"
+           class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm ...">
+       <option value="">All Status</option>
+       <option value="active" {{ 'selected' if current_status == 'active' }}>Active</option>
+       <option value="suspended" {{ 'selected' if current_status == 'suspended' }}>Suspended</option>
+   </select>
+   {% endset %}
+
+   {% call(row) data_grid(..., filters=status_filter) %}
+       ...
+   {% endcall %}
+#}
+
+
+{% endblock %}

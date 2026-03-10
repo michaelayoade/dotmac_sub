@@ -199,6 +199,7 @@ def nas_devices(db: Session, query: str, limit: int) -> list[dict]:
     like_term = f"%{term}%"
     results = (
         db.query(NasDevice)
+        .outerjoin(NetworkDevice, NasDevice.network_device_id == NetworkDevice.id)
         .filter(
             or_(
                 NasDevice.name.ilike(like_term),
@@ -206,9 +207,12 @@ def nas_devices(db: Session, query: str, limit: int) -> list[dict]:
                 NasDevice.ip_address.ilike(like_term),
                 NasDevice.management_ip.ilike(like_term),
                 NasDevice.nas_ip.ilike(like_term),
+                NetworkDevice.name.ilike(like_term),
+                NetworkDevice.hostname.ilike(like_term),
+                NetworkDevice.mgmt_ip.ilike(like_term),
             )
         )
-        .filter(NasDevice.is_active == True)
+        .filter(NasDevice.is_active.is_(True))
         .limit(limit)
         .all()
     )
@@ -219,6 +223,8 @@ def nas_devices(db: Session, query: str, limit: int) -> list[dict]:
             label = f"{label} ({device.management_ip})"
         elif device.ip_address:
             label = f"{label} ({device.ip_address})"
+        elif device.network_device and device.network_device.mgmt_ip:
+            label = f"{label} ({device.network_device.mgmt_ip})"
         items.append({"id": device.id, "label": label})
     return items
 

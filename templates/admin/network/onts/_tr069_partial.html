@@ -3,6 +3,19 @@
 
 {% if tr069 and tr069.available %}
 <div class="space-y-6" x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, showSsidModal: false, showPasswordModal: false, ssid: '{{ tr069.wireless.SSID or '' }}', wifiPassword: '' }">
+    <div class="flex flex-wrap items-center justify-end gap-2">
+        <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/refresh"
+                hx-swap="none"
+                class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            Refresh
+        </button>
+        <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/reboot"
+                hx-swap="none"
+                class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+            Reboot
+        </button>
+    </div>
+
     {# System Section #}
     <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <button @click="sysOpen = !sysOpen" class="flex w-full items-center justify-between px-5 py-3">

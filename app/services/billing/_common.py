@@ -198,22 +198,33 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         tax_total = Decimal("0.00")
         for line in lines:
             amount = round_money(line.amount)
-            subtotal += amount
             if line.tax_rate_id:
                 rate = tax_rates_map.get(line.tax_rate_id)
                 if rate:
                     rate_percent = Decimal(str(rate.rate))
-                    if line.tax_application != TaxApplication.exempt:
-                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
-                        if line.tax_application == TaxApplication.inclusive:
-                            tax_amount = round_money(
+                    if line.tax_application == TaxApplication.inclusive:
+                        # Legacy billing semantics: keep gross amount in
+                        # subtotal and additionally track extracted tax.
+                        tax_amount = round_money(
+                            amount
+                            - (
                                 amount
-                                - (
-                                    amount
-                                    / (Decimal("1.00") + rate_percent / Decimal("100.00"))
-                                )
+                                / (Decimal("1.00") + rate_percent / Decimal("100.00"))
                             )
+                        )
+                        subtotal += amount
                         tax_total += tax_amount
+                    elif line.tax_application == TaxApplication.exempt:
+                        subtotal += amount
+                    else:
+                        # Exclusive: tax is added on top
+                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
+                        subtotal += amount
+                        tax_total += tax_amount
+                else:
+                    subtotal += amount
+            else:
+                subtotal += amount
         subtotal = round_money(subtotal)
         tax_total = round_money(tax_total)
         invoice.subtotal = subtotal
@@ -365,22 +376,32 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
         tax_total = Decimal("0.00")
         for line in lines:
             amount = round_money(line.amount)
-            subtotal += amount
             if line.tax_rate_id:
                 rate = tax_rates_map.get(line.tax_rate_id)
                 if rate:
                     rate_percent = Decimal(str(rate.rate))
-                    if line.tax_application != TaxApplication.exempt:
-                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
-                        if line.tax_application == TaxApplication.inclusive:
-                            tax_amount = round_money(
+                    if line.tax_application == TaxApplication.inclusive:
+                        # Inclusive: amount already contains tax — extract it
+                        tax_amount = round_money(
+                            amount
+                            - (
                                 amount
-                                - (
-                                    amount
-                                    / (Decimal("1.00") + rate_percent / Decimal("100.00"))
-                                )
+                                / (Decimal("1.00") + rate_percent / Decimal("100.00"))
                             )
+                        )
+                        subtotal += round_money(amount - tax_amount)
                         tax_total += tax_amount
+                    elif line.tax_application == TaxApplication.exempt:
+                        subtotal += amount
+                    else:
+                        # Exclusive: tax is added on top
+                        tax_amount = round_money(amount * rate_percent / Decimal("100.00"))
+                        subtotal += amount
+                        tax_total += tax_amount
+                else:
+                    subtotal += amount
+            else:
+                subtotal += amount
         subtotal = round_money(subtotal)
         tax_total = round_money(tax_total)
         credit_note.subtotal = subtotal

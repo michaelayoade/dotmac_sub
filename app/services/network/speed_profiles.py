@@ -15,7 +15,7 @@ from app.models.network import (
     SpeedProfileDirection,
     SpeedProfileType,
 )
-from app.services.common import coerce_uuid
+from app.services.common import apply_ordering, coerce_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,13 @@ class SpeedProfiles:
         if search:
             stmt = stmt.where(SpeedProfile.name.ilike(f"%{search}%"))
 
-        col = getattr(SpeedProfile, order_by, SpeedProfile.name)
-        stmt = stmt.order_by(col.desc() if order_dir == "desc" else col.asc())
+        allowed_columns = {
+            "name": SpeedProfile.name,
+            "speed_kbps": SpeedProfile.speed_kbps,
+            "direction": SpeedProfile.direction,
+            "created_at": SpeedProfile.created_at,
+        }
+        stmt = apply_ordering(stmt, order_by, order_dir, allowed_columns)
         stmt = stmt.limit(limit).offset(offset)
         return list(db.scalars(stmt).all())
 
@@ -114,7 +119,7 @@ class SpeedProfiles:
         if not profile:
             raise HTTPException(status_code=404, detail="Speed profile not found")
         for key, value in kwargs.items():
-            if value is not None and hasattr(profile, key):
+            if hasattr(profile, key):
                 setattr(profile, key, value)
         db.commit()
         db.refresh(profile)

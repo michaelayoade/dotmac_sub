@@ -66,10 +66,15 @@ class MetricsStore:
         """Get the HTTP timeout, using configurable settings."""
         if self._timeout is not None:
             return self._timeout
-        # Try to get from settings (no db available in async context, use env fallback)
-        timeout_obj = resolve_value(
-            None, SettingDomain.bandwidth, "victoriametrics_timeout_seconds"
-        )
+        # Try to get from settings; if DB-backed settings aren't available in this
+        # context, fall back to environment/default timeout.
+        timeout_obj = None
+        try:
+            timeout_obj = resolve_value(
+                None, SettingDomain.bandwidth, "victoriametrics_timeout_seconds"
+            )
+        except Exception:
+            timeout_obj = os.getenv("VICTORIAMETRICS_TIMEOUT_SECONDS")
         try:
             return float(str(timeout_obj)) if timeout_obj is not None else _DEFAULT_TIMEOUT
         except (TypeError, ValueError):

@@ -6,8 +6,7 @@
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
 
-<div class="relative space-y-6" id="monitoring-content"
-     hx-get="/admin/network/monitoring" hx-trigger="every 30s" hx-select="#monitoring-content" hx-swap="innerHTML">
+<div class="relative space-y-6" id="monitoring-content">
     {# Page Header #}
     {% call page_header(
         title="Network Monitoring",
@@ -16,8 +15,11 @@
         color="blue",
         color2="indigo"
     ) %}
-        {{ action_button("Refresh", "/admin/network/monitoring", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "slate") }}
+        {{ action_button("Refresh", "/admin/network/monitoring?refresh=1" ~ ("&q=" ~ (query | urlencode) if query else ""), '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "slate") }}
     {% endcall %}
+    {% if last_refreshed_at %}
+    <p class="-mt-3 text-xs text-slate-500 dark:text-slate-400">Last updated: {{ last_refreshed_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</p>
+    {% endif %}
 
     {# Getting Started Banner (when no devices at all) #}
     {% if stats.devices_online == 0 and stats.devices_offline == 0 %}
@@ -324,13 +326,35 @@
     {# Device Health Table #}
     <div class="animate-fade-in-up" style="animation-delay: 200ms;">
     {% call card("Device Health", color="blue") %}
+        <form method="GET" action="/admin/network/monitoring" class="mb-4 flex flex-wrap items-center gap-2">
+            <div class="relative w-full sm:w-96">
+                <input
+                    type="search"
+                    name="q"
+                    value="{{ query or '' }}"
+                    placeholder="Search device name, hostname, IP, vendor, model"
+                    class="w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-3 text-sm text-slate-900 placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+                />
+            </div>
+            <button type="submit" class="inline-flex items-center rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-medium text-primary-700 hover:bg-primary-100 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300">Search</button>
+            {% if query %}
+            <a href="/admin/network/monitoring" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+            {% endif %}
+        </form>
         {% if device_health %}
         {% call data_table() %}
             {{ table_head(["Device", "Status", "Health", "Capacity", "CPU", "Memory", "Uptime"]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for device in device_health %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                    <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{{ device.name }}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm font-medium">
+                        <a href="/admin/network/core-devices/{{ device.id }}" class="text-primary-700 hover:text-primary-800 hover:underline dark:text-primary-300 dark:hover:text-primary-200">
+                            {{ device.name }}
+                        </a>
+                        {% if device.mgmt_ip %}
+                        <div class="text-xs font-normal text-slate-500 dark:text-slate-400">{{ device.mgmt_ip }}</div>
+                        {% endif %}
+                    </td>
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if device.status == 'online' %}
                         {{ status_badge("Online", "active", size="sm") }}
@@ -381,9 +405,15 @@
                 {% endfor %}
             </tbody>
         {% endcall %}
+        <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ device_health_total }} device{{ '' if device_health_total == 1 else 's' }}{% if query %} matching "{{ query }}"{% endif %}.</p>
+        {% else %}
+        {% if query %}
+        {% call empty_state("No matching devices", "Try a different search term or clear the filter.") %}
+        {% endcall %}
         {% else %}
         {% call empty_state("No devices monitored", "Network devices will appear here once monitoring is configured.") %}
         {% endcall %}
+        {% endif %}
         {% endif %}
     {% endcall %}
     </div>

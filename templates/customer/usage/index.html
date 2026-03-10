@@ -6,8 +6,8 @@
 <!-- Chart.js for bandwidth charts -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="/static/js/charts.js"></script>
-<script src="/static/js/bandwidth-chart.js"></script>
+<script src="/static/js/charts.js?v=20260308b"></script>
+<script src="/static/js/bandwidth-chart.js?v=20260308b"></script>
 {% endblock %}
 
 {% block content %}
@@ -39,7 +39,7 @@
 
     <!-- Real-Time Bandwidth Chart -->
     <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80"
-         x-data="BandwidthChart.bandwidthChart({ useMyEndpoints: true })"
+         x-data="BandwidthChart.bandwidthChart({ apiBasePath: '/portal/bandwidth', useMyEndpoints: true })"
          x-init="init()"
          x-on:destroy.window="destroy()">
         <div class="flex items-center justify-between border-b border-stone-200/60 px-6 py-4 dark:border-stone-700/60">
@@ -151,6 +151,40 @@
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Records</p>
                         <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ usage_records | length }}</p>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Average Usage Card -->
+    <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80">
+        <div class="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+        <div class="relative">
+            <div class="mb-4 flex items-center gap-3">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Subscription Averages</p>
+                    <p class="mt-1 text-lg font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Current Usage Averages</p>
+                </div>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Daily Usage</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_daily_usage_gb or 0) }} GB</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Speed</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_speed_mbps or 0) }} Mbps</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Download</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_download_mbps or 0) }} Mbps</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Upload</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_upload_mbps or 0) }} Mbps</p>
                 </div>
             </div>
         </div>

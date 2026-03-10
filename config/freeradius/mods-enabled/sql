@@ -75,4 +75,107 @@ sql {
 		FROM ${groupreply_table} \
 		WHERE groupname = '%{SQL-Group}' \
 		ORDER BY id"
+
+	accounting {
+		reference = "%{tolower:type.%{%{Acct-Status-Type}:-%{Request-Processing-Stage}}.query}"
+
+		type {
+				accounting-on {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+						    acctsessiontime = COALESCE(EXTRACT(EPOCH FROM (NOW() - acctstarttime))::integer, 0), \
+						    acctterminatecause = 'NAS-Reboot' \
+						WHERE acctstoptime IS NULL \
+						  AND nasipaddress = '%{NAS-IP-Address}'"
+			}
+
+				accounting-off {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+						    acctsessiontime = COALESCE(EXTRACT(EPOCH FROM (NOW() - acctstarttime))::integer, 0), \
+						    acctterminatecause = 'NAS-Shutdown' \
+						WHERE acctstoptime IS NULL \
+						  AND nasipaddress = '%{NAS-IP-Address}'"
+			}
+
+				start {
+					query = "\
+						INSERT INTO ${....acct_table1} \
+							(acctsessionid, acctuniqueid, username, nasipaddress, nasportid, nasporttype, \
+						 acctstarttime, acctupdatetime, acctstoptime, acctsessiontime, acctauthentic, \
+						 connectinfo_start, calledstationid, callingstationid, servicetype, framedprotocol, \
+						 framedipaddress, framedipv6address, framedipv6prefix, framedinterfaceid, delegatedipv6prefix) \
+					VALUES \
+						('%{Acct-Session-Id}', '%{Acct-Unique-Session-Id}', '%{SQL-User-Name}', \
+						 '%{NAS-IP-Address}', '%{NAS-Port-ID}', '%{NAS-Port-Type}', \
+						 NOW(), NOW(), NULL, 0, '%{Acct-Authentic}', \
+						 '%{Connect-Info}', '%{Called-Station-Id}', '%{Calling-Station-Id}', '%{Service-Type}', \
+						 '%{Framed-Protocol}', '%{Framed-IP-Address}', '%{Framed-IPv6-Address}', \
+						 '%{Framed-IPv6-Prefix}', '%{Framed-Interface-Id}', '%{Delegated-IPv6-Prefix}') \
+					ON CONFLICT (acctuniqueid) DO UPDATE \
+					SET username = EXCLUDED.username, \
+					    nasipaddress = EXCLUDED.nasipaddress, \
+					    nasportid = EXCLUDED.nasportid, \
+					    nasporttype = EXCLUDED.nasporttype, \
+					    acctstarttime = EXCLUDED.acctstarttime, \
+					    acctupdatetime = EXCLUDED.acctupdatetime, \
+					    acctstoptime = NULL, \
+					    acctsessiontime = 0, \
+					    acctauthentic = EXCLUDED.acctauthentic, \
+					    connectinfo_start = EXCLUDED.connectinfo_start, \
+					    calledstationid = EXCLUDED.calledstationid, \
+					    callingstationid = EXCLUDED.callingstationid, \
+					    servicetype = EXCLUDED.servicetype, \
+					    framedprotocol = EXCLUDED.framedprotocol, \
+					    framedipaddress = EXCLUDED.framedipaddress, \
+					    framedipv6address = EXCLUDED.framedipv6address, \
+					    framedipv6prefix = EXCLUDED.framedipv6prefix, \
+					    framedinterfaceid = EXCLUDED.framedinterfaceid, \
+					    delegatedipv6prefix = EXCLUDED.delegatedipv6prefix"
+			}
+
+				interim-update {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctupdatetime = NOW(), \
+					    acctinterval = NULLIF('%{%{Acct-Interim-Interval}:-0}', '')::integer, \
+					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::integer, \
+					    acctinputoctets = NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
+					    acctoutputoctets = NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+					    framedipaddress = '%{Framed-IP-Address}', \
+					    framedipv6address = '%{Framed-IPv6-Address}', \
+					    framedipv6prefix = '%{Framed-IPv6-Prefix}', \
+					    framedinterfaceid = '%{Framed-Interface-Id}', \
+					    delegatedipv6prefix = '%{Delegated-IPv6-Prefix}', \
+					    callingstationid = '%{Calling-Station-Id}' \
+					WHERE acctuniqueid = '%{Acct-Unique-Session-Id}'"
+			}
+
+				stop {
+					query = "\
+						UPDATE ${....acct_table1} \
+						SET acctstoptime = NOW(), \
+					    acctsessiontime = NULLIF('%{%{Acct-Session-Time}:-0}', '')::integer, \
+					    acctinputoctets = NULLIF('%{%{Acct-Input-Octets}:-0}', '')::bigint, \
+					    acctoutputoctets = NULLIF('%{%{Acct-Output-Octets}:-0}', '')::bigint, \
+					    acctterminatecause = '%{Acct-Terminate-Cause}', \
+					    connectinfo_stop = '%{Connect-Info}', \
+					    framedipaddress = '%{Framed-IP-Address}', \
+					    framedipv6address = '%{Framed-IPv6-Address}', \
+					    framedipv6prefix = '%{Framed-IPv6-Prefix}', \
+					    framedinterfaceid = '%{Framed-Interface-Id}', \
+					    delegatedipv6prefix = '%{Delegated-IPv6-Prefix}', \
+					    callingstationid = '%{Calling-Station-Id}' \
+					WHERE acctuniqueid = '%{Acct-Unique-Session-Id}'"
+			}
+		}
+	}
+
+		post-auth {
+			query = "\
+				INSERT INTO ${..postauth_table} (username, pass, reply, authdate) \
+				VALUES ('%{SQL-User-Name}', '%{%{User-Password}:-}', '%{reply:Packet-Type}', NOW())"
+		}
 }

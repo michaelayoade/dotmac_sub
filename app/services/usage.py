@@ -1,19 +1,31 @@
 from __future__ import annotations
 
 import builtins
+import os
+import re
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
-from app.models.catalog import CatalogOffer, OfferVersion, Subscription, UsageAllowance
+from app.models.catalog import (
+    AccessCredential,
+    CatalogOffer,
+    OfferVersion,
+    Subscription,
+    SubscriptionStatus,
+    UsageAllowance,
+)
 from app.models.domain_settings import SettingDomain
+from app.models.radius import RadiusClient, RadiusUser
 from app.models.subscriber import Subscriber
 from app.models.usage import (
+    AccountingStatus,
     QuotaBucket,
     RadiusAccountingSession,
     UsageCharge,
@@ -35,10 +47,14 @@ from app.schemas.usage import (
     UsageRecordUpdate,
 )
 from app.services import settings_spec
+from app.services import domain_settings as domain_settings_service
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
+
+_MAC_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
+_RADIUS_ACCOUNTING_CURSOR_KEY = "radius_accounting_last_radacctid"
 
 
 def _round_money(value: Decimal) -> Decimal:
@@ -80,6 +96,241 @@ def _period_bounds_for_record(recorded_at: datetime) -> tuple[datetime, datetime
     else:
         end = datetime(recorded_at.year, recorded_at.month + 1, 1, tzinfo=UTC)
     return start, end
+
+
+def _normalize_mac_address(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    compact = _MAC_HEX_RE.sub("", raw)
+    if len(compact) != 12:
+        return None
+    return ":".join(compact[i:i + 2] for i in range(0, 12, 2)).upper()
+
+
+def _write_subscription_mac_from_accounting(
+    db: Session,
+    subscription_id,
+    calling_station_id: str | None,
+) -> None:
+    mac_address = _normalize_mac_address(calling_station_id)
+    if not mac_address or not subscription_id:
+        return
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription or subscription.mac_address == mac_address:
+        return
+    subscription.mac_address = mac_address
+
+
+def _normalize_radius_db_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    db_url = value.strip()
+    if not db_url:
+        return None
+    if db_url.startswith("postgresql://"):
+        db_url = "postgresql+psycopg://" + db_url[len("postgresql://") :]
+    parsed = urlparse(db_url)
+    hostname = parsed.hostname or ""
+    if hostname in {"localhost", "127.0.0.1"} and parsed.port == 5437:
+        db_url = urlunparse(
+            parsed._replace(
+                netloc="radius:l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-@radius-db:5432"
+            )
+        )
+    return db_url
+
+
+def _radius_accounting_db_url() -> str | None:
+    dsn = _normalize_radius_db_url(os.getenv("RADIUS_DB_DSN"))
+    if dsn:
+        return dsn
+    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
+    database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
+    username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
+    password = (
+        os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-"
+    ).strip()
+    if not all([host, database, username, password]):
+        return None
+    return f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+
+
+def _get_radius_accounting_cursor(db: Session) -> int:
+    try:
+        setting = domain_settings_service.usage_settings.get_by_key(
+            db, _RADIUS_ACCOUNTING_CURSOR_KEY
+        )
+    except Exception:
+        return 0
+    try:
+        return int(str(setting.value_text or "0").strip() or "0")
+    except ValueError:
+        return 0
+
+
+def _set_radius_accounting_cursor(db: Session, radacctid: int) -> None:
+    from app.models.subscription_engine import SettingValueType
+    from app.schemas.settings import DomainSettingUpdate
+
+    domain_settings_service.usage_settings.upsert_by_key(
+        db,
+        _RADIUS_ACCOUNTING_CURSOR_KEY,
+        DomainSettingUpdate(
+            value_type=SettingValueType.integer,
+            value_text=str(int(radacctid)),
+            is_active=True,
+        ),
+    )
+
+
+def _resolve_subscription_for_credential(
+    db: Session, credential: AccessCredential
+) -> Subscription | None:
+    radius_user = (
+        db.query(RadiusUser)
+        .filter(RadiusUser.access_credential_id == credential.id)
+        .filter(RadiusUser.is_active.is_(True))
+        .first()
+    )
+    if radius_user and radius_user.subscription_id:
+        subscription = db.get(Subscription, radius_user.subscription_id)
+        if subscription:
+            return subscription
+    return (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == credential.subscriber_id)
+        .filter(Subscription.status == SubscriptionStatus.active)
+        .order_by(
+            Subscription.start_at.desc().nullslast(),
+            Subscription.created_at.desc(),
+        )
+        .first()
+    )
+
+
+def _status_from_radacct(row: dict[str, object]) -> AccountingStatus:
+    if row.get("acctstoptime") is not None:
+        return AccountingStatus.stop
+    if row.get("acctupdatetime") and row.get("acctupdatetime") != row.get("acctstarttime"):
+        return AccountingStatus.interim
+    return AccountingStatus.start
+
+
+def _upsert_accounting_row(db: Session, row: dict[str, object]) -> bool:
+    username = str(row.get("username") or "").strip()
+    session_id = str(row.get("acctsessionid") or "").strip()
+    if not username or not session_id:
+        return False
+
+    credential = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.username == username)
+        .first()
+    )
+    if not credential:
+        return False
+
+    subscription = _resolve_subscription_for_credential(db, credential)
+    nas_ip = str(row.get("nasipaddress") or "").strip()
+    radius_client = None
+    if nas_ip:
+        radius_client = (
+            db.query(RadiusClient)
+            .filter(RadiusClient.client_ip == nas_ip)
+            .filter(RadiusClient.is_active.is_(True))
+            .first()
+        )
+
+    status_type = _status_from_radacct(row)
+    existing = (
+        db.query(RadiusAccountingSession)
+        .filter(RadiusAccountingSession.access_credential_id == credential.id)
+        .filter(RadiusAccountingSession.session_id == session_id)
+        .first()
+    )
+    target = existing or RadiusAccountingSession(
+        access_credential_id=credential.id,
+        session_id=session_id,
+    )
+    if not existing:
+        db.add(target)
+
+    target.subscription_id = subscription.id if subscription else None
+    target.radius_client_id = radius_client.id if radius_client else None
+    target.nas_device_id = radius_client.nas_device_id if radius_client else None
+    target.status_type = status_type
+    target.session_start = cast(datetime | None, row.get("acctstarttime"))
+    target.session_end = cast(datetime | None, row.get("acctstoptime"))
+    target.input_octets = cast(int | None, row.get("acctinputoctets"))
+    target.output_octets = cast(int | None, row.get("acctoutputoctets"))
+    target.terminate_cause = cast(str | None, row.get("acctterminatecause"))
+    _write_subscription_mac_from_accounting(
+        db,
+        target.subscription_id,
+        cast(str | None, row.get("callingstationid")),
+    )
+    if status_type in {AccountingStatus.start, AccountingStatus.interim}:
+        credential.last_auth_at = datetime.now(UTC)
+    return True
+
+
+def import_radius_accounting(
+    db: Session,
+    *,
+    limit: int | None = None,
+) -> dict[str, int | bool]:
+    db_url = _radius_accounting_db_url()
+    if not db_url:
+        return {"ok": False, "processed": 0, "created_or_updated": 0, "cursor": 0}
+
+    batch_size = max(limit or 500, 1)
+    last_radacctid = _get_radius_accounting_cursor(db)
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT
+                    radacctid,
+                    acctsessionid,
+                    username,
+                    nasipaddress,
+                    acctstarttime,
+                    acctupdatetime,
+                    acctstoptime,
+                    acctinputoctets,
+                    acctoutputoctets,
+                    acctterminatecause,
+                    callingstationid
+                FROM radacct
+                WHERE radacctid > :cursor
+                ORDER BY radacctid ASC
+                LIMIT :limit
+                """
+            ),
+            {"cursor": last_radacctid, "limit": batch_size},
+        )
+        rows = [dict(row._mapping) for row in result]
+
+    processed = 0
+    created_or_updated = 0
+    cursor = last_radacctid
+    for row in rows:
+        processed += 1
+        if _upsert_accounting_row(db, row):
+            created_or_updated += 1
+        cursor = max(cursor, int(row.get("radacctid") or 0))
+
+    if cursor > last_radacctid:
+        _set_radius_accounting_cursor(db, cursor)
+    db.commit()
+    return {
+        "ok": True,
+        "processed": processed,
+        "created_or_updated": created_or_updated,
+        "cursor": cursor,
+    }
 
 
 def _parse_warning_thresholds(value: str | None) -> list[Decimal]:
@@ -303,8 +554,15 @@ class QuotaBuckets(ListResponseMixin):
 class RadiusAccountingSessions(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: RadiusAccountingSessionCreate):
-        session = RadiusAccountingSession(**payload.model_dump())
+        session = RadiusAccountingSession(
+            **payload.model_dump(exclude={"calling_station_id"})
+        )
         db.add(session)
+        _write_subscription_mac_from_accounting(
+            db,
+            session.subscription_id,
+            payload.calling_station_id,
+        )
         db.commit()
         db.refresh(session)
         return session
@@ -351,8 +609,16 @@ class RadiusAccountingSessions(ListResponseMixin):
         session = db.get(RadiusAccountingSession, session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Accounting session not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        for key, value in payload.model_dump(
+            exclude_unset=True,
+            exclude={"calling_station_id"},
+        ).items():
             setattr(session, key, value)
+        _write_subscription_mac_from_accounting(
+            db,
+            session.subscription_id,
+            payload.calling_station_id,
+        )
         db.commit()
         db.refresh(session)
         return session
@@ -543,6 +809,10 @@ class UsageCharges(ListResponseMixin):
         return charge
 
     @staticmethod
+    def post_charge(db: Session, charge_id: str, payload: UsageChargePostRequest):
+        return UsageCharges.post(db, charge_id, payload)
+
+    @staticmethod
     def post_batch(db: Session, payload: UsageChargePostBatchRequest) -> int:
         query = (
             db.query(UsageCharge)
@@ -616,6 +886,26 @@ class UsageRatingRuns(ListResponseMixin):
             {"created_at": UsageRatingRun.created_at, "run_at": UsageRatingRun.run_at},
         )
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_runs_response(
+        db: Session,
+        started_by: str | None,
+        order_by: str,
+        order_dir: str,
+        limit: int,
+        offset: int,
+    ):
+        # Usage rating runs are currently system-generated; `started_by` is
+        # accepted for API compatibility but not yet used for filtering.
+        _ = started_by
+        return UsageRatingRuns.list_response(
+            db, None, order_by, order_dir, limit, offset
+        )
+
+    @staticmethod
+    def get_run(db: Session, run_id: str):
+        return UsageRatingRuns.get(db, run_id)
 
     @staticmethod
     def run(db: Session, payload: UsageRatingRunRequest) -> UsageRatingRunResponse:
@@ -753,3 +1043,4 @@ radius_accounting_sessions = RadiusAccountingSessions()
 usage_records = UsageRecords()
 usage_charges = UsageCharges()
 usage_rating_runs = UsageRatingRuns()
+usage_ratings = usage_rating_runs

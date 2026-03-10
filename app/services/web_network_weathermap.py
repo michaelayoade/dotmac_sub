@@ -121,8 +121,8 @@ def build_weathermap_data(db: Session) -> dict[str, object]:
     y_gap = 130
 
     for depth in sorted(levels.keys()):
-        row = levels[depth]
-        for idx, item in enumerate(row):
+        level_devices = levels[depth]
+        for idx, item in enumerate(level_devices):
             x = 140 + (depth * x_gap)
             y = 100 + (idx * y_gap)
             item_id = str(item.id)
@@ -157,9 +157,11 @@ def build_weathermap_data(db: Session) -> dict[str, object]:
         target_id = str(item.id)
         if source_id not in pos_by_id or target_id not in pos_by_id:
             continue
-        m = metrics_by_device.get(target_id)
-        total = float((m or {}).get("rx_bps", 0.0) + (m or {}).get("tx_bps", 0.0)) if m else None
-        state = _link_state(total)
+        metrics = metrics_by_device.get(target_id)
+        link_total: float | None = None
+        if metrics is not None:
+            link_total = float(metrics.get("rx_bps", 0.0) + metrics.get("tx_bps", 0.0))
+        state = _link_state(link_total)
         sx, sy = pos_by_id[source_id]
         tx, ty = pos_by_id[target_id]
         links.append(
@@ -170,7 +172,7 @@ def build_weathermap_data(db: Session) -> dict[str, object]:
                 "sy": sy,
                 "tx": tx,
                 "ty": ty,
-                "total_bps": total,
+                    "total_bps": link_total,
                 "state": state,
             }
         )

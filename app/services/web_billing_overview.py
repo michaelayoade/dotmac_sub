@@ -372,11 +372,22 @@ def build_ar_aging_data(
         if invoice.status not in {InvoiceStatus.paid, InvoiceStatus.void}
         and _in_period(invoice, period=selected_period, today=today)
     ]
+    account_ids = {
+        invoice.account_id
+        for invoice in period_filtered_invoices
+        if getattr(invoice, "account_id", None)
+    }
+    accounts_by_id = {
+        account.id: account
+        for account in (
+            db.query(Subscriber).filter(Subscriber.id.in_(account_ids)).all() if account_ids else []
+        )
+    }
 
     partner_options: dict[str, str] = {}
     location_options: set[str] = set()
     for invoice in period_filtered_invoices:
-        account = getattr(invoice, "account", None)
+        account = getattr(invoice, "account", None) or accounts_by_id.get(invoice.account_id)
         if account is None:
             continue
         reseller = getattr(account, "reseller", None)
@@ -394,7 +405,7 @@ def build_ar_aging_data(
 
     filtered_invoices = []
     for invoice in period_filtered_invoices:
-        account = getattr(invoice, "account", None)
+        account = getattr(invoice, "account", None) or accounts_by_id.get(invoice.account_id)
         if selected_partner_id:
             account_partner = str(getattr(account, "reseller_id", "") or "")
             if account_partner != selected_partner_id:
@@ -491,8 +502,8 @@ def build_ar_aging_data(
     trend_labels = [month.strftime("%b %Y") for month in trend_months]
     trend_series: dict[str, list[float]] = {key: [] for key in _BUCKET_SEQUENCE}
     for month_start in trend_months:
-        snapshot_at = _month_end(month_start)
-        snapshot_buckets: dict[str, float] = {key: 0.0 for key in _BUCKET_SEQUENCE}
+        snapshot_at = min(_month_end(month_start), today)
+        snapshot_buckets: dict[str, float] = dict.fromkeys(_BUCKET_SEQUENCE, 0.0)
         for invoice in filtered_invoices:
             due_at = invoice.due_at.date() if invoice.due_at else None
             if not due_at:

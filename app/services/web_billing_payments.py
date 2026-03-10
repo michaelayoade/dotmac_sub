@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-import csv
-import io
 from typing import cast
 from uuid import UUID
 

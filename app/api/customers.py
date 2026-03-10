@@ -5,11 +5,16 @@ from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.customer_search import CustomerSearchItem
 from app.services import customer_search as customer_search_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-@router.get("/search", response_model=ListResponse[CustomerSearchItem])
+@router.get(
+    "/search",
+    response_model=ListResponse[CustomerSearchItem],
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def search_customers(
     q: str = Query(min_length=2),
     limit: int = Query(default=20, ge=1, le=50),

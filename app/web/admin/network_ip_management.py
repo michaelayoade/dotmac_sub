@@ -1,5 +1,7 @@
 """Admin network IP management and VLAN web routes."""
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -32,14 +34,29 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 @router.get("/ip-management", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def ip_management(request: Request, db: Session = Depends(get_db)):
+def ip_management(
+    request: Request,
+    db: Session = Depends(get_db),
+    page: int = 1,
+    search: str | None = None,
+    pool_filter: str | None = None,
+    notice: str | None = None,
+    warning: str | None = None,
+):
     """IP address management page - consolidated view with tabs."""
-    state = web_network_ip_service.build_ip_management_data(db)
+    state = web_network_ip_service.build_ip_management_data(
+        db,
+        page=page,
+        search=search,
+        pool_filter=pool_filter,
+    )
 
     context = _base_context(request, db, active_page="ip-management", active_menu="network")
     context.update(
         {
             **state,
+            "notice": notice,
+            "warning": warning,
             "activities": build_audit_activities_for_types(
                 db,
                 ["ip_pool", "ip_block"],
@@ -48,6 +65,36 @@ def ip_management(request: Request, db: Session = Depends(get_db)):
         }
     )
     return templates.TemplateResponse("admin/network/ip-management/index.html", context)
+
+
+@router.post("/ip-management/reconcile-pools", dependencies=[Depends(require_permission("network:write"))])
+def reconcile_ip_pool_memberships(request: Request, db: Session = Depends(get_db)):
+    result = web_network_ip_service.reconcile_ipv4_pool_memberships(db)
+    notice = (
+        "Reconciled IPv4 address pool membership: "
+        f"{result['updated']} updated, {result['unchanged']} unchanged."
+    )
+    warning_parts: list[str] = []
+    if result["unmatched"]:
+        warning_parts.append(f"{result['unmatched']} address(es) did not match any configured pool")
+    if result["conflicts"]:
+        warning_parts.append(f"{result['conflicts']} address(es) matched multiple pools")
+    if result["invalid"]:
+        warning_parts.append(f"{result['invalid']} invalid address row(s)")
+    redirect_url = f"/admin/network/ip-management?notice={quote_plus(notice)}"
+    if warning_parts:
+        redirect_url += f"&warning={quote_plus('. '.join(warning_parts))}"
+    current_user = getattr(request.state, "auth", None)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="reconcile",
+        entity_type="ip_pool",
+        entity_id=None,
+        actor_id=str(current_user.get("sub")) if isinstance(current_user, dict) and current_user.get("sub") else None,
+        metadata=result,
+    )
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.get("/ip-management/pools/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
@@ -407,6 +454,127 @@ def ipv4_network_detail(request: Request, pool_id: str, db: Session = Depends(ge
     context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
     context.update(state)
     return templates.TemplateResponse("admin/network/ip-management/ipv4_network_detail.html", context)
+
+
+@router.get("/ip-management/ipv4-blocks/{block_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ipv4_block_detail(request: Request, block_id: str, db: Session = Depends(get_db)):
+    """Detailed IPv4 block assignment/status view."""
+    state = web_network_ip_service.build_ipv4_block_detail_data(
+        db,
+        block_id=block_id,
+        limit=256,
+    )
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "IPv4 block not found"},
+            status_code=404,
+        )
+
+    context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
+    context.update(state)
+    return templates.TemplateResponse("admin/network/ip-management/ipv4_network_detail.html", context)
+
+
+@router.get("/ip-management/ipv4-assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ipv4_assignment_form(
+    request: Request,
+    pool_id: str,
+    ip: str,
+    block_id: str | None = None,
+    return_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    state = web_network_ip_service.build_ipv4_assignment_form_data(
+        db,
+        pool_id=pool_id,
+        ip_address=ip,
+        block_id=block_id,
+    )
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "IPv4 address not found for this range"},
+            status_code=404,
+        )
+
+    context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
+    context.update(
+        {
+            **state,
+            "return_to": return_to or request.headers.get("referer") or f"/admin/network/ip-management/ipv4-networks/{pool_id}",
+            "action_url": "/admin/network/ip-management/ipv4-assign",
+            "error": None,
+        }
+    )
+    return templates.TemplateResponse("admin/network/ip-management/ipv4_assignment_form.html", context)
+
+
+@router.post("/ip-management/ipv4-assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    pool_id = str(form.get("pool_id") or "").strip()
+    block_id = str(form.get("block_id") or "").strip() or None
+    ip_address = str(form.get("ip_address") or "").strip()
+    subscriber_id = str(form.get("subscriber_id") or "").strip()
+    subscription_id = str(form.get("subscription_id") or "").strip() or None
+    return_to = str(form.get("return_to") or "").strip() or f"/admin/network/ip-management/ipv4-networks/{pool_id}"
+
+    state = web_network_ip_service.build_ipv4_assignment_form_data(
+        db,
+        pool_id=pool_id,
+        ip_address=ip_address,
+        block_id=block_id,
+    )
+    if state is None:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "IPv4 address not found for this range"},
+            status_code=404,
+        )
+
+    try:
+        result = web_network_ip_service.assign_ipv4_address(
+            db,
+            pool_id=pool_id,
+            ip_address=ip_address,
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+            block_id=block_id,
+        )
+    except Exception as exc:
+        context = _base_context(request, db, active_page="ipv4-networks", active_menu="ip-address")
+        context.update(
+            {
+                **state,
+                "return_to": return_to,
+                "action_url": "/admin/network/ip-management/ipv4-assign",
+                "error": str(exc),
+                "subscriber_id": subscriber_id or state.get("subscriber_id"),
+                "subscription_id": subscription_id or state.get("subscription_id"),
+            }
+        )
+        return templates.TemplateResponse("admin/network/ip-management/ipv4_assignment_form.html", context)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="reassign" if result.get("reassigned") else "assign",
+        entity_type="ip_assignment",
+        entity_id=str(getattr(result.get("assignment"), "id", "") or ""),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "pool_id": pool_id,
+            "block_id": block_id,
+            "ip_address": ip_address,
+            "subscriber_id": subscriber_id,
+            "subscription_id": subscription_id,
+        },
+    )
+    return RedirectResponse(return_to, status_code=303)
 
 
 @router.get("/ip-management/ipv6", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])

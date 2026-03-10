@@ -167,6 +167,10 @@ class TestBuildRadiusReplyAttributes:
         assert "Framed-Pool" in attr_names
         assert "Session-Timeout" in attr_names
         assert "Framed-IP-Address" in attr_names
+        rate_limit = next(
+            attr["value"] for attr in attrs if attr["attribute"] == "Mikrotik-Rate-Limit"
+        )
+        assert rate_limit == "50000k/25000k"
 
     def test_dhcp_attributes(self, mock_subscription, mock_profile):
         db = MagicMock()
@@ -221,6 +225,7 @@ class TestBuildRadiusReplyAttributes:
         attr_names = [a["attribute"] for a in attrs]
         assert "Framed-IP-Address" in attr_names
         assert "Framed-IPv6-Prefix" in attr_names
+
 
 
 # ---------------------------------------------------------------------------

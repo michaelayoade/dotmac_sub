@@ -152,11 +152,13 @@
 
 {% block scripts %}
 {{ super() }}
-<script src="{{ url_for('static', path='js/session-refresh.js') }}"></script>
+<script src="/static/js/session-refresh.js"></script>
 <script>
-    initSessionRefresh({
-        refreshUrl: "/reseller/auth/refresh",
-        loginUrl: "/reseller/auth/login"
-    });
+    if (typeof initSessionRefresh === 'function') {
+        initSessionRefresh({
+            refreshUrl: "/reseller/auth/refresh",
+            loginUrl: "/reseller/auth/login"
+        });
+    }
 </script>
 {% endblock %}

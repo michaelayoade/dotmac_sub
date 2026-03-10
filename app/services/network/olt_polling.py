@@ -22,6 +22,8 @@ from app.models.network import (
     OntUnit,
     PonPort,
 )
+from app.models.network_monitoring import NetworkDevice
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +128,8 @@ def get_signal_thresholds(db: Session) -> tuple[float, float]:
         warn = float(str(warn_raw)) if warn_raw is not None else DEFAULT_WARN_THRESHOLD
         crit = float(str(crit_raw)) if crit_raw is not None else DEFAULT_CRIT_THRESHOLD
         return warn, crit
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load signal thresholds, using defaults: %s", exc)
         return DEFAULT_WARN_THRESHOLD, DEFAULT_CRIT_THRESHOLD
 
 
@@ -146,15 +149,45 @@ class OntSignalReading:
     is_online: bool | None
 
 
-def _get_olt_snmp_config(olt: OLTDevice) -> dict[str, str | int | None]:
+def _get_olt_snmp_config(db: Session, olt: OLTDevice) -> dict[str, str | int | None]:
     """Build SNMP config dict for an OLT device.
 
-    OLT devices don't have SNMP fields directly — we look for a linked
-    NetworkDevice with the same mgmt_ip, or use defaults.
+    OLT devices don't store SNMP auth directly; resolve a linked
+    NetworkDevice by mgmt_ip/hostname/name and read SNMP fields there.
     """
+    host = olt.mgmt_ip or olt.hostname
+    vendor = (olt.vendor or "").lower()
+    community: str | None = None
+
+    linked: NetworkDevice | None = None
+    if olt.mgmt_ip:
+        linked = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
+        ).first()
+    if linked is None and olt.hostname:
+        linked = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
+        ).first()
+    if linked is None and olt.name:
+        linked = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.name == olt.name).limit(1)
+        ).first()
+
+    if linked and linked.snmp_enabled:
+        if (linked.snmp_version or "v2c").lower() != "v2c":
+            logger.warning(
+                "Skipping OLT %s SNMP poll: unsupported SNMP version '%s' (only v2c supported)",
+                olt.name,
+                linked.snmp_version,
+            )
+        else:
+            raw_community = (linked.snmp_community or "").strip() or None
+            community = decrypt_credential(raw_community) if raw_community else None
+
     return {
-        "host": olt.mgmt_ip or olt.hostname,
-        "vendor": (olt.vendor or "").lower(),
+        "host": host,
+        "vendor": vendor,
+        "community": community,
     }
 
 
@@ -176,9 +209,7 @@ def _get_signal_scale(vendor: str) -> float:
     return 0.01
 
 
-def _run_olt_snmpwalk(
-    host: str, oid: str, community: str = "public", timeout: int = 30
-) -> list[str]:
+def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 30) -> list[str]:
     """Run snmpwalk against an OLT and return output lines."""
     import subprocess
 
@@ -335,7 +366,7 @@ def poll_olt_ont_signals(
     db: Session,
     olt: OLTDevice,
     *,
-    community: str = "public",
+    community: str | None = None,
 ) -> dict[str, int]:
     """Poll all ONTs on an OLT for optical signal levels via SNMP.
 
@@ -352,6 +383,9 @@ def poll_olt_ont_signals(
     host = olt.mgmt_ip or olt.hostname
     if not host:
         logger.warning("OLT %s has no management IP or hostname, skipping", olt.name)
+        return {"polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+    if not community:
+        logger.warning("OLT %s has no SNMP community configured, skipping", olt.name)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 1}
 
     vendor = (olt.vendor or "").lower()
@@ -497,7 +531,7 @@ class OltHealthReading:
     uptime_seconds: int | None = None
 
 
-def _snmpget_value(host: str, oid: str, community: str = "public") -> str | None:
+def _snmpget_value(host: str, oid: str, community: str) -> str | None:
     """Perform a single SNMP GET and return the value string, or None."""
     import subprocess
 
@@ -548,7 +582,7 @@ def _parse_uptime_ticks(raw: str | None) -> int | None:
 def poll_olt_health(
     olt: OLTDevice,
     *,
-    community: str = "public",
+    community: str | None = None,
 ) -> OltHealthReading:
     """Poll OLT hardware health metrics via SNMP.
 
@@ -561,6 +595,8 @@ def poll_olt_health(
     """
     host = olt.mgmt_ip or olt.hostname
     if not host:
+        return OltHealthReading()
+    if not community:
         return OltHealthReading()
 
     vendor = (olt.vendor or "").lower().strip()
@@ -789,8 +825,14 @@ def poll_all_olts(db: Session) -> dict[str, int]:
     health_map: dict[str, OltHealthReading] = {}
 
     for olt in olts:
+        snmp_cfg = _get_olt_snmp_config(db, olt)
+        community = (
+            str(snmp_cfg.get("community")).strip()
+            if snmp_cfg.get("community") is not None
+            else None
+        )
         try:
-            result = poll_olt_ont_signals(db, olt)
+            result = poll_olt_ont_signals(db, olt, community=community)
             totals["olts_polled"] += 1
             totals["total_polled"] += result["polled"]
             totals["total_updated"] += result["updated"]
@@ -801,7 +843,7 @@ def poll_all_olts(db: Session) -> dict[str, int]:
 
         # Poll OLT hardware health
         try:
-            health = poll_olt_health(olt)
+            health = poll_olt_health(olt, community=community)
             health_map[olt.name] = health
         except Exception as e:
             logger.error("Failed to poll health for OLT %s: %s", olt.name, e)

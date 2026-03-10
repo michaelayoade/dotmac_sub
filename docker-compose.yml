@@ -175,7 +175,10 @@ services:
     - radius_db_data:/var/lib/postgresql/data
     - ./config/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql
   genieacs:
-    image: genieacs/genieacs:1.2.9
+    build:
+      context: .
+      dockerfile: docker/genieacs/Dockerfile
+    image: dotmac_sub-genieacs:1.2.13
     container_name: dotmac_sub_genieacs
     restart: unless-stopped
     ports:
@@ -187,6 +190,9 @@ services:
     - genieacs-mongodb
     environment:
     - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm@genieacs-mongodb/genieacs?authSource=admin
+    - GENIEACS_UI_JWT_SECRET=${GENIEACS_UI_JWT_SECRET:-change-me}
+    - GENIEACS_CWMP_AUTHENTICATION=acs:acs123
+    - NODE_OPTIONS=--enable-source-maps
   genieacs-mongodb:
     image: mongo:4.4
     container_name: dotmac_sub_genieacs_mongodb

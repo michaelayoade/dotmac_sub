@@ -1,0 +1,33 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% block title %}Billing Notifications - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Billing Notifications", subtitle="Prepaid and recurring billing notification waves", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>', color="emerald", color2="teal") %}{% endcall %}
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% call card("General", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Hour (0-23)</label><input type="number" name="billing_notif_send_hour" min="0" max="23" value="{{ billing_notif.billing_notif_send_hour or '8' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+        </div>
+        {% endcall %}
+        {% call card("Blocking Wave", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enabled</label><select name="blocking_wave_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing_notif.blocking_wave_enabled == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing_notif.blocking_wave_enabled != 'true' %}selected{% endif %}>No</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label><select name="blocking_wave_channel" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="email" {% if billing_notif.blocking_wave_channel == 'email' %}selected{% endif %}>Email</option><option value="sms" {% if billing_notif.blocking_wave_channel == 'sms' %}selected{% endif %}>SMS</option><option value="both" {% if billing_notif.blocking_wave_channel == 'both' %}selected{% endif %}>Both</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">BCC</label><input type="email" name="blocking_wave_bcc" value="{{ billing_notif.blocking_wave_bcc or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+        </div>
+        {% endcall %}
+        {% call card("Pre-Blocking Wave 1", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Enabled</label><select name="pre_block_wave1_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing_notif.pre_block_wave1_enabled == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing_notif.pre_block_wave1_enabled != 'true' %}selected{% endif %}>No</option></select></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Days Before Blocking</label><input type="number" name="pre_block_wave1_days" value="{{ billing_notif.pre_block_wave1_days or '5' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label><select name="pre_block_wave1_channel" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="email">Email</option><option value="sms">SMS</option><option value="both">Both</option></select></div>
+        </div>
+        {% endcall %}
+        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Notifications</button></div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

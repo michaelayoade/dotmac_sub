@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_billing_invoice_cache as web_billing_invoice_cache_service
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_overview as web_billing_overview_service
@@ -18,7 +19,6 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
-from app.services.billing import configuration as billing_config_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -66,7 +66,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def billing_overview(
     request: Request,
     partner_id: str | None = Query(None),
@@ -98,7 +98,58 @@ def billing_overview(
     )
 
 
-@router.get("/invoices", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/cache", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
+def billing_invoice_cache_page(
+    request: Request,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    account_id: str | None = Query(None),
+    notice: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = web_billing_invoice_cache_service.build_cache_page_state(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        account_id=account_id,
+    )
+    return templates.TemplateResponse(
+        "admin/billing/cache.html",
+        {
+            "request": request,
+            "active_page": "billing-cache",
+            "active_menu": "billing",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "notice": notice,
+            **state,
+        },
+    )
+
+
+@router.post("/cache/clear", dependencies=[Depends(require_permission("billing:invoice:update"))])
+def billing_invoice_cache_clear(
+    request: Request,
+    mode: str = Form("all"),
+    date_from: str | None = Form(None),
+    date_to: str | None = Form(None),
+    account_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    result = web_billing_invoice_cache_service.clear_cache_from_form(
+        db,
+        mode=mode,
+        date_from=date_from,
+        date_to=date_to,
+        account_id=account_id,
+    )
+    notice = f"Cleared {result['invalidated']} cached invoice PDF(s)"
+    return RedirectResponse(url=f"/admin/billing/cache?notice={notice}", status_code=303)
+
+
+@router.get("/invoices", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoices_list(
     request: Request,
     account_id: str | None = None,
@@ -162,7 +213,7 @@ def invoices_list(
     )
 
 
-@router.get("/invoices/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/invoices/export.csv", dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoices_export_csv(
     request: Request,
     account_id: str | None = Query(None),
@@ -194,7 +245,7 @@ def invoices_export_csv(
     )
 
 
-@router.get("/invoices/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get("/invoices/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:create"))])
 def invoice_new(
     request: Request,
     account_id: str | None = Query(None),
@@ -225,7 +276,7 @@ def invoice_new(
     )
 
 
-@router.post("/invoices/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:create"))])
 def invoice_create(
     request: Request,
     account_id: str | None = Form(None),
@@ -305,7 +356,7 @@ def invoice_create(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice.id}", status_code=303)
 
 
-@router.get("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_invoice_forms_service.edit_form_state(
         db,
@@ -334,7 +385,7 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
     )
 
 
-@router.post("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_update(
     request: Request,
     invoice_id: UUID,
@@ -402,12 +453,11 @@ def invoice_update(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice_id}", status_code=303)
 
 
-@router.get("/invoices/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/invoices/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoice_search(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
 
 
-@router.get("/invoices/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/invoices/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoice_filter(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("")
-

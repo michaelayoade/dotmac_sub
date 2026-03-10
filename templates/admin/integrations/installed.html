@@ -1,0 +1,140 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}Installed Integrations - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("indigo", "violet") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Installed Integrations",
+        subtitle="Manage installed add-ons, portal relay, and connector health",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>',
+        color="indigo",
+        color2="violet"
+    ) %}
+        <a href="/admin/integrations/connectors/new" class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Add Connector</a>
+    {% endcall %}
+
+    {% if saved %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">Integration settings updated.</div>
+    {% endif %}
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card("Installed", stats.total, color="slate", color2="gray") }}
+        {{ stats_card("Enabled", stats.enabled, color="emerald", color2="teal") }}
+        {{ stats_card("Healthy", stats.healthy, color="blue", color2="indigo") }}
+    </div>
+
+    <form id="bulk-installed-form" method="POST" action="/admin/integrations/installed/bulk" class="hidden">
+        {% include "components/forms/csrf_input.html" %}
+    </form>
+
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-3 flex items-center gap-2">
+            <button type="submit" form="bulk-installed-form" name="action" value="enable" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Enable Selected</button>
+            <button type="submit" form="bulk-installed-form" name="action" value="disable" class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">Disable Selected</button>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="bg-slate-50/60 dark:bg-slate-800/50">
+                        <th class="px-3 py-2 text-left"><input type="checkbox" onclick="for (const el of document.querySelectorAll('.js-select-integration')) el.checked=this.checked"></th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Title</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Root</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Relay Portal</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Health</th>
+                        <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in integrations %}
+                    <tr>
+                        <td class="px-3 py-2"><input class="js-select-integration" type="checkbox" form="bulk-installed-form" name="connector_ids" value="{{ row.connector.id }}"></td>
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.connector.name }}</td>
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.title }}</td>
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.root|title }}</td>
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.integration_type|replace('_', ' ')|title }}</td>
+                        <td class="px-3 py-2">
+                            <form method="POST" action="/admin/integrations/installed/{{ row.connector.id }}/relay" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="relay_to_portal" value="{{ 'false' if row.relay_to_portal else 'true' }}">
+                                <button type="submit" class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' if row.relay_to_portal else 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200' }}">{{ 'Yes' if row.relay_to_portal else 'No' }}</button>
+                            </form>
+                        </td>
+                        <td class="px-3 py-2">
+                            {% if row.connector.is_active %}
+                            <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Enabled</span>
+                            {% else %}
+                            <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">Disabled</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-2">
+                            {% if row.health == 'green' %}
+                            <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Healthy</span>
+                            {% elif row.health == 'amber' %}
+                            <span class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Degraded</span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Error</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-3 py-2 text-right space-x-2">
+                            <a href="/admin/integrations/connectors/{{ row.connector.id }}" class="text-xs font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Edit</a>
+                            <form method="POST" action="/admin/integrations/installed/{{ row.connector.id }}/toggle" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="enabled" value="{{ 'false' if row.connector.is_active else 'true' }}">
+                                <button type="submit" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ 'Disable' if row.connector.is_active else 'Enable' }}</button>
+                            </form>
+                            <form method="POST" action="/admin/integrations/installed/{{ row.connector.id }}/uninstall" class="inline" onsubmit="return confirm('Uninstall this integration?')">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">Uninstall</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No installed integrations yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Integration Activity Log</h2>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Last 50 API calls with status code and response time.</p>
+        <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="bg-slate-50/60 dark:bg-slate-800/50">
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Timestamp</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Connector</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Event</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">HTTP</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Latency</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for item in activity_log %}
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') if item.timestamp else '-' }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.connector_id }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.event_type }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.status }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.status_code or '-' }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.response_time_ms if item.response_time_ms is not none else '-' }}{% if item.response_time_ms is not none %} ms{% endif %}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No connector API activity recorded.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

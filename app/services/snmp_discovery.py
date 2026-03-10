@@ -7,11 +7,19 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from sqlalchemy import update
+
+from app.models.bandwidth import BandwidthSample
 from app.models.network_monitoring import (
+    Alert,
+    AlertRule,
     DeviceInterface,
+    DeviceMetric,
     InterfaceStatus,
     NetworkDevice,
 )
+from app.models.notification import AlertNotificationPolicy
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +30,7 @@ class InterfaceSnapshot:
     description: str | None
     status: InterfaceStatus
     speed_mbps: int | None
+    mac_address: str | None
 
 
 def _snmpwalk_args(device: NetworkDevice, command: str = "snmpwalk", bulk: bool = False) -> list[str]:
@@ -34,15 +43,15 @@ def _snmpwalk_args(device: NetworkDevice, command: str = "snmpwalk", bulk: bool 
     if bulk:
         args.append("-Cr25")
     if version in {"2c", "v2c"}:
-        community = device.snmp_community or "public"
+        community = decrypt_credential(device.snmp_community) if device.snmp_community else "public"
         args += ["-v2c", "-c", community]
     elif version == "v3":
         username = device.snmp_username
         if not username:
             raise ValueError("SNMP v3 requires a username.")
 
-        auth_secret = device.snmp_auth_secret
-        priv_secret = device.snmp_priv_secret
+        auth_secret = decrypt_credential(device.snmp_auth_secret) if device.snmp_auth_secret else None
+        priv_secret = decrypt_credential(device.snmp_priv_secret) if device.snmp_priv_secret else None
         auth_protocol = (device.snmp_auth_protocol or "none").lower()
         priv_protocol = (device.snmp_priv_protocol or "none").lower()
 
@@ -268,9 +277,8 @@ def collect_device_health(device: NetworkDevice) -> dict[str, float | int | None
 
 def collect_interface_snapshot(device: NetworkDevice) -> list[InterfaceSnapshot]:
     descr = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.2"))
+    names = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.31.1.1.1.1"))
     alias = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.31.1.1.1.18"))
-    if not alias:
-        alias = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.31.1.1.1.1"))
     status = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.8"))
     if not status:
         status = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.7"))
@@ -278,19 +286,36 @@ def collect_interface_snapshot(device: NetworkDevice) -> list[InterfaceSnapshot]
     speed_bps = {}
     if not speed:
         speed_bps = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.5"))
+    macs = _parse_walk(_run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.6"))
 
     snapshots: list[InterfaceSnapshot] = []
-    for index, name in descr.items():
-        display_name = name
+    indexes = sorted(
+        set(descr) | set(names),
+        key=lambda value: int(value) if value.isdigit() else value,
+    )
+    for index in indexes:
+        raw_name = descr.get(index) or names.get(index)
+        if not raw_name:
+            continue
+        display_name = raw_name
+        fallback_name = names.get(index)
         description = alias.get(index) or None
-        if "=>" in name:
-            left, right = name.split("=>", 1)
+        if description and fallback_name and description.strip() == fallback_name.strip():
+            description = None
+        if "=>" in raw_name:
+            left, right = raw_name.split("=>", 1)
             display_name = left.strip()
             if not description:
                 description = right.strip() or None
         high_speed = _parse_speed(speed.get(index)) if speed else None
         bps_speed = _parse_speed(speed_bps.get(index), scale=1_000_000) if speed_bps else None
         resolved_speed = high_speed if high_speed and high_speed > 0 else bps_speed
+        mac = macs.get(index) if macs else None
+        if mac:
+            normalized = mac.strip().strip('"').replace(" ", ":").replace("-", ":").upper()
+            if normalized in {"", "00:00:00:00:00:00"}:
+                normalized = None
+            mac = normalized
         snapshots.append(
             InterfaceSnapshot(
                 index=index,
@@ -298,6 +323,7 @@ def collect_interface_snapshot(device: NetworkDevice) -> list[InterfaceSnapshot]
                 description=description,
                 status=_parse_status(status.get(index)),
                 speed_mbps=resolved_speed,
+                mac_address=mac,
             )
         )
     return snapshots
@@ -323,6 +349,7 @@ def apply_interface_snapshot(
             iface.description = snapshot.description
             iface.status = snapshot.status
             iface.speed_mbps = snapshot.speed_mbps
+            iface.mac_address = snapshot.mac_address
             updated += 1
         elif create_missing:
             iface = DeviceInterface(
@@ -331,8 +358,29 @@ def apply_interface_snapshot(
                 description=snapshot.description,
                 status=snapshot.status,
                 speed_mbps=snapshot.speed_mbps,
+                mac_address=snapshot.mac_address,
             )
             db.add(iface)
             created += 1
+    snapshot_names = {snapshot.name for snapshot in snapshots}
+    stale_interfaces = [
+        iface for name, iface in existing.items() if name not in snapshot_names
+    ]
+    if stale_interfaces:
+        stale_ids = [iface.id for iface in stale_interfaces]
+        for model in (
+            DeviceMetric,
+            Alert,
+            AlertRule,
+            AlertNotificationPolicy,
+            BandwidthSample,
+        ):
+            db.execute(
+                update(model)
+                .where(model.interface_id.in_(stale_ids))
+                .values(interface_id=None)
+            )
+        for iface in stale_interfaces:
+            db.delete(iface)
     db.commit()
     return created, updated

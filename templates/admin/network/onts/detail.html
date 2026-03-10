@@ -4,7 +4,19 @@
 {% block title %}{{ ont.serial_number }} - ONT - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data="{ activeTab: 'overview' }">
+<div class="space-y-6"
+     x-data="{ activeTab: '{{ ont_active_tab | default('overview') }}' }"
+     x-init="
+        if (activeTab === 'tr069') {
+            const trigger = document.querySelector('[data-tab=\"tr069\"]');
+            if (trigger) trigger.dataset.loaded = '1';
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'});
+        } else if (activeTab === 'charts') {
+            const trigger = document.querySelector('[data-tab=\"charts\"]');
+            if (trigger) trigger.dataset.loaded = '1';
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'});
+        }
+     ">
     {# Header #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -135,13 +147,13 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 History
             </button>
-            <button @click="activeTab = 'tr069'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'}) }"
+            <button data-tab="tr069" @click="activeTab = 'tr069'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'}) }"
                     :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                 TR-069 / CPE
             </button>
-            <button @click="activeTab = 'charts'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'}) }"
+            <button data-tab="charts" @click="activeTab = 'charts'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'}) }"
                     :class="activeTab === 'charts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>

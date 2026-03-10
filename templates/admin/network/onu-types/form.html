@@ -47,7 +47,7 @@
                             <label class="flex items-center gap-2">
                                 <input type="radio" name="pon_type" value="{{ pt.value }}" required
                                     {% if item and item.pon_type.value == pt.value %}checked{% elif not item and loop.first %}checked{% endif %}
-                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ pt.value|upper }}</span>
                             </label>
                             {% endfor %}
@@ -61,7 +61,7 @@
                             <label class="flex items-center gap-2">
                                 <input type="radio" name="gpon_channel" value="{{ gc.value }}" required
                                     {% if item and item.gpon_channel.value == gc.value %}checked{% elif not item and loop.first %}checked{% endif %}
-                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500">
+                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ gc.value|replace('_', '-')|upper }}</span>
                             </label>
                             {% endfor %}
@@ -121,7 +121,7 @@
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="allow_custom_profiles" value="true"
                                 {% if item and item.allow_custom_profiles %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow Custom Profiles</span>
                         </label>
                         <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Enable custom RADIUS or provisioning profiles for this ONU type</p>
@@ -130,7 +130,7 @@
                     <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="is_active" value="true" {% if not item or item.is_active %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
                         </label>
                     </div>

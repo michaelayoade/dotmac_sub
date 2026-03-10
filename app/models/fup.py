@@ -13,6 +13,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     Time,
@@ -82,10 +83,10 @@ class FupPolicy(Base):
 
     # Days of week (stored as array of day numbers 0=Mon .. 6=Sun)
     traffic_days_of_week: Mapped[list[int] | None] = mapped_column(
-        ARRAY(Integer), nullable=True
+        ARRAY(Integer).with_variant(JSON, "sqlite"), nullable=True
     )
     online_days_of_week: Mapped[list[int] | None] = mapped_column(
-        ARRAY(Integer), nullable=True
+        ARRAY(Integer).with_variant(JSON, "sqlite"), nullable=True
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

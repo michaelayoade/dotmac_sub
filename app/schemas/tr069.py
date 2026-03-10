@@ -10,6 +10,11 @@ from app.models.tr069 import Tr069Event, Tr069JobStatus
 
 class Tr069AcsServerBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
+    cwmp_url: str = Field(min_length=1, max_length=255)
+    cwmp_username: str = Field(min_length=1, max_length=120)
+    cwmp_password: str = Field(min_length=1, max_length=255)
+    connection_request_username: str = Field(min_length=1, max_length=120)
+    connection_request_password: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=1, max_length=255)
     is_active: bool = True
     notes: str | None = None
@@ -21,6 +26,11 @@ class Tr069AcsServerCreate(Tr069AcsServerBase):
 
 class Tr069AcsServerUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
+    cwmp_url: str | None = Field(default=None, min_length=1, max_length=255)
+    cwmp_username: str | None = Field(default=None, min_length=1, max_length=120)
+    cwmp_password: str | None = Field(default=None, min_length=1, max_length=255)
+    connection_request_username: str | None = Field(default=None, min_length=1, max_length=120)
+    connection_request_password: str | None = Field(default=None, min_length=1, max_length=255)
     base_url: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
     notes: str | None = None

@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.models.subscription_engine import SettingValueType
 from app.models.wireguard import WireGuardPeerStatus
-from app.schemas.wireguard import WireGuardPeerCreate
 from app.schemas.settings import DomainSettingUpdate
+from app.schemas.wireguard import WireGuardPeerCreate
 from app.services import domain_settings as domain_settings_service
+from app.services import job_log_store
 from app.services import wireguard as wg_service
 from app.services.audit_helpers import log_audit_event
 from app.services.wireguard_system import WireGuardSystemService
@@ -142,7 +143,7 @@ def _build_openvpn_client_config(
 ) -> str:
     fake_ca = (
         "-----BEGIN CERTIFICATE-----\n"
-        + base64.b64encode(f"dotmac-openvpn-ca:{client_name}".encode("utf-8")).decode("utf-8")
+        + base64.b64encode(f"dotmac-openvpn-ca:{client_name}".encode()).decode("utf-8")
         + "\n-----END CERTIFICATE-----"
     )
     return (
@@ -234,36 +235,31 @@ def build_unified_dashboard_data(db: Session, server_id: str | None = None) -> d
 
 
 def _job_entries(db: Session) -> list[dict[str, Any]]:
-    entries = _network_setting_json(db, VPN_CONTROL_JOBS_KEY, [])
-    if not isinstance(entries, list):
-        return []
-    return [item for item in entries if isinstance(item, dict)]
+    return job_log_store.read_json_list(
+        db, domain_settings_service.network_settings, VPN_CONTROL_JOBS_KEY
+    )
 
 
 def _save_jobs(db: Session, entries: list[dict[str, Any]]) -> None:
-    _upsert_network_json(db, VPN_CONTROL_JOBS_KEY, entries[:100])
+    job_log_store.save_json_list(
+        db,
+        domain_settings_service.network_settings,
+        VPN_CONTROL_JOBS_KEY,
+        entries,
+        limit=100,
+        is_secret=False,
+        is_active=True,
+    )
 
 
 def upsert_control_job(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    job_id = str(payload.get("job_id") or "").strip()
-    if not job_id:
-        raise ValueError("job_id is required")
-    entries = _job_entries(db)
-    for idx, item in enumerate(entries):
-        if str(item.get("job_id") or "") == job_id:
-            entries[idx] = {**item, **payload}
-            _save_jobs(db, entries)
-            return entries[idx]
-    entries.insert(0, payload)
+    entries, merged = job_log_store.upsert_job(_job_entries(db), payload)
     _save_jobs(db, entries)
-    return payload
+    return merged
 
 
 def get_control_job(db: Session, job_id: str) -> dict[str, Any] | None:
-    for item in _job_entries(db):
-        if str(item.get("job_id") or "") == job_id:
-            return item
-    return None
+    return job_log_store.get_job(_job_entries(db), job_id)
 
 
 def queue_control_job(

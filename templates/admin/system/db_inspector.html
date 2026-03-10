@@ -1,0 +1,213 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card %}
+
+{% block title %}DB Inspector - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "zinc") }}
+<div class="relative space-y-6">
+    {% call page_header(
+        title="DB Inspector (Read-Only)",
+        subtitle="SELECT-only inspection tool for database troubleshooting",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>',
+        color="slate",
+        color2="zinc"
+    ) %}{% endcall %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if notice %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-400">{{ notice }}</div>
+    {% endif %}
+
+    <div class="rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+        <p class="font-semibold">Warning</p>
+        <p>Use at your own risk. Only read-only inspection is allowed. All queries are audited with user and timestamp.</p>
+    </div>
+
+    {% if not confirmed %}
+    {% call card("Password Confirmation", color="slate") %}
+    <form method="POST" action="/admin/system/tools/db-inspector/confirm" class="space-y-3 max-w-md">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="table" value="{{ selected_table or '' }}">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Confirm your password</label>
+        <input type="password" name="password" required class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+        <button type="submit" class="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Unlock DB Inspector</button>
+    </form>
+    {% endcall %}
+    {% else %}
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card("Dialect", dialect|upper, color="slate", color2="zinc") }}
+        {{ stats_card("Tables", table_stats|length, color="blue", color2="indigo") }}
+        {{ stats_card("Slow Query Entries", slow_queries|length, color="amber", color2="orange") }}
+    </div>
+
+    {% call card("Run SELECT Query", color="slate") %}
+    <form method="POST" action="/admin/system/tools/db-inspector/query" class="space-y-3">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="grid gap-3 md:grid-cols-4">
+            <div class="md:col-span-1">
+                <label class="mb-1 block text-xs font-medium text-slate-500">Row limit</label>
+                <input type="number" name="row_limit" min="1" max="500" value="{{ row_limit or 100 }}" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            </div>
+            <div class="md:col-span-3">
+                <label class="mb-1 block text-xs font-medium text-slate-500">Table schema lookup (optional)</label>
+                <input type="text" name="table" value="{{ selected_table or '' }}" placeholder="public.subscribers" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+            </div>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-medium text-slate-500">SQL query (SELECT only)</label>
+            <textarea name="query_text" rows="6" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="SELECT id, email FROM subscribers ORDER BY created_at DESC">{{ query_text or '' }}</textarea>
+        </div>
+        <div class="flex gap-2">
+            <button type="submit" class="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Run Query</button>
+            <button type="submit" formaction="/admin/system/tools/db-inspector/export.csv" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">Export CSV</button>
+        </div>
+    </form>
+    <form method="POST" action="/admin/system/tools/db-inspector/revoke" class="mt-3">
+        {% include "components/forms/csrf_input.html" %}
+        <button type="submit" class="text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Lock inspector</button>
+    </form>
+    {% endcall %}
+
+    {% if query_result %}
+    {% call card("Query Result", color="slate", padding=False) %}
+    <div class="px-4 py-2 text-xs text-slate-500 dark:text-slate-400">Rows: {{ query_result.row_count }}{% if query_result.truncated %} (truncated){% endif %}</div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full">
+            <thead>
+                <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/70">
+                    {% for col in query_result.columns %}
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% for row in query_result.rows %}
+                <tr>
+                    {% for col in query_result.columns %}
+                    <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row[col] }}</td>
+                    {% endfor %}
+                </tr>
+                {% else %}
+                <tr><td colspan="{{ query_result.columns|length }}" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No rows returned.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endcall %}
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        {% call card("Table Stats", color="slate", padding=False) %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/70">
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Table</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Rows</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Size (bytes)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in table_stats %}
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.table_name }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.row_count }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.total_bytes if row.total_bytes is not none else '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No table stats available.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+
+        {% call card("Table Schema", color="slate", padding=False) %}
+        <div class="px-4 py-2 text-xs text-slate-500 dark:text-slate-400">Selected: {{ selected_table or '-' }}</div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/70">
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Column</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Nullable</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in table_schema %}
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.column_name }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.data_type }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.is_nullable }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No schema rows available.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        {% call card("Index Usage", color="slate", padding=False) %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/70">
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Table</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Index</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Scans</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in index_usage %}
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.table_name }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.index_name }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.idx_scan }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No index usage data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+
+        {% call card("Slow Query Summary", color="slate", padding=False) %}
+        {% if slow_query_note %}
+        <div class="px-4 py-2 text-xs text-amber-700 dark:text-amber-300">{{ slow_query_note }}</div>
+        {% endif %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/70">
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Calls</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Avg ms</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Total ms</th>
+                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Query</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for row in slow_queries %}
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.calls }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.avg_ms }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-700 dark:text-slate-200">{{ row.total_ms }}</td>
+                        <td class="px-3 py-2 text-xs font-mono text-slate-700 dark:text-slate-200">{{ row.query }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No slow query data.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endcall %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

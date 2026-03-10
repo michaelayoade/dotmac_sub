@@ -7,7 +7,7 @@ from typing import cast
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
@@ -258,7 +258,14 @@ class SubscriptionChangeRequests(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Subscription not found")
 
         # Update subscription to new offer
+        previous_offer_id = subscription.offer_id
         subscription.offer_id = request.requested_offer_id
+        from app.services.catalog.subscriptions import apply_offer_radius_profile
+        apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=previous_offer_id,
+        )
 
         # Get new offer for pricing info
         from app.models.catalog import CatalogOffer, PriceType
@@ -280,6 +287,19 @@ class SubscriptionChangeRequests(ListResponseMixin):
 
         db.commit()
         db.refresh(request)
+        try:
+            from app.services.enforcement import update_subscription_sessions
+            from app.services.radius import reconcile_subscription_connectivity
+
+            reconcile_subscription_connectivity(db, str(subscription.id))
+            if subscription.status == SubscriptionStatus.active:
+                update_subscription_sessions(db, str(subscription.id), reason="profile_change")
+        except Exception as exc:
+            logger.warning(
+                "Failed to refresh RADIUS state for subscription %s after change request: %s",
+                subscription.id,
+                exc,
+            )
 
         logger.info(
             f"Applied subscription change request {request_id}, "

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from urllib.parse import quote_plus
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -38,6 +39,7 @@ from app.services import notification as notification_service
 from app.services import provisioning as provisioning_service
 from app.services import subscriber as subscriber_service
 from app.services import web_provisioning_bulk_activate as bulk_activate_service
+from app.services import web_provisioning_migration as migration_service
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -45,7 +47,7 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.auth_dependencies import require_permission
-from app.tasks.provisioning import run_bulk_activation_job
+from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 
 logger = logging.getLogger(__name__)
 
@@ -251,8 +253,9 @@ async def bulk_activate_execute(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
     from urllib.parse import quote_plus
+
+    from app.web.admin import get_current_user
 
     form = await request.form()
     filters = bulk_activate_service.parse_filters(dict(form))
@@ -293,6 +296,141 @@ def bulk_activate_job_status(
     job = bulk_activate_service.get_job(db, job_id)
     return templates.TemplateResponse(
         "admin/provisioning/_bulk_activate_job_status.html",
+        {"request": request, "job": job},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Service Migration
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/migrate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def service_migration_page(
+    request: Request,
+    reseller_id: str | None = Query(default=None),
+    pop_site_id: str | None = Query(default=None),
+    subscriber_status: str | None = Query(default=None),
+    current_offer_id: str | None = Query(default=None),
+    current_nas_device_id: str | None = Query(default=None),
+    query: str | None = Query(default=None),
+    job_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    ctx = _ctx(request, db, "provisioning-migrate")
+    filters = migration_service.MigrationFilters(
+        reseller_id=reseller_id,
+        pop_site_id=pop_site_id,
+        subscriber_status=subscriber_status,
+        current_offer_id=current_offer_id,
+        current_nas_device_id=current_nas_device_id,
+        query=query,
+    )
+    table = migration_service.build_selection_table(db, filters=filters)
+    options = migration_service.page_options(db)
+    active_job = migration_service.get_job(db, job_id) if job_id else None
+    ctx.update(
+        {
+            **options,
+            **table,
+            "filters": filters,
+            "active_job_id": job_id,
+            "active_job": active_job,
+            "preview": None,
+            "notice": request.query_params.get("notice"),
+            "error": request.query_params.get("error"),
+        }
+    )
+    return templates.TemplateResponse("admin/provisioning/migrate.html", ctx)
+
+
+@router.post(
+    "/migrate/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+async def service_migration_preview(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    form = await request.form()
+    filters = migration_service.parse_filters(dict(form))
+    targets = migration_service.parse_targets(dict(form))
+    selected_ids = migration_service.parse_selected_ids(form)
+    preview = migration_service.build_preview(
+        db,
+        filters=filters,
+        targets=targets,
+        selected_ids=selected_ids,
+    )
+    return templates.TemplateResponse(
+        "admin/provisioning/_migrate_preview.html",
+        {"request": request, "preview": preview},
+    )
+
+
+@router.post(
+    "/migrate/execute",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:write"))],
+)
+async def service_migration_execute(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    form = await request.form()
+    filters = migration_service.parse_filters(dict(form))
+    targets = migration_service.parse_targets(dict(form))
+    selected_ids = migration_service.parse_selected_ids(form)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id") or "").strip() or None
+
+    try:
+        job = migration_service.create_job(
+            db,
+            filters=filters,
+            targets=targets,
+            selected_ids=selected_ids,
+            actor_id=actor_id,
+        )
+        scheduled_at = job.get("scheduled_at")
+        if scheduled_at:
+            eta = datetime.fromisoformat(str(scheduled_at))
+            run_service_migration_job.apply_async(kwargs={"job_id": str(job["job_id"])}, eta=eta)
+            notice = quote_plus("Service migration scheduled.")
+        else:
+            run_service_migration_job.delay(job_id=str(job["job_id"]))
+            notice = quote_plus("Service migration queued.")
+        return RedirectResponse(
+            url=f"/admin/provisioning/migrate?job_id={job['job_id']}&notice={notice}",
+            status_code=303,
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            url=f"/admin/provisioning/migrate?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+
+
+@router.get(
+    "/migrate/jobs/{job_id}/status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def service_migration_job_status(
+    request: Request,
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    job = migration_service.get_job(db, job_id)
+    return templates.TemplateResponse(
+        "admin/provisioning/_migrate_job_status.html",
         {"request": request, "job": job},
     )
 

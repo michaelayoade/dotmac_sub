@@ -31,6 +31,40 @@
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+    const form = document.getElementById('mikrotik-bootstrap-script-form');
+    const statusEl = document.getElementById('mikrotik-bootstrap-script-status');
+    if (!form || !statusEl) return;
+
+    const setStatus = (message, ok) => {
+        statusEl.textContent = message;
+        statusEl.className = ok
+            ? 'mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300'
+            : 'mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300';
+    };
+
+    form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        setStatus('Generating script...', true);
+        try {
+            const resp = await fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                credentials: 'same-origin'
+            });
+            if (!resp.ok) {
+                throw new Error('Failed to generate script.');
+            }
+            const scriptText = await resp.text();
+            await navigator.clipboard.writeText(scriptText);
+            setStatus('Script copied to clipboard.', true);
+        } catch (err) {
+            setStatus('Could not copy automatically. Please try again.', false);
+        }
+    });
+})();
+</script>
 {% endblock %}
 
 {% block content %}
@@ -134,7 +168,7 @@
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.model or '-' }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ resolved_model or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">IP Address</dt>
@@ -142,25 +176,25 @@
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Firmware Version</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.firmware_version or '-' }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ resolved_firmware_version or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ device.serial_number or '-' }}</dd>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ resolved_serial_number or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">MAC Address</dt>
-                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ device.mac_address or '-' }}</dd>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ mikrotik_status.primary_mac or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Location</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ device.location or '-' }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ resolved_location or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Seen</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {% if device.last_seen_at %}
-                                {{ device.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                {% if resolved_last_seen_at %}
+                                {{ resolved_last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}
                                 {% else %}
                                 <span class="text-slate-400">Never</span>
                                 {% endif %}
@@ -413,6 +447,16 @@
                                 Test API connection
                             </button>
                         </form>
+                        <form id="mikrotik-bootstrap-script-form" method="post" action="/admin/network/nas/devices/{{ device.id }}/vendor/mikrotik/bootstrap-script" class="mt-2">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+                                Generate setup script
+                            </button>
+                        </form>
+                        <div id="mikrotik-bootstrap-script-status" class="mt-2 text-[11px] text-slate-500 dark:text-slate-400"></div>
+                        <p class="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                            Generates a new password, saves credentials in Dotmac, and copies a RouterOS script to clipboard.
+                        </p>
                         {% if api_test_status and api_test_message %}
                         <div class="mt-3 rounded-lg border px-3 py-2 text-xs {% if api_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300{% endif %}">
                             {{ api_test_message }}
@@ -422,7 +466,18 @@
                             <div><span class="text-slate-400">Platform:</span> {{ mikrotik_status.platform or '-' }}</div>
                             <div><span class="text-slate-400">Board name:</span> {{ mikrotik_status.board_name or '-' }}</div>
                             <div><span class="text-slate-400">RouterOS Version:</span> {{ mikrotik_status.routeros_version or '-' }}</div>
+                            <div><span class="text-slate-400">Serial number:</span> {{ mikrotik_status.serial_number or '-' }}</div>
+                            <div><span class="text-slate-400">Primary MAC:</span> {{ mikrotik_status.primary_mac or '-' }}</div>
+                            <div><span class="text-slate-400">Architecture:</span> {{ mikrotik_status.architecture_name or '-' }}</div>
+                            <div><span class="text-slate-400">CPU model:</span> {{ mikrotik_status.cpu_model or '-' }}</div>
+                            <div><span class="text-slate-400">CPU cores:</span> {{ mikrotik_status.cpu_count or '-' }}</div>
+                            <div><span class="text-slate-400">CPU frequency:</span> {{ mikrotik_status.cpu_frequency or '-' }}</div>
+                            <div><span class="text-slate-400">Disk total:</span> {{ mikrotik_status.total_hdd_space or '-' }}</div>
+                            <div><span class="text-slate-400">Disk free:</span> {{ mikrotik_status.free_hdd_space or '-' }}</div>
                             <div><span class="text-slate-400">CPU usage:</span> {{ mikrotik_status.cpu_usage or '-' }}</div>
+                            <div><span class="text-slate-400">Uptime:</span> {{ (metrics_by_type.get('uptime').value ~ ' s') if metrics_by_type.get('uptime') else '-' }}</div>
+                            <div><span class="text-slate-400">Rx:</span> {{ (metrics_by_type.get('rx_bps').value ~ ' bps') if metrics_by_type.get('rx_bps') else '-' }}</div>
+                            <div><span class="text-slate-400">Tx:</span> {{ (metrics_by_type.get('tx_bps').value ~ ' bps') if metrics_by_type.get('tx_bps') else '-' }}</div>
                             <div><span class="text-slate-400">IPv6 status:</span> {{ mikrotik_status.ipv6_status or '-' }}</div>
                             <div><span class="text-slate-400">Last status check:</span> {{ mikrotik_status.last_status_check or '-' }}</div>
                         </dl>
@@ -444,18 +499,19 @@
                     </div>
                 </div>
                 <div class="p-6">
-                    {% if logs %}
+                    {% set display_logs = connection_logs if connection_logs else [] %}
+                    {% if display_logs %}
                     <div class="space-y-3">
-                        {% for log in logs %}
+                        {% for log in display_logs %}
                         <a href="/admin/network/nas/logs/{{ log.id }}" class="flex items-center justify-between rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50">
                             <div class="flex items-center gap-3">
                                 <div class="flex h-8 w-8 items-center justify-center rounded-lg
-                                    {% if log.status == 'success' %}bg-green-100 dark:bg-green-900/30
-                                    {% elif log.status == 'failed' %}bg-red-100 dark:bg-red-900/30
+                                    {% if log.status.value == 'success' %}bg-green-100 dark:bg-green-900/30
+                                    {% elif log.status.value == 'failed' %}bg-red-100 dark:bg-red-900/30
                                     {% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
-                                    {% if log.status == 'success' %}
+                                    {% if log.status.value == 'success' %}
                                     <svg class="h-4 w-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                    {% elif log.status == 'failed' %}
+                                    {% elif log.status.value == 'failed' %}
                                     <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                                     {% else %}
                                     <svg class="h-4 w-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -463,18 +519,21 @@
                                 </div>
                                 <div>
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">
-                                        {{ log.action.value.replace('_', ' ') | title }}
+                                        {{ log.command_sent or (log.action.value.replace('_', ' ') | title) }}
                                     </p>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">
                                         {{ log.created_at.strftime('%Y-%m-%d %H:%M') }} &middot; {{ log.triggered_by or 'System' }}
                                     </p>
+                                    {% if log.error_message %}
+                                    <p class="text-xs text-red-600 dark:text-red-400">{{ log.error_message }}</p>
+                                    {% endif %}
                                 </div>
                             </div>
                         </a>
                         {% endfor %}
                     </div>
                     {% else %}
-                    <p class="text-sm text-slate-500 dark:text-slate-400">No provisioning activity yet</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No NAS connection auth attempts logged yet.</p>
                     {% endif %}
                 </div>
             </div>
@@ -507,17 +566,17 @@
                     <div>
                         <h3 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Health Status</h3>
                         <div class="flex items-center gap-2">
-                            {% if device.health_status == 'healthy' %}
+                            {% if resolved_health_status == 'healthy' %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
                                 <span class="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse"></span>
                                 Healthy
                             </span>
-                            {% elif device.health_status == 'degraded' %}
+                            {% elif resolved_health_status == 'degraded' %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
                                 <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
                                 Degraded
                             </span>
-                            {% elif device.health_status == 'unhealthy' %}
+                            {% elif resolved_health_status == 'unhealthy' %}
                             <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">
                                 <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
                                 Unhealthy
@@ -528,9 +587,9 @@
                             </span>
                             {% endif %}
                         </div>
-                        {% if device.last_health_check_at %}
+                        {% if resolved_last_health_check_at %}
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Last check: {{ device.last_health_check_at.strftime('%Y-%m-%d %H:%M') }}
+                            Last check: {{ resolved_last_health_check_at.strftime('%Y-%m-%d %H:%M') }}
                         </p>
                         {% endif %}
                     </div>
@@ -539,8 +598,8 @@
                         {% if device.max_concurrent_subscribers %}
                         <div class="space-y-2">
                             <div class="flex justify-between text-sm">
-                                <span class="text-slate-600 dark:text-slate-300">{{ device.current_subscriber_count or 0 }} / {{ device.max_concurrent_subscribers }}</span>
-                                {% set utilization = ((device.current_subscriber_count or 0) / device.max_concurrent_subscribers * 100) | round(0) | int %}
+                                <span class="text-slate-600 dark:text-slate-300">{{ resolved_current_subscriber_count or 0 }} / {{ device.max_concurrent_subscribers }}</span>
+                                {% set utilization = ((resolved_current_subscriber_count or 0) / device.max_concurrent_subscribers * 100) | round(0) | int %}
                                 <span class="{% if utilization > 90 %}text-red-600 dark:text-red-400{% elif utilization > 75 %}text-amber-600 dark:text-amber-400{% else %}text-slate-600 dark:text-slate-300{% endif %}">
                                     {{ utilization }}%
                                 </span>
@@ -551,7 +610,7 @@
                         </div>
                         {% else %}
                         <div class="text-sm text-slate-600 dark:text-slate-300">
-                            {{ device.current_subscriber_count or 0 }} subscribers
+                            {{ resolved_current_subscriber_count or 0 }} subscribers
                         </div>
                         <p class="mt-1 text-xs text-slate-400">No capacity limit set</p>
                         {% endif %}
@@ -574,7 +633,7 @@
                                 <span class="text-slate-400">User:</span> {{ device.ssh_username }}
                             </p>
                             <p class="text-slate-600 dark:text-slate-300">
-                                <span class="text-slate-400">Port:</span> {{ device.ssh_port }}
+                                <span class="text-slate-400">Port:</span> {{ resolved_ssh_port or '-' }}
                             </p>
                             {% if device.ssh_key %}
                             <p class="text-green-600 dark:text-green-400 text-xs">Key configured</p>

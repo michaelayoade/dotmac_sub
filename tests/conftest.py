@@ -92,8 +92,8 @@ def _sqlite_uuid_result_processor(self, dialect, coltype):
     return _original_uuid_result_processor(self, dialect, coltype)
 
 
-sqltypes.Uuid.bind_processor = _sqlite_uuid_bind_processor
-sqltypes.Uuid.result_processor = _sqlite_uuid_result_processor
+sqltypes.Uuid.bind_processor = _sqlite_uuid_bind_processor  # type: ignore[method-assign]
+sqltypes.Uuid.result_processor = _sqlite_uuid_result_processor  # type: ignore[method-assign]
 
 
 # Monkey-patch PostgreSQL JSONB type for SQLite compatibility

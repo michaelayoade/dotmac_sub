@@ -37,7 +37,7 @@ def _parse_decimal(value: str | None, field: str, default: Decimal | None = None
         raise ValueError(f"{field} must be a valid number") from exc
 
 
-@router.get("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:credit_note:read"))])
 def billing_credits_list(
     request: Request,
     page: int = 1,
@@ -66,7 +66,7 @@ def billing_credits_list(
     )
 
 
-@router.get("/credits/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.get("/credits/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:credit_note:create"))])
 def billing_credit_new(
     request: Request,
     account_id: str | None = Query(None),
@@ -100,7 +100,7 @@ def billing_credit_new(
     )
 
 
-@router.post("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:credit_note:create"))])
 def billing_credit_create(
     request: Request,
     account_id: str = Form(...),

@@ -32,7 +32,6 @@ from app.schemas.billing import (
     InvoiceWriteOffRequest,
     LedgerEntryCreate,
     LedgerEntryRead,
-    LedgerEntryUpdate,
     PaymentAllocationCreate,
     PaymentAllocationRead,
     PaymentChannelAccountCreate,
@@ -1180,16 +1179,16 @@ def list_ledger_entries(
     )
 
 
-@router.patch(
-    "/ledger-entries/{entry_id}",
+@router.post(
+    "/ledger-entries/{entry_id}/reverse",
     response_model=LedgerEntryRead,
     tags=["ledger-entries"],
     dependencies=[Depends(require_permission("billing:write"))],
 )
-def update_ledger_entry(
-    entry_id: str, payload: LedgerEntryUpdate, db: Session = Depends(get_db)
+def reverse_ledger_entry(
+    entry_id: str, memo: str | None = None, db: Session = Depends(get_db)
 ):
-    return billing_service.ledger_entries.update(db, entry_id, payload)
+    return billing_service.ledger_entries.reverse(db, entry_id, memo)
 
 
 @router.delete(

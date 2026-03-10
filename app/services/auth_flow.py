@@ -11,7 +11,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import func, select as sa_select
+from sqlalchemy import func
+from sqlalchemy import select as sa_select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,11 +40,12 @@ from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import radius_auth as radius_auth_service
 from app.services.common import coerce_uuid
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
 PASSWORD_CONTEXT = CryptContext(
-    schemes=["pbkdf2_sha256", "bcrypt"],
+    schemes=["pbkdf2_sha256", "bcrypt", "sha512_crypt"],
     default="pbkdf2_sha256",
     deprecated="auto",
 )
@@ -464,9 +466,22 @@ def hash_password(password: str) -> str:
     return cast(str, PASSWORD_CONTEXT.hash(password))
 
 
+def hash_service_secret(password: str) -> str:
+    """Store subscriber service credentials in reversible-at-rest format.
+
+    PPPoE and other RADIUS flows may require Cleartext-Password or NT-Password
+    for MS-CHAP-compatible auth. We therefore store service credentials using
+    the shared credential encryption layer instead of a one-way hash.
+    """
+    return cast(str, encrypt_credential(password))
+
+
 def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
         return False
+    decrypted = decrypt_credential(password_hash)
+    if decrypted != password_hash:
+        return secrets.compare_digest(password, decrypted or "")
     return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
 
 

@@ -6,6 +6,7 @@ from app.db import SessionLocal
 from app.metrics import observe_job
 from app.models.domain_settings import SettingDomain
 from app.services import gis_sync as gis_sync_service
+from app.services import web_system_geocode_tool as web_system_geocode_tool_service
 from app.services.scheduler_config import _effective_bool
 
 logger = logging.getLogger(__name__)
@@ -73,3 +74,16 @@ def sync_gis_sources():
         session.close()
         duration = time.monotonic() - start
         observe_job("gis_sync", status, duration)
+
+
+@celery_app.task(name="app.tasks.gis.run_batch_geocode_job")
+def run_batch_geocode_job(*, job_id: str):
+    """Execute a batch geocoding job from system geocode tool."""
+    session = SessionLocal()
+    try:
+        return web_system_geocode_tool_service.execute_job(session, job_id=job_id)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

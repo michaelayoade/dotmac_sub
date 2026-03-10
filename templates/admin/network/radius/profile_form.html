@@ -50,6 +50,44 @@
                         </select>
                     </div>
 
+                    <div>
+                        <label for="connection_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Connection Type</label>
+                        <select name="connection_type" id="connection_type"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            {% for item in connection_types %}
+                            <option value="{{ item }}" {% if profile and profile.connection_type and profile.connection_type.value == item %}selected{% endif %}>
+                                {{ item | replace("_", " ") | title }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="download_speed" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed (Kbps)</label>
+                        <input type="number" name="download_speed" id="download_speed" min="0"
+                            value="{{ profile.download_speed if profile and profile.download_speed is not none else '' }}"
+                            placeholder="6000"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="upload_speed" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed (Kbps)</label>
+                        <input type="number" name="upload_speed" id="upload_speed" min="0"
+                            value="{{ profile.upload_speed if profile and profile.upload_speed is not none else '' }}"
+                            placeholder="6000"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="mikrotik_rate_limit" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MikroTik Rate Limit</label>
+                        <input type="text" name="mikrotik_rate_limit" id="mikrotik_rate_limit"
+                            value="{{ profile.mikrotik_rate_limit if profile and profile.mikrotik_rate_limit else '' }}"
+                            placeholder="6000k/6000k"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional override. Leave blank to derive from download/upload speed.</p>
+                    </div>
+
                     <div class="sm:col-span-2">
                         <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
                         <textarea name="description" id="description" rows="3"

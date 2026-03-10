@@ -369,14 +369,34 @@ function updateChartTheme(chart) {
 // Global chart registry for theme updates
 const chartRegistry = new Map();
 
+function isChartUsable(chart) {
+    return Boolean(chart && !chart._destroyed && chart.canvas && chart.ctx);
+}
+
 function registerChart(id, chart) {
+    const existing = chartRegistry.get(id);
+    if (existing && existing !== chart) {
+        try {
+            if (!existing._destroyed) {
+                existing.destroy();
+            }
+        } catch (_e) {
+            // Ignore stale/detached chart cleanup errors
+        }
+    }
     chartRegistry.set(id, chart);
 }
 
 function unregisterChart(id) {
     const chart = chartRegistry.get(id);
     if (chart) {
-        chart.destroy();
+        try {
+            if (!chart._destroyed) {
+                chart.destroy();
+            }
+        } catch (_e) {
+            // Ignore stale/detached chart cleanup errors
+        }
         chartRegistry.delete(id);
     }
 }
@@ -385,8 +405,16 @@ function unregisterChart(id) {
 const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
         if (mutation.attributeName === 'class') {
-            chartRegistry.forEach((chart) => {
-                updateChartTheme(chart);
+            chartRegistry.forEach((chart, id) => {
+                if (!isChartUsable(chart)) {
+                    chartRegistry.delete(id);
+                    return;
+                }
+                try {
+                    updateChartTheme(chart);
+                } catch (_e) {
+                    chartRegistry.delete(id);
+                }
             });
         }
     });

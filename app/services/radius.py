@@ -1,9 +1,11 @@
 import hashlib
 import logging
+import os
 import re
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
@@ -45,6 +47,53 @@ from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
+
+
+_CRYPT_PREFIXES = ("$1$", "$2a$", "$2b$", "$2y$", "$5$", "$6$")
+RADIUS_SYNC_ELIGIBLE_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+)
+
+
+def _external_password_row(
+    credential: AccessCredential,
+    *,
+    default_attribute: str,
+    default_op: str,
+) -> tuple[str, str, str] | None:
+    secret_hash = str(credential.secret_hash or "").strip()
+    if not secret_hash:
+        return None
+    lowered = secret_hash.lower()
+    if lowered.startswith(("plain:", "cleartext:", "enc:")):
+        return ("Cleartext-Password", ":=", decrypt_credential(secret_hash) or "")
+    if secret_hash.startswith(_CRYPT_PREFIXES):
+        return ("Crypt-Password", ":=", secret_hash)
+    if secret_hash.startswith("$pbkdf2-"):
+        logger.warning(
+            "Skipping external RADIUS password sync for %s: unsupported legacy PBKDF2 service secret",
+            credential.username,
+        )
+        return None
+    return (default_attribute, default_op, secret_hash)
+
+
+def _radius_sync_subscription_for_subscriber(
+    db: Session, subscriber_id
+) -> Subscription | None:
+    return (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber_id)
+        .filter(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
+        .order_by(
+            Subscription.start_at.desc().nullslast(),
+            Subscription.created_at.desc(),
+        )
+        .first()
+    )
 
 
 def _coerce_int_setting(value: object) -> int | None:
@@ -205,6 +254,258 @@ def _hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _radius_client_ip_for_nas(nas_device: NasDevice) -> str:
+    return (nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address or "").strip()
+
+
+def _active_radius_servers(db: Session) -> list[RadiusServer]:
+    return (
+        db.query(RadiusServer)
+        .filter(RadiusServer.is_active.is_(True))
+        .order_by(RadiusServer.created_at.asc())
+        .all()
+    )
+
+
+def _normalize_external_db_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    db_url = value.strip()
+    if not db_url:
+        return None
+    if db_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + db_url[len("postgresql://") :]
+    return db_url
+
+
+def _bundled_external_db_config() -> dict | None:
+    """Fallback external RADIUS DB config for the bundled Docker stack."""
+    db_url = _normalize_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
+    if not db_url:
+        db_url = _normalize_external_db_url(os.getenv("RADIUS_DB_DSN"))
+        if db_url and ("@localhost:" in db_url or "@127.0.0.1:" in db_url):
+            db_url = None
+    if not db_url:
+        host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
+        database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
+        username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
+        password = (os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-").strip()
+        if host and database and username and password:
+            db_url = f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+    if not db_url:
+        return None
+    return {
+        "db_url": db_url,
+        "radcheck_table": '"radcheck"',
+        "radreply_table": '"radreply"',
+        "radusergroup_table": '"radusergroup"',
+        "nas_table": '"nas"',
+        "password_attribute": "Cleartext-Password",
+        "password_op": ":=",
+        "use_group": False,
+        "group_priority": 0,
+        "default_reply_op": ":=",
+    }
+
+
+def _active_external_sync_configs(db: Session) -> list[dict]:
+    configs: list[dict] = []
+    jobs = (
+        db.query(RadiusSyncJob)
+        .filter(RadiusSyncJob.is_active.is_(True))
+        .filter(RadiusSyncJob.connector_config_id.isnot(None))
+        .all()
+    )
+    for job in jobs:
+        config = _external_db_config(db, job)
+        if config:
+            configs.append(config)
+    if configs:
+        return configs
+    fallback = _bundled_external_db_config()
+    return [fallback] if fallback else []
+
+
+def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
+    """Ensure active RadiusClient rows exist for a NAS on all active servers."""
+    client_ip = _radius_client_ip_for_nas(nas_device)
+    if not client_ip or not nas_device.shared_secret:
+        return 0
+
+    decrypted_secret = decrypt_credential(nas_device.shared_secret)
+    raw_secret = resolve_secret(decrypted_secret)
+    if not raw_secret:
+        return 0
+
+    servers = _active_radius_servers(db)
+    if not servers:
+        return 0
+
+    secret_hash = _hash_secret(raw_secret)
+    changed = 0
+    for server in servers:
+        existing = (
+            db.query(RadiusClient)
+            .filter(RadiusClient.server_id == server.id)
+            .filter(
+                or_(
+                    RadiusClient.nas_device_id == nas_device.id,
+                    RadiusClient.client_ip == client_ip,
+                )
+            )
+            .first()
+        )
+        if existing:
+            updated = False
+            if existing.nas_device_id != nas_device.id:
+                existing.nas_device_id = nas_device.id
+                updated = True
+            if existing.client_ip != client_ip:
+                existing.client_ip = client_ip
+                updated = True
+            if existing.shared_secret_hash != secret_hash:
+                existing.shared_secret_hash = secret_hash
+                updated = True
+            if existing.description != nas_device.name:
+                existing.description = nas_device.name
+                updated = True
+            if existing.is_active is not True:
+                existing.is_active = True
+                updated = True
+            if updated:
+                changed += 1
+            continue
+
+        db.add(
+            RadiusClient(
+                server_id=server.id,
+                nas_device_id=nas_device.id,
+                client_ip=client_ip,
+                shared_secret_hash=secret_hash,
+                description=nas_device.name,
+                is_active=True,
+            )
+        )
+        changed += 1
+    return changed
+
+
+def ensure_radius_users_for_subscription(db: Session, subscription: Subscription) -> int:
+    """Ensure internal RadiusUser rows exist for active credentials on a subscription."""
+    if subscription.status != SubscriptionStatus.active:
+        return 0
+
+    credentials = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+        .filter(AccessCredential.is_active.is_(True))
+        .order_by(AccessCredential.updated_at.desc(), AccessCredential.created_at.desc())
+        .all()
+    )
+    if not credentials:
+        return 0
+
+    changed = 0
+    for credential in credentials:
+        existing_user = (
+            db.query(RadiusUser)
+            .filter(RadiusUser.access_credential_id == credential.id)
+            .first()
+        )
+        profile_id = credential.radius_profile_id or subscription.radius_profile_id
+        if existing_user:
+            updated = False
+            if existing_user.subscription_id != subscription.id:
+                existing_user.subscription_id = subscription.id
+                updated = True
+            if existing_user.subscriber_id != subscription.subscriber_id:
+                existing_user.subscriber_id = subscription.subscriber_id
+                updated = True
+            if existing_user.username != credential.username:
+                existing_user.username = credential.username
+                updated = True
+            if existing_user.secret_hash != credential.secret_hash:
+                existing_user.secret_hash = credential.secret_hash
+                updated = True
+            if existing_user.radius_profile_id != profile_id:
+                existing_user.radius_profile_id = profile_id
+                updated = True
+            if existing_user.is_active is not True:
+                existing_user.is_active = True
+                updated = True
+            existing_user.last_sync_at = datetime.now(UTC)
+            if updated:
+                changed += 1
+            continue
+
+        db.add(
+            RadiusUser(
+                subscriber_id=subscription.subscriber_id,
+                subscription_id=subscription.id,
+                access_credential_id=credential.id,
+                username=credential.username,
+                secret_hash=credential.secret_hash,
+                radius_profile_id=profile_id,
+                is_active=True,
+                last_sync_at=datetime.now(UTC),
+            )
+        )
+        changed += 1
+    return changed
+
+
+def reconcile_subscription_connectivity(
+    db: Session,
+    subscription_id: str,
+) -> dict[str, int | bool]:
+    """Ensure internal RADIUS state exists for a sync-eligible subscription."""
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if not subscription or subscription.status not in RADIUS_SYNC_ELIGIBLE_STATUSES:
+        return {"ok": False, "radius_clients_changed": 0, "radius_users_changed": 0}
+
+    radius_clients_changed = 0
+    if subscription.provisioning_nas_device_id:
+        nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
+        if nas_device:
+            radius_clients_changed = ensure_radius_clients_for_nas(db, nas_device)
+
+    radius_users_changed = ensure_radius_users_for_subscription(db, subscription)
+    db.commit()
+
+    external_nas_synced = 0
+    external_credentials_synced = 0
+    credentials = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+        .filter(AccessCredential.is_active.is_(True))
+        .all()
+    )
+    external_configs = _active_external_sync_configs(db)
+    if external_configs:
+        nas_devices = [nas_device] if subscription.provisioning_nas_device_id and nas_device else []
+        for config in external_configs:
+            if nas_devices:
+                external_nas_synced += _external_sync_nas(config, nas_devices).get(
+                    "external_nas_synced", 0
+                )
+            if credentials:
+                external_credentials_synced += _external_sync_users(
+                    db, config, credentials
+                ).get("external_users_synced", 0)
+    else:
+        for credential in credentials:
+            if sync_credential_to_radius(db, credential):
+                external_credentials_synced += 1
+
+    return {
+        "ok": True,
+        "radius_clients_changed": radius_clients_changed,
+        "radius_users_changed": radius_users_changed,
+        "external_nas_synced": external_nas_synced,
+        "external_credentials_synced": external_credentials_synced,
+    }
+
+
 _SQL_IDENT_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -282,15 +583,8 @@ def _external_sync_users(
     profile_cache: dict[str, RadiusProfile | None] = {}
     with engine.begin() as conn:
         for credential in credentials:
-            subscription = (
-                db.query(Subscription)
-                .filter(Subscription.subscriber_id == credential.subscriber_id)
-                .filter(Subscription.status == SubscriptionStatus.active)
-                .order_by(
-                    Subscription.start_at.desc().nullslast(),
-                    Subscription.created_at.desc(),
-                )
-                .first()
+            subscription = _radius_sync_subscription_for_subscriber(
+                db, credential.subscriber_id
             )
             if not subscription:
                 continue
@@ -301,14 +595,19 @@ def _external_sync_users(
                 conn.execute(
                     text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}  # noqa: S608
                 )
-            if credential.secret_hash:
+            password_row = _external_password_row(
+                credential,
+                default_attribute=password_attr,
+                default_op=password_op,
+            )
+            if password_row:
                 conn.execute(
                     text(f"INSERT INTO {radcheck} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
                     {
                         "u": username,
-                        "attr": password_attr,
-                        "op": password_op,
-                        "val": credential.secret_hash,
+                        "attr": password_row[0],
+                        "op": password_row[1],
+                        "val": password_row[2],
                     },
                 )
 
@@ -359,7 +658,8 @@ def _external_sync_nas(
     created = 0
     with engine.begin() as conn:
         for device in nas_devices:
-            if not device.ip_address:
+            client_ip = _radius_client_ip_for_nas(device)
+            if not client_ip:
                 continue
             # Decrypt the stored credential, then resolve any OpenBao references
             decrypted_secret = decrypt_credential(device.shared_secret)
@@ -368,12 +668,12 @@ def _external_sync_nas(
                 continue
             conn.execute(
                 text(f"DELETE FROM {nas_table} WHERE nasname = :ip"),  # noqa: S608
-                {"ip": device.ip_address},
+                {"ip": client_ip},
             )
             conn.execute(
                 text(f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"),  # noqa: S608
                 {
-                    "ip": device.ip_address,
+                    "ip": client_ip,
                     "name": device.name,
                     "type": device.vendor.value if hasattr(device.vendor, "value") else "other",
                     "secret": secret,
@@ -538,10 +838,12 @@ class RadiusSyncJobs(ListResponseMixin):
                 nas_devices = (
                     db.query(NasDevice)
                     .filter(NasDevice.is_active.is_(True))
-                    .filter(NasDevice.ip_address.isnot(None))
                     .all()
                 )
                 for device in nas_devices:
+                    client_ip = _radius_client_ip_for_nas(device)
+                    if not client_ip:
+                        continue
                     # Decrypt the stored credential, then resolve any OpenBao references
                     decrypted_secret = decrypt_credential(device.shared_secret)
                     raw_secret = resolve_secret(decrypted_secret)
@@ -550,12 +852,13 @@ class RadiusSyncJobs(ListResponseMixin):
                     existing_client = (
                         db.query(RadiusClient)
                         .filter(RadiusClient.server_id == job.server_id)
-                        .filter(RadiusClient.client_ip == device.ip_address)
+                        .filter(RadiusClient.client_ip == client_ip)
                         .first()
                     )
                     secret_hash = _hash_secret(raw_secret)
                     if existing_client:
                         existing_client.nas_device_id = device.id
+                        existing_client.client_ip = client_ip
                         existing_client.shared_secret_hash = secret_hash
                         existing_client.description = device.name
                         existing_client.is_active = True
@@ -564,7 +867,7 @@ class RadiusSyncJobs(ListResponseMixin):
                         client = RadiusClient(
                             server_id=job.server_id,
                             nas_device_id=device.id,
-                            client_ip=device.ip_address,
+                            client_ip=client_ip,
                             shared_secret_hash=secret_hash,
                             description=device.name,
                             is_active=True,
@@ -583,12 +886,8 @@ class RadiusSyncJobs(ListResponseMixin):
                     .all()
                 )
                 for credential in credentials:
-                    subscription = (
-                        db.query(Subscription)
-                        .filter(Subscription.subscriber_id == credential.subscriber_id)
-                        .filter(Subscription.status == SubscriptionStatus.active)
-                        .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
-                        .first()
+                    subscription = _radius_sync_subscription_for_subscriber(
+                        db, credential.subscriber_id
                     )
                     if not subscription:
                         continue
@@ -697,13 +996,9 @@ def sync_credential_to_radius(db: Session, credential: AccessCredential) -> bool
     if not credential.is_active:
         return False
 
-    # Check if credential has an active subscription
-    subscription = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == credential.subscriber_id)
-        .filter(Subscription.status == SubscriptionStatus.active)
-        .order_by(Subscription.start_at.desc().nullslast(), Subscription.created_at.desc())
-        .first()
+    # Check if credential has a sync-eligible subscription
+    subscription = _radius_sync_subscription_for_subscriber(
+        db, credential.subscriber_id
     )
     if not subscription:
         return False

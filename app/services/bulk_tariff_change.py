@@ -96,17 +96,39 @@ class BulkTariffChange:
         changed = 0
         skipped = 0
         errors = 0
+        changed_ids: list[str] = []
 
         for sub in subscriptions:
             try:
+                previous_offer_id = sub.offer_id
                 sub.offer_id = target_uuid
+                from app.services.catalog.subscriptions import apply_offer_radius_profile
+                apply_offer_radius_profile(
+                    db,
+                    sub,
+                    previous_offer_id=previous_offer_id,
+                )
                 changed += 1
+                changed_ids.append(str(sub.id))
             except Exception as e:
                 logger.error("Error changing subscription %s: %s", sub.id, e)
                 errors += 1
 
         if changed > 0:
             db.commit()
+            from app.services.enforcement import update_subscription_sessions
+            from app.services.radius import reconcile_subscription_connectivity
+
+            for subscription_id in changed_ids:
+                try:
+                    reconcile_subscription_connectivity(db, subscription_id)
+                    update_subscription_sessions(db, subscription_id, reason="profile_change")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to refresh RADIUS state for subscription %s after bulk tariff change: %s",
+                        subscription_id,
+                        exc,
+                    )
 
         logger.info(
             "Bulk tariff change: %d changed, %d skipped, %d errors (source=%s, target=%s)",

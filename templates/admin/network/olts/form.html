@@ -55,6 +55,18 @@
                     </div>
 
                     <div>
+                        <label for="tr069_acs_server_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">TR-069 Profile (ACS Server)</label>
+                        <select name="tr069_acs_server_id" id="tr069_acs_server_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">-- None --</option>
+                            {% for server in tr069_servers %}
+                            <option value="{{ server.id }}" {% if olt and olt.tr069_acs_server_id and olt.tr069_acs_server_id|string == server.id|string %}selected{% endif %}>{{ server.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default TR-069 profile managed by this OLT.</p>
+                    </div>
+
+                    <div>
                         <label for="vendor" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
                         <select name="vendor" id="vendor"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -84,21 +96,160 @@
                             placeholder="SN123456789"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Access Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="ssh_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSH Username</label>
+                        <input type="text" name="ssh_username" id="ssh_username" maxlength="120"
+                            value="{{ olt.ssh_username if olt else '' }}"
+                            placeholder="admin"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
 
                     <div>
-                        <label class="flex items-center gap-2">
-                            <input type="checkbox" name="is_active" value="true" {% if not olt or olt.is_active %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
-                        </label>
+                        <label for="ssh_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSH Port</label>
+                        <input type="number" name="ssh_port" id="ssh_port" min="1" max="65535"
+                            value="{{ olt.ssh_port if olt and olt.ssh_port is not none else 22 }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
 
                     <div class="sm:col-span-2">
-                        <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
-                        <textarea name="notes" id="notes" rows="3"
-                            placeholder="Additional notes..."
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ olt.notes if olt else '' }}</textarea>
+                        <label for="ssh_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSH Password</label>
+                        <input type="password" name="ssh_password" id="ssh_password" maxlength="255"
+                            value=""
+                            placeholder="{{ 'Saved. Enter a new value to replace it.' if olt and olt.ssh_password else 'Stored for CLI and NETCONF authentication' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
+
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" id="netconf_enabled" name="netconf_enabled" value="true" {% if olt and olt.netconf_enabled %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Activate NETCONF</span>
+                        </label>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Reuse the SSH credentials above for NETCONF sessions.</p>
+                    </div>
+                </div>
+
+                <div id="netconf-details" class="{% if not olt or not olt.netconf_enabled %}hidden{% endif %}">
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <label for="netconf_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">NETCONF Port</label>
+                            <input type="number" name="netconf_port" id="netconf_port" min="1" max="65535"
+                                value="{{ olt.netconf_port if olt and olt.netconf_port is not none else 830 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Monitoring (SNMP)</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                <div>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" id="snmp_enabled" name="snmp_enabled" value="true" {% if olt and olt.snmp_enabled %}checked{% endif %}
+                            class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable SNMP Monitoring</span>
+                    </label>
+                </div>
+
+                <div id="snmp-details" class="{% if not olt or not olt.snmp_enabled %}hidden{% endif %}">
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <label for="snmp_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Port</label>
+                            <input type="number" name="snmp_port" id="snmp_port" min="1" max="65535"
+                                value="{{ olt.snmp_port if olt and olt.snmp_port is not none else 161 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="snmp_version" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Version</label>
+                            <select name="snmp_version" id="snmp_version"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="v2c" {% if olt and olt.snmp_version == 'v2c' %}selected{% elif not olt %}selected{% endif %}>v2c</option>
+                                <option value="v3" {% if olt and olt.snmp_version == 'v3' %}selected{% endif %}>v3</option>
+                            </select>
+                        </div>
+
+                        <div id="snmp-v2-fields" class="contents">
+                            <div class="sm:col-span-2">
+                                <label for="snmp_community" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Community (v2c)</label>
+                                <input type="text" name="snmp_community" id="snmp_community" maxlength="255"
+                                    value="{{ olt.snmp_community if olt else '' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                            </div>
+                        </div>
+
+                        <div id="snmp-v3-fields" class="contents">
+                            <div>
+                                <label for="snmp_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username (v3)</label>
+                                <input type="text" name="snmp_username" id="snmp_username" maxlength="120"
+                                    value="{{ olt.snmp_username if olt else '' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="snmp_auth_protocol" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Protocol</label>
+                                <select name="snmp_auth_protocol" id="snmp_auth_protocol"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">None</option>
+                                    <option value="md5" {% if olt and olt.snmp_auth_protocol == 'md5' %}selected{% endif %}>MD5</option>
+                                    <option value="sha" {% if olt and olt.snmp_auth_protocol == 'sha' %}selected{% endif %}>SHA</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="snmp_auth_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Secret</label>
+                                <input type="password" name="snmp_auth_secret" id="snmp_auth_secret" maxlength="255"
+                                    value="{{ olt.snmp_auth_secret if olt else '' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="snmp_priv_protocol" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Privacy Protocol</label>
+                                <select name="snmp_priv_protocol" id="snmp_priv_protocol"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">None</option>
+                                    <option value="des" {% if olt and olt.snmp_priv_protocol == 'des' %}selected{% endif %}>DES</option>
+                                    <option value="aes" {% if olt and olt.snmp_priv_protocol == 'aes' %}selected{% endif %}>AES</option>
+                                </select>
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label for="snmp_priv_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Privacy Secret</label>
+                                <input type="password" name="snmp_priv_secret" id="snmp_priv_secret" maxlength="255"
+                                    value="{{ olt.snmp_priv_secret if olt else '' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="p-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <div>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="is_active" value="true" {% if not olt or olt.is_active %}checked{% endif %}
+                            class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                    </label>
+                </div>
+
+                <div class="sm:col-span-2">
+                    <label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label>
+                    <textarea name="notes" id="notes" rows="3"
+                        placeholder="Additional notes..."
+                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ olt.notes if olt else '' }}</textarea>
                 </div>
             </div>
         </div>
@@ -114,4 +265,34 @@
         </div>
     </form>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const netconfToggle = document.getElementById('netconf_enabled');
+    const netconfDetails = document.getElementById('netconf-details');
+    if (netconfToggle && netconfDetails) {
+        const syncNetconf = () => netconfDetails.classList.toggle('hidden', !netconfToggle.checked);
+        netconfToggle.addEventListener('change', syncNetconf);
+        syncNetconf();
+    }
+
+    const snmpToggle = document.getElementById('snmp_enabled');
+    const snmpDetails = document.getElementById('snmp-details');
+    const snmpVersion = document.getElementById('snmp_version');
+    const snmpV2 = document.getElementById('snmp-v2-fields');
+    const snmpV3 = document.getElementById('snmp-v3-fields');
+    if (snmpToggle && snmpDetails) {
+        const syncSnmp = () => {
+            const enabled = snmpToggle.checked;
+            snmpDetails.classList.toggle('hidden', !enabled);
+            if (!enabled) return;
+            const useV3 = snmpVersion && snmpVersion.value === 'v3';
+            if (snmpV2) snmpV2.classList.toggle('hidden', useV3);
+            if (snmpV3) snmpV3.classList.toggle('hidden', !useV3);
+        };
+        snmpToggle.addEventListener('change', syncSnmp);
+        if (snmpVersion) snmpVersion.addEventListener('change', syncSnmp);
+        syncSnmp();
+    }
+});
+</script>
 {% endblock %}

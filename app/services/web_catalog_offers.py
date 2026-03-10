@@ -16,10 +16,12 @@ from app.models.catalog import (
     CatalogOffer,
     ContractTerm,
     GuaranteedSpeedType,
+    NasVendor,
     OfferStatus,
     PlanCategory,
     PriceBasis,
     PriceUnit,
+    RadiusProfile,
     ServiceType,
     Subscription,
     SubscriptionStatus,
@@ -32,6 +34,8 @@ from app.schemas.catalog import (
     OfferPriceUpdate,
     OfferRadiusProfileCreate,
     OfferRadiusProfileUpdate,
+    RadiusProfileCreate,
+    RadiusProfileUpdate,
 )
 from app.services import catalog as catalog_service
 from app.services import settings_spec
@@ -41,6 +45,8 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.common import coerce_uuid
+from app.services.catalog.subscriptions import apply_offer_radius_profile
+from app.services.radius import reconcile_subscription_connectivity
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +59,7 @@ IP_BLOCK_SIZES = ["/32", "/30", "/29", "/28", "/27", "/26", "/25", "/24"]
 
 def parse_offer_description_metadata(description: str | None) -> tuple[dict[str, str | None], str | None]:
     text = str(description or "").strip()
-    metadata = {"plan_kind": None, "ip_block_size": None}
+    metadata: dict[str, str | None] = {"plan_kind": None, "ip_block_size": None}
     if not text:
         return metadata, None
 
@@ -207,8 +213,6 @@ def validate_offer_form(offer: dict[str, object]) -> str | None:
     if plan_kind == PLAN_KIND_IP_ADDRESS and not str(offer.get("ip_block_size") or "").strip():
         return "IP block size is required for IP address plans."
 
-    if plan_kind == PLAN_KIND_STANDARD and not offer.get("radius_profile_id"):
-        return "RADIUS profile is required."
     price_type = str(offer.get("price_type") or "recurring").strip().lower()
     if price_type not in {"recurring", "one_time", "usage"}:
         return "Price type is invalid."
@@ -293,6 +297,165 @@ def upsert_radius_profile_link(db: Session, offer_id: str, profile_id: str) -> N
                 profile_id=coerce_uuid(profile_id),
             ),
         )
+
+
+def get_linked_radius_profile_id(db: Session, offer_id: str) -> str | None:
+    """Return the currently linked RADIUS profile ID for an offer, if any."""
+    links = catalog_service.offer_radius_profiles.list(
+        db=db,
+        offer_id=offer_id,
+        profile_id=None,
+        order_by="offer_id",
+        order_dir="asc",
+        limit=10,
+        offset=0,
+    )
+    if not links:
+        return None
+    profile_id = getattr(links[0], "profile_id", None)
+    return str(profile_id) if profile_id else None
+
+
+def generated_radius_profile_code_for_offer(offer_id: str) -> str:
+    """Return the stable code used for auto-generated offer RADIUS profiles."""
+    return f"offer-{offer_id}"
+
+
+def _coerce_offer_speed(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_offer_generated_rate_limit(download_speed: int | None, upload_speed: int | None) -> str | None:
+    if not download_speed and not upload_speed:
+        return None
+    return f"{download_speed or 0}k/{upload_speed or 0}k"
+
+
+def ensure_generated_radius_profile_for_offer(db: Session, offer: CatalogOffer) -> RadiusProfile:
+    """Create or update the auto-generated MikroTik profile for an offer."""
+    profile_code = generated_radius_profile_code_for_offer(str(offer.id))
+    download_speed = _coerce_offer_speed(offer.speed_download_mbps)
+    upload_speed = _coerce_offer_speed(offer.speed_upload_mbps)
+    payload_data = {
+        "name": str(offer.name or "").strip() or f"Offer {offer.id}",
+        "code": profile_code,
+        "vendor": NasVendor.mikrotik,
+        "download_speed": download_speed,
+        "upload_speed": upload_speed,
+        "mikrotik_rate_limit": _build_offer_generated_rate_limit(download_speed, upload_speed),
+        "description": f"Auto-generated from offer {offer.id}",
+        "is_active": bool(offer.is_active),
+    }
+    existing_profile = (
+        db.query(RadiusProfile)
+        .filter(RadiusProfile.code == profile_code)
+        .first()
+    )
+    if existing_profile:
+        return catalog_service.radius_profiles.update(
+            db=db,
+            profile_id=str(existing_profile.id),
+            payload=RadiusProfileUpdate.model_validate(payload_data),
+        )
+    return catalog_service.radius_profiles.create(
+        db=db,
+        payload=RadiusProfileCreate.model_validate(payload_data),
+    )
+
+
+def sync_offer_radius_profile_to_subscriptions(
+    db: Session,
+    *,
+    offer_id: str,
+    previous_profile_id: str | None,
+    new_profile_id: str | None,
+) -> None:
+    """Apply a changed offer profile to inherited subscriptions and resync active sessions."""
+    offer_subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.offer_id == coerce_uuid(offer_id))
+        .all()
+    )
+    active_subscription_ids: list[str] = []
+    previous_profile_uuid = coerce_uuid(previous_profile_id) if previous_profile_id else None
+    new_profile_uuid = coerce_uuid(new_profile_id) if new_profile_id else None
+    for subscription in offer_subscriptions:
+        inherited_profile = (
+            subscription.radius_profile_id is None
+            or subscription.radius_profile_id == previous_profile_uuid
+            or subscription.radius_profile_id == new_profile_uuid
+        )
+        if inherited_profile:
+            apply_offer_radius_profile(
+                db,
+                subscription,
+                target_profile_id=new_profile_uuid,
+                force=True,
+            )
+            if subscription.status == SubscriptionStatus.active:
+                active_subscription_ids.append(str(subscription.id))
+    db.commit()
+    for subscription_id in active_subscription_ids:
+        try:
+            reconcile_subscription_connectivity(db, subscription_id)
+        except Exception:
+            logger.warning(
+                "Failed to reconcile subscription %s after offer profile sync.",
+                subscription_id,
+                exc_info=True,
+            )
+
+
+def ensure_offer_radius_profile(
+    db: Session,
+    offer: CatalogOffer,
+    *,
+    explicit_profile_id: str | None = None,
+    previous_profile_id: str | None = None,
+) -> str | None:
+    """Ensure an offer has a linked RADIUS profile and sync inherited subscriptions."""
+    profile_id = str(explicit_profile_id or "").strip()
+    if not profile_id:
+        generated_profile = ensure_generated_radius_profile_for_offer(db, offer)
+        profile_id = str(generated_profile.id)
+    upsert_radius_profile_link(db, str(offer.id), profile_id)
+    sync_offer_radius_profile_to_subscriptions(
+        db,
+        offer_id=str(offer.id),
+        previous_profile_id=previous_profile_id,
+        new_profile_id=profile_id,
+    )
+    return profile_id
+
+
+def backfill_offer_radius_profiles(
+    db: Session,
+    *,
+    force_offer_ids: set[str] | None = None,
+) -> dict[str, int]:
+    """Create and link generated profiles for offers that need them."""
+    forced = {str(item) for item in (force_offer_ids or set()) if str(item)}
+    offers = db.scalars(select(CatalogOffer).order_by(CatalogOffer.name.asc())).all()
+    created_or_updated = 0
+    linked = 0
+    for offer in offers:
+        previous_profile_id = get_linked_radius_profile_id(db, str(offer.id))
+        if previous_profile_id and str(offer.id) not in forced:
+            continue
+        ensure_offer_radius_profile(
+            db,
+            offer,
+            previous_profile_id=previous_profile_id,
+        )
+        created_or_updated += 1
+        linked += 1
+    return {"offers_processed": created_or_updated, "links_updated": linked}
 
 
 def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object]):
@@ -513,7 +676,7 @@ def offer_form_context(
     addon_links_map = build_addon_links_map(offer_addon_links)
 
     all_offers = catalog_service.offers.list(
-        db=db, status=None, is_active=True,
+        db=db, service_type=None, access_type=None, status=None, is_active=True,
         order_by="name", order_dir="asc", limit=500, offset=0,
     )
 
@@ -680,8 +843,11 @@ def create_offer_with_audit(
         },
     )
 
-    if offer["radius_profile_id"]:
-        upsert_radius_profile_link(db, str(created_offer.id), str(offer["radius_profile_id"]))
+    ensure_offer_radius_profile(
+        db,
+        created_offer,
+        explicit_profile_id=str(offer.get("radius_profile_id") or "").strip() or None,
+    )
 
     addon_configs = parse_addon_links_from_form(form)
     if addon_configs:
@@ -724,6 +890,7 @@ def update_offer_with_audit(
     Returns the updated offer ORM object.
     """
     before_snapshot = model_to_dict(existing_offer)
+    previous_profile_id = get_linked_radius_profile_id(db, offer_id)
     payload = update_offer_payload(offer_data)
     updated_offer = catalog_service.offers.update(db=db, offer_id=offer_id, payload=payload)
     after_snapshot = model_to_dict(updated_offer)
@@ -740,7 +907,12 @@ def update_offer_with_audit(
         metadata=metadata,
     )
 
-    upsert_radius_profile_link(db, offer_id, str(offer_data["radius_profile_id"]))
+    ensure_offer_radius_profile(
+        db,
+        updated_offer,
+        explicit_profile_id=str(offer_data.get("radius_profile_id") or "").strip() or None,
+        previous_profile_id=previous_profile_id,
+    )
 
     addon_configs = parse_addon_links_from_form(form)
     catalog_service.offer_addons.sync(

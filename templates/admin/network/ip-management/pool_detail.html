@@ -16,6 +16,11 @@
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ pool.cidr }}</p>
         </div>
         <div class="flex items-center gap-2">
+            {% if pool.ip_version.value == 'ipv4' %}
+            <a href="/admin/network/ip-management/ipv4-networks/{{ pool.id }}" class="inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">
+                Open Address Range
+            </a>
+            {% endif %}
             <a href="/admin/network/ip-management/pools/{{ pool.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 Edit
@@ -67,6 +72,18 @@
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secondary DNS</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pool.dns_secondary or '-' }}</dd>
                         </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ utilization.used }}/{{ utilization.total }} ({{ utilization.percent }}%)</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Available</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ utilization.available }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Reserved</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ utilization.reserved }}</dd>
+                        </div>
                         {% if pool.notes %}
                         <div class="sm:col-span-2">
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
@@ -92,7 +109,11 @@
                         {% for block in blocks %}
                         <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
                             <div>
-                                <p class="text-sm font-medium text-slate-900 dark:text-white font-mono">{{ block.cidr }}</p>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white font-mono">
+                                    <a href="/admin/network/ip-management/ipv4-blocks/{{ block.id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
+                                        {{ block.cidr }}
+                                    </a>
+                                </p>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ block.notes or 'No description' }}</p>
                             </div>
                             {% if block.is_active %}
@@ -130,14 +151,8 @@
                                 <tr>
                                     <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ addr.address }}</td>
                                     <td class="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">
-                                        {% if addr.assignment and addr.assignment.account %}
-                                            {% if addr.assignment.account.subscriber and addr.assignment.account.subscriber.person %}
-                                            {{ addr.assignment.account.subscriber.person.first_name }} {{ addr.assignment.account.subscriber.person.last_name }}
-                                            {% elif addr.assignment.account.subscriber and addr.assignment.account.subscriber.organization %}
-                                            {{ addr.assignment.account.subscriber.organization.name }}
-                                            {% else %}
-                                            {{ addr.assignment.account.account_number or 'Account' }}
-                                            {% endif %}
+                                        {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
+                                            {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
                                         {% else %}
                                             Unassigned
                                         {% endif %}
@@ -145,7 +160,7 @@
                                     <td class="px-3 py-2">
                                         {% if addr.is_reserved %}
                                         <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
-                                        {% elif addr.assignment %}
+                                        {% elif addr.assignment and addr.assignment.is_active %}
                                         <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Assigned</span>
                                         {% else %}
                                         <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Available</span>

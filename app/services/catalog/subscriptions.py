@@ -10,10 +10,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
+    AccessCredential,
     BillingCycle,
     BillingMode,
     CatalogOffer,
     ContractTerm,
+    OfferRadiusProfile,
     OfferPrice,
     OfferVersionPrice,
     PriceType,
@@ -133,15 +135,79 @@ def _generate_proration_if_enabled(
 
 
 def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
-    """Sync all subscriber credentials to RADIUS on subscription activation."""
+    """Reconcile internal/external RADIUS state for active subscriptions."""
     try:
-        from app.services.radius import sync_account_credentials_to_radius
-        sync_account_credentials_to_radius(db, subscriber_id)
+        from app.services.radius import reconcile_subscription_connectivity
+        active_subscriptions = (
+            db.query(Subscription)
+            .filter(Subscription.subscriber_id == subscriber_id)
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .all()
+        )
+        for subscription in active_subscriptions:
+            reconcile_subscription_connectivity(db, str(subscription.id))
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning(
-            f"Failed to sync credentials to RADIUS for subscriber {subscriber_id}: {exc}"
+            f"Failed to reconcile RADIUS state for subscriber {subscriber_id}: {exc}"
         )
+
+
+def _resolve_offer_radius_profile_id(
+    db: Session, offer_id: str | None
+):
+    if not offer_id:
+        return None
+    link = (
+        db.query(OfferRadiusProfile)
+        .filter(OfferRadiusProfile.offer_id == offer_id)
+        .first()
+    )
+    return link.profile_id if link else None
+
+
+def apply_offer_radius_profile(
+    db: Session,
+    subscription: Subscription,
+    *,
+    previous_offer_id=None,
+    target_profile_id=None,
+    force: bool = False,
+    sync_credentials: bool = True,
+):
+    """Keep subscription and inherited credentials aligned to the offer profile."""
+    previous_default = _resolve_offer_radius_profile_id(
+        db, str(previous_offer_id) if previous_offer_id else None
+    )
+    resolved_target = (
+        target_profile_id
+        if target_profile_id is not None
+        else _resolve_offer_radius_profile_id(db, str(subscription.offer_id))
+    )
+
+    inherited_subscription = (
+        subscription.radius_profile_id is None
+        or subscription.radius_profile_id == previous_default
+    )
+    if force or inherited_subscription:
+        subscription.radius_profile_id = resolved_target
+
+    if sync_credentials:
+        credentials = (
+            db.query(AccessCredential)
+            .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+            .filter(AccessCredential.is_active.is_(True))
+            .all()
+        )
+        for credential in credentials:
+            inherited_credential = (
+                credential.radius_profile_id is None
+                or credential.radius_profile_id == previous_default
+            )
+            if force or inherited_credential:
+                credential.radius_profile_id = resolved_target
+
+    return resolved_target
 
 
 def _emit_subscription_status_event(
@@ -201,6 +267,14 @@ def _emit_subscription_status_event(
         emit_event(
             db,
             EventType.subscription_canceled,
+            payload,
+            subscription_id=subscription.id,
+            account_id=subscription.subscriber_id,
+        )
+    elif to_status == SubscriptionStatus.expired:
+        emit_event(
+            db,
+            EventType.subscription_expired,
             payload,
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
@@ -296,6 +370,13 @@ class Subscriptions(ListResponseMixin):
             if end_at:
                 data["end_at"] = end_at
         subscription = Subscription(**data)
+        apply_offer_radius_profile(
+            db,
+            subscription,
+            target_profile_id=data.get("radius_profile_id"),
+            force="radius_profile_id" in fields_set or not bool(data.get("radius_profile_id")),
+            sync_credentials=False,
+        )
         db.add(subscription)
         db.commit()
         db.refresh(subscription)
@@ -410,6 +491,8 @@ class Subscriptions(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Subscription not found")
         # Track status before update for event emission
         previous_status = subscription.status
+        previous_offer_id = subscription.offer_id
+        previous_profile_id = subscription.radius_profile_id
         data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
@@ -451,6 +534,11 @@ class Subscriptions(ListResponseMixin):
         if status == SubscriptionStatus.active and not start_at:
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
+        elif "offer_id" in data and not start_at:
+            # Preserve historical behavior where plan changes establish
+            # subscription start time if it was previously unset.
+            start_at = datetime.now(UTC)
+            data["start_at"] = start_at
         if status == SubscriptionStatus.active and start_at and "next_billing_at" not in data:
             cycle = _resolve_billing_cycle(
                 db, offer_id, str(offer_version_id) if offer_version_id else None
@@ -463,6 +551,20 @@ class Subscriptions(ListResponseMixin):
                 data["end_at"] = end_at
         for key, value in data.items():
             setattr(subscription, key, value)
+        if "radius_profile_id" in data:
+            apply_offer_radius_profile(
+                db,
+                subscription,
+                previous_offer_id=previous_offer_id,
+                target_profile_id=data["radius_profile_id"],
+                force=True,
+            )
+        elif "offer_id" in data or subscription.radius_profile_id is None:
+            apply_offer_radius_profile(
+                db,
+                subscription,
+                previous_offer_id=previous_offer_id,
+            )
         db.commit()
         db.refresh(subscription)
 
@@ -472,6 +574,15 @@ class Subscriptions(ListResponseMixin):
             _emit_subscription_status_event(
                 db, subscription, previous_status, new_status
             )
+        elif previous_status == SubscriptionStatus.active and previous_profile_id != subscription.radius_profile_id:
+            _sync_credentials_to_radius(db, subscription.subscriber_id)
+            try:
+                from app.services.enforcement import update_subscription_sessions
+                update_subscription_sessions(
+                    db, str(subscription.id), reason="profile_change"
+                )
+            except Exception:
+                pass
 
         return subscription
 

@@ -105,10 +105,10 @@
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
-                    {"label": "Account"},
+                    {"label": "Subscriber Number"},
                     {"label": "Subscriber"},
-                    {"label": "Balance"},
                     {"label": "Status"},
+                    {"label": "Balance"},
                     {"label": "Created"},
                     {"label": "Actions", "align": "right"}
                 ]) }}
@@ -117,41 +117,30 @@
                     {% for account in accounts %}
                     {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
-                            <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600 transition-all group-hover:from-amber-100 group-hover:to-orange-100 group-hover:text-amber-700 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400 dark:group-hover:from-amber-900/30 dark:group-hover:to-orange-900/30 dark:group-hover:text-amber-400">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                                </div>
-                                <div>
-                                    <a href="/admin/billing/accounts/{{ account.id }}" class="font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">
-                                        {% if account.subscriber and account.subscriber.person %}
-                                            {{ account.subscriber.person.first_name }} {{ account.subscriber.person.last_name }}
-                                        {% elif account.subscriber and account.subscriber.organization %}
-                                            {{ account.subscriber.organization.name }}
-                                        {% elif account.account_number %}
-                                            {{ account.account_number }}
-                                        {% else %}
-                                            Account
-                                        {% endif %}
-                                    </a>
-                                    {% if account.account_number %}
-                                    <p class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ account.account_number }}</p>
-                                    {% endif %}
-                                </div>
-                            </div>
+                            <span class="text-sm font-mono text-slate-700 dark:text-slate-300">
+                                {{ account.subscriber_number or 'N/A' }}
+                            </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if account.subscriber %}
-                            <a href="/admin/subscribers/{{ account.subscriber.id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
-                                {% if account.subscriber.person %}
-                                    {{ account.subscriber.person.first_name }} {{ account.subscriber.person.last_name }}
-                                {% elif account.subscriber.organization %}
-                                    {{ account.subscriber.organization.name }}
+                            <a href="/admin/subscribers/{{ account.id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
+                                {% if account.person %}
+                                    {{ account.person.first_name }} {{ account.person.last_name }}
+                                {% elif account.organization %}
+                                    {{ account.organization.name }}
                                 {% else %}
-                                    Subscriber
+                                    {{ (account.first_name ~ ' ' ~ account.last_name)|trim or 'Subscriber' }}
                                 {% endif %}
                             </a>
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4">
+                            {% set status = account.status | default('active') %}
+                            {% set status_val = status.value if status is not string else status %}
+                            {% if status_val == 'active' %}
+                            {{ status_badge("Active", variant="active") }}
+                            {% elif status_val == 'suspended' %}
+                            {{ status_badge("Suspended", variant="warning") }}
                             {% else %}
-                            <span class="text-sm text-slate-400 dark:text-slate-500">No subscriber</span>
+                            {{ status_badge(status_val | default('Unknown') | title, variant="default") }}
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
@@ -163,17 +152,6 @@
                             <p class="text-xs text-slate-500 dark:text-slate-400">Due</p>
                             {% elif balance < 0 %}
                             <p class="text-xs text-emerald-600 dark:text-emerald-400">Credit</p>
-                            {% endif %}
-                        </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            {% set status = account.status | default('active') %}
-                            {% set status_val = status.value if status is not string else status %}
-                            {% if status_val == 'active' %}
-                            {{ status_badge("Active", variant="active") }}
-                            {% elif status_val == 'suspended' %}
-                            {{ status_badge("Suspended", variant="warning") }}
-                            {% else %}
-                            {{ status_badge(status_val | default('Unknown') | title, variant="default") }}
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">

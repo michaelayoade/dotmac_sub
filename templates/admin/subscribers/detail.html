@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, ambient_background %}
 
 {% block title %}
 {{ (subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name)|trim if subscriber.person else (subscriber.organization.name if subscriber.organization else ((subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber')) }} - Subscriber
@@ -12,6 +12,7 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 {% endif %}
 <style>
+    [x-cloak] { display: none !important; }
     #subscriber-mini-map {
         z-index: 0;
     }
@@ -32,26 +33,27 @@
 {% endblock %}
 
 {% block page_header %}
-<!-- Ambient Background -->
-<div class="pointer-events-none fixed inset-0 overflow-hidden">
-    <div class="absolute -top-40 right-0 h-[500px] w-[500px] rounded-full bg-gradient-to-br from-amber-400/5 to-orange-500/5 blur-3xl"></div>
-    <div class="absolute -bottom-40 -left-40 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-emerald-400/5 to-cyan-500/5 blur-3xl"></div>
-</div>
+{{ ambient_background("amber", "emerald") }}
 
 <div class="relative z-30 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6 animate-fade-in-up">
     <div class="flex items-start gap-4">
         <!-- Enhanced Avatar -->
         <div class="relative group">
             <div class="absolute inset-0 rounded-2xl bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600{% else %}from-violet-500 to-purple-600{% endif %} opacity-0 blur-xl transition-opacity group-hover:opacity-50"></div>
+            {% set person_first_initial = (subscriber.person.first_name or '')[:1] if subscriber.person else '' %}
+            {% set person_last_initial = (subscriber.person.last_name or '')[:1] if subscriber.person else '' %}
+            {% set organization_initials = (subscriber.organization.name or '')[:2] if subscriber.organization else '' %}
+            {% set subscriber_first_initial = (subscriber.first_name or '')[:1] %}
+            {% set subscriber_last_initial = (subscriber.last_name or '')[:1] %}
             <div class="relative flex h-16 w-16 items-center justify-center rounded-2xl text-xl font-bold shadow-lg
                 {% if subscriber.is_active %}bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600 shadow-amber-500/25{% else %}from-violet-500 to-purple-600 shadow-violet-500/25{% endif %} text-white
                 {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
                 {% if subscriber.person %}
-                    {{ subscriber.person.first_name[0] }}{{ subscriber.person.last_name[0] if subscriber.person.last_name else '' }}
+                    {{ (person_first_initial ~ person_last_initial) or 'S' }}
                 {% elif subscriber.organization %}
-                    {{ subscriber.organization.name[0:2] | upper }}
+                    {{ (organization_initials or 'OR') | upper }}
                 {% else %}
-                    {{ subscriber.first_name[0] if subscriber.first_name else 'S' }}{{ subscriber.last_name[0] if subscriber.last_name else '' }}
+                    {{ (subscriber_first_initial ~ subscriber_last_initial) or 'S' }}
                 {% endif %}
             </div>
         </div>
@@ -95,8 +97,8 @@
     </div>
     <div class="flex flex-wrap items-center gap-2">
         {% set subscription_link = "/admin/catalog/subscriptions/new" %}
-        {% if accounts and accounts|length == 1 %}
-            {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ accounts[0].id %}
+        {% if subscriber and subscriber.id %}
+            {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ subscriber.id %}
         {% endif %}
         <a href="{{ subscription_link }}" class="group inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:shadow-md hover:border-amber-300 hover:-translate-y-0.5 dark:border-amber-800/60 dark:bg-gradient-to-r dark:from-amber-900/20 dark:to-orange-900/20 dark:text-amber-300 dark:hover:border-amber-700">
             <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -167,7 +169,7 @@
                 </button>
                 {% else %}
                 <button hx-delete="/admin/subscribers/{{ subscriber.id }}"
-                        hx-confirm="Delete this deactivated subscriber? This action cannot be undone."
+                        hx-confirm="Move this deactivated subscriber to recovery queue?"
                         class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                     Delete Subscriber
@@ -200,8 +202,59 @@
 {% endblock %}
 
 {% block content %}
+{% set subscription_link = "/admin/catalog/subscriptions/new" %}
+{% if subscriber and subscriber.id %}
+    {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ subscriber.id %}
+{% endif %}
+{% set requested_tab = request.query_params.get('tab', 'information') %}
+{% if requested_tab not in ['information', 'services', 'billing', 'statistics'] %}
+    {% set requested_tab = 'information' %}
+{% endif %}
+<div x-data="{
+        activeTab: '{{ requested_tab }}',
+        setTab(tab) {
+            this.activeTab = tab;
+            const url = new URL(window.location.href);
+            url.searchParams.set('tab', tab);
+            window.history.replaceState({}, '', url);
+        }
+    }"
+    x-init="
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (['information', 'services', 'billing', 'statistics'].includes(tab)) {
+            activeTab = tab;
+        }
+    ">
+    <div class="mb-6 rounded-2xl border border-slate-200/60 bg-white/90 p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/90">
+        <nav class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <button type="button"
+                    @click="setTab('information'); $nextTick(() => window.dispatchEvent(new Event('resize')))"
+                    :class="activeTab === 'information' ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600'"
+                    class="rounded-xl px-4 py-2.5 text-sm font-semibold transition-all">
+                Information
+            </button>
+            <button type="button"
+                    @click="setTab('services'); $nextTick(() => window.dispatchEvent(new Event('resize')))"
+                    :class="activeTab === 'services' ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600'"
+                    class="rounded-xl px-4 py-2.5 text-sm font-semibold transition-all">
+                Services
+            </button>
+            <button type="button"
+                    @click="setTab('billing'); $nextTick(() => window.dispatchEvent(new Event('resize')))"
+                    :class="activeTab === 'billing' ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600'"
+                    class="rounded-xl px-4 py-2.5 text-sm font-semibold transition-all">
+                Billing
+            </button>
+            <button type="button"
+                    @click="setTab('statistics'); $nextTick(() => window.dispatchEvent(new Event('resize')))"
+                    :class="activeTab === 'statistics' ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600'"
+                    class="rounded-xl px-4 py-2.5 text-sm font-semibold transition-all">
+                Statistics
+            </button>
+        </nav>
+    </div>
 <!-- Quick Stats Bar -->
-<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 mb-6">
+<div x-show="activeTab === 'information'" class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 mb-6">
     <div class="stat-card group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">
         <div class="stat-glow absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br from-emerald-500/10 to-green-500/10 blur-2xl transition-all opacity-50"></div>
         <div class="relative">
@@ -254,11 +307,12 @@
     </div>
 </div>
 
-<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+<div class="grid grid-cols-1 gap-6 lg:grid-cols-1">
     <!-- Left Column: Services & Equipment -->
-    <div class="lg:col-span-2 space-y-6">
+    <div class="space-y-6"
+         :style="activeTab === 'information' ? 'order: 20;' : 'order: 10;'">
         <!-- Active Services -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 200ms;">
+        <div x-show="activeTab === 'services'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 200ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg shadow-amber-500/25">
@@ -268,18 +322,24 @@
                     </div>
                     <h2 class="text-base font-semibold text-slate-900 dark:text-white">Subscriptions</h2>
                 </div>
-                <button type="button" @click="$dispatch('open-subscription-modal')" class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
+                <a href="{{ subscription_link }}" class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                     Add Subscription
-                </button>
+                </a>
             </div>
-            <div class="p-5">
+            <div class="p-5" x-data="{ showAllSubscriptions: false }">
                 {% if subscriptions %}
                 <div class="space-y-3">
                     {% for sub in subscriptions %}
                     {% set sub_status = sub.status.value if sub.status is not string and sub.status else (sub.status | default('active')) %}
                     {% set is_online = online_status.get(sub.id|string, false) %}
-                    <a href="/admin/catalog/subscriptions/{{ sub.id }}" class="group flex items-center gap-4 rounded-xl border border-slate-100 dark:border-slate-700 p-4 hover:border-amber-200 hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:border-amber-800/50 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5 transition-all cursor-pointer">
+                    <a href="/admin/catalog/subscriptions/{{ sub.id }}"
+                       class="group flex items-center gap-4 rounded-xl border border-slate-100 dark:border-slate-700 p-4 hover:border-amber-200 hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:border-amber-800/50 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5 transition-all cursor-pointer"
+                       {% if loop.index > 3 %}
+                       x-show="showAllSubscriptions"
+                       x-collapse
+                       x-cloak
+                       {% endif %}>
                         {# Icon with online indicator #}
                         <div class="relative">
                             <div class="flex h-12 w-12 items-center justify-center rounded-xl {% if is_online %}bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/40 dark:to-teal-800/30{% else %}bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600{% endif %} transition-transform group-hover:scale-105">
@@ -338,6 +398,18 @@
                     </a>
                     {% endfor %}
                 </div>
+                {% if subscriptions|length > 3 %}
+                <div class="mt-4 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
+                    <button type="button"
+                            @click="showAllSubscriptions = !showAllSubscriptions"
+                            class="inline-flex items-center gap-2 text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
+                        <span x-text="showAllSubscriptions ? 'Show less' : 'View all subscriptions ({{ subscriptions|length }})'"></span>
+                        <svg class="h-4 w-4 transition-transform" :class="showAllSubscriptions ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                </div>
+                {% endif %}
                 {% else %}
                 <div class="text-center py-10">
                     <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600">
@@ -347,17 +419,17 @@
                     </div>
                     <h3 class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">No active subscriptions</h3>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add a subscription to get this subscriber connected.</p>
-                    <button type="button" @click="$dispatch('open-subscription-modal')" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
+                    <a href="{{ subscription_link }}" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                         Add Subscription
-                    </button>
+                    </a>
                 </div>
                 {% endif %}
             </div>
         </div>
 
         <!-- Equipment & Network -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
+        <div x-show="activeTab === 'statistics'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-teal-600 shadow-lg shadow-cyan-500/25">
@@ -367,7 +439,14 @@
                     </div>
                     <h2 class="text-base font-semibold text-slate-900 dark:text-white">Equipment & Network</h2>
                 </div>
-                <button class="text-sm font-medium text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 transition-colors">Manage Devices</button>
+                <div class="flex items-center gap-3">
+                    {% if primary_ont_tr069_url %}
+                    <a href="{{ primary_ont_tr069_url }}" class="text-sm font-semibold text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 transition-colors">Manage ONT (TR-069)</a>
+                    {% elif primary_ont_url %}
+                    <a href="{{ primary_ont_url }}" class="text-sm font-semibold text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 transition-colors">Manage ONT</a>
+                    {% endif %}
+                    <a href="/admin/network/onts" class="text-sm font-medium text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 transition-colors">All Devices</a>
+                </div>
             </div>
             <div class="p-5">
                 {% if equipment %}
@@ -388,6 +467,16 @@
                         <div class="mt-2 space-y-1 text-xs text-slate-500 dark:text-slate-400">
                             <p>SN: <span class="font-mono text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">{{ device.serial }}</span></p>
                         </div>
+                        {% if device.detail_url or device.tr069_url %}
+                        <div class="mt-3 flex items-center gap-3 text-xs">
+                            {% if device.detail_url %}
+                            <a href="{{ device.detail_url }}" class="font-semibold text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Open Device</a>
+                            {% endif %}
+                            {% if device.tr069_url %}
+                            <a href="{{ device.tr069_url }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">TR-069</a>
+                            {% endif %}
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 </div>
@@ -407,9 +496,16 @@
 
         <!-- Bandwidth Usage Chart -->
         {% if subscriptions and subscriptions|length > 0 %}
-        {% set first_subscription = subscriptions[0] %}
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;"
-             x-data="BandwidthChart.bandwidthChart({ subscriptionId: '{{ first_subscription.id }}' })"
+        {% set bandwidth_ns = namespace(target_subscription=none) %}
+        {% for sub in subscriptions %}
+            {% set sub_status = sub.status.value if sub.status is not string else sub.status %}
+            {% if bandwidth_ns.target_subscription is none and sub_status == 'active' %}
+                {% set bandwidth_ns.target_subscription = sub %}
+            {% endif %}
+        {% endfor %}
+        {% set first_subscription = bandwidth_ns.target_subscription or subscriptions[0] %}
+        <div x-show="activeTab === 'statistics'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;"
+             x-data="BandwidthChart.bandwidthChart({ subscriptionId: '{{ first_subscription.id }}', enableLive: false })"
              x-init="init()"
              x-on:destroy.window="destroy()">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
@@ -488,7 +584,7 @@
         </div>
         {% else %}
         <!-- No subscriptions placeholder -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;">
+        <div x-show="activeTab === 'statistics'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
@@ -510,12 +606,388 @@
             </div>
         </div>
         {% endif %}
+
+        <div x-show="activeTab === 'statistics'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 shadow-lg shadow-cyan-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Speed Test History</h2>
+                </div>
+                <a href="/admin/network/speedtests?subscriber_id={{ subscriber.id }}" class="text-sm font-semibold text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Open All Results</a>
+            </div>
+            <div class="p-5 space-y-4">
+                <div class="grid gap-3 sm:grid-cols-3">
+                    <div class="rounded-xl bg-cyan-50 p-3 dark:bg-cyan-900/20">
+                        <p class="text-xs uppercase tracking-wide text-cyan-600 dark:text-cyan-300">Plan Download</p>
+                        <p class="mt-1 text-lg font-bold text-cyan-700 dark:text-cyan-300">{{ speedtest_plan.download_mbps if speedtest_plan.download_mbps > 0 else '-' }} Mbps</p>
+                    </div>
+                    <div class="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-900/20">
+                        <p class="text-xs uppercase tracking-wide text-emerald-600 dark:text-emerald-300">Plan Upload</p>
+                        <p class="mt-1 text-lg font-bold text-emerald-700 dark:text-emerald-300">{{ speedtest_plan.upload_mbps if speedtest_plan.upload_mbps > 0 else '-' }} Mbps</p>
+                    </div>
+                    <div class="rounded-xl bg-rose-50 p-3 dark:bg-rose-900/20">
+                        <p class="text-xs uppercase tracking-wide text-rose-600 dark:text-rose-300">Underperforming Tests</p>
+                        <p class="mt-1 text-lg font-bold text-rose-700 dark:text-rose-300">{{ speedtest_underperforming_count }}</p>
+                    </div>
+                </div>
+
+                {% if speedtests %}
+                <div class="h-52"><canvas id="subscriberSpeedTestChart"></canvas></div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                        <thead>
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Date</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Download</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Upload</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Latency</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Plan Match</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                            {% for row in speedtest_performance_rows[:10] %}
+                            <tr>
+                                <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.test.tested_at.strftime('%Y-%m-%d %H:%M') if row.test.tested_at else '-' }}</td>
+                                <td class="px-3 py-2 text-sm font-semibold text-cyan-600 dark:text-cyan-400">{{ '%.2f'|format(row.test.download_mbps or 0) }} Mbps</td>
+                                <td class="px-3 py-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{{ '%.2f'|format(row.test.upload_mbps or 0) }} Mbps</td>
+                                <td class="px-3 py-2 text-sm text-amber-600 dark:text-amber-400">{{ '%.2f'|format(row.test.latency_ms or 0) }} ms</td>
+                                <td class="px-3 py-2 text-sm">
+                                    {% if row.is_underperforming %}
+                                    <span class="inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Below 80%</span>
+                                    {% else %}
+                                    <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Healthy</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No speed tests recorded for this subscriber yet.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div x-show="activeTab === 'billing'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 260ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing Configuration</h2>
+                </div>
+                <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ billing_config.next_block_label }}</span>
+            </div>
+            <div class="p-5">
+                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/billing-config" class="grid gap-3 sm:grid-cols-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Billing Day</span>
+                        <input type="number" name="billing_day" min="1" max="31" value="{{ billing_config.billing_day or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Payment Due Days</span>
+                        <input type="number" name="payment_due_days" min="0" value="{{ billing_config.payment_due_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Blocking Period (days)</span>
+                        <input type="number" name="blocking_period_days" min="0" value="{{ billing_config.blocking_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Deactivation Period (days)</span>
+                        <input type="number" name="deactivation_period_days" min="0" value="{{ billing_config.deactivation_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Grace Period (days)</span>
+                        <input type="number" name="grace_period_days" min="0" value="{{ billing_config.grace_period_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="block">
+                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Minimum Balance</span>
+                        <input type="number" step="0.01" name="min_balance" value="{{ billing_config.min_balance or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="billing_enabled" value="true" {% if billing_config.billing_enabled %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Billing Enabled
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" name="auto_create_invoices" value="true" {% if billing_config.auto_create_invoices %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Auto-create Invoices
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 sm:col-span-2">
+                        <input type="checkbox" name="send_billing_notifications" value="true" {% if billing_config.send_billing_notifications %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        Send Billing Notifications
+                    </label>
+                    <div class="sm:col-span-2 flex justify-end">
+                        <button type="submit" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Save Billing Config</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div x-show="activeTab === 'billing'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 270ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 shadow-lg shadow-emerald-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing</h2>
+                </div>
+                <a href="/admin/billing?subscriber={{ subscriber.id }}" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">View All</a>
+            </div>
+            <div class="p-5">
+                <div class="flex items-center justify-between mb-4 pb-4 border-b border-slate-100 dark:border-slate-700">
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Current Balance</p>
+                        <p class="text-2xl font-bold {% if (stats.current_balance | default(0)) > 0 %}text-red-600 dark:text-red-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %} font-display">₦{{ "{:,.2f}".format(stats.current_balance | default(0)) }}</p>
+                    </div>
+                    <button class="rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">Take Payment</button>
+                </div>
+                {% if stats.has_credit_adjustment %}
+                <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200">
+                    Credit issued of <span class="font-semibold">₦{{ "{:,.2f}".format(stats.credit_issued | default(0)) }}</span> has been added to current balance.
+                </div>
+                {% endif %}
+                <p class="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide mb-3">Recent Invoices</p>
+                {% if invoices %}
+                <div class="space-y-2">
+                    {% for invoice in invoices[:3] %}
+                    {% set inv_status = invoice.status.value if invoice.status is not string and invoice.status else (invoice.status | default('draft')) %}
+                    <div class="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group">
+                        <div>
+                            <p class="text-sm font-medium text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">{{ invoice.invoice_number | default('Invoice') }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.created_at.strftime('%b %d, %Y') if invoice.created_at else 'N/A' }}</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.total_amount | default(0)) }}</p>
+                            {% if inv_status == 'paid' %}
+                            <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Paid</span>
+                            {% elif inv_status in ['pending', 'sent'] %}
+                            <span class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Pending</span>
+                            {% elif inv_status == 'overdue' %}
+                            <span class="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Overdue</span>
+                            {% else %}
+                            <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ inv_status | title }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-center py-6">
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No invoices yet</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <template x-if="activeTab === 'information'">
+        <div>
+        {% set ns = namespace(comments=[], activities=[]) %}
+        {% for event in timeline %}
+            {% if event.is_comment or event.is_todo %}
+                {% set ns.comments = ns.comments + [event] %}
+            {% else %}
+                {% set ns.activities = ns.activities + [event] %}
+            {% endif %}
+        {% endfor %}
+
+        <!-- Comments -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-slate-500 to-slate-600 shadow-lg shadow-slate-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Comments</h2>
+                </div>
+            </div>
+            <div class="p-5">
+                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments" enctype="multipart/form-data" class="mb-5 space-y-3" id="subscriber-comment-form">
+                    {% include "components/forms/csrf_input.html" %}
+                    <label for="subscriber-comment" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Add Comment</label>
+                    <input type="hidden" name="mention_ids" id="subscriber-comment-mention-ids" value="[]">
+                    <textarea id="subscriber-comment" name="comment" rows="3" required
+                              placeholder="Write a note about this subscriber... Type @sam to tag users."
+                              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:focus:border-amber-500 dark:focus:ring-amber-900/30"></textarea>
+                    <div>
+                        <label for="subscriber-comment-attachments" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Attachments</label>
+                        <input id="subscriber-comment-attachments" type="file" name="attachments" multiple
+                               class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:file:bg-slate-600 dark:file:text-slate-100 dark:hover:file:bg-slate-500">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">You can attach multiple files (max 10MB each).</p>
+                    </div>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                        <input type="checkbox" name="is_todo" value="1" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700">
+                        Mark as to-do
+                    </label>
+                    <div id="subscriber-comment-mentions" class="flex flex-wrap gap-2"></div>
+                    <div id="subscriber-comment-mention-suggestions" class="relative"></div>
+                    <div class="flex justify-end">
+                        <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-amber-500/25 transition hover:shadow-lg hover:shadow-amber-500/30">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/></svg>
+                            Post Comment
+                        </button>
+                    </div>
+                </form>
+
+                {% if ns.comments %}
+                <div class="relative">
+                    <div class="absolute left-4 top-2 bottom-2 w-0.5 bg-gradient-to-b from-amber-200 via-slate-200 to-slate-100 dark:from-amber-800 dark:via-slate-700 dark:to-slate-800"></div>
+                    <div class="space-y-4">
+                        {% for event in ns.comments %}
+                        <div class="relative flex items-start gap-4 pl-10">
+                            <div class="absolute left-0 flex h-8 w-8 items-center justify-center rounded-full bg-white dark:bg-slate-800 border-2 shadow-sm
+                                {% if event.is_todo %}border-amber-500{% else %}border-slate-300 dark:border-slate-600{% endif %}">
+                                {% if event.is_todo %}
+                                <svg class="h-3.5 w-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6M9 16h6M9 8h6"/></svg>
+                                {% else %}
+                                <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                                {% endif %}
+                            </div>
+                            <div class="flex-1 min-w-0 pt-1">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.title }}</p>
+                                <div class="flex items-center gap-2">
+                                    <p class="text-xs {% if event.is_todo and event.is_completed %}text-emerald-600 dark:text-emerald-400 line-through{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ event.detail }} · <span class="text-slate-400 dark:text-slate-500">{{ event.time }}</span></p>
+                                    {% if event.is_todo %}
+                                    <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments/{{ event.id }}/toggle">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <button type="submit" class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {% if event.is_completed %}border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
+                                            {% if event.is_completed %}Completed{% else %}Mark Done{% endif %}
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                                {% if event.attachments %}
+                                <div class="mt-2 flex flex-wrap gap-2">
+                                    {% for attachment in event.attachments %}
+                                    <a href="/admin/subscribers/{{ subscriber.id }}/comments/files/{{ attachment.id }}/download"
+                                       class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700/60 dark:text-slate-200 dark:hover:bg-slate-700">
+                                        <svg class="h-3.5 w-3.5 text-slate-500 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/></svg>
+                                        <span class="truncate max-w-[180px]">{{ attachment.filename }}</span>
+                                        {% if attachment.size_label %}
+                                        <span class="text-slate-400 dark:text-slate-500">{{ attachment.size_label }}</span>
+                                        {% endif %}
+                                    </a>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center py-8">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600">
+                        <svg class="h-7 w-7 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/>
+                        </svg>
+                    </div>
+                    <p class="mt-3 text-sm font-medium text-slate-500 dark:text-slate-400">No comments yet</p>
+                    <p class="text-xs text-slate-400 dark:text-slate-500">Comments will appear here when notes are added.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Messengers -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 310ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-600 shadow-lg shadow-indigo-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Messengers</h2>
+                </div>
+            </div>
+            <div class="p-5">
+                <p class="text-sm text-slate-600 dark:text-slate-300">No messenger integrations are active for this workspace.</p>
+                <a href="/admin/integrations" class="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+                    Configure integrations
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+            </div>
+        </div>
+
+        <!-- Activity Timeline -->
+        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 320ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-slate-500 to-slate-600 shadow-lg shadow-slate-500/25">
+                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Activity</h2>
+                </div>
+            </div>
+            <div class="p-5">
+                {% if ns.activities %}
+                <div class="relative">
+                    <div class="absolute left-4 top-2 bottom-2 w-0.5 bg-gradient-to-b from-amber-200 via-slate-200 to-slate-100 dark:from-amber-800 dark:via-slate-700 dark:to-slate-800"></div>
+                    <div class="space-y-4">
+                        {% for event in ns.activities %}
+                        <div class="relative flex items-start gap-4 pl-10">
+                            <div class="absolute left-0 flex h-8 w-8 items-center justify-center rounded-full bg-white dark:bg-slate-800 border-2 shadow-sm
+                                {% if event.type == 'payment' %}border-emerald-500
+                                {% elif event.type == 'service' %}border-amber-500
+                                {% else %}border-slate-300 dark:border-slate-600{% endif %}">
+                                {% if event.type == 'payment' %}
+                                <svg class="h-3.5 w-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                {% elif event.type == 'service' %}
+                                <svg class="h-3.5 w-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                {% else %}
+                                <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                                {% endif %}
+                            </div>
+                            <div class="flex-1 min-w-0 pt-1">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.title }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.detail }} · <span class="text-slate-400 dark:text-slate-500">{{ event.time }}</span></p>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center py-8">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600">
+                        <svg class="h-7 w-7 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                    </div>
+                    <p class="mt-3 text-sm font-medium text-slate-500 dark:text-slate-400">No activity yet</p>
+                    <p class="text-xs text-slate-400 dark:text-slate-500">Activity will appear here as system events occur.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        </div>
+        </template>
     </div>
 
     <!-- Right Column: Contact, Billing, Timeline -->
-    <div class="space-y-6">
+    <template x-if="activeTab === 'information'">
+    <div x-cloak
+         class="space-y-6"
+         :class="activeTab === 'information' ? 'grid gap-6 lg:grid-cols-2 space-y-0' : ''"
+         :style="activeTab === 'information' ? 'order: 10;' : 'order: 20;'">
         <!-- Contact Info -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 200ms;">
+        <div x-show="activeTab === 'information'"
+             class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up"
+             :style="activeTab === 'information' ? 'order: 1; grid-column: 1 / -1;' : ''"
+             style="animation-delay: 200ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/25">
@@ -656,7 +1128,7 @@
         </div>
 
         <!-- Customer Portal -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-gradient-to-br from-slate-50 to-white shadow-sm dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800 animate-fade-in-up" style="animation-delay: 205ms;">
+        <div x-show="activeTab === 'information'" class="section-card rounded-2xl border border-slate-200/60 bg-gradient-to-br from-slate-50 to-white shadow-sm dark:border-slate-700/60 dark:from-slate-800 dark:to-slate-800 animate-fade-in-up" :style="activeTab === 'information' ? 'order: 3;' : ''" style="animation-delay: 205ms;">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                 <div class="flex items-center gap-2">
                     <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
@@ -704,7 +1176,7 @@
         </div>
 
         <!-- User Access -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 210ms;">
+        <div x-show="activeTab === 'information'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" :style="activeTab === 'information' ? 'order: 4;' : ''" style="animation-delay: 210ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/25">
@@ -823,7 +1295,7 @@
 
         <!-- Location -->
         {% if map_data %}
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 225ms;">
+        <div x-show="activeTab === 'information'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" :style="activeTab === 'information' ? 'order: 2;' : ''" style="animation-delay: 225ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25">
@@ -878,7 +1350,7 @@
             </div>
         </div>
         {% elif geocode_target %}
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 225ms;">
+        <div x-show="activeTab === 'information'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" :style="activeTab === 'information' ? 'order: 2;' : ''" style="animation-delay: 225ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25">
@@ -905,6 +1377,11 @@
                         class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                     Geocode address
+                </button>
+                <button type="button"
+                        id="subscriber-geocode-now-btn"
+                        class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+                    Auto geocode now
                 </button>
                 <p id="subscriber-geocode-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
                 <div id="subscriber-geocode-results" class="space-y-2"></div>
@@ -936,7 +1413,7 @@
         {% endif %}
 
         <!-- Billing Summary -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
+        <div x-show="activeTab === '__legacy_billing_summary'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 shadow-lg shadow-emerald-500/25">
@@ -994,67 +1471,10 @@
             </div>
         </div>
 
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 260ms;">
-            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/25">
-                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
-                        </svg>
-                    </div>
-                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing Configuration</h2>
-                </div>
-                <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ billing_config.next_block_label }}</span>
-            </div>
-            <div class="p-5">
-                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/billing-config" class="grid gap-3 sm:grid-cols-2">
-                    {% include "components/forms/csrf_input.html" %}
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Billing Day</span>
-                        <input type="number" name="billing_day" min="1" max="31" value="{{ billing_config.billing_day or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Payment Due Days</span>
-                        <input type="number" name="payment_due_days" min="0" value="{{ billing_config.payment_due_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Blocking Period (days)</span>
-                        <input type="number" name="blocking_period_days" min="0" value="{{ billing_config.blocking_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Deactivation Period (days)</span>
-                        <input type="number" name="deactivation_period_days" min="0" value="{{ billing_config.deactivation_period_days or 0 }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Grace Period (days)</span>
-                        <input type="number" name="grace_period_days" min="0" value="{{ billing_config.grace_period_days or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="block">
-                        <span class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Minimum Balance</span>
-                        <input type="number" step="0.01" name="min_balance" value="{{ billing_config.min_balance or '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="checkbox" name="billing_enabled" value="true" {% if billing_config.billing_enabled %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
-                        Billing Enabled
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="checkbox" name="auto_create_invoices" value="true" {% if billing_config.auto_create_invoices %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
-                        Auto-create Invoices
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 sm:col-span-2">
-                        <input type="checkbox" name="send_billing_notifications" value="true" {% if billing_config.send_billing_notifications %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
-                        Send Billing Notifications
-                    </label>
-                    <div class="sm:col-span-2 flex justify-end">
-                        <button type="submit" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Save Billing Config</button>
-                    </div>
-                </form>
-            </div>
-        </div>
 
         <!-- Notifications -->
         {% if notifications %}
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 287ms;">
+        <div x-show="activeTab === 'information'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" :style="activeTab === 'information' ? 'order: 5;' : ''" style="animation-delay: 287ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
@@ -1104,91 +1524,8 @@
         </div>
         {% endif %}
 
-        <!-- Activity Timeline -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;">
-            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-slate-500 to-slate-600 shadow-lg shadow-slate-500/25">
-                        <svg class="h-4.5 w-4.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Activity</h2>
-                </div>
-            </div>
-            <div class="p-5">
-                <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments" class="mb-5 space-y-3" id="subscriber-comment-form">
-                    {% include "components/forms/csrf_input.html" %}
-                    <label for="subscriber-comment" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Add Comment</label>
-                    <input type="hidden" name="mention_ids" id="subscriber-comment-mention-ids" value="[]">
-                    <textarea id="subscriber-comment" name="comment" rows="3" required
-                              placeholder="Write a note about this subscriber... Type @sam to tag users."
-                              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:focus:border-amber-500 dark:focus:ring-amber-900/30"></textarea>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                        <input type="checkbox" name="is_todo" value="1" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700">
-                        Mark as to-do
-                    </label>
-                    <div id="subscriber-comment-mentions" class="flex flex-wrap gap-2"></div>
-                    <div id="subscriber-comment-mention-suggestions" class="relative"></div>
-                    <div class="flex justify-end">
-                        <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-amber-500/25 transition hover:shadow-lg hover:shadow-amber-500/30">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 1.104-.896 2-2 2H7l-4 4V6c0-1.104.896-2 2-2h14c1.104 0 2 .896 2 2v6z"/></svg>
-                            Post Comment
-                        </button>
-                    </div>
-                </form>
-                {% if timeline %}
-                <div class="relative">
-                    <div class="absolute left-4 top-2 bottom-2 w-0.5 bg-gradient-to-b from-amber-200 via-slate-200 to-slate-100 dark:from-amber-800 dark:via-slate-700 dark:to-slate-800"></div>
-                    <div class="space-y-4">
-                        {% for event in timeline %}
-                        <div class="relative flex items-start gap-4 pl-10">
-                            <div class="absolute left-0 flex h-8 w-8 items-center justify-center rounded-full bg-white dark:bg-slate-800 border-2 shadow-sm
-                                {% if event.type == 'payment' %}border-emerald-500
-                                {% elif event.type == 'service' %}border-amber-500
-                                {% else %}border-slate-300 dark:border-slate-600{% endif %}">
-                                {% if event.type == 'payment' %}
-                                <svg class="h-3.5 w-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                {% elif event.type == 'service' %}
-                                <svg class="h-3.5 w-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                                {% else %}
-                                <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                                {% endif %}
-                            </div>
-                            <div class="flex-1 min-w-0 pt-1">
-                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.title }}</p>
-                                <div class="flex items-center gap-2">
-                                    <p class="text-xs {% if event.is_todo and event.is_completed %}text-emerald-600 dark:text-emerald-400 line-through{% else %}text-slate-500 dark:text-slate-400{% endif %}">{{ event.detail }} · <span class="text-slate-400 dark:text-slate-500">{{ event.time }}</span></p>
-                                    {% if event.is_todo %}
-                                    <form method="POST" action="/admin/subscribers/{{ subscriber.id }}/comments/{{ event.id }}/toggle">
-                                        {% include "components/forms/csrf_input.html" %}
-                                        <button type="submit" class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {% if event.is_completed %}border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
-                                            {% if event.is_completed %}Completed{% else %}Mark Done{% endif %}
-                                        </button>
-                                    </form>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% else %}
-                <div class="text-center py-8">
-                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-700 dark:to-slate-600">
-                        <svg class="h-7 w-7 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                    <p class="mt-3 text-sm font-medium text-slate-500 dark:text-slate-400">No activity yet</p>
-                    <p class="text-xs text-slate-400 dark:text-slate-500">Activity will appear here as you interact with this subscriber.</p>
-                </div>
-                {% endif %}
-            </div>
-        </div>
-
         <!-- Messengers -->
-        <div class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 290ms;">
+        <div x-show="activeTab === '__hidden_messengers'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 290ms;">
             <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
                 <div class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-600 shadow-lg shadow-indigo-500/25">
@@ -1208,6 +1545,8 @@
             </div>
         </div>
     </div>
+    </template>
+</div>
 </div>
 
 <!-- Add Subscription Modal -->
@@ -1323,7 +1662,44 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="/static/js/charts.js"></script>
-<script src="/static/js/bandwidth-chart.js"></script>
+<script src="/static/js/bandwidth-chart.js?v=20260309a"></script>
+<script>
+const speedtestChartData = {{ speedtest_chart | tojson }};
+const speedtestChartCanvas = document.getElementById("subscriberSpeedTestChart");
+if (speedtestChartCanvas && typeof Chart !== "undefined") {
+    new Chart(speedtestChartCanvas, {
+        type: "line",
+        data: {
+            labels: speedtestChartData.labels || [],
+            datasets: [
+                {
+                    label: "Download (Mbps)",
+                    data: speedtestChartData.download || [],
+                    borderColor: "#0891b2",
+                    backgroundColor: "rgba(8,145,178,0.18)",
+                    tension: 0.25,
+                    fill: true,
+                },
+                {
+                    label: "Upload (Mbps)",
+                    data: speedtestChartData.upload || [],
+                    borderColor: "#059669",
+                    backgroundColor: "rgba(5,150,105,0.15)",
+                    tension: 0.25,
+                    fill: true,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: "Mbps" } },
+            },
+        },
+    });
+}
+</script>
 <script>
 (function() {
     const textarea = document.getElementById("subscriber-comment");
@@ -1475,6 +1851,17 @@
     const mapData = {{ map_data | tojson | safe }};
     if (!mapData || !mapData.center) return;
 
+    function initializeMapWhenReady(attempt = 0) {
+        const mapContainer = document.getElementById('subscriber-mini-map');
+        if (!mapContainer || typeof L === 'undefined') {
+            if (attempt < 80) {
+                window.setTimeout(() => initializeMapWhenReady(attempt + 1), 100);
+            }
+            return;
+        }
+        if (mapContainer.dataset.mapInitialized === 'true') return;
+        mapContainer.dataset.mapInitialized = 'true';
+
     function escapeHtml(value) {
         return String(value ?? '')
             .replace(/&/g, '&amp;')
@@ -1485,7 +1872,7 @@
     }
 
     // Initialize mini-map
-    const map = L.map('subscriber-mini-map', {
+    const map = L.map(mapContainer, {
         zoomControl: false,
         attributionControl: false
     }).setView(mapData.center, 15);
@@ -1640,6 +2027,10 @@
             }
         });
     }
+    }
+
+    initializeMapWhenReady();
+    document.addEventListener('alpine:initialized', () => initializeMapWhenReady(), { once: true });
 })();
 </script>
 {% endif %}
@@ -1648,6 +2039,7 @@
 <script>
 (function() {
     const button = document.getElementById('subscriber-geocode-btn');
+    const quickGeocodeBtn = document.getElementById('subscriber-geocode-now-btn');
     const statusEl = document.getElementById('subscriber-geocode-status');
     const resultsEl = document.getElementById('subscriber-geocode-results');
     const manualSaveBtn = document.getElementById('subscriber-coords-save-btn');
@@ -1690,6 +2082,19 @@
         });
         if (!resp.ok) {
             throw new Error('Geocode save failed');
+        }
+        return resp.json();
+    }
+
+    async function geocodeNow() {
+        const resp = await fetch('/admin/subscribers/{{ subscriber.id }}/geocode-now', {
+            method: 'POST',
+            headers: {
+                'X-CSRF-Token': getCookie('csrf_token')
+            }
+        });
+        if (!resp.ok) {
+            throw new Error('Automatic geocode failed');
         }
         return resp.json();
     }
@@ -1760,6 +2165,21 @@
                 window.location.reload();
             } catch (err) {
                 statusEl.textContent = 'Failed to save coordinates.';
+            }
+        });
+    }
+
+    if (quickGeocodeBtn) {
+        quickGeocodeBtn.addEventListener('click', async () => {
+            quickGeocodeBtn.disabled = true;
+            statusEl.textContent = 'Geocoding address...';
+            try {
+                await geocodeNow();
+                window.location.reload();
+            } catch (err) {
+                statusEl.textContent = 'Automatic geocode failed.';
+            } finally {
+                quickGeocodeBtn.disabled = false;
             }
         });
     }

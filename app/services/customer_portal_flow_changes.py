@@ -38,7 +38,7 @@ def get_change_plan_page(
         return None
 
     account_id = customer.get("account_id")
-    if account_id and str(subscription.subscriber_id) != str(account_id):
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
         return None
 
     available_offers = get_available_portal_offers(db)
@@ -197,7 +197,7 @@ def apply_instant_plan_change(
         raise ValueError("Subscription not found")
 
     account_id = customer.get("account_id")
-    if account_id and str(subscription.subscriber_id) != str(account_id):
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
 
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))

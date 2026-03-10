@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, row_actions, row_action, status_badge, empty_state, action_button, metric_row, icon_plus, icon_view, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, action_button, metric_row, icon_plus, animation_styles %}
+{% from "components/data/data_grid.html" import data_grid, cell, cell_link, cell_badge, cell_status, cell_bandwidth, cell_actions, cell_custom %}
 
 {% block title %}Service Catalog - Admin{% endblock %}
 
@@ -63,150 +64,116 @@
 
     {# Tariffs Table #}
     <div class="animate-fade-in-up" style="animation-delay: 150ms;">
-    {% call card("Tariffs", color="violet") %}
-        {# Category Tabs #}
-        {% set category_tab_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundles"} %}
-        <div class="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3 dark:border-slate-700">
-            <a href="/admin/catalog{% if status %}?status={{ status }}{% endif %}{% if search %}{% if status %}&{% else %}?{% endif %}search={{ search }}{% endif %}{% if plan_kind %}{% if status or search %}&{% else %}?{% endif %}plan_kind={{ plan_kind }}{% endif %}"
-               class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if not plan_category %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
-                All
-            </a>
-            {% for cat in plan_categories %}
-            <a href="/admin/catalog?plan_category={{ cat }}{% if status %}&status={{ status }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
-               class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if plan_category == cat %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
-                {{ category_tab_labels.get(cat, cat | replace("_", " ") | title) }}
-            </a>
+
+    {# Category Tabs #}
+    {% set category_tab_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundles"} %}
+    <div class="flex flex-wrap items-center gap-2 rounded-t-2xl border border-b-0 border-slate-200/60 bg-white px-6 py-3 dark:border-slate-700/60 dark:bg-slate-800">
+        <a href="/admin/catalog{% if status %}?status={{ status }}{% endif %}{% if search %}{% if status %}&{% else %}?{% endif %}search={{ search }}{% endif %}{% if plan_kind %}{% if status or search %}&{% else %}?{% endif %}plan_kind={{ plan_kind }}{% endif %}"
+           class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if not plan_category %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+            All
+        </a>
+        {% for cat in plan_categories %}
+        <a href="/admin/catalog?plan_category={{ cat }}{% if status %}&status={{ status }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}"
+           class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if plan_category == cat %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
+            {{ category_tab_labels.get(cat, cat | replace("_", " ") | title) }}
+        </a>
+        {% endfor %}
+    </div>
+
+    {# Filter Bar (injected into data_grid via filters param) #}
+    {% set catalog_filters %}
+    <form method="get" action="/admin/catalog" class="flex flex-wrap items-center gap-3">
+        {% if plan_category %}
+        <input type="hidden" name="plan_category" value="{{ plan_category }}">
+        {% endif %}
+        <select name="status" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All statuses</option>
+            {% for item in offer_statuses %}
+            <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
             {% endfor %}
-        </div>
+        </select>
+        <select name="plan_kind" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            <option value="">All plan kinds</option>
+            <option value="standard" {% if plan_kind == "standard" %}selected{% endif %}>Standard</option>
+            <option value="ip_address" {% if plan_kind == "ip_address" %}selected{% endif %}>IP Address</option>
+            <option value="device_replacement" {% if plan_kind == "device_replacement" %}selected{% endif %}>Device Replacement</option>
+        </select>
+        <button type="submit" class="inline-flex items-center rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700">Filter</button>
+    </form>
+    {% endset %}
 
-        {# Filter Bar #}
-        <div class="mb-4">
-            <form method="get" action="/admin/catalog" class="flex flex-col gap-3 sm:flex-row sm:items-center">
-                {% if plan_category %}
-                <input type="hidden" name="plan_category" value="{{ plan_category }}">
-                {% endif %}
-                <div class="relative flex-1">
-                    <input type="text" name="search" value="{{ search or '' }}" placeholder="Search tariffs..."
-                           class="block h-10 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                    <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.85-5.65a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                </div>
-                <select name="status" class="block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-48">
-                    <option value="">All statuses</option>
-                    {% for item in offer_statuses %}
-                    <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
-                    {% endfor %}
-                </select>
-                <select name="plan_kind" class="block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-52">
-                    <option value="">All plan kinds</option>
-                    <option value="standard" {% if plan_kind == "standard" %}selected{% endif %}>Standard</option>
-                    <option value="ip_address" {% if plan_kind == "ip_address" %}selected{% endif %}>IP Address</option>
-                    <option value="device_replacement" {% if plan_kind == "device_replacement" %}selected{% endif %}>Device Replacement</option>
-                </select>
-                <button type="submit" class="inline-flex h-10 items-center justify-center rounded-lg bg-violet-600 px-4 text-sm font-medium text-white hover:bg-violet-700 sm:w-auto">Filter</button>
-            </form>
-        </div>
+    {% set status_map = {
+        "active": "active",
+        "inactive": "warning",
+        "archived": "inactive",
+        "draft": "draft",
+    } %}
 
-        {% if offers %}
-        {% call data_table() %}
-            {{ table_head(["Tariff", "Category", "Type", "Plan", "Bandwidth", "Subscriptions", "Status", ""]) }}
-            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                {% for offer in offers %}
-                {% set offer_status = offer.status.value if offer.status is not string and offer.status else (offer.status | default('active')) %}
-                {% set plan_meta = offer_plan_metadata.get(offer.id|string, {}) %}
-                {% set plan_kind_value = plan_meta.get("plan_kind", "standard") %}
-                {% call table_row(offer.id) %}
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <a href="/admin/catalog/offers/{{ offer.id }}" class="text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">{{ offer.name }}</a>
-                        {% if offer.code %}
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ offer.code }}</p>
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        {% set cat_val = offer.plan_category.value if offer.plan_category is not string and offer.plan_category else (offer.plan_category | default('internet')) %}
-                        {% set cat_colors = {
-                            "internet": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-                            "recurring": "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
-                            "one_time": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-                            "bundle": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                        } %}
-                        {% set cat_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundle"} %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ cat_colors.get(cat_val, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300') }}">
-                            {{ cat_labels.get(cat_val, cat_val | replace('_', ' ') | title) }}
-                        </span>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                        {{ offer.service_type.value if offer.service_type is not string and offer.service_type else offer.service_type }}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
-                            {% if plan_kind_value == 'ip_address' %}
-                                bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300
-                            {% elif plan_kind_value == 'device_replacement' %}
-                                bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
-                            {% else %}
-                                bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300
-                            {% endif %}">
-                            {{ plan_kind_value | replace('_', ' ') | title }}
-                        </span>
-                        {% if plan_kind_value == 'ip_address' and plan_meta.get('ip_block_size') %}
-                        <p class="mt-1 text-xs font-mono text-slate-400 dark:text-slate-500">{{ plan_meta.get('ip_block_size') }}</p>
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-500 dark:text-slate-400">
-                        {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
-                        {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Kbps
-                        {% else %}
-                        -
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm">
-                        <span class="font-medium text-slate-900 dark:text-white">{{ offer_active_subscription_counts.get(offer.id|string, 0) }}</span>
-                        <span class="text-xs text-slate-400 dark:text-slate-500">active</span>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        {% if offer_status == 'active' %}
-                        {{ status_badge("Active", "active", size="sm") }}
-                        {% elif offer_status == 'inactive' %}
-                        {{ status_badge("Inactive", "warning", size="sm") }}
-                        {% elif offer_status == 'archived' %}
-                        {{ status_badge("Archived", "neutral", size="sm") }}
-                        {% else %}
-                        {{ status_badge(offer_status | title, "neutral", size="sm") }}
-                        {% endif %}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right">
-                        {% call row_actions() %}
-                            {{ row_action("/admin/catalog/offers/" ~ offer.id, icon_view(), "View") }}
-                            {{ row_action("/admin/catalog/offers/" ~ offer.id ~ "/edit", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', "Edit") }}
-                        {% endcall %}
-                    </td>
-                {% endcall %}
-                {% endfor %}
-            </tbody>
+    {% call(row) data_grid(
+        table_id="catalog-grid",
+        items=offers,
+        columns=[
+            {"key": "name",     "label": "Tariff",        "sortable": true},
+            {"key": "category", "label": "Category"},
+            {"key": "type",     "label": "Type"},
+            {"key": "plan",     "label": "Plan",           "hidden": true},
+            {"key": "speed",    "label": "Bandwidth"},
+            {"key": "subs",     "label": "Subscriptions",  "align": "right"},
+            {"key": "status",   "label": "Status"},
+            {"key": "actions",  "label": "",                "align": "right", "always_visible": true},
+        ],
+        color="violet",
+        htmx_url="/admin/catalog",
+        searchable=true,
+        search_value=search or "",
+        search_placeholder="Search tariffs...",
+        filters=catalog_filters,
+        show_count=true,
+        total=total,
+        create_url="/admin/catalog/offers/create",
+        create_label="Add Tariff",
+        page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        empty_title="No tariffs found",
+        empty_message="Create your first tariff to power subscriptions, billing, and provisioning.",
+        empty_action_label="Create Tariff",
+        empty_action_href="/admin/catalog/offers/create",
+    ) %}
+        {% set offer_status = row.status.value if row.status is not string and row.status else (row.status | default('active')) %}
+        {% set plan_meta = offer_plan_metadata.get(row.id|string, {}) %}
+        {% set plan_kind_value = plan_meta.get("plan_kind", "standard") %}
+
+        {{ cell_link("name", row.name, "/admin/catalog/offers/" ~ row.id, row.code or "", color="violet") }}
+        {# Category badge with color mapping #}
+        {% call cell_custom("category") %}
+            {% set cat_val = row.plan_category.value if row.plan_category is not string and row.plan_category else (row.plan_category | default('internet')) %}
+            {% set cat_badge_map = {"internet": "info", "recurring": "purple", "one_time": "warning", "bundle": "success"} %}
+            {% set cat_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundle"} %}
+            <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium
+                {% if cat_val == 'internet' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300
+                {% elif cat_val == 'recurring' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300
+                {% elif cat_val == 'one_time' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                {% elif cat_val == 'bundle' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
+                {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                {{ cat_labels.get(cat_val, cat_val | replace('_', ' ') | title) }}
+            </span>
         {% endcall %}
-
-        {# Pagination #}
-        {% if total_pages and total_pages > 1 %}
-        <div class="mt-4 flex flex-col items-center justify-between gap-4 sm:flex-row">
-            <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
-            <div class="flex items-center gap-2">
-                {% if page > 1 %}
-                <a href="/admin/catalog?page={{ page - 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}{% if plan_category %}&plan_category={{ plan_category }}{% endif %}"
-                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
-                {% endif %}
-                {% if page < total_pages %}
-                <a href="/admin/catalog?page={{ page + 1 }}&per_page={{ per_page }}{% if search %}&search={{ search }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}{% if plan_category %}&plan_category={{ plan_category }}{% endif %}"
-                   class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
-                {% endif %}
-            </div>
-        </div>
-        {% endif %}
-
-        {% else %}
-        {% call empty_state("No tariffs found", "Create your first tariff to power subscriptions, billing, and provisioning.") %}
-            {{ action_button("Create Tariff", "/admin/catalog/offers/create", icon_plus(), "primary", "violet", "purple") }}
+        {{ cell("type", row.service_type.value if row.service_type is not string and row.service_type else row.service_type) }}
+        {# Plan kind badge #}
+        {{ cell_badge("plan", plan_kind_value | replace('_', ' ') | title,
+            "info" if plan_kind_value == "ip_address" else ("warning" if plan_kind_value == "device_replacement" else "default")) }}
+        {{ cell_bandwidth("speed", row.speed_download_mbps, row.speed_upload_mbps) }}
+        {# Subscription count #}
+        {% call cell_custom("subs", align="right") %}
+            <span class="font-medium text-slate-900 dark:text-white">{{ offer_active_subscription_counts.get(row.id|string, 0) }}</span>
+            <span class="text-xs text-slate-400 dark:text-slate-500">active</span>
         {% endcall %}
-        {% endif %}
+        {{ cell_status("status", offer_status|title, status_map.get(offer_status, "default")) }}
+        {{ cell_actions("actions", [
+            {"href": "/admin/catalog/offers/" ~ row.id, "icon": "view", "title": "View plan", "color": "violet"},
+            {"href": "/admin/catalog/offers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit plan"},
+        ]) }}
     {% endcall %}
     </div>
 </div>

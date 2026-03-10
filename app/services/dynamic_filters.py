@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, or_
 from sqlalchemy.sql.elements import BinaryExpression, ClauseElement, ColumnElement
-
 
 FilterExpressionBuilder = Callable[[str, Any], ClauseElement]
 
@@ -76,8 +76,8 @@ DEFAULT_OPERATORS_BY_TYPE: dict[str, set[str]] = {
 
 
 NULL_TOKENS = {None, "", "null", "none", "nil"}
-TRUE_TOKENS = {True, "true", "1", 1, "yes", "on"}
-FALSE_TOKENS = {False, "false", "0", 0, "no", "off"}
+TRUE_TOKENS = {True, "true", "1", "yes", "on"}
+FALSE_TOKENS = {False, "false", "0", "no", "off"}
 
 
 def _parse_bool(value: Any) -> bool:
@@ -311,12 +311,12 @@ def build_filter_expression(
     *,
     doctype: str,
     field_specs: dict[str, FilterFieldSpec],
-) -> BinaryExpression | None:
+) -> ColumnElement[bool] | None:
     """Build a SQLAlchemy filter expression from parsed dynamic filters."""
-    and_conditions: list[ClauseElement] = []
-    or_conditions: list[ClauseElement] = []
+    and_conditions: list[ColumnElement[bool]] = []
+    or_conditions: list[ColumnElement[bool]] = []
 
-    def _build_condition(condition: FilterCondition) -> ClauseElement:
+    def _build_condition(condition: FilterCondition) -> ColumnElement[bool]:
         _validate_field_doctype(condition, doctype)
 
         spec = field_specs.get(condition.field)
@@ -330,18 +330,21 @@ def build_filter_expression(
             )
 
         if spec.builder is not None:
-            return spec.builder(condition.operator, condition.value)
+            return cast(ColumnElement[bool], spec.builder(condition.operator, condition.value))
 
-        return _build_default_expression(
+        return cast(
+            ColumnElement[bool],
+            _build_default_expression(
             spec,
             operator=condition.operator,
             value=condition.value,
+            ),
         )
 
     and_conditions.extend(_build_condition(item) for item in filter_query.and_filters)
     or_conditions.extend(_build_condition(item) for item in filter_query.or_filters)
 
-    final_conditions: list[ClauseElement] = []
+    final_conditions: list[ColumnElement[bool]] = []
     if and_conditions:
         final_conditions.append(and_(*and_conditions))
     if or_conditions:

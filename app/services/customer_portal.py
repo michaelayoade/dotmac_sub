@@ -40,11 +40,11 @@ from app.services.customer_portal_flows import (
     verify_and_record_payment,
 )
 from app.services.customer_portal_session import (
-    SESSION_COOKIE_NAME,
-    _CUSTOMER_SESSIONS,
     _CUSTOMER_SESSION_PREFIX,
+    _CUSTOMER_SESSIONS,
     _DEFAULT_REMEMBER_TTL,
     _DEFAULT_SESSION_TTL,
+    SESSION_COOKIE_NAME,
     _build_current_user,
     _parse_setting_int,
     _session_ttl_seconds,

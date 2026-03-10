@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, metric_row, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, metric_row, progress_bar, animation_styles %}
 
 {% block title %}Server Health - Admin{% endblock %}
 
@@ -40,35 +40,113 @@
         {{ stats_card("Load Average", ("%.2f / %.2f / %.2f"|format(health.load_avg[0], health.load_avg[1], health.load_avg[2]) if health.load_avg else "--"), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="amber", color2="orange") }}
     </div>
 
-    {# Memory + Disk Detail #}
+    {# Memory + Disk Detail with visual gauges #}
     <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
         {# Memory #}
         {% call card("Memory", color="violet") %}
-        <div class="flex items-center justify-between mb-4">
+        <div class="space-y-4">
+            {# Large percentage with gauge #}
             <div>
-                <p class="text-3xl font-bold text-slate-900 dark:text-white">{{ health.memory.used_pct }}</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
+                <div class="flex items-end justify-between mb-3">
+                    <div>
+                        <p class="text-4xl font-bold text-slate-900 dark:text-white tabular-nums">{{ health.memory.used_pct }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Used of {{ health.memory.total }}</p>
+                    </div>
+                    {% set mem_val = health.memory.used_pct_value %}
+                    {% if mem_val is not none %}
+                    <div class="flex items-center gap-1.5">
+                        {% if mem_val < 70 %}
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                        <span class="text-xs font-medium text-emerald-600 dark:text-emerald-400">Normal</span>
+                        {% elif mem_val < 85 %}
+                        <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                        <span class="text-xs font-medium text-amber-600 dark:text-amber-400">Elevated</span>
+                        {% else %}
+                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                        <span class="text-xs font-medium text-rose-600 dark:text-rose-400">High</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% if mem_val is not none %}
+                {{ progress_bar(mem_val, 100, show_text=False, size="md") }}
+                {% endif %}
             </div>
-        </div>
-        <div class="space-y-2">
-            {{ metric_row("Used", health.memory.used, color="violet") }}
-            {{ metric_row("Available", health.memory.available, color="emerald") }}
-            {{ metric_row("Total", health.memory.total, color="slate") }}
+
+            {# Detail breakdown #}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                <div class="space-y-2">
+                    {{ metric_row("Used", health.memory.used, color="violet") }}
+                    {{ metric_row("Available", health.memory.available, color="emerald") }}
+                    {{ metric_row("Total", health.memory.total, color="slate") }}
+                </div>
+            </div>
         </div>
         {% endcall %}
 
         {# Disk #}
         {% call card("Disk", color="amber") %}
-        <div class="flex items-center justify-between mb-4">
+        <div class="space-y-4">
+            {# Large percentage with gauge #}
             <div>
-                <p class="text-3xl font-bold text-slate-900 dark:text-white">{{ health.disk.used_pct }}</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">Used</p>
+                <div class="flex items-end justify-between mb-3">
+                    <div>
+                        <p class="text-4xl font-bold text-slate-900 dark:text-white tabular-nums">{{ health.disk.used_pct }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Used of {{ health.disk.total }}</p>
+                    </div>
+                    {% set disk_val = health.disk.used_pct_value %}
+                    {% if disk_val is not none %}
+                    <div class="flex items-center gap-1.5">
+                        {% if disk_val < 70 %}
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                        <span class="text-xs font-medium text-emerald-600 dark:text-emerald-400">Normal</span>
+                        {% elif disk_val < 85 %}
+                        <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                        <span class="text-xs font-medium text-amber-600 dark:text-amber-400">Elevated</span>
+                        {% else %}
+                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                        <span class="text-xs font-medium text-rose-600 dark:text-rose-400">High</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% if disk_val is not none %}
+                {{ progress_bar(disk_val, 100, show_text=False, size="md") }}
+                {% endif %}
+            </div>
+
+            {# Detail breakdown #}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                <div class="space-y-2">
+                    {{ metric_row("Used", health.disk.used, color="amber") }}
+                    {{ metric_row("Free", health.disk.free, color="emerald") }}
+                    {{ metric_row("Total", health.disk.total, color="slate") }}
+                </div>
             </div>
         </div>
-        <div class="space-y-2">
-            {{ metric_row("Used", health.disk.used, color="amber") }}
-            {{ metric_row("Free", health.disk.free, color="emerald") }}
-            {{ metric_row("Total", health.disk.total, color="slate") }}
+        {% endcall %}
+    </div>
+
+    {# Invoice Cache Performance #}
+    <div class="animate-fade-in-up" style="animation-delay: 130ms;">
+        {% call card("Invoice Cache Performance", color="slate") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Cache Size</p>
+                <p class="mt-1 text-lg font-bold text-slate-900 dark:text-white tabular-nums">{{ "{:,.0f} B".format(invoice_cache_stats.cache_size_bytes|default(0)) }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Cached Invoices</p>
+                <p class="mt-1 text-lg font-bold text-slate-900 dark:text-white tabular-nums">{{ invoice_cache_stats.total_cached_invoices|default(0) }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Hit Rate</p>
+                <p class="mt-1 text-lg font-bold text-slate-900 dark:text-white tabular-nums">{{ "%.2f%%"|format(invoice_cache_stats.hit_rate_pct|default(0)) }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-800/50">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Avg PDF Build</p>
+                <p class="mt-1 text-lg font-bold text-slate-900 dark:text-white tabular-nums">{{ "%.2fs"|format(invoice_cache_stats.avg_generation_seconds|default(0)) }}</p>
+            </div>
         </div>
         {% endcall %}
     </div>

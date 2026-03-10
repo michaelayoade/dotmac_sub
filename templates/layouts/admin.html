@@ -9,9 +9,14 @@
             sidebarOpen = isDesktop;
         };
         updateSidebar();
-        window.addEventListener('resize', updateSidebar);
+        if (window.__adminSidebarResizeHandler) {
+            window.removeEventListener('resize', window.__adminSidebarResizeHandler);
+        }
+        window.__adminSidebarResizeHandler = updateSidebar;
+        window.addEventListener('resize', window.__adminSidebarResizeHandler);
      "
      class="flex h-screen overflow-hidden">
+    {% set unread_notifications = sidebar_stats.notifications_unread if sidebar_stats is defined and sidebar_stats and sidebar_stats.notifications_unread is defined else 0 %}
 
     <!-- Sidebar -->
     <aside :class="[
@@ -112,7 +117,7 @@
             </button>
 
             <!-- Breadcrumbs -->
-            <div class="hidden lg:flex items-center gap-2 text-sm">
+            <div class="hidden md:flex items-center gap-2 text-sm">
                 {% block breadcrumbs %}
                 <a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a>
                 {% endblock %}
@@ -121,10 +126,18 @@
             <!-- Right side actions -->
             <div class="flex items-center gap-2 pointer-events-auto">
                 <!-- Global Search with Suggestions -->
-                <div class="hidden sm:block"
-                     x-data="globalSearch()"
-                     x-on:click.away="close()"
-                     x-on:keydown.escape.window="close()">
+                <div x-data="{ ...globalSearch(), mobileOpen: false }"
+                     x-on:click.away="close(); mobileOpen = false"
+                     x-on:keydown.escape.window="close(); mobileOpen = false">
+                    <!-- Mobile search toggle -->
+                    <button x-on:click="mobileOpen = !mobileOpen; $nextTick(() => $refs.searchInput.focus())"
+                            aria-label="Open search"
+                            class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 sm:hidden">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </button>
+                    <div :class="mobileOpen ? 'absolute left-2 right-2 top-14 z-50 sm:static sm:left-auto sm:right-auto sm:top-auto' : 'hidden sm:block'">
                     <div class="relative">
                         <input type="search"
                                x-ref="searchInput"
@@ -136,11 +149,12 @@
                                x-on:keydown.enter.prevent="selectCurrent()"
                                placeholder="Search customers, invoices..."
                                autocomplete="off"
-                               class="w-72 rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-4 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
+                               class="w-full sm:w-72 rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-14 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
                         <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                         </svg>
-                        <div x-show="loading" class="absolute right-3 top-2.5">
+                        <span x-show="!loading" class="pointer-events-none absolute right-3 top-2 hidden rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 lg:inline-flex">Cmd+K</span>
+                        <div x-show="loading" x-cloak class="absolute right-3 top-2.5">
                             <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -157,7 +171,7 @@
                          x-transition:leave-start="opacity-100 scale-100"
                          x-transition:leave-end="opacity-0 scale-95"
                          x-cloak
-                         class="absolute right-0 mt-2 w-96 max-h-[28rem] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800 z-50">
+                         class="absolute right-0 sm:left-0 sm:right-auto mt-2 w-[calc(100vw-2rem)] sm:w-96 max-h-[28rem] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800 z-50">
 
                         <!-- No Results -->
                         <template x-if="query.length >= 2 && !loading && results.categories?.length === 0">
@@ -239,6 +253,7 @@
                             </div>
                         </div>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Dark mode toggle -->
@@ -264,10 +279,12 @@
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                         </svg>
-                        <span class="absolute right-1.5 top-1.5 flex h-2 w-2">
+                        {% if unread_notifications > 0 %}
+                        <span class="absolute right-1.5 top-1.5 flex h-2 w-2" title="{{ unread_notifications }} unread notifications">
                             <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
                             <span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
                         </span>
+                        {% endif %}
                     </button>
 
                     <div x-show="open"

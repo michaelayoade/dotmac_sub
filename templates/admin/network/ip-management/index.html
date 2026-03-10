@@ -25,6 +25,16 @@
             </div>
         </div>
         <div class="flex items-center gap-3">
+            <form method="post" action="/admin/network/ip-management/reconcile-pools">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit"
+                        class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-emerald-500 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400">
+                    <svg class="h-4 w-4 transition-transform group-hover:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Reconcile Existing Addresses
+                </button>
+            </form>
             <a href="/admin/network/ip-management/blocks/new"
                class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-violet-500 dark:hover:bg-violet-900/20 dark:hover:text-violet-400">
                 <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -41,6 +51,17 @@
             </a>
         </div>
     </div>
+
+    {% if notice %}
+    <div class="animate-fade-in-up rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+        {{ notice }}
+    </div>
+    {% endif %}
+    {% if warning %}
+    <div class="animate-fade-in-up rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+        {{ warning }}
+    </div>
+    {% endif %}
 
     <!-- Stats Overview -->
     <div class="grid gap-4 sm:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
@@ -169,7 +190,8 @@
                             </th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Pool Name</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Version</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Description</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">CIDR</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Used</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
                             <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
                         </tr>
@@ -177,25 +199,44 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for pool in pools %}
                         <tr class="group transition-all hover:bg-gradient-to-r hover:from-indigo-50/50 hover:to-violet-50/30 dark:hover:from-indigo-900/10 dark:hover:to-violet-900/5"
-                            data-row-text="{{ pool.name }} {{ pool.notes or '' }} IPv{{ pool.ip_version or '4' }}"
+                            data-row-text="{{ pool.name }} {{ pool.notes or '' }} IPv{{ pool.ip_version.value if pool.ip_version else '4' }}"
                             data-row-copy="{{ pool.name }}">
                             <td class="px-6 py-4">
                                 <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
                             </td>
                             <td class="px-6 py-4">
-                                <a href="/admin/network/ip-management/pools/{{ pool.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
+                                <a href="{{ '/admin/network/ip-management/ipv4-networks/' ~ pool.id if pool.ip_version.value == 'ipv4' else '/admin/network/ip-management/pools/' ~ pool.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
                                     {{ pool.name }}
                                 </a>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
-                                    {% if pool.ip_version == '6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                    {% if pool.ip_version and pool.ip_version.value == 'ipv6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
                                     {% else %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
-                                    IPv{{ pool.ip_version or '4' }}
+                                    IPv{{ pool.ip_version.value if pool.ip_version else '4' }}
                                 </span>
                             </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="font-mono text-sm text-slate-600 dark:text-slate-300">{{ pool.cidr or '-' }}</span>
+                            </td>
                             <td class="px-6 py-4">
-                                <span class="text-sm text-slate-500 dark:text-slate-400">{{ pool.notes or '-' }}</span>
+                                {% set util = pool_utilization[pool.id|string] if pool_utilization else None %}
+                                {% if util and util.total > 0 %}
+                                <div class="w-44">
+                                    <div class="mb-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                        <span>{{ util.used }}/{{ util.total }}</span>
+                                        <span>{{ util.percent }}%</span>
+                                    </div>
+                                    <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
+                                        <div class="h-2 rounded-full bg-indigo-500" style="width: {{ util.percent }}%"></div>
+                                    </div>
+                                    <div class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                        {{ util.available }} available{% if util.reserved %}, {{ util.reserved }} reserved{% endif %}
+                                    </div>
+                                </div>
+                                {% else %}
+                                <span class="text-xs text-slate-400">N/A</span>
+                                {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if pool.is_active %}
@@ -210,7 +251,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
+                            <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -252,8 +293,10 @@
                             </th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">CIDR</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Pool</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Description</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Used</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Description</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -265,14 +308,35 @@
                                 <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
                             </td>
                             <td class="px-6 py-4">
-                                <span class="font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ block.cidr }}</span>
+                                <a href="{{ '/admin/network/ip-management/ipv4-blocks/' ~ block.id if block.pool and block.pool.ip_version.value == 'ipv4' else '/admin/network/ip-management/pools/' ~ block.pool.id }}"
+                                   class="font-mono text-sm font-semibold text-slate-900 hover:text-cyan-600 dark:text-white dark:hover:text-cyan-400">
+                                    {{ block.cidr }}
+                                </a>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if block.pool %}
                                 <a href="/admin/network/ip-management/pools/{{ block.pool.id }}" class="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ block.pool.name }}</a>
                                 {% else %}-{% endif %}
                             </td>
-                            <td class="px-6 py-4"><span class="text-sm text-slate-500 dark:text-slate-400">{{ block.notes or '-' }}</span></td>
+                            <td class="px-6 py-4">
+                                {% set util = block_utilization[block.id|string] if block_utilization else None %}
+                                {% if util and util.total > 0 %}
+                                <div class="w-44">
+                                    <div class="mb-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                        <span>{{ util.used }}/{{ util.total }}</span>
+                                        <span>{{ util.percent }}%</span>
+                                    </div>
+                                    <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
+                                        <div class="h-2 rounded-full bg-cyan-500" style="width: {{ util.percent }}%"></div>
+                                    </div>
+                                    <div class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                        {{ util.available }} available{% if util.reserved %}, {{ util.reserved }} reserved{% endif %}
+                                    </div>
+                                </div>
+                                {% else %}
+                                <span class="text-xs text-slate-400">N/A</span>
+                                {% endif %}
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if block.is_active %}
                                 {{ status_badge("Active", "active", size="sm") }}
@@ -280,10 +344,18 @@
                                 {{ status_badge("Inactive", "inactive", size="sm") }}
                                 {% endif %}
                             </td>
+                            <td class="px-6 py-4"><span class="text-sm text-slate-500 dark:text-slate-400">{{ block.notes or '-' }}</span></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right">
+                                {% if block.pool and block.pool.ip_version.value == 'ipv4' %}
+                                <a href="/admin/network/ip-management/ipv4-blocks/{{ block.id }}" class="text-sm text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400">View</a>
+                                {% else %}
+                                <span class="text-sm text-slate-400">-</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP blocks configured</td>
+                            <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP blocks configured</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -316,8 +388,18 @@
                 {% endfor %}
             </select>
             {% endif %}
-            <input type="text" data-address-search placeholder="Search addresses..."
-                   class="ml-auto w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+            <form method="get" action="/admin/network/ip-management" class="ml-auto flex items-center gap-2">
+            <input type="hidden" name="page" value="{{ pagination.page if pagination else 1 }}">
+            {% if pool_filter %}
+            <input type="hidden" name="pool_filter" value="{{ pool_filter }}">
+            {% endif %}
+            <input type="text" name="search" value="{{ search or '' }}" placeholder="Search addresses..."
+                   class="w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+            <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Search</button>
+            {% if search %}
+            <a href="/admin/network/ip-management" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+            {% endif %}
+        </form>
         </div>
 
         <!-- IPv4 Addresses -->
@@ -348,7 +430,7 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for addr in ipv4_addresses %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
-                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment and addr.assignment.is_active else 'available' }}"
                             data-row-copy="{{ addr.address }}"
                             data-pool-id="{{ addr.pool.id if addr.pool else '' }}">
                             <td class="px-6 py-4">
@@ -359,15 +441,15 @@
                             <td class="px-6 py-4">
                                 {% if addr.is_reserved %}
                                 <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
-                                {% elif addr.assignment %}
+                                {% elif addr.assignment and addr.assignment.is_active %}
                                 <span class="inline-flex rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Assigned</span>
                                 {% else %}
                                 <span class="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Available</span>
                                 {% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                                {% if addr.assignment and addr.assignment.account %}
-                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ addr.assignment.account.account_number or 'View' }}</a>
+                                {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
+                                {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
                                 {% else %}-{% endif %}
                             </td>
                         </tr>
@@ -377,6 +459,22 @@
                     </tbody>
                 </table>
             </div>
+            {% if pagination and pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <div class="text-sm text-slate-500 dark:text-slate-400">
+                    Showing {{ ((pagination.page - 1) * pagination.limit) + 1 }} - {{ [pagination.page * pagination.limit, pagination.total_items] | min }} of {{ pagination.total_items }} addresses
+                </div>
+                <div class="flex items-center gap-2">
+                    {% if pagination.page > 1 %}
+                    <a href="?page={{ pagination.page - 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+                    {% endif %}
+                    <span class="px-3 py-1.5 text-sm text-slate-500">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+                    {% if pagination.page < pagination.total_pages %}
+                    <a href="?page={{ pagination.page + 1 }}{% if search %}&search={{ search }}{% endif %}{% if pool_filter %}&pool_filter={{ pool_filter }}{% endif %}" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- IPv6 Addresses -->
@@ -407,7 +505,7 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for addr in ipv6_addresses %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
-                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment else 'available' }}"
+                            data-row-text="{{ addr.address }} {{ addr.pool.name if addr.pool else '' }} {{ 'assigned' if addr.assignment and addr.assignment.is_active else 'available' }}"
                             data-row-copy="{{ addr.address }}"
                             data-pool-id="{{ addr.pool.id if addr.pool else '' }}">
                             <td class="px-6 py-4">
@@ -418,15 +516,15 @@
                             <td class="px-6 py-4">
                                 {% if addr.is_reserved %}
                                 <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Reserved</span>
-                                {% elif addr.assignment %}
+                                {% elif addr.assignment and addr.assignment.is_active %}
                                 <span class="inline-flex rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">Assigned</span>
                                 {% else %}
                                 <span class="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Available</span>
                                 {% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
-                                {% if addr.assignment and addr.assignment.account %}
-                                <a href="/admin/billing/accounts/{{ addr.assignment.account.id }}" class="text-purple-600 hover:text-purple-700 dark:text-purple-400">{{ addr.assignment.account.account_number or 'View' }}</a>
+                                {% if addr.assignment and addr.assignment.is_active and addr.assignment.subscriber %}
+                                {{ addr.assignment.subscriber.display_name or addr.assignment.subscriber.email or addr.assignment.subscriber.id }}
                                 {% else %}-{% endif %}
                             </td>
                         </tr>
@@ -475,7 +573,7 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for assignment in assignments %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30"
-                            data-row-text="{{ assignment.account.name if assignment.account else '' }} {{ assignment.subscription.reference if assignment.subscription and assignment.subscription.reference else '' }} {{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}"
+                            data-row-text="{{ assignment.subscriber.display_name if assignment.subscriber else '' }} {{ assignment.subscription.service_id if assignment.subscription and assignment.subscription.service_id else '' }} {{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}"
                             data-row-copy="{{ assignment.ipv4_address.address if assignment.ipv4_address else (assignment.ipv6_address.address if assignment.ipv6_address else '') }}">
                             <td class="px-6 py-4">
                                 <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500">
@@ -487,19 +585,19 @@
                             </td>
                             <td class="px-6 py-4">
                                 <span class="inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold
-                                    {% if assignment.ip_version and assignment.ip_version.value == 'IPv6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
+                                    {% if assignment.ip_version and assignment.ip_version.value == 'ipv6' %}bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400
                                     {% else %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
                                     {{ assignment.ip_version.value if assignment.ip_version else 'IPv4' }}
                                 </span>
                             </td>
                             <td class="px-6 py-4">
-                                {% if assignment.account %}
-                                <a href="/admin/billing/accounts/{{ assignment.account_id }}" class="text-sm text-teal-600 hover:text-teal-700 dark:text-teal-400">{{ assignment.account.name }}</a>
+                                {% if assignment.subscriber %}
+                                <span class="text-sm text-teal-600 dark:text-teal-400">{{ assignment.subscriber.display_name or assignment.subscriber.email or assignment.subscriber.id }}</span>
                                 {% else %}-{% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                                 {% if assignment.subscription %}
-                                <a href="/admin/catalog/subscriptions/{{ assignment.subscription_id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ assignment.subscription.reference or 'View' }}</a>
+                                <a href="/admin/catalog/subscriptions/{{ assignment.subscription_id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ assignment.subscription.service_id or 'View' }}</a>
                                 {% else %}-{% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">

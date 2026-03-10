@@ -1,13 +1,26 @@
 {% extends "layouts/admin.html" %}
 
-{% block title %}{{ pool.name }} - IPv4 Network - Admin{% endblock %}
+{% set is_block = detail_scope == 'block' %}
+{% block title %}{{ block.cidr if is_block and block else pool.name }} - IPv4 Network - Admin{% endblock %}
 
 {% block content %}
 <div class="space-y-6">
     <div>
         <a href="/admin/network/ip-management/ipv4-networks" class="text-sm text-primary-600 hover:text-primary-700">Back to IPv4 Networks</a>
-        <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ pool.name }} ({{ pool.cidr }})</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-400">IP Address assignment view for subnet.</p>
+        <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+            {% if is_block and block %}
+            {{ block.cidr }} in {{ pool.name }}
+            {% else %}
+            {{ pool.name }} ({{ pool.cidr }})
+            {% endif %}
+        </h1>
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+            {% if is_block and block %}
+            Address status within this block range.
+            {% else %}
+            Address status within this network range.
+            {% endif %}
+        </p>
     </div>
 
     <div class="grid gap-4 md:grid-cols-4">
@@ -25,13 +38,45 @@
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-xs uppercase text-slate-500">Router</p>
-            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ (ip_rows[0].device if ip_rows else None) or '-' }}</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ router or '-' }}</p>
         </div>
     </div>
 
-    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="grid gap-4 md:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Assigned</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ stats.assigned }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Reserved</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ stats.reserved }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Available</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ stats.available }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs uppercase text-slate-500">Utilization</p>
+            <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ stats.percent_used }}% used</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800" x-data="{ search: '', status: 'all' }">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <h2 class="font-semibold text-slate-900 dark:text-white">IP Addresses</h2>
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">IP Addresses</h2>
+                <div class="flex flex-col gap-3 sm:flex-row">
+                    <input x-model="search" type="text" placeholder="Search address or subscriber..."
+                           class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select x-model="status"
+                            class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="all">All statuses</option>
+                        <option value="assigned">Assigned</option>
+                        <option value="reserved">Reserved</option>
+                        <option value="available">Available</option>
+                    </select>
+                </div>
+            </div>
         </div>
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
@@ -43,12 +88,18 @@
                         <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Service</th>
                         <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Device</th>
                         <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500">Notes</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                     {% for row in ip_rows %}
-                    <tr>
-                        <td class="px-4 py-3 font-mono text-slate-800 dark:text-slate-200">{{ row.ip_address }}</td>
+                    <tr data-search-text="{{ row.search_text }}" x-show="(status === 'all' || status === '{{ row.status }}') && (!search || $el.dataset.searchText.includes(search.toLowerCase()))">
+                        <td class="px-4 py-3 font-mono">
+                            <a href="/admin/network/ip-management/ipv4-assign?pool_id={{ pool.id }}&ip={{ row.ip_address }}{% if is_block and block %}&block_id={{ block.id }}{% endif %}&return_to={{ request.url.path }}"
+                               class="text-slate-800 hover:text-primary-600 dark:text-slate-200 dark:hover:text-primary-400">
+                                {{ row.ip_address }}
+                            </a>
+                        </td>
                         <td class="px-4 py-3">
                             {% if row.status == 'assigned' %}
                             <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Assigned</span>
@@ -62,9 +113,24 @@
                         <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.service_ref or '-' }}</td>
                         <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.device or '-' }}</td>
                         <td class="px-4 py-3 text-slate-600 dark:text-slate-400">{{ row.notes or '-' }}</td>
+                        <td class="px-4 py-3 text-right">
+                            {% if row.status == 'reserved' %}
+                            <span class="text-xs text-slate-400">Reserved</span>
+                            {% elif row.status == 'assigned' %}
+                            <a href="/admin/network/ip-management/ipv4-assign?pool_id={{ pool.id }}&ip={{ row.ip_address }}{% if is_block and block %}&block_id={{ block.id }}{% endif %}&return_to={{ request.url.path }}"
+                               class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                                Reassign
+                            </a>
+                            {% else %}
+                            <a href="/admin/network/ip-management/ipv4-assign?pool_id={{ pool.id }}&ip={{ row.ip_address }}{% if is_block and block %}&block_id={{ block.id }}{% endif %}&return_to={{ request.url.path }}"
+                               class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                Assign
+                            </a>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">No address rows to display.</td></tr>
+                    <tr><td colspan="7" class="px-4 py-6 text-center text-sm text-slate-500">No address rows to display.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>

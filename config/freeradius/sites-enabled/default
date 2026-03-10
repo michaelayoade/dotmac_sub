@@ -18,8 +18,14 @@ server default {
 	authorize {
 		filter_username
 		preprocess
+		if (&MS-CHAP-Challenge && (&MS-CHAP-Response || &MS-CHAP2-Response)) {
+			update control {
+				Auth-Type := MS-CHAP
+			}
+		}
 		suffix
 		sql
+		mschap
 		pap
 	}
 

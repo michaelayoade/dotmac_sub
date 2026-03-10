@@ -5,8 +5,9 @@ Provides endpoints for bandwidth time series data, real-time streaming,
 and usage statistics. Supports both admin and customer portal access.
 """
 import asyncio
+import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -133,26 +134,37 @@ def get_live_bandwidth(
             if await request.is_disconnected():
                 break
 
+            current = {"rx_bps": 0.0, "tx_bps": 0.0}
             try:
-                # Get current bandwidth from VictoriaMetrics
+                # Primary source: VictoriaMetrics
                 current = await metrics_store.get_current_bandwidth(str(subscription_id))
-                now = datetime.now(UTC)
-
-                yield {
-                    "event": "bandwidth",
-                    "data": {
-                        "timestamp": now.isoformat(),
-                        "rx_bps": current["rx_bps"],
-                        "tx_bps": current["tx_bps"],
-                    },
-                }
-
             except Exception as e:
-                logger.error(f"Error in live bandwidth stream: {e}")
-                yield {
-                    "event": "error",
-                    "data": {"message": "Error fetching bandwidth data"},
-                }
+                logger.warning("Live bandwidth metrics query failed for %s: %s", subscription_id, e)
+
+            try:
+                # Fallback source: latest PostgreSQL sample (recent data only)
+                if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
+                    cutoff = datetime.now(UTC) - timedelta(minutes=2)
+                    latest_sample = bandwidth_samples.get_latest_recent_sample(
+                        db, subscription_id, cutoff
+                    )
+                    if latest_sample:
+                        current = {
+                            "rx_bps": float(latest_sample.rx_bps or 0),
+                            "tx_bps": float(latest_sample.tx_bps or 0),
+                        }
+            except Exception as e:
+                logger.warning("Live bandwidth DB fallback failed for %s: %s", subscription_id, e)
+
+            now = datetime.now(UTC)
+            yield {
+                "event": "bandwidth",
+                "data": json.dumps({
+                    "timestamp": now.isoformat(),
+                    "rx_bps": float(current.get("rx_bps", 0) or 0),
+                    "tx_bps": float(current.get("tx_bps", 0) or 0),
+                }),
+            }
 
             await asyncio.sleep(1)
 
@@ -172,7 +184,11 @@ def get_top_users(
     Returns the top N subscriptions by bandwidth usage.
     Admin only.
     """
-    if current_user.get("role") != "admin":
+    roles = {str(role) for role in (current_user.get("roles") or [])}
+    role_value = current_user.get("role")
+    if isinstance(role_value, str):
+        roles.add(role_value)
+    if "admin" not in roles:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     results = cast(

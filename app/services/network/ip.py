@@ -1,5 +1,7 @@
 """IP management services."""
 
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -31,6 +33,8 @@ from app.services.network._common import (
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.validators import network as network_validators
+
+logger = logging.getLogger(__name__)
 
 
 class IPAssignments(CRUDManager[IPAssignment]):

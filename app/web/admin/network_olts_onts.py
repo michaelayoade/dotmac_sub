@@ -3,7 +3,7 @@
 from datetime import datetime
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -16,7 +16,6 @@ from app.models.network import (
     IpProtocol,
     MgmtIpMode,
     OnuMode,
-    PonType,
     WanMode,
 )
 from app.services import network as network_service
@@ -28,6 +27,7 @@ from app.services import (
 )
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
+from app.services import web_network_onts as web_network_onts_service
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -35,6 +35,7 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.credential_crypto import encrypt_credential
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -58,93 +59,14 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 
-def _get_onu_types(db: Session) -> list:
-    """Fetch active ONU types for form dropdowns."""
-    from app.services.network.onu_types import onu_types
-
-    return onu_types.list(db, is_active=True)
-
-
-def _get_olt_devices(db: Session) -> list:
-    """Fetch active OLT devices for form dropdowns."""
-    from sqlalchemy import select as sa_select
-
-    from app.models.network import OLTDevice
-
-    stmt = (
-        sa_select(OLTDevice)
-        .where(OLTDevice.is_active.is_(True))
-        .order_by(OLTDevice.name)
-    )
-    return list(db.scalars(stmt).all())
-
-
-def _get_vlans(db: Session) -> list:
-    """Fetch VLANs for form dropdowns."""
-    from sqlalchemy import select as sa_select
-
-    from app.models.network import Vlan
-
-    stmt = sa_select(Vlan).order_by(Vlan.tag)
-    return list(db.scalars(stmt).all())
-
-
-def _get_zones(db: Session) -> list:
-    """Fetch active network zones for form dropdowns."""
-    from app.services.network.zones import network_zones
-
-    return network_zones.list(db, is_active=True)
-
-
-def _get_splitters(db: Session) -> list:
-    """Fetch splitters for form dropdowns."""
-    from sqlalchemy import select as sa_select
-
-    from app.models.network import Splitter
-
-    stmt = (
-        sa_select(Splitter)
-        .where(Splitter.is_active.is_(True))
-        .order_by(Splitter.name)
-    )
-    return list(db.scalars(stmt).all())
-
-
-def _get_speed_profiles(db: Session, direction: str) -> list:
-    """Fetch speed profiles for a given direction (download/upload)."""
-    from app.services.network.speed_profiles import speed_profiles
-
-    return speed_profiles.list(db, direction=direction, is_active=True)
-
-
-def _get_tr069_servers(db: Session) -> list:
-    """Fetch active TR069 ACS servers for form dropdowns."""
-    from sqlalchemy import select as sa_select
-
-    from app.models.tr069 import Tr069AcsServer
-
-    stmt = (
-        sa_select(Tr069AcsServer)
-        .where(Tr069AcsServer.is_active.is_(True))
-        .order_by(Tr069AcsServer.name)
-    )
-    return list(db.scalars(stmt).all())
 
 
 def _ont_form_dependencies(db: Session) -> dict:
     """Build all dropdown data needed by the ONT provisioning form."""
-    return {
-        "onu_types": _get_onu_types(db),
-        "olt_devices": _get_olt_devices(db),
-        "vlans": _get_vlans(db),
-        "zones": _get_zones(db),
-        "splitters": _get_splitters(db),
-        "speed_profiles_download": _get_speed_profiles(db, "download"),
-        "speed_profiles_upload": _get_speed_profiles(db, "upload"),
-        "pon_types": [e.value for e in PonType],
-        "gpon_channels": [e.value for e in GponChannel],
-        "onu_modes": [e.value for e in OnuMode],
-    }
+    deps = web_network_onts_service.ont_form_dependencies(db)
+    deps["gpon_channels"] = [e.value for e in GponChannel]
+    deps["onu_modes"] = [e.value for e in OnuMode]
+    return deps
 
 
 def _form_uuid_or_none(form: FormData, key: str) -> str | None:
@@ -182,6 +104,7 @@ def olt_new(request: Request, db: Session = Depends(get_db)):
     context.update({
         "olt": None,
         "action_url": "/admin/network/olts",
+        "tr069_servers": web_network_onts_service.get_tr069_servers(db),
     })
     return templates.TemplateResponse("admin/network/olts/form.html", context)
 
@@ -194,14 +117,24 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
     error = web_network_olts_service.validate_values(db, values)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({"olt": None, "action_url": "/admin/network/olts", "error": error})
+        context.update({
+            "olt": None,
+            "action_url": "/admin/network/olts",
+            "error": error,
+            "tr069_servers": web_network_onts_service.get_tr069_servers(db),
+        })
         return templates.TemplateResponse("admin/network/olts/form.html", context)
     current_user = get_current_user(request)
     actor_id = str(current_user.get("subscriber_id")) if current_user else None
     olt, error = web_network_olts_service.create_olt_with_audit(db, request, values, actor_id)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({"olt": web_network_olts_service.snapshot(values), "action_url": "/admin/network/olts", "error": error})
+        context.update({
+            "olt": web_network_olts_service.snapshot(values),
+            "action_url": "/admin/network/olts",
+            "error": error,
+            "tr069_servers": web_network_onts_service.get_tr069_servers(db),
+        })
         return templates.TemplateResponse("admin/network/olts/form.html", context)
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
@@ -216,7 +149,13 @@ def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
     context = _base_context(request, db, active_page="olts")
-    context.update({"olt": olt, "action_url": f"/admin/network/olts/{olt.id}"})
+    context.update(
+        {
+            "olt": web_network_olts_service.build_form_model(db, olt),
+            "action_url": f"/admin/network/olts/{olt.id}",
+            "tr069_servers": web_network_onts_service.get_tr069_servers(db),
+        }
+    )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
 
 
@@ -235,20 +174,40 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
     error = web_network_olts_service.validate_values(db, values, current_olt=olt)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({"olt": olt, "action_url": f"/admin/network/olts/{olt.id}", "error": error})
+        context.update(
+            {
+                "olt": web_network_olts_service.snapshot(values),
+                "action_url": f"/admin/network/olts/{olt.id}",
+                "error": error,
+                "tr069_servers": web_network_onts_service.get_tr069_servers(db),
+            }
+        )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
     current_user = get_current_user(request)
     actor_id = str(current_user.get("subscriber_id")) if current_user else None
     olt, error = web_network_olts_service.update_olt_with_audit(db, request, olt_id, olt, values, actor_id)
     if error:
         context = _base_context(request, db, active_page="olts")
-        context.update({"olt": web_network_olts_service.snapshot(values), "action_url": f"/admin/network/olts/{olt_id}", "error": error})
+        context.update({
+            "olt": web_network_olts_service.snapshot(values),
+            "action_url": f"/admin/network/olts/{olt_id}",
+            "error": error,
+            "tr069_servers": web_network_onts_service.get_tr069_servers(db),
+        })
         return templates.TemplateResponse("admin/network/olts/form.html", context)
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
 
 @router.get("/olts/{olt_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def olt_detail(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def olt_detail(
+    request: Request,
+    olt_id: str,
+    ssh_test_status: str | None = None,
+    ssh_test_message: str | None = None,
+    snmp_test_status: str | None = None,
+    snmp_test_message: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
     page_data = web_network_core_devices_service.olt_detail_page_data(db, olt_id)
     if not page_data:
         return templates.TemplateResponse(
@@ -259,8 +218,74 @@ def olt_detail(request: Request, olt_id: str, db: Session = Depends(get_db)) -> 
 
     activities = build_audit_activities(db, "olt", str(olt_id))
     context = _base_context(request, db, active_page="olts")
-    context.update({**page_data, "activities": activities})
+    context.update(
+        {
+            **page_data,
+            "activities": activities,
+            "ssh_test_status": ssh_test_status,
+            "ssh_test_message": ssh_test_message,
+            "snmp_test_status": snmp_test_status,
+            "snmp_test_message": snmp_test_message,
+        }
+    )
     return templates.TemplateResponse("admin/network/olts/detail.html", context)
+
+
+@router.post("/olts/{olt_id}/test-ssh", dependencies=[Depends(require_permission("network:write"))])
+def olt_test_ssh_connection(request: Request, olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    ok, message, policy_key = web_network_olts_service.test_olt_ssh_connection(db, olt_id)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="test_ssh_connection",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "policy_key": policy_key,
+            "message": message,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post("/olts/{olt_id}/test-snmp", dependencies=[Depends(require_permission("network:write"))])
+def olt_test_snmp_connection(request: Request, olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    ok, message = web_network_olts_service.test_olt_snmp_connection(db, olt_id)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="test_snmp_connection",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
+        status_code=303,
+    )
 
 
 @router.get("/olts/{olt_id}/backups", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
@@ -536,7 +561,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
 def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "ONT not found"},
@@ -553,7 +578,12 @@ def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/onts/{ont_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def ont_detail(request: Request, ont_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def ont_detail(
+    request: Request,
+    ont_id: str,
+    tab: str = Query(default="overview"),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
     page_data = web_network_core_devices_service.ont_detail_page_data(db, ont_id)
     if not page_data:
         return templates.TemplateResponse(
@@ -562,9 +592,12 @@ def ont_detail(request: Request, ont_id: str, db: Session = Depends(get_db)) -> 
             status_code=404,
         )
 
+    allowed_tabs = {"overview", "network", "history", "tr069", "charts"}
+    active_tab = tab if tab in allowed_tabs else "overview"
+
     activities = build_audit_activities(db, "ont", str(ont_id))
     context = _base_context(request, db, active_page="onts")
-    context.update({**page_data, "activities": activities})
+    context.update({**page_data, "activities": activities, "ont_active_tab": active_tab})
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
 
 
@@ -572,7 +605,7 @@ def ont_detail(request: Request, ont_id: str, db: Session = Depends(get_db)) -> 
 def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "ONT not found"},
@@ -593,7 +626,7 @@ def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db))
 def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "ONT not found"},
@@ -631,7 +664,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
 
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "ONT not found"},
@@ -728,10 +761,10 @@ def ont_onu_mode_modal(
     """Serve ONU mode configuration modal partial."""
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
-    vlans = _get_vlans(db)
+    vlans = web_network_onts_service.get_vlans(db)
     context = {
         "request": request,
         "ont": ont,
@@ -765,13 +798,13 @@ def ont_onu_mode_update(
         config_method=_form_str(form, "config_method").strip() or None,
         ip_protocol=_form_str(form, "ip_protocol").strip() or None,
         pppoe_username=_form_str(form, "pppoe_username").strip() or None,
-        pppoe_password=_form_str(form, "pppoe_password").strip() or None,
+        pppoe_password=encrypt_credential(pw) if (pw := _form_str(form, "pppoe_password").strip()) else None,
         wan_remote_access=_form_str(form, "wan_remote_access") == "true",
     )
 
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
@@ -806,16 +839,14 @@ def ont_mgmt_ip_modal(
     """Serve management/VoIP IP modal partial."""
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
-    vlans = _get_vlans(db)
-    tr069_servers = _get_tr069_servers(db)
+    vlans = web_network_onts_service.get_vlans(db)
     context = {
         "request": request,
         "ont": ont,
         "vlans": vlans,
-        "tr069_servers": tr069_servers,
         "mgmt_ip_modes": [e.value for e in MgmtIpMode],
     }
     return templates.TemplateResponse(
@@ -836,7 +867,6 @@ def ont_mgmt_ip_update(
 
     form = parse_form_data_sync(request)
     payload = OntUnitUpdate(
-        tr069_acs_server_id=_form_uuid_or_none(form, "tr069_acs_server_id"),
         mgmt_ip_mode=_form_str(form, "mgmt_ip_mode").strip() or None,
         mgmt_vlan_id=_form_uuid_or_none(form, "mgmt_vlan_id"),
         mgmt_ip_address=_form_str(form, "mgmt_ip_address").strip() or None,
@@ -846,7 +876,7 @@ def ont_mgmt_ip_update(
 
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
-    except Exception:
+    except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
@@ -1122,5 +1152,3 @@ def ont_charts(
     return templates.TemplateResponse(
         "admin/network/onts/_charts_partial.html", context
     )
-
-

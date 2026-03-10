@@ -392,6 +392,7 @@ def radius_profile_create(request: Request, db: Session = Depends(get_db)):
             "profile": profile_data,
             "attributes": attributes,
             "vendors": web_network_radius_service.profile_vendors(),
+            "connection_types": web_network_radius_service.profile_connection_types(),
             "action_url": "/admin/network/radius/profiles",
             "error": error,
         })
@@ -433,6 +434,7 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
             "profile": profile_data,
             "attributes": attributes,
             "vendors": web_network_radius_service.profile_vendors(),
+            "connection_types": web_network_radius_service.profile_connection_types(),
             "action_url": f"/admin/network/radius/profiles/{profile_id}",
             "error": error,
         })
@@ -456,5 +458,4 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
         metadata=metadata,
     )
     return RedirectResponse("/admin/network/radius", status_code=303)
-
 

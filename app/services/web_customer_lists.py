@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -75,11 +78,10 @@ def build_contacts_index_context(
     orgs_count = db.query(func.count(Organization.id)).scalar() or 0
 
     contacts: list[dict[str, Any]] = []
-    list_limit = offset + per_page
 
     if entity_type != "organization":
         people = (
-            people_query.order_by(Subscriber.created_at.desc()).limit(list_limit).offset(0).all()
+            people_query.order_by(Subscriber.created_at.desc()).limit(per_page).offset(offset).all()
         )
         for person in people:
             contacts.append(
@@ -101,7 +103,7 @@ def build_contacts_index_context(
         orgs_query = db.query(Organization)
         if search:
             orgs_query = orgs_query.filter(Organization.name.ilike(f"%{search}%"))
-        orgs = orgs_query.order_by(Organization.created_at.desc()).limit(list_limit).offset(0).all()
+        orgs = orgs_query.order_by(Organization.created_at.desc()).limit(per_page).offset(offset).all()
         for organization in orgs:
             contacts.append(
                 {
@@ -133,7 +135,6 @@ def build_contacts_index_context(
 
     total = people_total + org_total
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-    contacts = contacts[offset : offset + per_page]
 
     stats_total = (
         active_people_count

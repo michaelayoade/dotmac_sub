@@ -32,7 +32,7 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict[str, 
 @router.get(
     "/payment-providers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:provider:read"))],
 )
 def payment_providers_list(
     request: Request,
@@ -52,7 +52,7 @@ def payment_providers_list(
 @router.post(
     "/payment-providers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_create(
     request: Request,
@@ -91,7 +91,7 @@ def payment_providers_create(
 @router.get(
     "/payment-providers/{provider_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_edit(request: Request, provider_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_providers_service.edit_data(db, provider_id=str(provider_id))
@@ -116,7 +116,7 @@ def payment_providers_edit(request: Request, provider_id: UUID, db: Session = De
 @router.post(
     "/payment-providers/{provider_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_update(
     request: Request,
@@ -159,7 +159,7 @@ def payment_providers_update(
 @router.post(
     "/payment-providers/{provider_id}/deactivate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_deactivate(provider_id: UUID, db: Session = Depends(get_db)):
     billing_service.payment_providers.delete(db, str(provider_id))
@@ -169,7 +169,7 @@ def payment_providers_deactivate(provider_id: UUID, db: Session = Depends(get_db
 @router.post(
     "/payment-providers/test",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_test(
     request: Request,
@@ -198,7 +198,7 @@ def payment_providers_test(
 @router.post(
     "/payment-providers/failover-config",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_failover_config(
     request: Request,
@@ -231,7 +231,7 @@ def payment_providers_failover_config(
 @router.post(
     "/payment-providers/failover-trigger",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_failover_trigger(
     request: Request,

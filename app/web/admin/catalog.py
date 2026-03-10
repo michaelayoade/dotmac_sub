@@ -451,12 +451,20 @@ def catalog_subscription_create(
     db: Session = Depends(get_db),
 ):
     subscription = web_catalog_subscriptions_service.parse_subscription_form(form)
-    subscriber_id = str(subscription.get("subscriber_id") or "")
     error = web_catalog_subscriptions_service.resolve_account_id(db, subscription)
     if not error:
         error = web_catalog_subscriptions_service.validate_subscription_form(
             subscription, for_create=True
         )
+    if not error:
+        try:
+            web_catalog_subscriptions_service.ensure_ipv4_blocks_allocatable(
+                db,
+                [str(value).strip() for value in form.getlist("ipv4_block_ids") if str(value).strip()],
+                [str(value).strip() for value in form.getlist("ipv4_addresses") if str(value).strip()],
+            )
+        except Exception as exc:
+            error = web_catalog_subscriptions_service.error_message(exc)
     if error:
         context = _base_context(request, db, active_page="subscriptions")
         context.update(
@@ -464,6 +472,9 @@ def catalog_subscription_create(
         )
         return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
+    subscriber_id = str(
+        subscription.get("subscriber_id") or subscription.get("account_id") or ""
+    )
     payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
 
     try:
@@ -475,8 +486,10 @@ def catalog_subscription_create(
             return RedirectResponse(f"/admin/subscribers/{subscriber_id}", status_code=303)
         return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
     except ValidationError as exc:
+        db.rollback()
         error = exc.errors()[0]["msg"]
     except Exception as exc:
+        db.rollback()
         error = web_catalog_subscriptions_service.error_message(exc)
 
     context = _base_context(request, db, active_page="subscriptions")
@@ -567,12 +580,19 @@ def catalog_subscription_update(
     try:
         actor_id = _get_actor_id(request)
         web_catalog_subscriptions_service.update_subscription_with_audit(
-            db, subscription_id, payload_data, request, actor_id
+            db,
+            subscription_id,
+            payload_data,
+            str(subscription.get("service_password") or ""),
+            request,
+            actor_id,
         )
         return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
     except ValidationError as exc:
+        db.rollback()
         error = exc.errors()[0]["msg"]
     except Exception as exc:
+        db.rollback()
         error = web_catalog_subscriptions_service.error_message(exc)
 
     context = _base_context(request, db, active_page="subscriptions")

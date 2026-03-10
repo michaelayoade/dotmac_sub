@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-import ipaddress
-import logging
 import difflib
+import logging
 import re
-import subprocess
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
-import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import FormData
 
+from app.models.catalog import ConfigBackupMethod, NasConfigBackup, NasDevice
 from app.models.network_monitoring import (
     Alert,
     AlertStatus,
@@ -31,16 +29,17 @@ from app.models.network_monitoring import (
     DeviceStatus,
     DeviceType,
     MetricType,
+    NetworkDevice,
     NetworkDeviceBandwidthGraph,
     NetworkDeviceBandwidthGraphSource,
     NetworkDeviceSnmpOid,
-    NetworkDevice,
     PopSite,
 )
-from app.models.catalog import ConfigBackupMethod, NasConfigBackup, NasDevice
+from app.models.radius import RadiusClient
 from app.schemas.catalog import NasDeviceUpdate
 from app.services import nas as nas_service
 from app.services import network as network_service
+from app.services import ping as ping_service
 
 logger = logging.getLogger(__name__)
 
@@ -71,19 +70,13 @@ class CoreDeviceSubmitResult:
 
     device: NetworkDevice | None
     error: str | None = None
+    warning: str | None = None
     snapshot: SimpleNamespace | None = None
 
 
 def build_ping_command(host: str) -> list[str]:
     """Build a cross-platform ping command."""
-    command = ["ping", "-c", "1", "-W", "2", host]
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.version == 6:
-            return ["ping", "-6", "-c", "1", "-W", "2", host]
-    except ValueError:
-        pass
-    return command
+    return ping_service.build_ping_command(host)
 
 
 def integrity_error_message(exc: Exception) -> str:
@@ -365,17 +358,8 @@ def snapshot_for_form(
 
 def run_ping_probe(host: str) -> bool:
     """Run ping probe for host reachability validation."""
-    try:
-        result = subprocess.run(
-            build_ping_command(host),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=4,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    success, _latency_ms = ping_service.run_ping(host, timeout_seconds=4)
+    return success
 
 
 def run_snmp_probe(values: dict[str, object]) -> str | None:
@@ -410,6 +394,7 @@ def run_snmp_probe(values: dict[str, object]) -> str | None:
 def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitResult:
     """Create a core device with optional ping/SNMP probes."""
     status = DeviceStatus.offline
+    warnings: list[str] = []
     device = NetworkDevice(
         name=values["name"],
         hostname=values.get("hostname"),
@@ -441,24 +426,22 @@ def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitRes
     host = values.get("host")
     if values.get("ping_enabled") and host:
         if not run_ping_probe(str(host)):
-            return CoreDeviceSubmitResult(
-                None,
-                error="Ping failed. Check the management IP/hostname.",
-                snapshot=snapshot_for_form(values, status=status),
-            )
-        device.last_ping_at = datetime.now(UTC)
-        device.last_ping_ok = True
+            warnings.append("Ping probe failed. Check the management IP/hostname.")
+            device.last_ping_at = datetime.now(UTC)
+            device.last_ping_ok = False
+        else:
+            device.last_ping_at = datetime.now(UTC)
+            device.last_ping_ok = True
 
     if values.get("snmp_enabled"):
         snmp_error = run_snmp_probe(values)
         if snmp_error:
-            return CoreDeviceSubmitResult(
-                None,
-                error=snmp_error,
-                snapshot=snapshot_for_form(values, status=status),
-            )
-        device.last_snmp_at = datetime.now(UTC)
-        device.last_snmp_ok = True
+            warnings.append(snmp_error)
+            device.last_snmp_at = datetime.now(UTC)
+            device.last_snmp_ok = False
+        else:
+            device.last_snmp_at = datetime.now(UTC)
+            device.last_snmp_ok = True
 
     db.add(device)
     try:
@@ -471,37 +454,37 @@ def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitRes
             error=integrity_error_message(exc),
             snapshot=snapshot_for_form(values, status=status),
         )
-    return CoreDeviceSubmitResult(device=device)
+    return CoreDeviceSubmitResult(
+        device=device,
+        warning=" ".join(warnings) if warnings else None,
+    )
 
 
 def update_device(
     db: Session, device: NetworkDevice, values: dict[str, object]
 ) -> CoreDeviceSubmitResult:
     """Update a core device with optional ping/SNMP probes."""
+    previous_mgmt_ip = (device.mgmt_ip or "").strip() or None
+    warnings: list[str] = []
+
     if values.get("ping_enabled") and values.get("host"):
         if not run_ping_probe(str(values["host"])):
-            return CoreDeviceSubmitResult(
-                None,
-                error="Ping failed. Check the management IP/hostname.",
-                snapshot=snapshot_for_form(
-                    values, device_id=str(device.id), status=device.status
-                ),
-            )
-        device.last_ping_at = datetime.now(UTC)
-        device.last_ping_ok = True
+            warnings.append("Ping probe failed. Check the management IP/hostname.")
+            device.last_ping_at = datetime.now(UTC)
+            device.last_ping_ok = False
+        else:
+            device.last_ping_at = datetime.now(UTC)
+            device.last_ping_ok = True
 
     if values.get("snmp_enabled"):
         snmp_error = run_snmp_probe(values)
         if snmp_error:
-            return CoreDeviceSubmitResult(
-                None,
-                error=snmp_error,
-                snapshot=snapshot_for_form(
-                    values, device_id=str(device.id), status=device.status
-                ),
-            )
-        device.last_snmp_at = datetime.now(UTC)
-        device.last_snmp_ok = True
+            warnings.append(snmp_error)
+            device.last_snmp_at = datetime.now(UTC)
+            device.last_snmp_ok = False
+        else:
+            device.last_snmp_at = datetime.now(UTC)
+            device.last_snmp_ok = True
 
     device.name = cast(str, values["name"])
     device.hostname = cast(str | None, values.get("hostname"))
@@ -527,6 +510,7 @@ def update_device(
     device.snmp_priv_secret = cast(str | None, values.get("snmp_priv_secret"))
     device.notes = cast(str | None, values.get("notes"))
     device.is_active = bool(values.get("is_active"))
+    _sync_linked_nas_device_ip_state(db, device, previous_mgmt_ip=previous_mgmt_ip)
     try:
         db.commit()
     except IntegrityError as exc:
@@ -538,7 +522,58 @@ def update_device(
                 values, device_id=str(device.id), status=device.status
             ),
         )
-    return CoreDeviceSubmitResult(device=device)
+    return CoreDeviceSubmitResult(
+        device=device,
+        warning=" ".join(warnings) if warnings else None,
+    )
+
+
+def _sync_linked_nas_device_ip_state(
+    db: Session,
+    device: NetworkDevice,
+    *,
+    previous_mgmt_ip: str | None,
+) -> None:
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return
+
+    normalized_ip = (device.mgmt_ip or "").strip() or None
+    previous_nas_management_ip = (nas_device.management_ip or "").strip() or None
+    previous_nas_ip = (nas_device.ip_address or "").strip() or None
+    previous_nas_radius_ip = (nas_device.nas_ip or "").strip() or None
+
+    nas_device.management_ip = normalized_ip
+
+    # Keep the NAS IP copy aligned when it was mirroring the core device IP.
+    mirrored_ip_values = {value for value in (previous_mgmt_ip, previous_nas_management_ip) if value}
+    if previous_nas_ip in mirrored_ip_values or previous_nas_ip is None:
+        nas_device.ip_address = normalized_ip
+    if previous_nas_radius_ip in mirrored_ip_values or previous_nas_radius_ip is None:
+        nas_device.nas_ip = normalized_ip
+
+    if not normalized_ip:
+        return
+
+    old_radius_ips = {
+        value
+        for value in (
+            previous_mgmt_ip,
+            previous_nas_management_ip,
+            previous_nas_ip,
+            previous_nas_radius_ip,
+        )
+        if value
+    }
+    if not old_radius_ips:
+        return
+
+    radius_clients = list(
+        db.scalars(select(RadiusClient).where(RadiusClient.nas_device_id == nas_device.id)).all()
+    )
+    for client in radius_clients:
+        if client.client_ip in old_radius_ips:
+            client.client_ip = normalized_ip
 
 
 def list_page_data(
@@ -744,6 +779,8 @@ def detail_page_data(
     *,
     format_duration: Callable[[float | int | None], str],
     format_bps: Callable[[float | int | None], str],
+    message: str | None = None,
+    error: str | None = None,
 ) -> dict[str, object] | None:
     """Return full payload for core-device detail page."""
     device = get_device(db, device_id)
@@ -912,9 +949,11 @@ def detail_page_data(
         }
         for metric in ping_history_metrics
     ]
+    nas_device = _core_mapped_nas_device(db, device)
 
     return {
         "device": device,
+        "nas_device": nas_device,
         "interfaces": interfaces,
         "selected_interface": selected_interface,
         "child_devices": child_devices,
@@ -931,7 +970,39 @@ def detail_page_data(
             "last_seen": device.last_ping_at or device.last_snmp_at,
         },
         "ping_history": ping_history,
+        "message": message,
+        "error": error,
     }
+
+
+def update_provisioning_access_for_device(
+    db: Session,
+    *,
+    device_id: str,
+    ssh_username: str,
+    ssh_password: str | None,
+    shared_secret: str | None,
+) -> tuple[bool, str]:
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    nas_device = _core_mapped_nas_device(db, device)
+    if not nas_device:
+        return False, "No linked NAS device for this core device."
+
+    normalized_ssh_username = (ssh_username or "").strip() or None
+    normalized_ssh_password = (ssh_password or "").strip()
+    normalized_shared_secret = (shared_secret or "").strip()
+    nas_service.NasDevices.update(
+        db,
+        str(nas_device.id),
+        NasDeviceUpdate(
+            ssh_username=normalized_ssh_username,
+            ssh_password=normalized_ssh_password or nas_device.ssh_password,
+            shared_secret=normalized_shared_secret or nas_device.shared_secret,
+        ),
+    )
+    return True, "Provisioning access settings saved."
 
 
 def snmp_oids_page_data(
@@ -1482,7 +1553,7 @@ def backup_page_data(
     backup_config = {
         "enabled": bool(nas_device.backup_enabled),
         "ssh_username": nas_device.ssh_username or "",
-        "ssh_port": nas_device.management_port or 22,
+        "ssh_port": nas_device.management_port or 120,
         "backup_type": _tag_get(tags, "backup_type:") or "commands",
         "backup_commands": _tag_get(tags, "backup_commands:") or "export",
         "hours_csv": _tag_get(tags, "backup_hours:") or "",
@@ -1552,7 +1623,7 @@ def update_backup_settings_for_device(
             backup_schedule=schedule,
             ssh_username=(ssh_username or "").strip() or None,
             ssh_password=(ssh_password or "").strip() or None,
-            management_port=max(1, int(ssh_port or 22)),
+            management_port=max(1, int(ssh_port or 120)),
             tags=tags,
         ),
     )

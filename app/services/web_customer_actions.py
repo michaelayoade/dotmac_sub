@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -36,17 +37,9 @@ from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
-from app.services.common import coerce_uuid
+from app.services.common import coerce_uuid, parse_date_filter as _parse_date
 
-
-def _parse_date(value: str | None) -> datetime | None:
-    if not value or not value.strip():
-        return None
-    try:
-        parsed = datetime.strptime(value.strip(), "%Y-%m-%d")
-        return parsed.replace(tzinfo=UTC)
-    except ValueError:
-        return None
+logger = logging.getLogger(__name__)
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -460,7 +453,7 @@ def create_impersonation_session(
         account_id=selected_account.id,
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
-        return_to=f"/admin/customers/{customer_type}/{customer_id}",
+        return_to=f"/admin/subscribers/{selected_account.id}",
     )
 
     actor_id_value = None

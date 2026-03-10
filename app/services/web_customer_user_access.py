@@ -16,7 +16,6 @@ from app.models.subscriber import Organization, Subscriber, UserType
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
 
-
 INVITE_AUDIT_ACTION = "customer_user_invite"
 RESET_AUDIT_ACTION = "customer_user_reset_link"
 LOGIN_TOGGLE_AUDIT_ACTION = "customer_user_login_toggle"

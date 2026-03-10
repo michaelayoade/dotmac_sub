@@ -9,12 +9,12 @@ from urllib.parse import urlencode
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscription_engine import SettingValueType
 from app.models.notification import (
     Notification,
     NotificationChannel,
     NotificationStatus,
 )
+from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services.domain_settings import notification_settings
 from app.services.settings_spec import resolve_value

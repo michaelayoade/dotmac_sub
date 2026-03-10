@@ -1,0 +1,58 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, metric_row, animation_styles %}
+
+{% block title %}System Information - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="System Information",
+        subtitle="Application version, environment details, and resource utilization",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}{% endcall %}
+
+    {# KPI Cards #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("App Version", info.app_version, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>', color="slate", color2="gray") }}
+        {{ stats_card("Subscribers", info.subscriber_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="indigo", color2="violet") }}
+        {{ stats_card("Database Size", info.db_size, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>', color="emerald", color2="teal") }}
+        {{ stats_card("Uptime", info.uptime, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="cyan") }}
+    </div>
+
+    {# Application + Resources | Database — 2-col grid #}
+    <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 100ms;">
+        {# Application & Runtime #}
+        {% call card("Application & Runtime", color="slate") %}
+        <div class="space-y-3">
+            {{ metric_row("Version", info.app_version, color="slate") }}
+            {{ metric_row("Python", info.python_version, color="blue") }}
+            {{ metric_row("FastAPI", info.fastapi_version, color="emerald") }}
+            {{ metric_row("SQLAlchemy", info.sqlalchemy_version, color="violet") }}
+            {{ metric_row("Uvicorn", info.uvicorn_version, color="cyan") }}
+            {{ metric_row("Platform", info.platform, color="slate") }}
+            <div class="border-t border-slate-100 pt-3 dark:border-slate-700/50">
+                {{ metric_row("CPU Cores", info.cpu_count, color="blue") }}
+                {{ metric_row("Memory Usage", info.memory_pct, color="violet") }}
+                {{ metric_row("Disk Usage", info.disk_pct, color="amber") }}
+            </div>
+        </div>
+        {% endcall %}
+
+        {# Database & Services #}
+        {% call card("Database & Services", color="emerald") %}
+        <div class="space-y-3">
+            {{ metric_row("PostgreSQL", info.pg_version, color="blue") }}
+            {{ metric_row("Database Size", info.db_size, color="emerald") }}
+            {{ metric_row("Active Connections", info.active_connections, color="amber") }}
+            {{ metric_row("Total Subscribers", info.subscriber_count, color="indigo") }}
+            {{ metric_row("Redis", info.redis_status, color="cyan") }}
+        </div>
+        {% endcall %}
+    </div>
+</div>
+{{ animation_styles() }}
+{% endblock %}

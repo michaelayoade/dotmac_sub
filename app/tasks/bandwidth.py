@@ -144,9 +144,13 @@ def process_bandwidth_stream():
 
             try:
                 sample_at = datetime.fromisoformat(data[b"sample_at"].decode())
+                # NOTE:
+                # Stream payload currently carries NAS device IDs (`nas_device_id`), while
+                # bandwidth_samples.device_id references network_devices.id. To avoid FK
+                # violations and data loss, persist samples without device linkage here.
                 samples.append(BandwidthSample(
                     subscription_id=UUID(data[b"subscription_id"].decode()),
-                    device_id=UUID(data[b"nas_device_id"].decode()) if data.get(b"nas_device_id") else None,
+                    device_id=None,
                     rx_bps=int(data[b"rx_bps"]),
                     tx_bps=int(data[b"tx_bps"]),
                     sample_at=sample_at,

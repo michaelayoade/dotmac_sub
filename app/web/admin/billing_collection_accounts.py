@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.schemas.billing import CollectionAccountUpdate
 from app.services import billing as billing_service
-from app.services import web_billing_collection_accounts as web_billing_collection_accounts_service
+from app.services import (
+    web_billing_collection_accounts as web_billing_collection_accounts_service,
+)
 from app.services.auth_dependencies import require_permission
 from app.services.billing import configuration as billing_config_service
 
@@ -33,7 +35,7 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict[str, 
 @router.get(
     "/collection-accounts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:account:read"))],
 )
 def collection_accounts_list(
     request: Request,
@@ -53,7 +55,7 @@ def collection_accounts_list(
 @router.post(
     "/collection-accounts",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_create(
     request: Request,
@@ -94,7 +96,7 @@ def collection_accounts_create(
 @router.get(
     "/collection-accounts/{account_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
@@ -119,7 +121,7 @@ def collection_accounts_edit(request: Request, account_id: UUID, db: Session = D
 @router.post(
     "/collection-accounts/{account_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_update(
     request: Request,
@@ -165,7 +167,7 @@ def collection_accounts_update(
 @router.post(
     "/collection-accounts/{account_id}/deactivate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_deactivate(account_id: UUID, db: Session = Depends(get_db)):
     billing_service.collection_accounts.delete(db, str(account_id))
@@ -175,7 +177,7 @@ def collection_accounts_deactivate(account_id: UUID, db: Session = Depends(get_d
 @router.post(
     "/collection-accounts/{account_id}/activate",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_activate(account_id: UUID, db: Session = Depends(get_db)):
     billing_service.collection_accounts.update(

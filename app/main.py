@@ -22,10 +22,10 @@ from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
 from app.api.deps import require_role, require_user_auth
 from app.api.domains import router as domains_router
-from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_monitoring import router as domains_monitoring_router
 from app.api.domains_network_access import router as domains_network_access_router
 from app.api.domains_network_fiber import router as domains_network_fiber_router
+from app.api.domains_provisioning import router as domains_provisioning_router
 from app.api.domains_usage import router as domains_usage_router
 from app.api.external import router as external_router
 from app.api.fiber_plant import router as fiber_plant_router
@@ -187,6 +187,12 @@ async def csrf_middleware(request: Request, call_next):
         from fastapi.responses import HTMLResponse
 
         def _csrf_forbidden(message: str) -> HTMLResponse:
+            logger.warning(
+                "CSRF validation failed for %s %s: %s",
+                method,
+                path,
+                message,
+            )
             return HTMLResponse(
                 content=f"<h1>403 Forbidden</h1><p>{message}</p>",
                 status_code=403,
@@ -262,7 +268,21 @@ async def csrf_middleware(request: Request, call_next):
                 # Non-form state-changing requests must use header token.
                 return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            disconnected = await request.is_disconnected()
+            # During client disconnects and dev auto-reload windows Starlette may not
+            # produce a downstream response; treat it as a benign terminated request.
+            logger.warning(
+                "No response returned from downstream app; request terminated (%s): %s %s",
+                "client_disconnected" if disconnected else "reload_or_shutdown",
+                method,
+                path,
+            )
+            return Response(status_code=204)
+        raise
 
     # Set CSRF cookie on responses if not present
     if generated_token:

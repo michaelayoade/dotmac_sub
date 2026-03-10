@@ -243,7 +243,7 @@ def get_payment_arrangement_detail(
     if not arrangement:
         return None
 
-    if account_id and str(arrangement.subscriber_id) != str(account_id):
+    if not account_id or str(arrangement.subscriber_id) != str(account_id):
         return None
 
     installments = arrangement_service.installments.list(

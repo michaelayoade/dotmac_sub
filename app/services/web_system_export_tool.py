@@ -25,8 +25,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.billing import Invoice, Payment
 from app.models.catalog import NasDevice, Subscription
-from app.models.domain_settings import DomainSetting
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.provisioning import ServiceOrder
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscriber import Subscriber

@@ -320,9 +320,11 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
     def test_subscription_suspended_disconnects_and_blocks(
-        self, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
+        mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
         sub_id = uuid.uuid4()
         event = self._make_event(
@@ -336,9 +338,11 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
     def test_subscription_canceled_disconnects_and_blocks(
-        self, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
+        mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
         sub_id = uuid.uuid4()
         event = self._make_event(
@@ -352,9 +356,11 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
     def test_subscription_block_uses_payload_fallback(
-        self, mock_disconnect, mock_block, db_session
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
+        mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
         sub_id = uuid.uuid4()
         event = self._make_event(
@@ -363,6 +369,44 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
         mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="suspended")
+
+    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    def test_subscription_block_uses_negative_reject_reason_for_dunning(
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+    ):
+        mock_reject_ip.return_value = {"ok": False}
+        handler = EnforcementHandler()
+        sub_id = uuid.uuid4()
+        event = self._make_event(
+            EventType.subscription_suspended,
+            subscription_id=sub_id,
+            payload={"reason": "dunning"},
+        )
+        handler.handle(db_session, event)
+        mock_reject_ip.assert_called_once_with(
+            db_session, str(sub_id), reject_reason="negative"
+        )
+
+    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    def test_subscription_block_defaults_reject_reason_to_blocked(
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session
+    ):
+        mock_reject_ip.return_value = {"ok": False}
+        handler = EnforcementHandler()
+        sub_id = uuid.uuid4()
+        event = self._make_event(
+            EventType.subscription_suspended,
+            subscription_id=sub_id,
+            payload={"reason": "manual"},
+        )
+        handler.handle(db_session, event)
+        mock_reject_ip.assert_called_once_with(
+            db_session, str(sub_id), reject_reason="blocked"
+        )
 
     @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")

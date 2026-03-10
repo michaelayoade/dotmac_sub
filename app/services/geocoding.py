@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
@@ -86,18 +87,101 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
     return results
 
 
+def _google_search(db: Session, query: str, limit: int) -> list[dict]:
+    api_key = _setting_value(db, "google_api_key")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Google geocoding key is not configured")
+    timeout_sec = _setting_int(db, "timeout_sec", 5)
+    try:
+        response = httpx.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": query, "key": api_key},
+            timeout=float(timeout_sec),
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Geocoding request failed") from exc
+    body = response.json()
+    if body.get("status") not in {"OK", "ZERO_RESULTS"}:
+        raise HTTPException(status_code=502, detail="Invalid geocoding response")
+    results = body.get("results") or []
+    if not isinstance(results, list):
+        raise HTTPException(status_code=502, detail="Invalid geocoding response")
+    normalized: list[dict] = []
+    for item in results[: max(1, limit)]:
+        geometry = item.get("geometry") or {}
+        location = geometry.get("location") or {}
+        lat = location.get("lat")
+        lon = location.get("lng")
+        if lat is None or lon is None:
+            continue
+        normalized.append(
+            {
+                "display_name": item.get("formatted_address"),
+                "lat": lat,
+                "lon": lon,
+                "class": "google",
+                "type": "geocode",
+                "importance": 1.0,
+            }
+        )
+    return normalized
+
+
+def _mapbox_search(db: Session, query: str, limit: int) -> list[dict]:
+    token = _setting_value(db, "mapbox_api_key")
+    if not token:
+        raise HTTPException(status_code=400, detail="Mapbox geocoding token is not configured")
+    timeout_sec = _setting_int(db, "timeout_sec", 5)
+    try:
+        response = httpx.get(
+            f"https://api.mapbox.com/geocoding/v5/mapbox.places/{quote(query)}.json",
+            params={"access_token": token, "limit": max(limit, 1)},
+            timeout=float(timeout_sec),
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Geocoding request failed") from exc
+    body = response.json()
+    features = body.get("features") or []
+    if not isinstance(features, list):
+        raise HTTPException(status_code=502, detail="Invalid geocoding response")
+    normalized: list[dict] = []
+    for item in features[: max(1, limit)]:
+        center = item.get("center") or []
+        if not isinstance(center, list) or len(center) < 2:
+            continue
+        normalized.append(
+            {
+                "display_name": item.get("place_name"),
+                "lat": center[1],
+                "lon": center[0],
+                "class": "mapbox",
+                "type": item.get("place_type", ["geocode"])[0] if isinstance(item.get("place_type"), list) and item.get("place_type") else "geocode",
+                "importance": item.get("relevance"),
+            }
+        )
+    return normalized
+
+
+def _provider_search(db: Session, query: str, limit: int) -> list[dict]:
+    provider = (_setting_value(db, "provider") or "nominatim").strip().lower()
+    if provider == "google":
+        return _google_search(db, query, limit)
+    if provider == "mapbox":
+        return _mapbox_search(db, query, limit)
+    return _nominatim_search(db, query, limit)
+
+
 def geocode_address(db: Session, data: dict) -> dict:
     if data.get("latitude") is not None and data.get("longitude") is not None:
         return data
     if not _setting_bool(db, "enabled", True):
         return data
-    provider = _setting_value(db, "provider") or "nominatim"
-    if provider != "nominatim":
-        return data
     address = _compose_address(data)
     if not address:
         return data
-    results = _nominatim_search(db, address, 1)
+    results = _provider_search(db, address, 1)
     if not results:
         return data
     first = results[0]
@@ -112,13 +196,10 @@ def geocode_address(db: Session, data: dict) -> dict:
 def geocode_preview(db: Session, data: dict, limit: int = 3) -> list[dict]:
     if not _setting_bool(db, "enabled", True):
         return []
-    provider = _setting_value(db, "provider") or "nominatim"
-    if provider != "nominatim":
-        return []
     address = _compose_address(data)
     if not address:
         raise HTTPException(status_code=400, detail="Address fields required")
-    results = _nominatim_search(db, address, limit)
+    results = _provider_search(db, address, limit)
     preview: list[dict] = []
     for item in results:
         try:

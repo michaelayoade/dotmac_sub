@@ -5,6 +5,17 @@
 
 {% block content %}
 <div class="space-y-6" x-data="{ activeTab: 'overview' }">
+    {% if ssh_test_message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if ssh_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
+        {{ ssh_test_message }}
+    </div>
+    {% endif %}
+    {% if snmp_test_message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if snmp_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
+        {{ snmp_test_message }}
+    </div>
+    {% endif %}
+
     {# Header #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -56,7 +67,7 @@
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
                 Ports &amp; Cards
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ pon_ports | length }}</span>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ resolved_pon_ports_count }}</span>
             </button>
             <button @click="activeTab = 'onts'"
                     :class="activeTab === 'onts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
@@ -80,31 +91,67 @@
             <div class="lg:col-span-2 space-y-6">
                 {# Device Information #}
                 {% call card("Device Information", color="blue") %}
+                {% set info = resolved_device_info %}
                 <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Hostname</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.hostname or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.hostname or 'N/A' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Management IP</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.mgmt_ip or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.mgmt_ip or 'N/A' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ olt.vendor or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.vendor or 'N/A' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ olt.model or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.model or 'N/A' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.serial_number or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.serial_number or 'N/A' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Device Status</dt>
+                        {% set device_status = (info.status or 'unknown') | lower %}
+                        <dd class="mt-1 text-sm">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if device_status == 'online' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200{% elif device_status == 'offline' %}bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {{ (info.status or 'unknown') | replace('_', ' ') | title }}
+                            </span>
+                        </dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Created</dt>
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ olt.created_at.strftime('%B %d, %Y') if olt.created_at else '&mdash;' }}</dd>
                     </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last SNMP Check</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.last_snmp_at.strftime('%Y-%m-%d %H:%M:%S') if info.last_snmp_at else 'N/A' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Ping Check</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.last_ping_at.strftime('%Y-%m-%d %H:%M:%S') if info.last_ping_at else 'N/A' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">SNMP Result</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'OK' if info.last_snmp_ok else ('Failed' if info.last_snmp_at else 'Unknown') }}</dd>
+                    </div>
+                    {% if monitoring_data and monitoring_data.snmp_system %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">SNMP SysObjectID</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ monitoring_data.snmp_system.sys_object_id or 'N/A' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">SNMP Uptime</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ monitoring_data.snmp_system.sys_uptime or 'N/A' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">SNMP Interface Count</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ monitoring_data.snmp_system.if_number or 'N/A' }}</dd>
+                    </div>
+                    {% endif %}
                     {% if olt.notes %}
                     <div class="sm:col-span-2">
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
@@ -120,12 +167,33 @@
                 <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                     {% for port in pon_ports %}
                     {% set ps = port_stats.get(port.id | string, {}) %}
-                    <button @click="activeTab = 'ports'" class="flex flex-col items-center justify-center rounded-lg border p-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/50 {% if ps.get('offline', 0) > 0 %}border-rose-200 bg-rose-50/50 dark:border-rose-800/50 dark:bg-rose-900/10{% elif ps.get('low_signal', 0) > 0 %}border-amber-200 bg-amber-50/50 dark:border-amber-800/50 dark:bg-amber-900/10{% elif port.is_active %}border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/50 dark:bg-emerald-900/10{% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800{% endif %}">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-full {% if ps.get('offline', 0) > 0 %}bg-rose-100 text-rose-600 dark:bg-rose-900/50 dark:text-rose-400{% elif ps.get('low_signal', 0) > 0 %}bg-amber-100 text-amber-600 dark:bg-amber-900/50 dark:text-amber-400{% elif port.is_active %}bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400{% else %}bg-slate-200 text-slate-400 dark:bg-slate-700{% endif %}">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14"/></svg>
+                    {% set avg = ps.get('avg_olt_rx_dbm') %}
+                    {% set avg_class = 'text-slate-700 bg-slate-100 dark:text-slate-300 dark:bg-slate-700' %}
+                    {% if avg is not none and avg < crit_threshold %}
+                        {% set avg_class = 'text-rose-700 bg-rose-100 dark:text-rose-300 dark:bg-rose-900/30' %}
+                    {% elif avg is not none and avg < warn_threshold %}
+                        {% set avg_class = 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30' %}
+                    {% elif avg is not none %}
+                        {% set avg_class = 'text-emerald-700 bg-emerald-100 dark:text-emerald-300 dark:bg-emerald-900/30' %}
+                    {% endif %}
+                    <button @click="activeTab = 'ports'" class="rounded-xl border p-3 text-left transition-all hover:shadow-sm hover:-translate-y-0.5 dark:hover:bg-slate-700/30 {% if ps.get('offline', 0) > 0 %}border-rose-200 bg-rose-50/40 dark:border-rose-800/50 dark:bg-rose-900/10{% elif ps.get('low_signal', 0) > 0 %}border-amber-200 bg-amber-50/40 dark:border-amber-800/50 dark:bg-amber-900/10{% elif port.is_active %}border-emerald-200 bg-emerald-50/40 dark:border-emerald-800/50 dark:bg-emerald-900/10{% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800{% endif %}">
+                        <div class="flex items-center justify-between">
+                            <p class="text-xs font-semibold text-slate-900 dark:text-white">{{ port.name }}</p>
+                            <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium {% if ps.get('offline', 0) > 0 %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% elif ps.get('online', 0) > 0 %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {% if ps.get('offline', 0) > 0 %}Issue{% elif ps.get('online', 0) > 0 %}Online{% else %}Idle{% endif %}
+                            </span>
                         </div>
-                        <p class="mt-1 text-xs font-medium text-slate-900 dark:text-white">{{ port.name }}</p>
-                        <p class="text-xs tabular-nums text-slate-500 dark:text-slate-400">{{ ps.get('online', 0) }}/{{ ps.get('total', 0) }}</p>
+                        <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                            <div class="h-full rounded-full {% if ps.get('online_pct', 0) >= 80 %}bg-emerald-500{% elif ps.get('online_pct', 0) >= 40 %}bg-amber-500{% else %}bg-rose-500{% endif %}" style="width: {{ ps.get('online_pct', 0) }}%"></div>
+                        </div>
+                        <div class="mt-2 flex items-center justify-between">
+                            <p class="text-[11px] tabular-nums text-slate-600 dark:text-slate-300">
+                                {{ ps.get('online', 0) }}/{{ ps.get('total', 0) }} ONTs
+                            </p>
+                            <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium {{ avg_class }}">
+                                {% if avg is not none %}{{ "%.1f"|format(avg) }} dBm{% else %}No signal{% endif %}
+                            </span>
+                        </div>
                     </button>
                     {% endfor %}
                 </div>
@@ -136,7 +204,13 @@
                     <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600"></span> Inactive</span>
                 </div>
                 {% else %}
+                {% if monitoring_data and monitoring_data.pon_interfaces %}
+                <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/10 dark:text-blue-300">
+                    Using live SNMP PON interfaces: {{ monitoring_data.pon_interfaces | length }} detected.
+                </div>
+                {% else %}
                 <p class="text-sm text-slate-500 dark:text-slate-400">No PON ports configured.</p>
+                {% endif %}
                 {% endif %}
                 {% endcall %}
             </div>
@@ -152,7 +226,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PON Ports</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pon_ports | length }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ resolved_pon_ports_count }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Connected ONTs</p>
@@ -171,6 +245,56 @@
                             <span class="mx-1 text-slate-300 dark:text-slate-600">|</span>
                             <span class="text-rose-600 dark:text-rose-400">Crit:</span> {{ crit_threshold }} dBm
                         </p>
+                    </div>
+                </div>
+                {% endcall %}
+
+                {% call card("Access", color="slate") %}
+                <div class="space-y-4">
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Username</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.ssh_username or 'Not configured' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Port</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.ssh_port or 22 }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Password</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Saved' if olt.ssh_password else 'Not configured' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">NETCONF</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {% if olt.netconf_enabled %}
+                            Enabled{% if olt.netconf_port %} on port <span class="font-mono">{{ olt.netconf_port }}</span>{% endif %}
+                            {% else %}
+                            Disabled
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SNMP</p>
+                        {% if monitoring_device %}
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {% if monitoring_device.snmp_enabled %}Enabled{% else %}Disabled{% endif %}
+                            {% if monitoring_device.snmp_enabled and monitoring_device.snmp_port %}
+                            on port <span class="font-mono">{{ monitoring_device.snmp_port }}</span>
+                            {% endif %}
+                        </p>
+                        {% if monitoring_device.snmp_enabled %}
+                        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                            Version: <span class="font-mono">{{ monitoring_device.snmp_version or '-' }}</span>
+                            {% if monitoring_device.snmp_version == 'v2c' %}
+                            • Community: <span class="font-mono">{{ monitoring_device.snmp_community or '-' }}</span>
+                            {% elif monitoring_device.snmp_version == 'v3' %}
+                            • User: <span class="font-mono">{{ monitoring_device.snmp_username or '-' }}</span>
+                            {% endif %}
+                        </p>
+                        {% endif %}
+                        {% else %}
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No linked monitoring device</p>
+                        {% endif %}
                     </div>
                 </div>
                 {% endcall %}
@@ -232,6 +356,20 @@
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                         View All ONTs
                     </a>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-ssh">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
+                            Test SSH Connection
+                        </button>
+                    </form>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-snmp">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m2-4h.01M4 7h16M4 12h16M4 17h16"/></svg>
+                            Test SNMP Connection
+                        </button>
+                    </form>
                 </div>
                 {% endcall %}
             </div>
@@ -270,53 +408,80 @@
             {% endif %}
             {% endcall %}
             {% endfor %}
+            {% elif live_board_inventory %}
+            {% call card("Live Board Inventory (SNMP)", color="blue") %}
+            {% if live_board_cards %}
+            <div class="mb-2 flex items-center justify-between">
+                <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Cards</h4>
+                <span class="text-xs text-slate-500 dark:text-slate-400">{{ live_board_cards | length }}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                {% for board in live_board_cards %}
+                <div class="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-800/50 dark:bg-emerald-900/10">
+                    <div class="mb-2 flex items-center justify-between">
+                        <span class="text-xs font-semibold text-slate-900 dark:text-white">
+                            {% if board.slot_number is not none %}Slot {{ board.slot_number }}{% else %}Index {{ board.index }}{% endif %}
+                        </span>
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    </div>
+                    <p class="text-xs text-slate-700 dark:text-slate-300">{{ board.card_type }}</p>
+                    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Discovered live via SNMP</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endcall %}
             {% endif %}
 
             {# PON Ports Detail Table #}
             {% call card("PON Ports", color="blue") %}
-            {% if pon_ports %}
+            {% if pon_port_table_rows %}
             {% call data_table() %}
-                {{ table_head(["Port", "Status", "ONTs", "Online", "Offline", "Low Signal"]) }}
+                {{ table_head(["Port", "Type", "Admin state", "Status", "ONUs", "Average signal", "Description", "Range", "Tx power", "Action"]) }}
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% for port in pon_ports %}
-                    {% set ps = port_stats.get(port.id | string, {}) %}
+                    {% for row in pon_port_table_rows %}
+                    {% set row_status = (row.status or 'unknown') | lower %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{{ port.name }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{{ row.name }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ row.type or 'PON' }}</td>
                         <td class="px-6 py-3 whitespace-nowrap">
-                            {% if port.is_active %}
-                            {{ status_badge("Active", "active", size="sm") }}
+                            {% if row.admin_state == 'Enabled' %}
+                            {{ status_badge("Enabled", "active", size="sm") }}
+                            {% elif row.admin_state == 'Disabled' %}
+                            {{ status_badge("Disabled", "inactive", size="sm") }}
                             {% else %}
-                            {{ status_badge("Inactive", "inactive", size="sm") }}
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ ps.get('total', 0) }}</td>
-                        <td class="px-6 py-3 whitespace-nowrap">
-                            {% if ps.get('online', 0) > 0 %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">{{ ps.get('online', 0) }}</span>
-                            {% else %}
-                            <span class="text-xs text-slate-400">&mdash;</span>
+                            <span class="text-xs text-slate-400">N/A</span>
                             {% endif %}
                         </td>
                         <td class="px-6 py-3 whitespace-nowrap">
-                            {% if ps.get('offline', 0) > 0 %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200">{{ ps.get('offline', 0) }}</span>
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if row_status == 'up' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200{% elif row_status == 'down' %}bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {{ row_status | upper }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ row.onus or 0 }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                            {% if row.avg_signal_dbm is not none %}
+                            {{ "%.2f"|format(row.avg_signal_dbm) }} dBm
                             {% else %}
-                            <span class="text-xs text-slate-400">&mdash;</span>
+                            N/A
                             {% endif %}
                         </td>
+                        <td class="px-6 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.description or 'N/A' }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ row.range_display or 'N/A' }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                            {% if row.tx_power_dbm is not none %}{{ "%.2f"|format(row.tx_power_dbm) }} dBm{% else %}N/A{% endif %}
+                        </td>
                         <td class="px-6 py-3 whitespace-nowrap">
-                            {% if ps.get('low_signal', 0) > 0 %}
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">{{ ps.get('low_signal', 0) }}</span>
-                            {% else %}
-                            <span class="text-xs text-slate-400">&mdash;</span>
-                            {% endif %}
+                            <a href="{{ row.action_url }}" class="inline-flex items-center rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                                View ONTs
+                            </a>
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             {% endcall %}
             {% else %}
-            {% call empty_state("No PON ports", "No PON ports are configured for this OLT.") %}{% endcall %}
+            {{ empty_state("No PON ports", "No PON ports are configured for this OLT.") }}
             {% endif %}
             {% endcall %}
         </div>
@@ -383,7 +548,7 @@
             </tbody>
         {% endcall %}
         {% else %}
-        {% call empty_state("No ONTs connected", "No ONTs are currently assigned to this OLT.") %}{% endcall %}
+        {{ empty_state("No ONTs connected", "No ONTs are currently assigned to this OLT.") }}
         {% endif %}
         {% endcall %}
     </div>
@@ -408,7 +573,7 @@
             {% endfor %}
         </div>
         {% else %}
-        {% call empty_state("No activity yet", "Activity for this OLT will appear here as changes are made.") %}{% endcall %}
+        {{ empty_state("No activity yet", "Activity for this OLT will appear here as changes are made.") }}
         {% endif %}
         {% endcall %}
 

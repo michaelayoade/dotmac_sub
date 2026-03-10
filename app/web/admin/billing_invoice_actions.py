@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
-from app.services import web_billing_invoice_actions as web_billing_invoice_actions_service
+from app.services import (
+    web_billing_invoice_actions as web_billing_invoice_actions_service,
+)
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
@@ -67,7 +69,7 @@ def _invoice_pdf_response(
 @router.post(
     "/invoices/{invoice_id}/convert-proforma",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:write"))],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def invoice_convert_proforma(
     request: Request,
@@ -93,7 +95,7 @@ def invoice_convert_proforma(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice_id}", status_code=303)
 
 
-@router.get("/invoices/{invoice_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/invoices/{invoice_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoice_detail(
     request: Request,
     invoice_id: UUID,
@@ -125,7 +127,7 @@ def invoice_detail(
     )
 
 
-@router.post("/invoices/{invoice_id}/lines", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/{invoice_id}/lines", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_line_create(
     request: Request,
     invoice_id: UUID,
@@ -167,7 +169,7 @@ def invoice_line_create(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice_id}", status_code=303)
 
 
-@router.post("/invoices/{invoice_id}/apply-credit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/{invoice_id}/apply-credit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_apply_credit(
     request: Request,
     invoice_id: UUID,
@@ -217,7 +219,7 @@ def invoice_apply_credit(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice_id}", status_code=303)
 
 
-@router.get("/invoices/{invoice_id}/pdf", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/invoices/{invoice_id}/pdf", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
 def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
     if not invoice:
@@ -233,10 +235,12 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
         invoice_id=str(invoice_id),
     )
     latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-    if billing_invoice_pdf_service.export_file_exists(db, latest_export):
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
+        billing_invoice_pdf_service.record_cache_hit(db)
         response = _invoice_pdf_response(db, latest_export, invoice)
         if response is not None:
             return response
+    billing_invoice_pdf_service.record_cache_miss(db)
 
     from app.web.admin import get_current_user
 
@@ -246,6 +250,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
         db,
         invoice_id=str(invoice_id),
         requested_by_id=str(actor_id) if actor_id else None,
+        force_new=False,
     )
 
     for _ in range(5):
@@ -255,7 +260,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
             invoice_id=str(invoice_id),
         )
         latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-        if billing_invoice_pdf_service.export_file_exists(db, latest_export):
+        if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
             response = _invoice_pdf_response(db, latest_export, invoice)
             if response is not None:
                 return response
@@ -272,7 +277,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
         invoice_id=str(invoice_id),
     )
     latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-    if billing_invoice_pdf_service.export_file_exists(db, latest_export):
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
         response = _invoice_pdf_response(db, latest_export, invoice)
         if response is not None:
             return response
@@ -295,7 +300,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 @router.get(
     "/invoices/{invoice_id}/pdf/download",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:read"))],
+    dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
 def invoice_pdf_download(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
@@ -312,10 +317,12 @@ def invoice_pdf_download(request: Request, invoice_id: UUID, db: Session = Depen
         invoice_id=str(invoice_id),
     )
     latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-    if billing_invoice_pdf_service.export_file_exists(db, latest_export):
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
+        billing_invoice_pdf_service.record_cache_hit(db)
         response = _invoice_pdf_response(db, latest_export, invoice)
         if response is not None:
             return response
+    billing_invoice_pdf_service.record_cache_miss(db)
 
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice_id}?pdf_notice=not_ready",
@@ -323,7 +330,31 @@ def invoice_pdf_download(request: Request, invoice_id: UUID, db: Session = Depen
     )
 
 
-@router.post("/invoices/{invoice_id}/send", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post(
+    "/invoices/{invoice_id}/pdf/regenerate",
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_pdf_regenerate(
+    request: Request,
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = current_user.get("subscriber_id")
+    billing_invoice_pdf_service.regenerate_invoice_cache(
+        db,
+        invoice_id=str(invoice_id),
+        requested_by_id=str(actor_id) if actor_id else None,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}?pdf_notice=queued",
+        status_code=303,
+    )
+
+
+@router.post("/invoices/{invoice_id}/send", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user
 
@@ -346,7 +377,7 @@ def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_d
     return HTMLResponse(web_billing_invoice_actions_service.send_message(invoice_id))
 
 
-@router.post("/invoices/{invoice_id}/send-and-return", dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/{invoice_id}/send-and-return", dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_send_and_return(
     request: Request,
     invoice_id: UUID,
@@ -357,7 +388,7 @@ def invoice_send_and_return(
     return RedirectResponse(url=next_url, status_code=303)
 
 
-@router.post("/invoices/{invoice_id}/void", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/invoices/{invoice_id}/void", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:delete"))])
 def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user
 

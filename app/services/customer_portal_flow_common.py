@@ -1,9 +1,13 @@
 """Shared helpers for customer portal flow modules."""
 
+import logging
+
 from datetime import date, datetime
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 def _compute_total_pages(total: int, per_page: int) -> int:

@@ -31,7 +31,7 @@ def _parse_decimal(value: str | None, field: str, default: Decimal | None = None
         raise ValueError(f"{field} must be a valid number") from exc
 
 
-@router.get("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:tax:read"))])
 def billing_tax_rates(request: Request, db: Session = Depends(get_db)):
     state = web_billing_tax_rates_service.list_data(db)
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -49,7 +49,7 @@ def billing_tax_rates(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:write"))])
+@router.post("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:tax:write"))])
 def billing_tax_rate_create(
     request: Request,
     name: str = Form(...),
@@ -86,7 +86,7 @@ def billing_tax_rate_create(
     return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
 
 
-@router.get("/ar-aging", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/ar-aging", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:ledger:read"))])
 def billing_ar_aging(
     request: Request,
     period: str = Query("all"),
@@ -119,7 +119,7 @@ def billing_ar_aging(
     )
 
 
-@router.get("/ledger", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/ledger", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:ledger:read"))])
 def billing_ledger(
     request: Request,
     customer_ref: str | None = Query(None),
@@ -152,7 +152,7 @@ def billing_ledger(
     )
 
 
-@router.get("/ledger/export.csv", dependencies=[Depends(require_permission("billing:read"))])
+@router.get("/ledger/export.csv", dependencies=[Depends(require_permission("billing:ledger:read"))])
 def billing_ledger_export_csv(
     request: Request,
     customer_ref: str | None = Query(None),

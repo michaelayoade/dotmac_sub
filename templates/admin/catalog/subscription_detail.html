@@ -6,6 +6,14 @@
 {% block content %}
 {% set offer_label = subscription.offer.name if subscription.offer else 'Subscription' %}
 {% set status_val = subscription.status.value if subscription.status else 'pending' %}
+{% set provisioning_router = subscription.provisioning_nas_device %}
+{% set assigned_ipv4_list = [] %}
+{% for assignment in subscription.ip_assignments or [] %}
+    {% if assignment.is_active and assignment.ipv4_address %}
+        {% set _ = assigned_ipv4_list.append(assignment.ipv4_address.address) %}
+    {% endif %}
+{% endfor %}
+{% set display_ipv4 = subscription.ipv4_address or (assigned_ipv4_list | join(', ')) %}
 <div class="space-y-6">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -95,24 +103,53 @@
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.login or '—' }}</p>
                     </div>
                     <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning Router</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">
+                            {% if provisioning_router %}
+                                {{ provisioning_router.name }}
+                                {% if provisioning_router.management_ip %}
+                                    ({{ provisioning_router.management_ip }})
+                                {% elif provisioning_router.ip_address %}
+                                    ({{ provisioning_router.ip_address }})
+                                {% elif provisioning_router.nas_ip %}
+                                    ({{ provisioning_router.nas_ip }})
+                                {% endif %}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Router ID</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.router_id or '—' }}</p>
                     </div>
                     <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning NAS ID</p>
+                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.provisioning_nas_device_id or '—' }}</p>
+                    </div>
+                    <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv4</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv4_address or '—' }}</p>
+                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ display_ipv4 or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IPv6</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv6_address or '—' }}</p>
+                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.ipv6_address or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">MAC Address</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.mac_address or '—' }}</p>
+                        <p class="mt-1 font-mono text-sm text-slate-700 dark:text-slate-300">{{ subscription.mac_address or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External Service ID</p>
                         <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.splynx_service_id or '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">RADIUS Profile</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.radius_profile.name if subscription.radius_profile else '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Status Raw</p>
+                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.service_status_raw or '—' }}</p>
                     </div>
                 </div>
                 {% if subscription.service_description %}

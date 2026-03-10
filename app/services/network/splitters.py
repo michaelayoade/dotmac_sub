@@ -1,5 +1,6 @@
 """Splitter-related network services."""
 
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -32,6 +33,8 @@ from app.services.query_builders import (
     apply_optional_equals,
     apply_optional_ilike,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FdhCabinets(CRUDManager[FdhCabinet]):

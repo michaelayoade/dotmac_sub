@@ -203,13 +203,22 @@ class BandwidthSamples(ListResponseMixin):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
-        # Admin can access any subscription
-        if user.get("role") == "admin":
+        roles = {str(role) for role in (user.get("roles") or [])}
+        role_value = user.get("role")
+        if isinstance(role_value, str):
+            roles.add(role_value)
+
+        # Admins and internal system users can access any subscription.
+        if "admin" in roles or user.get("principal_type") == "system_user":
             return subscription
 
-        # Check if user owns the subscription (customer portal)
-        user_account_id = user.get("account_id")
-        if user_account_id and str(subscription.subscriber_id) == str(user_account_id):
+        # Check if subscriber principal owns the subscription (customer portal)
+        owner_subscriber_id = (
+            user.get("account_id")
+            or user.get("subscriber_id")
+            or user.get("principal_id")
+        )
+        if owner_subscriber_id and str(subscription.subscriber_id) == str(owner_subscriber_id):
             return subscription
 
         raise HTTPException(status_code=403, detail="Access denied to this subscription")
@@ -265,6 +274,10 @@ class BandwidthSamples(ListResponseMixin):
             step = interval
 
         if source == "postgres":
+            # Map query step to PostgreSQL bucket size.
+            # For near-real-time windows we still want minute buckets; using "hour"
+            # for a 1s internal step can collapse fresh data to a single invisible point.
+            pg_interval = "hour" if step == "1h" else "minute"
             # Query from PostgreSQL
             rows = BandwidthSamples.series_with_defaults(
                 db,
@@ -273,7 +286,7 @@ class BandwidthSamples(ListResponseMixin):
                 interface_id=None,
                 start_at=start_at,
                 end_at=end_at,
-                interval="minute" if step in ("1m", "auto") else "hour",
+                interval=pg_interval,
                 agg="avg",
             )
             data = [
@@ -284,6 +297,31 @@ class BandwidthSamples(ListResponseMixin):
                 }
                 for row in rows
             ]
+            # If recent raw samples are missing in PostgreSQL, fallback to VictoriaMetrics
+            # so charts still render when live/stats are sourced from metrics storage.
+            if not data:
+                try:
+                    from app.services.metrics_store import get_metrics_store
+
+                    metrics_store = get_metrics_store()
+                    vm_result = await metrics_store.get_subscription_bandwidth(
+                        str(subscription_id), start_at, end_at, step
+                    )
+                    rx_points = {p.timestamp: p.value for p in vm_result.get("rx", [])}
+                    tx_points = {p.timestamp: p.value for p in vm_result.get("tx", [])}
+                    all_timestamps = sorted(set(rx_points.keys()) | set(tx_points.keys()))
+                    data = [
+                        {
+                            "timestamp": ts,
+                            "rx_bps": rx_points.get(ts, 0),
+                            "tx_bps": tx_points.get(ts, 0),
+                        }
+                        for ts in all_timestamps
+                    ]
+                    if data:
+                        source = "victoriametrics"
+                except Exception as e:
+                    logger.error(f"VictoriaMetrics fallback query failed: {e}")
         else:
             # Query from VictoriaMetrics
             try:
@@ -379,18 +417,58 @@ class BandwidthSamples(ListResponseMixin):
                 )
                 .scalar()
             )
+            sample_count_value = int(sample_count or 0)
+
+            current_rx_bps = float(current.get("rx_bps", 0) or 0)
+            current_tx_bps = float(current.get("tx_bps", 0) or 0)
+            peak_rx_bps = float(peak.get("rx_peak_bps", 0) or 0)
+            peak_tx_bps = float(peak.get("tx_peak_bps", 0) or 0)
+
+            # If metrics store returns zeros but PostgreSQL has samples,
+            # fallback to recent PostgreSQL values for current/peak.
+            if (
+                sample_count_value > 0
+                and current_rx_bps <= 0
+                and current_tx_bps <= 0
+                and peak_rx_bps <= 0
+                and peak_tx_bps <= 0
+            ):
+                latest = (
+                    db.query(BandwidthSample)
+                    .filter(BandwidthSample.subscription_id == subscription_id)
+                    .order_by(BandwidthSample.sample_at.desc())
+                    .first()
+                )
+                pg_stats = (
+                    db.query(
+                        func.max(BandwidthSample.rx_bps).label("peak_rx"),
+                        func.max(BandwidthSample.tx_bps).label("peak_tx"),
+                    )
+                    .filter(
+                        BandwidthSample.subscription_id == subscription_id,
+                        BandwidthSample.sample_at >= start,
+                    )
+                    .first()
+                )
+                if latest:
+                    current_rx_bps = float(latest.rx_bps or 0)
+                    current_tx_bps = float(latest.tx_bps or 0)
+                if pg_stats:
+                    peak_rx_bps = float(pg_stats.peak_rx or 0)
+                    peak_tx_bps = float(pg_stats.peak_tx or 0)
 
             return {
-                "current_rx_bps": current["rx_bps"],
-                "current_tx_bps": current["tx_bps"],
-                "peak_rx_bps": peak["rx_peak_bps"],
-                "peak_tx_bps": peak["tx_peak_bps"],
+                "current_rx_bps": current_rx_bps,
+                "current_tx_bps": current_tx_bps,
+                "peak_rx_bps": peak_rx_bps,
+                "peak_tx_bps": peak_tx_bps,
                 "total_rx_bytes": total["rx_bytes"],
                 "total_tx_bytes": total["tx_bytes"],
-                "sample_count": sample_count or 0,
+                "sample_count": sample_count_value,
             }
 
-        except Exception:
+        except Exception as exc:
+            logger.error("Failed to compute bandwidth stats, falling back to PostgreSQL: %s", exc)
             # Fallback to PostgreSQL-only stats
             stats = (
                 db.query(
@@ -487,14 +565,18 @@ class BandwidthSamples(ListResponseMixin):
         Raises:
             HTTPException: If no account or active subscription found
         """
-        account_id = user.get("account_id")
-        if not account_id:
+        subscriber_id = (
+            user.get("account_id")
+            or user.get("subscriber_id")
+            or user.get("principal_id")
+        )
+        if not subscriber_id:
             raise HTTPException(status_code=403, detail="No account associated with user")
 
         subscription = (
             db.query(Subscription)
             .filter(
-                Subscription.subscriber_id == UUID(account_id),
+                Subscription.subscriber_id == UUID(str(subscriber_id)),
                 Subscription.status.in_(["active", "pending"]),
             )
             .first()
@@ -504,6 +586,22 @@ class BandwidthSamples(ListResponseMixin):
             raise HTTPException(status_code=404, detail="No active subscription found")
 
         return subscription
+
+    @staticmethod
+    def get_latest_recent_sample(
+        db: Session,
+        subscription_id: str | UUID,
+        cutoff: datetime,
+    ) -> BandwidthSample | None:
+        return (
+            db.query(BandwidthSample)
+            .filter(
+                BandwidthSample.subscription_id == subscription_id,
+                BandwidthSample.sample_at >= cutoff,
+            )
+            .order_by(BandwidthSample.sample_at.desc())
+            .first()
+        )
 
 
 bandwidth_samples = BandwidthSamples()

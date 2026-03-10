@@ -61,7 +61,7 @@ class RadiusAccountingSessionBase(BaseModel):
 
 
 class RadiusAccountingSessionCreate(RadiusAccountingSessionBase):
-    pass
+    calling_station_id: str | None = Field(default=None, max_length=64)
 
 
 class RadiusAccountingSessionUpdate(BaseModel):
@@ -76,6 +76,7 @@ class RadiusAccountingSessionUpdate(BaseModel):
     input_octets: int | None = None
     output_octets: int | None = None
     terminate_cause: str | None = Field(default=None, max_length=120)
+    calling_station_id: str | None = Field(default=None, max_length=64)
 
 
 class RadiusAccountingSessionRead(RadiusAccountingSessionBase):

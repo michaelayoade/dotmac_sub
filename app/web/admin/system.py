@@ -17,7 +17,12 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -34,6 +39,7 @@ from app.services import branding_storage as branding_storage_service
 from app.services import email as email_service
 from app.services import file_upload as file_upload_service
 from app.services import module_manager as module_manager_service
+from app.services import radius_reject as radius_reject_service
 from app.services import (
     rbac as rbac_service,
 )
@@ -41,6 +47,7 @@ from app.services import (
     scheduler as scheduler_service,
 )
 from app.services import settings_spec
+from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
 from app.services import (
     web_system_api_key_mutations as web_system_api_key_mutations_service,
@@ -49,28 +56,37 @@ from app.services import web_system_api_keys as web_system_api_keys_service
 from app.services import web_system_audit as web_system_audit_service
 from app.services import web_system_billing_forms as web_system_billing_forms_service
 from app.services import web_system_common as web_system_common_service
+from app.services import web_system_company_info as web_system_company_info_service
+from app.services import web_system_config as web_system_config_service
+from app.services import web_system_db_inspector as web_system_db_inspector_service
 from app.services import web_system_export_tool as web_system_export_tool_service
 from app.services import web_system_form_views as web_system_form_views_service
+from app.services import web_system_geocode_tool as web_system_geocode_tool_service
 from app.services import web_system_health as web_system_health_service
 from app.services import web_system_import_wizard as web_system_import_wizard_service
+from app.services import web_system_logs as web_system_logs_service
 from app.services import web_system_overview as web_system_overview_service
 from app.services import (
     web_system_permission_forms as web_system_permission_forms_service,
 )
 from app.services import web_system_profiles as web_system_profiles_service
+from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services import web_system_role_forms as web_system_role_forms_service
 from app.services import web_system_roles as web_system_roles_service
 from app.services import web_system_scheduler as web_system_scheduler_service
 from app.services import web_system_settings_forms as web_system_settings_forms_service
+from app.services import web_system_settings_hub as web_system_settings_hub_service
 from app.services import web_system_settings_views as web_system_settings_views_service
 from app.services import web_system_user_edit as web_system_user_edit_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services import web_system_users as web_system_users_service
 from app.services import web_system_webhook_forms as web_system_webhook_forms_service
 from app.services import web_system_webhooks as web_system_webhooks_service
+from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
-from app.tasks.imports import run_import_job
 from app.tasks.exports import run_export_job
+from app.tasks.gis import run_batch_geocode_job
+from app.tasks.imports import run_import_job
 from app.web.request_parsing import (
     parse_form_data,
     parse_form_data_sync,
@@ -79,6 +95,7 @@ from app.web.request_parsing import (
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/system", tags=["web-admin-system"])
+DB_INSPECTOR_COOKIE = "dbi_confirm"
 
 
 def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
@@ -95,6 +112,16 @@ def _placeholder_context(request: Request, db: Session, title: str, active_page:
         "empty_title": f"No {title.lower()} yet",
         "empty_message": "System configuration will appear once it is enabled.",
     }
+
+
+def _dbi_principal_id(request: Request) -> str:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    principal = str(current_user.get("subscriber_id") or current_user.get("id") or "").strip()
+    if not principal:
+        raise HTTPException(status_code=401, detail="Unable to resolve current user")
+    return principal
 
 
 @router.get("/health", response_class=HTMLResponse)
@@ -512,6 +539,7 @@ def system_export_tool(
 )
 def system_export_download(request: Request, db: Session = Depends(get_db)):
     from fastapi.responses import StreamingResponse
+
     from app.web.admin import get_current_user
 
     form = parse_form_data_sync(request)
@@ -613,6 +641,7 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
 )
 def system_export_job_download(request: Request, job_id: str, db: Session = Depends(get_db)):
     from fastapi.responses import FileResponse
+
     from app.web.admin import get_current_user
 
     job = web_system_export_tool_service.get_export_job(db, job_id)
@@ -2424,3 +2453,800 @@ def settings_bank_account_deactivate(
     return RedirectResponse(
         url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
     )
+
+
+@router.get(
+    "/tools/geocode",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def geocode_tool_page(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = web_system_geocode_tool_service.build_page_state(db)
+    active_job_id = request.query_params.get("job_id")
+    active_job = (
+        web_system_geocode_tool_service.get_job(db, active_job_id)
+        if active_job_id
+        else None
+    )
+    return templates.TemplateResponse(
+        "admin/system/geocode_tool.html",
+        {
+            "request": request,
+            "active_page": "system-geocode-tool",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_job_id": active_job_id,
+            "active_job": active_job,
+            **state,
+        },
+    )
+
+
+@router.post(
+    "/tools/geocode/start",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def geocode_tool_start(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    filters = web_system_geocode_tool_service.parse_filters(form)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = current_user.get("subscriber_id")
+    job = web_system_geocode_tool_service.create_job(
+        db,
+        filters=filters,
+        actor_id=str(actor_id) if actor_id else None,
+    )
+    run_batch_geocode_job.delay(job_id=job["job_id"])
+    return RedirectResponse(
+        url=f"/admin/system/tools/geocode?job_id={job['job_id']}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/tools/geocode/jobs/{job_id}/status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def geocode_tool_job_status(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(
+        "admin/system/_geocode_job_status.html",
+        {
+            "request": request,
+            "job_id": job_id,
+            "job": web_system_geocode_tool_service.get_job(db, job_id),
+        },
+    )
+
+
+@router.get(
+    "/tools/restore",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def restore_tool_page(
+    request: Request,
+    q: str | None = None,
+    selected_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = web_system_restore_tool_service.build_page_state(
+        db,
+        query=q,
+        selected_id=selected_id,
+    )
+    return templates.TemplateResponse(
+        "admin/system/restore_tool.html",
+        {
+            "request": request,
+            "active_page": "system-restore-tool",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            **state,
+        },
+    )
+
+
+@router.post(
+    "/tools/restore/{subscriber_id}",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def restore_tool_restore(
+    request: Request,
+    subscriber_id: UUID,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request) or {}
+    actor_id = str(current_user.get("subscriber_id")) if current_user.get("subscriber_id") else None
+
+    result = web_system_restore_tool_service.restore_subscriber(
+        db,
+        subscriber_id=str(subscriber_id),
+        actor_id=actor_id,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="restore",
+        entity_type="subscriber",
+        entity_id=str(subscriber_id),
+        actor_id=actor_id,
+        metadata={"restored_counts": result.get("touched", {})},
+    )
+    return RedirectResponse(
+        url=f"/admin/system/tools/restore?q={quote_plus(str(subscriber_id))}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/tools/restore/settings",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def restore_tool_settings(
+    request: Request,
+    retention_days: int = Form(90),
+    db: Session = Depends(get_db),
+):
+    value = web_system_restore_tool_service.set_retention_days(
+        db,
+        days=retention_days,
+    )
+    return RedirectResponse(
+        url=f"/admin/system/tools/restore?q={quote_plus(request.query_params.get('q', ''))}&selected_id={quote_plus(request.query_params.get('selected_id', ''))}&retention={value}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/tools/db-inspector",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:db_admin"))],
+)
+def db_inspector_page(
+    request: Request,
+    table: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    principal_id = _dbi_principal_id(request)
+    confirmed = web_system_db_inspector_service.validate_confirmation_token(
+        principal_id=principal_id,
+        token=request.cookies.get(DB_INSPECTOR_COOKIE),
+    )
+    overview = (
+        web_system_db_inspector_service.build_overview(db, selected_table=table)
+        if confirmed
+        else {
+            "dialect": db.bind.dialect.name if db.bind is not None else "unknown",
+            "table_stats": [],
+            "index_usage": [],
+            "slow_queries": [],
+            "slow_query_note": None,
+            "table_schema": [],
+            "selected_table": (table or "").strip(),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/system/db_inspector.html",
+        {
+            "request": request,
+            "active_page": "system-db-inspector",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "confirmed": confirmed,
+            "query_result": None,
+            "query_text": "",
+            "row_limit": web_system_db_inspector_service.DEFAULT_ROWS,
+            "error": request.query_params.get("error"),
+            "notice": request.query_params.get("notice"),
+            **overview,
+        },
+    )
+
+
+@router.post(
+    "/tools/db-inspector/confirm",
+    dependencies=[Depends(require_permission("system:db_admin"))],
+)
+def db_inspector_confirm(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = parse_form_data_sync(request)
+    password = str(form.get("password") or "")
+    table = str(form.get("table") or "").strip()
+    try:
+        token = web_system_db_inspector_service.confirm_access(
+            db,
+            principal_id=_dbi_principal_id(request),
+            password=password,
+        )
+    except HTTPException as exc:
+        return RedirectResponse(
+            url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&error={quote_plus(str(exc.detail))}",
+            status_code=303,
+        )
+
+    response = RedirectResponse(
+        url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&notice={quote_plus('Password confirmed. DB inspector unlocked for 3 minutes.')}",
+        status_code=303,
+    )
+    response.set_cookie(
+        DB_INSPECTOR_COOKIE,
+        token,
+        max_age=web_system_db_inspector_service.CONFIRM_TTL_SECONDS,
+        httponly=True,
+        samesite="strict",
+        secure=True,
+        path="/admin/system/tools/db-inspector",
+    )
+    return response
+
+
+@router.post(
+    "/tools/db-inspector/revoke",
+    dependencies=[Depends(require_permission("system:db_admin"))],
+)
+def db_inspector_revoke():
+    response = RedirectResponse(
+        url="/admin/system/tools/db-inspector?notice=Access%20revoked",
+        status_code=303,
+    )
+    response.delete_cookie(DB_INSPECTOR_COOKIE, path="/admin/system/tools/db-inspector")
+    return response
+
+
+@router.post(
+    "/tools/db-inspector/query",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:db_admin"))],
+)
+def db_inspector_query(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    principal_id = _dbi_principal_id(request)
+    confirmed = web_system_db_inspector_service.validate_confirmation_token(
+        principal_id=principal_id,
+        token=request.cookies.get(DB_INSPECTOR_COOKIE),
+    )
+    if not confirmed:
+        return RedirectResponse(
+            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
+            status_code=303,
+        )
+
+    form = parse_form_data_sync(request)
+    query_text = str(form.get("query_text") or "")
+    table = str(form.get("table") or "").strip()
+    row_limit_raw = str(form.get("row_limit") or "").strip()
+    try:
+        row_limit = int(row_limit_raw) if row_limit_raw else web_system_db_inspector_service.DEFAULT_ROWS
+    except ValueError:
+        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
+
+    query_result = None
+    error = None
+    try:
+        query_result = web_system_db_inspector_service.run_select_query(
+            db,
+            query_text,
+            row_limit=row_limit,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="db_inspector_query",
+            entity_type="db_inspector",
+            entity_id=None,
+            actor_id=principal_id,
+            metadata={
+                "query": query_result["query"],
+                "row_count": query_result["row_count"],
+                "row_limit": query_result["row_limit"],
+            },
+        )
+    except Exception as exc:
+        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+
+    overview = web_system_db_inspector_service.build_overview(db, selected_table=table)
+    return templates.TemplateResponse(
+        "admin/system/db_inspector.html",
+        {
+            "request": request,
+            "active_page": "system-db-inspector",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "confirmed": True,
+            "query_result": query_result,
+            "query_text": query_text,
+            "row_limit": row_limit,
+            "error": error,
+            "notice": None,
+            **overview,
+        },
+    )
+
+
+@router.post(
+    "/tools/db-inspector/export.csv",
+    dependencies=[Depends(require_permission("system:db_admin"))],
+)
+def db_inspector_export_csv(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    principal_id = _dbi_principal_id(request)
+    confirmed = web_system_db_inspector_service.validate_confirmation_token(
+        principal_id=principal_id,
+        token=request.cookies.get(DB_INSPECTOR_COOKIE),
+    )
+    if not confirmed:
+        return RedirectResponse(
+            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
+            status_code=303,
+        )
+
+    form = parse_form_data_sync(request)
+    query_text = str(form.get("query_text") or "")
+    row_limit_raw = str(form.get("row_limit") or "").strip()
+    try:
+        row_limit = int(row_limit_raw) if row_limit_raw else web_system_db_inspector_service.DEFAULT_ROWS
+    except ValueError:
+        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
+    result_payload = web_system_db_inspector_service.run_select_query(
+        db,
+        query_text,
+        row_limit=row_limit,
+    )
+    csv_content = web_system_db_inspector_service.query_result_to_csv(result_payload)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="db_inspector_export_csv",
+        entity_type="db_inspector",
+        entity_id=None,
+        actor_id=principal_id,
+        metadata={
+            "query": result_payload["query"],
+            "row_count": result_payload["row_count"],
+            "row_limit": result_payload["row_limit"],
+        },
+    )
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="db_inspector_query.csv"'},
+    )
+
+
+# ===================================================================
+# Settings Hub, Company Info, About, Logs, and Config Routes
+# (04_administration + 08_config feature implementations)
+# ===================================================================
+
+
+def _config_context(request: Request, db: Session, extra: dict) -> dict:
+    """Build standard context for config pages."""
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return {
+        "request": request,
+        "active_menu": "system",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        **extra,
+    }
+
+
+# --- Settings Hub ---
+@router.get("/settings-hub", response_class=HTMLResponse)
+def settings_hub(request: Request, db: Session = Depends(get_db)):
+    data = web_system_settings_hub_service.build_settings_hub_context(db)
+    return templates.TemplateResponse("admin/system/settings_hub.html", _config_context(request, db, {"active_page": "settings-hub", **data}))
+
+
+# --- Company Info ---
+@router.get("/company-info", response_class=HTMLResponse)
+def company_info_page(request: Request, db: Session = Depends(get_db)):
+    info = web_system_company_info_service.get_company_info(db)
+    return templates.TemplateResponse("admin/system/company_info.html", _config_context(request, db, {"active_page": "company-info", "info": info}))
+
+
+@router.post("/company-info", response_class=HTMLResponse)
+def company_info_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_company_info_service.save_company_info(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/company-info", status_code=303)
+
+
+# --- System About ---
+@router.get("/about", response_class=HTMLResponse)
+def system_about_page(request: Request, db: Session = Depends(get_db)):
+    info = web_system_about_service.get_system_info(db)
+    return templates.TemplateResponse("admin/system/about.html", _config_context(request, db, {"active_page": "system-about", "info": info}))
+
+
+# ===================================================================
+# Log Center Routes
+# ===================================================================
+
+@router.get("/logs", response_class=HTMLResponse)
+def logs_index(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_logs_index_context(db)
+    return templates.TemplateResponse("admin/system/logs/index.html", _config_context(request, db, {"active_page": "logs", **data}))
+
+
+@router.get("/logs/api", response_class=HTMLResponse)
+def logs_api(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_api_logs_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-api", **data}))
+
+
+@router.get("/logs/operations", response_class=HTMLResponse)
+def logs_operations(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_operations_log_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-operations", **data}))
+
+
+@router.get("/logs/internal", response_class=HTMLResponse)
+def logs_internal(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_internal_log_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-internal", **data}))
+
+
+@router.get("/logs/portal", response_class=HTMLResponse)
+def logs_portal(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_portal_activity_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-portal", **data}))
+
+
+@router.get("/logs/email", response_class=HTMLResponse)
+def logs_email(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_email_log_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-email", **data}))
+
+
+@router.get("/logs/sms", response_class=HTMLResponse)
+def logs_sms(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_sms_log_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-sms", **data}))
+
+
+@router.get("/logs/status-changes", response_class=HTMLResponse)
+def logs_status_changes(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_status_changes_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-status-changes", **data}))
+
+
+@router.get("/logs/service-changes", response_class=HTMLResponse)
+def logs_service_changes(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_service_changes_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-service-changes", **data}))
+
+
+@router.get("/logs/accounting", response_class=HTMLResponse)
+def logs_accounting(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_accounting_sync_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-accounting", **data}))
+
+
+@router.get("/logs/payment-gateway", response_class=HTMLResponse)
+def logs_payment_gateway(request: Request, db: Session = Depends(get_db)):
+    data = web_system_logs_service.build_payment_gateway_log_context(request, db)
+    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-payment-gateway", **data}))
+
+
+# ===================================================================
+# Configuration Page Routes (08_config features)
+# ===================================================================
+
+# --- 8.4 Notification Templates ---
+@router.get("/config/templates", response_class=HTMLResponse)
+def config_templates_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_templates_context(db)
+    return templates.TemplateResponse("admin/system/config/templates.html", _config_context(request, db, {"active_page": "config-templates", **data}))
+
+
+# --- 8.5 System Preferences ---
+@router.get("/config/preferences", response_class=HTMLResponse)
+def config_preferences_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_preferences_context(db)
+    return templates.TemplateResponse("admin/system/config/preferences.html", _config_context(request, db, {"active_page": "config-preferences", **data}))
+
+
+@router.post("/config/preferences", response_class=HTMLResponse)
+def config_preferences_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_preferences(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/preferences", status_code=303)
+
+
+# --- 8.9 Email / SMTP ---
+@router.get("/config/email", response_class=HTMLResponse)
+def config_email_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_email_config_context(db)
+    return templates.TemplateResponse("admin/system/config/email.html", _config_context(request, db, {"active_page": "config-email", **data}))
+
+
+@router.post("/config/email", response_class=HTMLResponse)
+def config_email_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_email_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/email", status_code=303)
+
+
+# --- 8.7 Subscriber Settings ---
+@router.get("/config/subscribers", response_class=HTMLResponse)
+def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_subscriber_config_context(db)
+    return templates.TemplateResponse("admin/system/config/subscribers.html", _config_context(request, db, {"active_page": "config-subscribers", **data}))
+
+
+@router.post("/config/subscribers", response_class=HTMLResponse)
+def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_subscriber_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/subscribers", status_code=303)
+
+
+# --- 8.8 Customer Portal ---
+@router.get("/config/portal", response_class=HTMLResponse)
+def config_portal_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_portal_config_context(db)
+    return templates.TemplateResponse("admin/system/config/portal.html", _config_context(request, db, {"active_page": "config-portal", **data}))
+
+
+@router.post("/config/portal", response_class=HTMLResponse)
+def config_portal_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_portal_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/portal", status_code=303)
+
+
+# --- 8.10 Data Retention ---
+@router.get("/config/data-retention", response_class=HTMLResponse)
+def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_retention_context(db)
+    return templates.TemplateResponse("admin/system/config/data_retention.html", _config_context(request, db, {"active_page": "config-data-retention", **data}))
+
+
+@router.post("/config/data-retention", response_class=HTMLResponse)
+def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_retention(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
+
+
+# --- 8.11 Finance Automation ---
+@router.get("/config/finance-automation", response_class=HTMLResponse)
+def config_finance_auto_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_finance_automation_context(db)
+    return templates.TemplateResponse("admin/system/config/finance_automation.html", _config_context(request, db, {"active_page": "config-finance-auto", **data}))
+
+
+@router.post("/config/finance-automation", response_class=HTMLResponse)
+def config_finance_auto_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_finance_automation(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/finance-automation", status_code=303)
+
+
+# --- 8.12 Billing Settings ---
+@router.get("/config/billing", response_class=HTMLResponse)
+def config_billing_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_billing_config_context(db)
+    return templates.TemplateResponse("admin/system/config/billing.html", _config_context(request, db, {"active_page": "config-billing", **data}))
+
+
+@router.post("/config/billing", response_class=HTMLResponse)
+def config_billing_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_billing_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/billing", status_code=303)
+
+
+# --- 8.13 Payment Methods ---
+@router.get("/config/payment-methods", response_class=HTMLResponse)
+def config_payment_methods_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_payment_methods_context(db)
+    return templates.TemplateResponse("admin/system/config/payment_methods.html", _config_context(request, db, {"active_page": "config-payment-methods", **data}))
+
+
+# --- 8.18 Tax Configuration ---
+@router.get("/config/tax", response_class=HTMLResponse)
+def config_tax_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_tax_config_context(db)
+    return templates.TemplateResponse("admin/system/config/tax.html", _config_context(request, db, {"active_page": "config-tax", **data}))
+
+
+# --- 8.16 Billing Reminders ---
+@router.get("/config/reminders", response_class=HTMLResponse)
+def config_reminders_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_reminders_context(db)
+    return templates.TemplateResponse("admin/system/config/reminders.html", _config_context(request, db, {"active_page": "config-reminders", **data}))
+
+
+@router.post("/config/reminders", response_class=HTMLResponse)
+def config_reminders_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_reminders(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/reminders", status_code=303)
+
+
+# --- 8.17 Billing Notifications ---
+@router.get("/config/billing-notifications", response_class=HTMLResponse)
+def config_billing_notif_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_billing_notifications_context(db)
+    return templates.TemplateResponse("admin/system/config/billing_notifications.html", _config_context(request, db, {"active_page": "config-billing-notif", **data}))
+
+
+@router.post("/config/billing-notifications", response_class=HTMLResponse)
+def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_billing_notifications(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/billing-notifications", status_code=303)
+
+
+# --- 8.19 Plan Change ---
+@router.get("/config/plan-change", response_class=HTMLResponse)
+def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_plan_change_context(db)
+    return templates.TemplateResponse("admin/system/config/plan_change.html", _config_context(request, db, {"active_page": "config-plan-change", **data}))
+
+
+@router.post("/config/plan-change", response_class=HTMLResponse)
+def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_plan_change(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/plan-change", status_code=303)
+
+
+# --- 8.20 RADIUS Configuration ---
+@router.get("/config/radius", response_class=HTMLResponse)
+def config_radius_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_radius_config_context(db)
+    push_status = str(request.query_params.get("push_status") or "").strip()
+    push_message = str(request.query_params.get("push_message") or "").strip()
+    return templates.TemplateResponse(
+        "admin/system/config/radius.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-radius",
+                "push_status": push_status,
+                "push_message": push_message,
+                **data,
+            },
+        ),
+    )
+
+
+@router.post("/config/radius", response_class=HTMLResponse)
+def config_radius_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_radius_config(db, form)
+    db.commit()
+    try:
+        radius_reject_service.push_reject_rules_once(db)
+    except Exception:
+        # Do not block settings persistence if router push fails.
+        pass
+    return RedirectResponse(url="/admin/system/config/radius", status_code=303)
+
+
+@router.post("/config/radius/push-reject-rules", response_class=HTMLResponse)
+def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_db)):
+    result = radius_reject_service.push_reject_rules_to_radius_nas(db)
+    status = "success" if result.get("ok") else "error"
+    message = quote_plus(str(result.get("message") or "Reject rule push failed."))
+    return RedirectResponse(
+        url=f"/admin/system/config/radius?push_status={status}&push_message={message}",
+        status_code=303,
+    )
+
+
+# --- 8.22 CPE Configuration ---
+@router.get("/config/cpe", response_class=HTMLResponse)
+def config_cpe_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_cpe_config_context(db)
+    return templates.TemplateResponse("admin/system/config/cpe.html", _config_context(request, db, {"active_page": "config-cpe", **data}))
+
+
+@router.post("/config/cpe", response_class=HTMLResponse)
+def config_cpe_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_cpe_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
+
+
+# --- 8.23 Monitoring ---
+@router.get("/config/monitoring", response_class=HTMLResponse)
+def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_monitoring_config_context(db)
+    return templates.TemplateResponse("admin/system/config/monitoring.html", _config_context(request, db, {"active_page": "config-monitoring", **data}))
+
+
+@router.post("/config/monitoring", response_class=HTMLResponse)
+def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_monitoring_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/monitoring", status_code=303)
+
+
+# --- 8.25 FUP ---
+@router.get("/config/fup", response_class=HTMLResponse)
+def config_fup_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_fup_config_context(db)
+    return templates.TemplateResponse("admin/system/config/fup.html", _config_context(request, db, {"active_page": "config-fup", **data}))
+
+
+@router.post("/config/fup", response_class=HTMLResponse)
+def config_fup_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_fup_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/fup", status_code=303)
+
+
+# --- 8.26 NAS Types ---
+@router.get("/config/nas-types", response_class=HTMLResponse)
+def config_nas_types_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_nas_types_context(db)
+    return templates.TemplateResponse("admin/system/config/nas_types.html", _config_context(request, db, {"active_page": "config-nas-types", **data}))
+
+
+# --- 8.27 IPv6 ---
+@router.get("/config/ipv6", response_class=HTMLResponse)
+def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_config_service.get_ipv6_config_context(db)
+    return templates.TemplateResponse("admin/system/config/ipv6.html", _config_context(request, db, {"active_page": "config-ipv6", **data}))
+
+
+@router.post("/config/ipv6", response_class=HTMLResponse)
+def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    web_system_config_service.save_ipv6_config(db, form)
+    db.commit()
+    return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)

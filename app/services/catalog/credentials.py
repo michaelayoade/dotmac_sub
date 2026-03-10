@@ -16,13 +16,24 @@ logger = logging.getLogger(__name__)
 
 
 def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> None:
-    """Sync credential to RADIUS immediately (non-blocking)."""
+    """Reconcile RADIUS state for any active subscriptions using this credential."""
     try:
-        from app.services.radius import sync_credential_to_radius
-        sync_credential_to_radius(db, credential)
+        from app.models.catalog import Subscription, SubscriptionStatus
+        from app.services.radius import reconcile_subscription_connectivity
+
+        active_subscriptions = (
+            db.query(Subscription)
+            .filter(Subscription.subscriber_id == credential.subscriber_id)
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .all()
+        )
+        for subscription in active_subscriptions:
+            reconcile_subscription_connectivity(db, str(subscription.id))
     except Exception as exc:
         # Don't fail the operation if RADIUS sync fails
-        logger.warning(f"Failed to sync credential {credential.username} to RADIUS: {exc}")
+        logger.warning(
+            f"Failed to sync credential {credential.username} to RADIUS: {exc}"
+        )
 
 
 class AccessCredentials(CRUDManager[AccessCredential]):

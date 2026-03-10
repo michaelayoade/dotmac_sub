@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
@@ -47,6 +48,8 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
 
 
 def _round_percent(value: Decimal) -> Decimal:
@@ -639,6 +642,7 @@ class NetworkDevices(ListResponseMixin):
         *,
         format_duration,
         format_bps,
+        query: str | None = None,
     ) -> dict:
         """Build full monitoring dashboard data.
 
@@ -659,6 +663,7 @@ class NetworkDevices(ListResponseMixin):
             .order_by(NetworkDevice.name)
             .all()
         )
+        filter_value = (query or "").strip()
         online_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
         devices_online = sum(1 for d in devices if d.status in online_statuses)
         devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
@@ -750,13 +755,26 @@ class NetworkDevices(ListResponseMixin):
         # ---- Device health table ----
         device_health = []
         for device in devices:
+            if filter_value:
+                filter_lower = filter_value.lower()
+                if (
+                    filter_lower not in (device.name or "").lower()
+                    and filter_lower not in (device.hostname or "").lower()
+                    and filter_lower not in (device.mgmt_ip or "").lower()
+                    and filter_lower not in (device.vendor or "").lower()
+                    and filter_lower not in (device.model or "").lower()
+                ):
+                    continue
             dm = metrics_by_device.get(str(device.id), {})
             cpu_m = dm.get(MT.cpu)
             mem_m = dm.get(MT.memory)
             uptime_m = dm.get(MT.uptime)
             device_health.append(
                 {
+                    "id": str(device.id),
                     "name": device.name,
+                    "hostname": device.hostname,
+                    "mgmt_ip": device.mgmt_ip,
                     "status": device.status.value if device.status else "unknown",
                     "health_status": device.health_status.value if device.health_status else "unknown",
                     "max_concurrent_subscribers": device.max_concurrent_subscribers,
@@ -784,6 +802,7 @@ class NetworkDevices(ListResponseMixin):
                 "tx_bps": format_bps(tx_total) if tx_total > 0 else "--",
             },
             "device_health": device_health,
+            "device_health_total": len(device_health),
             "device_status_chart": device_status_chart,
         }
 

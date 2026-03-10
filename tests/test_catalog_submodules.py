@@ -1448,6 +1448,25 @@ class TestSubscriptions:
         assert sub.id is not None
         assert sub.status == SubscriptionStatus.pending
 
+    def test_create_subscription_inherits_offer_radius_profile(self, db_session, subscriber):
+        offer = _make_offer(db_session)
+        profile = _make_radius_profile(db_session, download_speed=50000, upload_speed=25000)
+        catalog_service.offer_radius_profiles.create(
+            db_session,
+            OfferRadiusProfileCreate(offer_id=offer.id, profile_id=profile.id),
+        )
+
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=offer.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+
+        assert sub.radius_profile_id == profile.id
+
     def test_create_subscription_active_sets_start_at(
         self, db_session, subscriber, catalog_offer
     ):
@@ -1514,6 +1533,41 @@ class TestSubscriptions:
             SubscriptionUpdate(status=SubscriptionStatus.active),
         )
         assert updated.status == SubscriptionStatus.active
+
+    def test_update_subscription_offer_changes_inherited_radius_profile(
+        self, db_session, subscriber
+    ):
+        first_offer = _make_offer(db_session, name="Plan A")
+        second_offer = _make_offer(db_session, name="Plan B")
+        first_profile = _make_radius_profile(db_session, name="Plan A Profile")
+        second_profile = _make_radius_profile(db_session, name="Plan B Profile")
+        catalog_service.offer_radius_profiles.create(
+            db_session,
+            OfferRadiusProfileCreate(offer_id=first_offer.id, profile_id=first_profile.id),
+        )
+        catalog_service.offer_radius_profiles.create(
+            db_session,
+            OfferRadiusProfileCreate(offer_id=second_offer.id, profile_id=second_profile.id),
+        )
+
+        sub = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=first_offer.id,
+                status=SubscriptionStatus.pending,
+            ),
+        )
+        assert sub.radius_profile_id == first_profile.id
+
+        updated = catalog_service.subscriptions.update(
+            db_session,
+            str(sub.id),
+            SubscriptionUpdate(offer_id=second_offer.id),
+        )
+
+        assert updated.offer_id == second_offer.id
+        assert updated.radius_profile_id == second_profile.id
         assert updated.start_at is not None
 
     def test_update_subscription_not_found(self, db_session):

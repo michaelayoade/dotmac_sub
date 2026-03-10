@@ -98,6 +98,19 @@ def operations_service_orders_new_legacy(subscriber: str | None = None):
         url = f"{url}?subscriber={subscriber}"
     return RedirectResponse(url=url, status_code=307)
 
+
+@router.get("/settings")
+def admin_settings_hub():
+    """Canonical settings entry point."""
+    return RedirectResponse(url="/admin/system/settings-hub", status_code=307)
+
+
+@router.get("/reports")
+def admin_reports_hub():
+    """Canonical reports entry point."""
+    return RedirectResponse(url="/admin/reports/hub", status_code=307)
+
+
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(

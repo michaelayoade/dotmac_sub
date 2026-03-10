@@ -445,6 +445,7 @@ class SpeedTestResult(Base):
     provider: Mapped[str | None] = mapped_column(String(120))
     server_name: Mapped[str | None] = mapped_column(String(160))
     external_ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
     download_mbps: Mapped[float] = mapped_column(Float, default=0)
     upload_mbps: Mapped[float] = mapped_column(Float, default=0)
     latency_ms: Mapped[float | None] = mapped_column(Float)

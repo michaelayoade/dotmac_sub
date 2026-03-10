@@ -211,6 +211,12 @@
                 <a href="/admin/billing/invoices/{{ invoice.id }}/pdf/download" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
                     Download PDF
                 </a>
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/pdf/regenerate" class="mt-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        Regenerate PDF
+                    </button>
+                </form>
                 {% elif pdf_status in ['queued', 'processing'] %}
                 <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
                     Refresh PDF Status

@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
-import re
-import subprocess
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.db import SessionLocal
 from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
     DeviceStatus,
     MetricType,
-    NetworkDeviceSnmpOid,
     NetworkDevice,
+    NetworkDeviceSnmpOid,
 )
+from app.services import ping as ping_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +33,128 @@ class PingResult:
     device: NetworkDevice
 
 
-def _is_ipv6_host(host: str) -> bool:
-    """Check if host is an IPv6 address."""
+def refresh_devices_health(
+    db: Session,
+    devices: list[NetworkDevice],
+    *,
+    include_snmp: bool = False,
+    max_workers: int = 12,
+) -> dict[str, int]:
+    """Refresh ping/SNMP health for a list of devices.
+
+    Runs lightweight reachability checks for the provided devices and returns
+    summary counters.
+    """
+    _ = db  # Explicitly unused: each worker uses an isolated DB session.
+    totals = {"checked": 0, "ping": 0, "snmp": 0}
+    targets: list[tuple[str, bool, bool]] = []
+    for device in devices:
+        if not device.id:
+            continue
+        do_ping = bool(device.ping_enabled)
+        do_snmp = bool(device.snmp_enabled) and include_snmp
+        targets.append((str(device.id), do_ping, do_snmp))
+        totals["checked"] += 1
+        if do_ping:
+            totals["ping"] += 1
+        if do_snmp:
+            totals["snmp"] += 1
+
+    if not targets:
+        return totals
+
+    workers = max(1, min(max_workers, len(targets)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(_refresh_device_health_worker, device_id, do_ping, do_snmp)
+            for device_id, do_ping, do_snmp in targets
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                logger.exception("Core-device refresh worker crashed unexpectedly.")
+    return totals
+
+
+def refresh_stale_devices_health(
+    db: Session,
+    devices: list[NetworkDevice],
+    *,
+    ping_interval_seconds: int,
+    snmp_interval_seconds: int,
+    include_snmp: bool = True,
+    force: bool = False,
+    max_workers: int = 12,
+) -> dict[str, int]:
+    """Refresh only devices whose ping/SNMP checks are stale.
+
+    `force=True` refreshes all eligible devices regardless of recency.
+    """
+    now = datetime.now(UTC)
+    ping_interval_seconds = max(10, int(ping_interval_seconds or 0))
+    snmp_interval_seconds = max(30, int(snmp_interval_seconds or 0))
+
+    stale_targets: list[NetworkDevice] = []
+    for device in devices:
+        if not device.id:
+            continue
+
+        ping_stale = False
+        snmp_stale = False
+
+        if device.ping_enabled:
+            if force or device.last_ping_at is None:
+                ping_stale = True
+            else:
+                last_ping_at = device.last_ping_at
+                if last_ping_at.tzinfo is None:
+                    last_ping_at = last_ping_at.replace(tzinfo=UTC)
+                ping_stale = (now - last_ping_at).total_seconds() >= ping_interval_seconds
+
+        if include_snmp and device.snmp_enabled:
+            if force or device.last_snmp_at is None:
+                snmp_stale = True
+            else:
+                last_snmp_at = device.last_snmp_at
+                if last_snmp_at.tzinfo is None:
+                    last_snmp_at = last_snmp_at.replace(tzinfo=UTC)
+                snmp_stale = (now - last_snmp_at).total_seconds() >= snmp_interval_seconds
+
+        if ping_stale or snmp_stale:
+            stale_targets.append(device)
+
+    if not stale_targets:
+        return {"checked": 0, "ping": 0, "snmp": 0}
+    return refresh_devices_health(
+        db,
+        stale_targets,
+        include_snmp=include_snmp,
+        max_workers=max_workers,
+    )
+
+
+def _refresh_device_health_worker(device_id: str, do_ping: bool, do_snmp: bool) -> None:
+    """Refresh health for a single device in an isolated DB session."""
+    db = SessionLocal()
     try:
-        return ipaddress.ip_address(host).version == 6
-    except ValueError:
-        return False
+        device = get_device(db, device_id)
+        if not device:
+            return
+        if do_ping:
+            ping_device(db, device_id)
+        if do_snmp:
+            from app.services.network_vendor_polling import refresh_device_from_vendor_api
 
-
-def _build_ping_command(host: str) -> list[str]:
-    """Build a ping command for the given host."""
-    command = ["ping", "-c", "1", "-W", "2", host]
-    if _is_ipv6_host(host):
-        command.insert(1, "-6")
-    return command
+            handled, success = refresh_device_from_vendor_api(db, device)
+            if not handled or not success:
+                snmp_check_device(db, device_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Health refresh failed for core device %s", device_id)
+    finally:
+        db.close()
 
 
 def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str | None, bool]:
@@ -64,19 +172,7 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
     ping_success = False
     latency_ms: float | None = None
     now = datetime.now(UTC)
-    try:
-        result = subprocess.run(
-            _build_ping_command(device.mgmt_ip),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=4,
-        )
-        ping_success = result.returncode == 0
-        if ping_success:
-            latency_ms = _extract_latency_ms(result.stdout)
-    except Exception:
-        ping_success = False
+    ping_success, latency_ms = ping_service.run_ping(device.mgmt_ip, timeout_seconds=4)
 
     device.last_ping_at = now
     device.last_ping_ok = ping_success
@@ -98,17 +194,6 @@ def ping_device(db: Session, device_id: str) -> tuple[NetworkDevice | None, str 
     _recompute_parent_rollup(db, device)
     db.flush()
     return device, None, ping_success
-
-
-def _extract_latency_ms(output: str) -> float | None:
-    """Extract ping latency in milliseconds from ping output."""
-    match = re.search(r"time[=<]\s*([0-9.]+)\s*ms", output or "")
-    if not match:
-        return None
-    try:
-        return float(match.group(1))
-    except ValueError:
-        return None
 
 
 def _record_ping_metric(

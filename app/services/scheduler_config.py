@@ -243,6 +243,30 @@ def build_beat_schedule() -> dict:
             enabled=usage_enabled,
             interval_seconds=usage_interval_seconds,
         )
+        radius_accounting_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "radius_accounting_import_enabled",
+            "RADIUS_ACCOUNTING_IMPORT_ENABLED",
+            True,
+        )
+        radius_accounting_interval_seconds = _effective_int(
+            session,
+            SettingDomain.usage,
+            "radius_accounting_import_interval_seconds",
+            "RADIUS_ACCOUNTING_IMPORT_INTERVAL_SECONDS",
+            60,
+        )
+        radius_accounting_interval_seconds = max(
+            radius_accounting_interval_seconds, 10
+        )
+        _sync_scheduled_task(
+            session,
+            name="radius_accounting_importer",
+            task_name="app.tasks.usage.import_radius_accounting",
+            enabled=radius_accounting_enabled,
+            interval_seconds=radius_accounting_interval_seconds,
+        )
         billing_enabled = _effective_bool(
             session,
             SettingDomain.billing,
@@ -512,6 +536,43 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.snmp.discover_interfaces",
             enabled=True,
             interval_seconds=max(snmp_discovery_interval, 60),
+        )
+
+        # Core-device health refresh (ping + SNMP) for near-real-time status.
+        core_ping_interval = _resolve_int(
+            session, SettingDomain.network_monitoring, "core_device_ping_interval_seconds", 120
+        )
+        core_snmp_interval = _resolve_int(
+            session, SettingDomain.network_monitoring, "core_device_snmp_walk_interval_seconds", 300
+        )
+        _sync_scheduled_task(
+            session,
+            name="core_device_ping_refresh",
+            task_name="app.tasks.network_monitoring.refresh_core_device_ping",
+            enabled=True,
+            interval_seconds=max(core_ping_interval, 10),
+        )
+        _sync_scheduled_task(
+            session,
+            name="core_device_snmp_refresh",
+            task_name="app.tasks.network_monitoring.refresh_core_device_snmp",
+            enabled=True,
+            interval_seconds=max(core_snmp_interval, 30),
+        )
+
+        # OLT polling (RX/TX levels + ONU online status)
+        olt_poll_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "olt_polling_interval_minutes",
+            5,
+        )
+        _sync_scheduled_task(
+            session,
+            name="olt_signal_polling",
+            task_name="app.tasks.olt_polling.poll_all_olt_signals",
+            enabled=True,
+            interval_seconds=max(olt_poll_minutes * 60, 60),
         )
 
         # SLA breach detection - runs every 30 minutes

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,12 +15,34 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice
-from app.models.network_monitoring import NetworkDevice
+from app.models.network_monitoring import (
+    DeviceInterface,
+    NetworkDevice,
+)
 from app.services import network as network_service
 
 logger = logging.getLogger(__name__)
 
 _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+
+
+def _normalize_port_name(value: str | None) -> str:
+    """Normalize interface/port names for loose matching."""
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _extract_range_display(*values: object) -> str | None:
+    """Best-effort parser for optical range text like '20km' from free text."""
+    for value in values:
+        if not value:
+            continue
+        text = str(value)
+        match = re.search(r"(\d+(?:\.\d+)?)\s*km\b", text, flags=re.IGNORECASE)
+        if match:
+            return f"{match.group(1)} km"
+    return None
 
 
 def _get_olt_health(olt_name: str) -> dict[str, Any]:
@@ -140,6 +163,8 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         p_online = 0
         p_offline = 0
         p_low_signal = 0
+        p_signal_total = 0.0
+        p_signal_count = 0
         for a in active_assignments:
             ont = a.ont_unit
             if not ont:
@@ -155,13 +180,24 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                 warn_threshold=warn,
                 crit_threshold=crit,
             )
+            olt_rx_val = getattr(ont, "olt_rx_signal_dbm", None)
+            if olt_rx_val is not None:
+                try:
+                    p_signal_total += float(olt_rx_val)
+                    p_signal_count += 1
+                except Exception:
+                    pass
             if quality in ("warning", "critical"):
                 p_low_signal += 1
+        avg_signal = (p_signal_total / p_signal_count) if p_signal_count > 0 else None
+        online_pct = int(round((p_online / len(active_assignments)) * 100)) if active_assignments else 0
         port_stats[str(port.id)] = {
             "total": len(active_assignments),
             "online": p_online,
             "offline": p_offline,
             "low_signal": p_low_signal,
+            "avg_olt_rx_dbm": avg_signal,
+            "online_pct": online_pct,
         }
 
     # Build signal data for each ONT assignment
@@ -228,6 +264,290 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     # Fetch recent config backups
     from app.models.network import OltConfigBackup
 
+    # SNMP settings are stored on the linked core monitoring device record.
+    monitoring_device = None
+    if olt.mgmt_ip:
+        monitoring_device = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
+        ).first()
+    if monitoring_device is None and olt.hostname:
+        monitoring_device = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
+        ).first()
+    if monitoring_device is None and olt.name:
+        monitoring_device = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.name == olt.name).limit(1)
+        ).first()
+
+    monitoring_data: dict[str, object] | None = None
+    live_board_inventory: list[dict[str, object]] = []
+    resolved_device_info = {
+        "hostname": monitoring_device.hostname if monitoring_device and monitoring_device.hostname else olt.hostname,
+        "mgmt_ip": monitoring_device.mgmt_ip if monitoring_device and monitoring_device.mgmt_ip else olt.mgmt_ip,
+        "vendor": monitoring_device.vendor if monitoring_device and monitoring_device.vendor else olt.vendor,
+        "model": monitoring_device.model if monitoring_device and monitoring_device.model else olt.model,
+        "serial_number": monitoring_device.serial_number
+        if monitoring_device and monitoring_device.serial_number
+        else olt.serial_number,
+        "status": monitoring_device.status.value if monitoring_device and monitoring_device.status else ("active" if olt.is_active else "inactive"),
+        "last_ping_at": monitoring_device.last_ping_at if monitoring_device else None,
+        "last_snmp_at": monitoring_device.last_snmp_at if monitoring_device else None,
+        "last_ping_ok": monitoring_device.last_ping_ok if monitoring_device else None,
+        "last_snmp_ok": monitoring_device.last_snmp_ok if monitoring_device else None,
+    }
+
+    if monitoring_device is not None:
+        interfaces = list(
+            db.scalars(
+                select(DeviceInterface)
+                .where(DeviceInterface.device_id == monitoring_device.id)
+                .order_by(DeviceInterface.name.asc())
+            ).all()
+        )
+
+        pon_interfaces: list[dict[str, object]] = []
+        monitoring_interfaces: list[dict[str, object]] = []
+        for iface in interfaces:
+            item = {
+                "id": str(iface.id),
+                "name": iface.name,
+                "description": iface.description,
+                "status": iface.status.value if iface.status else "unknown",
+                "speed_mbps": iface.speed_mbps,
+                "mac_address": iface.mac_address,
+                "updated_at": iface.updated_at,
+            }
+            monitoring_interfaces.append(item)
+            text = f"{iface.name or ''} {iface.description or ''}".lower()
+            if any(token in text for token in ("pon", "gpon", "epon", "xgpon", "xgs")):
+                pon_interfaces.append(item)
+
+        snmp_system: dict[str, object] | None = None
+        if monitoring_device.snmp_enabled:
+            try:
+                from app.services.snmp_discovery import (
+                    _parse_scalar,
+                    _parse_walk,
+                    _run_snmpbulkwalk,
+                    _run_snmpwalk,
+                )
+
+                sys_name = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.5.0"))
+                sys_descr = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.1.0"))
+                sys_object_id = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.2.0"))
+                sys_uptime = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.3.0"))
+                sys_contact = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.4.0"))
+                sys_location = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.6.0"))
+                if_number = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.2.1.0"))
+
+                snmp_system = {
+                    "sys_name": sys_name,
+                    "sys_descr": sys_descr,
+                    "sys_object_id": sys_object_id,
+                    "sys_uptime": sys_uptime,
+                    "sys_contact": sys_contact,
+                    "sys_location": sys_location,
+                    "if_number": if_number,
+                }
+
+                ent_class = _parse_walk(
+                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.5")
+                )
+                ent_name = _parse_walk(
+                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.7")
+                )
+                ent_descr = _parse_walk(
+                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.2")
+                )
+                ent_model = _parse_walk(
+                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.13")
+                )
+
+                for idx, cls_raw in ent_class.items():
+                    cls = re.search(r"(\d+)", cls_raw or "")
+                    cls_code = int(cls.group(1)) if cls else None
+                    name = (ent_name.get(idx) or "").strip()
+                    descr = (ent_descr.get(idx) or "").strip()
+                    model = (ent_model.get(idx) or "").strip()
+                    merged = f"{name} {descr} {model}".strip()
+                    if not merged:
+                        continue
+                    lowered = merged.lower()
+                    looks_optics_like = any(
+                        t in lowered
+                        for t in (
+                            "optic",
+                            "sfp",
+                            "qsfp",
+                            "xfp",
+                            "gpon_uni",
+                            " epon_uni",
+                            " tx ",
+                            " rx ",
+                            "nm",
+                            "km",
+                            " sc",
+                            " lc",
+                            "connector",
+                        )
+                    )
+                    looks_chassis_like = any(
+                        t in lowered
+                        for t in (
+                            "rack",
+                            "subrack",
+                            "chassis",
+                            "frame",
+                            "cabinet",
+                            "shelf",
+                            "enclosure",
+                            "backplane",
+                        )
+                    )
+                    slot_match = re.search(r"slot\s*([0-9]+)", lowered)
+                    looks_like_card = any(
+                        t in lowered
+                        for t in (
+                            "board",
+                            " card",
+                            "slot",
+                            "service board",
+                            "control board",
+                            "main board",
+                            "mpu",
+                            "subrack",
+                            "rack",
+                        )
+                    ) or (cls_code in {9} and not looks_optics_like and not looks_chassis_like)
+                    if looks_chassis_like and not slot_match:
+                        looks_like_card = False
+                    if not looks_like_card:
+                        continue
+                    live_board_inventory.append(
+                        {
+                            "index": idx,
+                            "slot_number": int(slot_match.group(1)) if slot_match else None,
+                            "card_type": merged[:120],
+                            "category": "card",
+                        }
+                    )
+            except Exception:
+                snmp_system = None
+
+        monitoring_data = {
+            "interfaces": monitoring_interfaces,
+            "pon_interfaces": pon_interfaces,
+            "snmp_system": snmp_system,
+        }
+
+    live_board_inventory.sort(
+        key=lambda item: (
+            0 if item.get("category") == "card" else 1,
+            item.get("slot_number") is None,
+            item.get("slot_number") if item.get("slot_number") is not None else 10**9,
+            str(item.get("card_type") or "").lower(),
+        )
+    )
+    live_board_cards = [item for item in live_board_inventory if item.get("category") == "card"]
+    live_board_others: list[dict[str, object]] = []
+
+    db_pon_count = len(pon_ports)
+    snmp_pon_count = (
+        len(monitoring_data.get("pon_interfaces", []))
+        if isinstance(monitoring_data, dict)
+        else 0
+    )
+    resolved_pon_ports_count = db_pon_count if db_pon_count > 0 else snmp_pon_count
+
+    pon_port_table_rows: list[dict[str, object]] = []
+    pon_snmp_by_norm_name: dict[str, dict[str, object]] = {}
+    for iface in (monitoring_data.get("pon_interfaces", []) if isinstance(monitoring_data, dict) else []):
+        norm = _normalize_port_name(str(iface.get("name") or ""))
+        if norm and norm not in pon_snmp_by_norm_name:
+            pon_snmp_by_norm_name[norm] = iface
+
+    for port in pon_ports:
+        ps = port_stats.get(str(port.id), {})
+        iface = pon_snmp_by_norm_name.get(_normalize_port_name(getattr(port, "name", None)))
+        card_port = getattr(port, "olt_card_port", None)
+        sfp_modules = list(getattr(card_port, "sfp_modules", []) or []) if card_port else []
+        active_sfps = [m for m in sfp_modules if getattr(m, "is_active", True)]
+        tx_power_dbm = None
+        for sfp in active_sfps:
+            if getattr(sfp, "tx_power_dbm", None) is not None:
+                tx_power_dbm = sfp.tx_power_dbm
+                break
+        if tx_power_dbm is None:
+            for sfp in sfp_modules:
+                if getattr(sfp, "tx_power_dbm", None) is not None:
+                    tx_power_dbm = sfp.tx_power_dbm
+                    break
+
+        range_display = _extract_range_display(
+            getattr(port, "notes", None),
+            iface.get("description") if isinstance(iface, dict) else None,
+            getattr(card_port, "name", None),
+        )
+        description = getattr(port, "notes", None) or (
+            str(iface.get("description") or "").strip() if isinstance(iface, dict) else None
+        )
+
+        status_val = str((iface or {}).get("status") or "").lower() if isinstance(iface, dict) else ""
+        if status_val not in {"up", "down"}:
+            if int(ps.get("online", 0) or 0) > 0:
+                status_val = "up"
+            elif int(ps.get("total", 0) or 0) > 0:
+                status_val = "down"
+            else:
+                status_val = "unknown"
+
+        port_type = "PON"
+        if card_port and getattr(card_port, "port_type", None):
+            raw_type = getattr(card_port.port_type, "value", card_port.port_type)
+            port_type = str(raw_type or "pon").replace("_", "-").upper()
+
+        pon_port_table_rows.append(
+            {
+                "name": port.name,
+                "type": port_type,
+                "admin_state": "Enabled" if port.is_active else "Disabled",
+                "status": status_val,
+                "onus": int(ps.get("total", 0) or 0),
+                "avg_signal_dbm": ps.get("avg_olt_rx_dbm"),
+                "description": description,
+                "range_display": range_display,
+                "tx_power_dbm": tx_power_dbm,
+                "action_url": f"/admin/network/onts?olt_id={olt.id}",
+            }
+        )
+
+    if not pon_port_table_rows and isinstance(monitoring_data, dict):
+        for iface in monitoring_data.get("pon_interfaces", []):
+            description = str(iface.get("description") or "").strip() or None
+            name_text = f"{iface.get('name') or ''} {description or ''}".lower()
+            if "xgs" in name_text:
+                port_type = "XGS-PON"
+            elif "xgpon" in name_text or "xg-pon" in name_text:
+                port_type = "XG-PON"
+            elif "epon" in name_text:
+                port_type = "EPON"
+            else:
+                port_type = "GPON/PON"
+            pon_port_table_rows.append(
+                {
+                    "name": iface.get("name") or "N/A",
+                    "type": port_type,
+                    "admin_state": "N/A",
+                    "status": str(iface.get("status") or "unknown").lower(),
+                    "onus": 0,
+                    "avg_signal_dbm": None,
+                    "description": description,
+                    "range_display": _extract_range_display(description),
+                    "tx_power_dbm": None,
+                    "action_url": f"/admin/network/onts?olt_id={olt.id}",
+                }
+            )
+
     config_backups = (
         db.query(OltConfigBackup)
         .filter(OltConfigBackup.olt_device_id == olt.id)
@@ -247,6 +567,14 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "warn_threshold": warn,
         "crit_threshold": crit,
         "olt_health": olt_health,
+        "monitoring_device": monitoring_device,
+        "monitoring_data": monitoring_data,
+        "resolved_device_info": resolved_device_info,
+        "resolved_pon_ports_count": resolved_pon_ports_count,
+        "live_board_inventory": live_board_inventory,
+        "live_board_cards": live_board_cards,
+        "live_board_others": live_board_others,
+        "pon_port_table_rows": pon_port_table_rows,
         "config_backups": config_backups,
     }
 

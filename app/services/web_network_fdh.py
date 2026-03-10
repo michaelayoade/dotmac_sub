@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.network import FdhCabinet, Splitter
-from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services import catalog as catalog_service
+from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)

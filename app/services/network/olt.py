@@ -299,8 +299,8 @@ class OntUnits(CRUDManager[OntUnit]):
             elif signal_quality == "good":
                 stmt = stmt.where(OntUnit.olt_rx_signal_dbm >= warn)
 
-        # Count before pagination
-        count_stmt = stmt.with_only_columns(func.count()).order_by(None)
+        # Count before pagination (use subquery to handle JOINs correctly)
+        count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = db.scalar(count_stmt) or 0
 
         # Ordering — include signal-based sorting

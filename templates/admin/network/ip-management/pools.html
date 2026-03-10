@@ -123,7 +123,7 @@
                             <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <a href="/admin/network/ip-management/pools/{{ pool.id }}" class="font-medium text-slate-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
+                            <a href="{{ '/admin/network/ip-management/ipv4-networks/' ~ pool.id if pool.ip_version.value == 'ipv4' else '/admin/network/ip-management/pools/' ~ pool.id }}" class="font-medium text-slate-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
                                 {{ pool.name }}
                             </a>
                             {% if fallback_pool_ids and pool.id|string in fallback_pool_ids %}
@@ -156,6 +156,9 @@
                                 </div>
                                 <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
                                     <div class="h-2 rounded-full bg-blue-500" style="width: {{ util.percent }}%"></div>
+                                </div>
+                                <div class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                    {{ util.available }} available{% if util.reserved %}, {{ util.reserved }} reserved{% endif %}
                                 </div>
                             </div>
                             {% else %}
@@ -239,7 +242,11 @@
                             <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 font-mono text-sm font-medium text-slate-900 dark:text-white">
+                            {% if block.pool and block.pool.ip_version.value == 'ipv4' %}
+                            <a href="/admin/network/ip-management/ipv4-blocks/{{ block.id }}" class="hover:text-cyan-600 dark:hover:text-cyan-400">{{ block.cidr }}</a>
+                            {% else %}
                             {{ block.cidr }}
+                            {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {% if block.pool %}
@@ -260,6 +267,9 @@
                                 </div>
                                 <div class="h-2 rounded-full bg-slate-200 dark:bg-slate-700">
                                     <div class="h-2 rounded-full bg-blue-500" style="width: {{ util.percent }}%"></div>
+                                </div>
+                                <div class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                                    {{ util.available }} available{% if util.reserved %}, {{ util.reserved }} reserved{% endif %}
                                 </div>
                             </div>
                             {% else %}

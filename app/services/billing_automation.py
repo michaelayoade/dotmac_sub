@@ -138,7 +138,7 @@ def _prorated_amount(
     usage_seconds = (usage_end - usage_start).total_seconds()
     if period_seconds <= 0 or usage_seconds <= 0:
         return Decimal("0.00")
-    ratio = min(Decimal(usage_seconds / period_seconds), Decimal("1.00"))
+    ratio = min(Decimal(str(usage_seconds)) / Decimal(str(period_seconds)), Decimal("1.00"))
     return round_money(full_amount * ratio)
 
 
@@ -159,7 +159,7 @@ def _activate_pending_subscription(
         subscription.start_at = run_at
 
     logger.info(
-        f"Auto-activated subscription {subscription.id} (pending → active)"
+        "Auto-activated subscription %s (pending → active)", subscription.id
     )
 
     # Emit activation event with auto_activated flag
@@ -380,8 +380,10 @@ def run_invoice_cycle(
             if subscription.next_billing_at is None or subscription.next_billing_at < period_end:
                 subscription.next_billing_at = period_end
             logger.debug(
-                f"Skipping subscription {subscription.id}: already billed for period "
-                f"{period_start.date()} - {period_end.date()}"
+                "Skipping subscription %s: already billed for period %s - %s",
+                subscription.id,
+                period_start.date(),
+                period_end.date(),
             )
             summary["skipped"] += 1
             continue
@@ -475,7 +477,9 @@ def run_invoice_cycle(
                 _emit_invoice_created_event(db, invoice, run_id_str)
             except Exception as event_exc:
                 logger.warning(
-                    f"Failed to emit invoice.created event for {invoice.id}: {event_exc}"
+                    "Failed to emit invoice.created event for %s: %s",
+                    invoice.id,
+                    event_exc,
                 )
 
         summary["run_id"] = run_id_str
@@ -494,15 +498,17 @@ def run_invoice_cycle(
         db.commit()
 
         logger.info(
-            f"Billing run completed: {summary['invoices_created']} invoices, "
-            f"{summary['lines_created']} lines, {summary['pending_activated']} activated"
+            "Billing run completed: %d invoices, %d lines, %d activated",
+            summary["invoices_created"],
+            summary["lines_created"],
+            summary["pending_activated"],
         )
         return summary
 
     except Exception as exc:
         db.rollback()
         error_msg = str(exc)
-        logger.error(f"Billing run failed: {error_msg}")
+        logger.error("Billing run failed: %s", error_msg)
 
         run_db = db.get(BillingRun, run_uuid) if run_uuid else None
         if run_db:
@@ -515,8 +521,8 @@ def run_invoice_cycle(
         try:
             _log_billing_run_audit(db, run_db, summary, "failed", error_msg)
             db.commit()
-        except Exception:
-            pass  # Don't fail if audit logging fails
+        except Exception as audit_exc:
+            logger.warning("Failed to log billing run audit: %s", audit_exc)
 
         raise
 
@@ -544,7 +550,7 @@ def generate_prorated_invoice(
     # Get price info
     amount, currency, cycle = _resolve_price(db, subscription)
     if amount is None:
-        logger.warning(f"No price found for subscription {subscription.id}, skipping proration")
+        logger.warning("No price found for subscription %s, skipping proration", subscription.id)
         return None
 
     effective_cycle = cycle or BillingCycle.monthly
@@ -585,7 +591,7 @@ def generate_prorated_invoice(
     )
     if existing:
         logger.debug(
-            f"Prorated invoice already exists for subscription {subscription.id}"
+            "Prorated invoice already exists for subscription %s", subscription.id
         )
         return None
 
@@ -636,8 +642,11 @@ def generate_prorated_invoice(
     _emit_invoice_created_event(db, invoice, None)
 
     logger.info(
-        f"Generated prorated invoice {invoice.id} for subscription {subscription.id}: "
-        f"{line_amount} {currency}"
+        "Generated prorated invoice %s for subscription %s: %s %s",
+        invoice.id,
+        subscription.id,
+        line_amount,
+        currency,
     )
 
     return invoice
@@ -686,7 +695,10 @@ def run_invoice_cycle_with_retry(
         except (OperationalError, IntegrityError) as exc:
             last_error = exc
             logger.warning(
-                f"Billing run attempt {attempt + 1}/{max_retries} failed: {exc}"
+                "Billing run attempt %d/%d failed: %s",
+                attempt + 1,
+                max_retries,
+                exc,
             )
             if attempt < max_retries - 1:
                 db.rollback()

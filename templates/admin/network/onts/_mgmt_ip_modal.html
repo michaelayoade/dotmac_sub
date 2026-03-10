@@ -16,18 +16,8 @@
             {% include "components/forms/csrf_input.html" %}
 
             <div class="space-y-5">
-                {# TR069 Profile #}
-                <div>
-                    <label for="tr069_acs_server_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">TR069 Profile</label>
-                    <select name="tr069_acs_server_id" id="tr069_acs_server_id"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">-- None --</option>
-                        {% for server in tr069_servers %}
-                        <option value="{{ server.id }}" {% if ont.tr069_acs_server_id and (ont.tr069_acs_server_id | string) == (server.id | string) %}selected{% endif %}>
-                            {{ server.name }}
-                        </option>
-                        {% endfor %}
-                    </select>
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                    TR-069 profile is inherited from the assigned OLT. Configure ACS on the OLT profile.
                 </div>
 
                 {# Mgmt IP Mode #}

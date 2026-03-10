@@ -3,6 +3,7 @@
 import json
 import logging
 import uuid
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -261,7 +262,8 @@ def customer_wizard_create(
         db.rollback()
         return {"success": False, "message": "A customer with this information already exists."}
     except Exception as exc:
-        return {"success": False, "message": f"An error occurred: {str(exc)}"}
+        logger.error("Customer wizard error: %s", exc)
+        return {"success": False, "message": "An unexpected error occurred. Please try again."}
 
 
 @router.get("/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
@@ -445,12 +447,15 @@ def person_detail(
             db=db,
             customer_id=customer_id,
         )
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Customer not found"},
             status_code=404,
         )
+    except Exception:
+        logger.exception("Error loading person detail for %s", customer_id)
+        raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
@@ -479,12 +484,15 @@ def organization_detail(
             db=db,
             customer_id=customer_id,
         )
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Organization not found"},
             status_code=404,
         )
+    except Exception:
+        logger.exception("Error loading organization detail for %s", customer_id)
+        raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
@@ -504,11 +512,11 @@ def organization_detail(
 @router.post(
     "/{customer_type}/{customer_id}/user/invite",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("customer:write"))],
 )
 def customer_user_send_invite(
     request: Request,
-    customer_type: str,
+    customer_type: Literal["person", "organization"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -596,11 +604,11 @@ def customer_user_send_invite(
 @router.post(
     "/{customer_type}/{customer_id}/user/reset-link",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("customer:write"))],
 )
 def customer_user_send_reset_link(
     request: Request,
-    customer_type: str,
+    customer_type: Literal["person", "organization"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -686,11 +694,11 @@ def customer_user_send_reset_link(
 @router.post(
     "/{customer_type}/{customer_id}/user/activate-login",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("customer:write"))],
 )
 def customer_user_activate_login(
     request: Request,
-    customer_type: str,
+    customer_type: Literal["person", "organization"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -745,11 +753,11 @@ def customer_user_activate_login(
 @router.post(
     "/{customer_type}/{customer_id}/user/deactivate-login",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("customer:write"))],
 )
 def customer_user_deactivate_login(
     request: Request,
-    customer_type: str,
+    customer_type: Literal["person", "organization"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -886,12 +894,15 @@ def person_edit(
     """Edit person form."""
     try:
         customer = _get_subscriber(db=db, subscriber_id=customer_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Customer not found"},
             status_code=404,
         )
+    except Exception:
+        logger.exception("Error loading person edit for %s", customer_id)
+        raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
@@ -919,12 +930,15 @@ def organization_edit(
     """Edit organization form."""
     try:
         customer = subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    except Exception:
+    except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Organization not found"},
             status_code=404,
         )
+    except Exception:
+        logger.exception("Error loading organization edit for %s", customer_id)
+        raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
     sidebar_stats = get_sidebar_stats(db)
@@ -1429,8 +1443,9 @@ def delete_address(
         # Return empty response for HTMX to remove the element
         return HTMLResponse(content="")
     except Exception as e:
+        logger.exception("Error deleting address %s: %s", address_id, e)
         return HTMLResponse(
-            content=f'<div class="text-red-500 text-sm p-2">Error: {str(e)}</div>',
+            content='<div class="text-red-500 text-sm p-2">An error occurred while deleting.</div>',
             status_code=500,
         )
 
@@ -1497,8 +1512,9 @@ def delete_contact(
         # Return empty response for HTMX to remove the element
         return HTMLResponse(content="")
     except Exception as e:
+        logger.exception("Error deleting contact %s: %s", contact_id, e)
         return HTMLResponse(
-            content=f'<div class="text-red-500 text-sm p-2">Error: {str(e)}</div>',
+            content='<div class="text-red-500 text-sm p-2">An error occurred while deleting.</div>',
             status_code=500,
         )
 

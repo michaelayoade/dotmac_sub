@@ -7,7 +7,7 @@ from typing import cast
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import NasVendor
+from app.models.catalog import ConnectionType, NasVendor
 from app.models.radius import RadiusServer
 from app.schemas.catalog import (
     RadiusAttributeCreate,
@@ -219,11 +219,16 @@ def profile_vendors() -> list[str]:
     return [item.value for item in NasVendor]
 
 
+def profile_connection_types() -> list[str]:
+    return [item.value for item in ConnectionType]
+
+
 def profile_new_form_data() -> dict[str, object]:
     return {
         "profile": None,
         "attributes": [],
         "vendors": profile_vendors(),
+        "connection_types": profile_connection_types(),
         "action_url": "/admin/network/radius/profiles",
     }
 
@@ -245,6 +250,7 @@ def profile_edit_form_data(db, profile_id: str) -> dict[str, object] | None:
         "profile": profile,
         "attributes": attributes,
         "vendors": profile_vendors(),
+        "connection_types": profile_connection_types(),
         "action_url": f"/admin/network/radius/profiles/{profile_id}",
     }
 
@@ -270,7 +276,11 @@ def parse_profile_attributes(form) -> tuple[list[dict], str | None]:
 def parse_profile_form(form) -> tuple[dict[str, object], list[dict], str | None]:
     name = form.get("name", "").strip()
     vendor = form.get("vendor", "").strip()
+    connection_type = form.get("connection_type", "").strip()
     description = form.get("description", "").strip()
+    download_speed = form.get("download_speed", "").strip()
+    upload_speed = form.get("upload_speed", "").strip()
+    mikrotik_rate_limit = form.get("mikrotik_rate_limit", "").strip()
     is_active = form.get("is_active") == "true"
     attributes, attr_error = parse_profile_attributes(form)
 
@@ -281,6 +291,20 @@ def parse_profile_form(form) -> tuple[dict[str, object], list[dict], str | None]
     }
     if vendor:
         profile_data["vendor"] = vendor
+    if connection_type:
+        profile_data["connection_type"] = connection_type
+    if download_speed:
+        try:
+            profile_data["download_speed"] = int(download_speed)
+        except ValueError:
+            return profile_data, attributes, "Download speed must be a valid integer."
+    if upload_speed:
+        try:
+            profile_data["upload_speed"] = int(upload_speed)
+        except ValueError:
+            return profile_data, attributes, "Upload speed must be a valid integer."
+    if mikrotik_rate_limit:
+        profile_data["mikrotik_rate_limit"] = mikrotik_rate_limit
 
     if not name:
         return profile_data, attributes, "Profile name is required."

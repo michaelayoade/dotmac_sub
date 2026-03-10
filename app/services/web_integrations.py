@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urlparse
 from typing import cast
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
+from sqlalchemy.orm import Session
 
+from app.models.webhook import WebhookDelivery, WebhookEndpoint
 from app.schemas.billing import PaymentProviderCreate
 from app.schemas.connector import ConnectorConfigCreate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
@@ -18,6 +20,7 @@ from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import webhook as webhook_service
 from app.services.common import validate_enum
+from app.services.integrations import registry as integration_registry
 
 
 def _parse_uuid(value: str | None, field: str, required: bool = True) -> UUID | None:
@@ -47,6 +50,117 @@ def connector_form_options() -> dict[str, object]:
         "connector_types": [t.value for t in ConnectorType],
         "auth_types": [t.value for t in ConnectorAuthType],
     }
+
+
+def integration_registration_form_options() -> dict[str, object]:
+    return {
+        "integration_types": ["simple", "webhook", "oauth"],
+        "root_sections": ["system", "billing", "network", "customers", "services", "integrations"],
+        "icon_choices": [
+            "puzzle-piece",
+            "bolt",
+            "chat-bubble-left-right",
+            "cloud-arrow-up",
+            "currency-dollar",
+            "server-stack",
+        ],
+    }
+
+
+def create_registered_integration(
+    db,
+    *,
+    name: str,
+    display_title: str,
+    integration_type: str,
+    root_section: str,
+    icon: str,
+):
+    from app.models.connector import ConnectorAuthType, ConnectorType
+
+    integration_type = (integration_type or "simple").strip().lower()
+    if integration_type not in {"simple", "webhook", "oauth"}:
+        raise ValueError("integration_type must be simple, webhook, or oauth")
+
+    connector_type = "custom"
+    if integration_type == "webhook":
+        connector_type = "webhook"
+    elif integration_type == "oauth":
+        connector_type = "http"
+
+    payload = ConnectorConfigCreate(
+        name=name.strip(),
+        connector_type=validate_enum(connector_type, ConnectorType, "connector_type"),
+        auth_type=validate_enum(
+            "oauth2" if integration_type == "oauth" else "none",
+            ConnectorAuthType,
+            "auth_type",
+        ),
+        metadata_={
+            "registration": {
+                "display_title": display_title.strip() or name.strip(),
+                "integration_type": integration_type,
+                "root_section": root_section.strip() or "integrations",
+                "icon": icon.strip() or "puzzle-piece",
+            }
+        },
+        is_active=True,
+    )
+    return connector_service.connector_configs.create(db, payload)
+
+
+def registered_integration_config_state(db, connector_id: str) -> dict[str, object]:
+    connector = connector_service.connector_configs.get(db, connector_id)
+    metadata = dict(connector.metadata_ or {})
+    registration = metadata.get("registration") if isinstance(metadata.get("registration"), dict) else {}
+    config = metadata.get("registration_config") if isinstance(metadata.get("registration_config"), dict) else {}
+    return {
+        "connector": connector,
+        "registration": registration,
+        "config": {
+            "custom_fields_json": json.dumps(config.get("custom_fields") or {}, indent=2),
+            "webhook_endpoint": str(config.get("webhook_endpoint") or ""),
+            "auth_method": str(config.get("auth_method") or ""),
+            "data_mapping_json": json.dumps(config.get("data_mapping") or {}, indent=2),
+            "external_url": str(config.get("external_url") or connector.base_url or ""),
+        },
+    }
+
+
+def update_registered_integration_config(
+    db,
+    *,
+    connector_id: str,
+    custom_fields_json: str | None,
+    webhook_endpoint: str | None,
+    auth_method: str | None,
+    data_mapping_json: str | None,
+    external_url: str | None,
+):
+    connector = connector_service.connector_configs.get(db, connector_id)
+    metadata = dict(connector.metadata_ or {})
+    registration = metadata.get("registration") if isinstance(metadata.get("registration"), dict) else {}
+    integration_type = str(registration.get("integration_type") or "simple")
+    custom_fields = _parse_json(custom_fields_json, "custom_fields_json") or {}
+    data_mapping = _parse_json(data_mapping_json, "data_mapping_json") or {}
+    metadata["registration_config"] = {
+        "custom_fields": custom_fields,
+        "webhook_endpoint": (webhook_endpoint or "").strip() or None,
+        "auth_method": (auth_method or "").strip() or None,
+        "data_mapping": data_mapping,
+        "external_url": (external_url or "").strip() or None,
+    }
+    connector.metadata_ = metadata
+    if integration_type == "simple":
+        connector.base_url = (external_url or "").strip() or connector.base_url
+        if connector.connector_type.value != "custom":
+            connector.connector_type = validate_enum("custom", type(connector.connector_type), "connector_type")
+    elif integration_type == "webhook":
+        connector.connector_type = validate_enum("webhook", type(connector.connector_type), "connector_type")
+    db.add(connector)
+    db.commit()
+    db.refresh(connector)
+    return connector
 
 
 def connector_error_state(
@@ -196,6 +310,231 @@ def build_connectors_list_data(db) -> dict[str, object]:
         "connectors": connectors,
         "stats": connector_stats(connectors),
     }
+
+
+def _parse_version_tuple(version: str) -> tuple[int, int, int]:
+    raw = (version or "0.0.0").strip().lower().lstrip("v")
+    parts = raw.split(".")
+    nums = []
+    for item in parts[:3]:
+        digits = "".join(ch for ch in item if ch.isdigit())
+        nums.append(int(digits) if digits else 0)
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums)  # type: ignore[return-value]
+
+
+def build_marketplace_data(db) -> dict[str, object]:
+    connectors = connector_service.connector_configs.list_all(
+        db=db,
+        connector_type=None,
+        auth_type=None,
+        order_by="name",
+        order_dir="asc",
+        limit=1000,
+        offset=0,
+    )
+    installed_rows: list[dict[str, object]] = []
+    for connector in connectors:
+        metadata = dict(connector.metadata_ or {})
+        key = str(metadata.get("connector_key") or "").strip().lower()
+        if not key:
+            name_key = str(connector.name or "").strip().lower()
+            for item in ("quickbooks", "xero", "sage", "whatsapp", "paystack", "flutterwave", "3cx", "freepbx"):
+                if item in name_key:
+                    key = item
+                    break
+        installed_rows.append(
+            {
+                "key": key,
+                "connector": connector,
+                "version": str(metadata.get("version") or "1.0.0"),
+                "last_sync": metadata.get("accounting_sync", {}).get("last_sync_at")
+                if isinstance(metadata.get("accounting_sync"), dict)
+                else None,
+            }
+        )
+
+    installed_by_key = {row["key"]: row for row in installed_rows if row["key"]}
+    discovered = integration_registry.discover_connectors()
+    cards: list[dict[str, object]] = []
+    for entry in discovered:
+        installed = installed_by_key.get(entry.key)
+        installed_version = str(installed.get("version")) if installed else None
+        update_available = bool(
+            installed
+            and _parse_version_tuple(entry.version) > _parse_version_tuple(installed_version or "0.0.0")
+        )
+        cards.append(
+            {
+                "key": entry.key,
+                "name": entry.name,
+                "description": entry.description,
+                "type": entry.connector_type,
+                "available_version": entry.version,
+                "module_name": entry.module_name,
+                "file_size_bytes": entry.file_size_bytes,
+                "installed": bool(installed),
+                "installed_connector": installed.get("connector") if installed else None,
+                "installed_version": installed_version,
+                "update_available": update_available,
+                "last_sync": installed.get("last_sync") if installed else None,
+            }
+        )
+
+    return {
+        "marketplace_cards": cards,
+        "stats": {
+            "available": len(cards),
+            "installed": sum(1 for card in cards if card["installed"]),
+            "updates": sum(1 for card in cards if card["update_available"]),
+        },
+    }
+
+
+def _connector_registration_meta(connector) -> dict[str, object]:
+    metadata = dict(connector.metadata_ or {})
+    registration = metadata.get("registration")
+    if isinstance(registration, dict):
+        return registration
+    return {}
+
+
+def _connector_health(db: Session, connector_id: str) -> tuple[str, dict[str, int]]:
+    endpoints = (
+        db.query(WebhookEndpoint)
+        .filter(WebhookEndpoint.connector_config_id == _parse_uuid(connector_id, "connector_id"))
+        .all()
+    )
+    endpoint_ids = [endpoint.id for endpoint in endpoints]
+    if not endpoint_ids:
+        return "green", {"calls": 0, "failed": 0}
+
+    deliveries = (
+        db.query(WebhookDelivery)
+        .filter(WebhookDelivery.endpoint_id.in_(endpoint_ids))
+        .order_by(WebhookDelivery.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    total = len(deliveries)
+    failed = sum(1 for item in deliveries if getattr(item.status, "value", str(item.status)) == "failed")
+    if total == 0:
+        return "green", {"calls": 0, "failed": 0}
+    failure_ratio = failed / total
+    if failure_ratio >= 0.35:
+        return "red", {"calls": total, "failed": failed}
+    if failure_ratio >= 0.10:
+        return "amber", {"calls": total, "failed": failed}
+    return "green", {"calls": total, "failed": failed}
+
+
+def build_installed_integrations_data(db: Session) -> dict[str, object]:
+    connectors = connector_service.connector_configs.list_all(
+        db=db,
+        connector_type=None,
+        auth_type=None,
+        order_by="name",
+        order_dir="asc",
+        limit=1000,
+        offset=0,
+    )
+    rows: list[dict[str, object]] = []
+    for connector in connectors:
+        registration = _connector_registration_meta(connector)
+        health, health_stats = _connector_health(db, str(connector.id))
+        rows.append(
+            {
+                "connector": connector,
+                "title": str(registration.get("display_title") or connector.name),
+                "root": str(registration.get("root_section") or "integrations"),
+                "integration_type": str(registration.get("integration_type") or connector.connector_type.value),
+                "relay_to_portal": bool(registration.get("relay_to_portal", False)),
+                "health": health,
+                "health_stats": health_stats,
+            }
+        )
+
+    connector_ids = [row["connector"].id for row in rows]
+    endpoint_map = {
+        str(endpoint.id): str(endpoint.connector_config_id)
+        for endpoint in db.query(WebhookEndpoint).filter(WebhookEndpoint.connector_config_id.isnot(None)).all()
+    }
+    delivery_activities = (
+        db.query(WebhookDelivery)
+        .order_by(WebhookDelivery.created_at.desc())
+        .limit(120)
+        .all()
+    )
+    activities: list[dict[str, object]] = []
+    for delivery in delivery_activities:
+        connector_id = endpoint_map.get(str(delivery.endpoint_id))
+        if not connector_id:
+            continue
+        if connector_ids and _parse_uuid(connector_id, "connector_id") not in connector_ids:
+            continue
+        activities.append(
+            {
+                "connector_id": connector_id,
+                "timestamp": delivery.created_at,
+                "event_type": getattr(delivery.event_type, "value", str(delivery.event_type)),
+                "status_code": delivery.response_status,
+                "response_time_ms": (
+                    int((delivery.payload or {}).get("latency_ms", 0))
+                    if isinstance(delivery.payload, dict) and (delivery.payload or {}).get("latency_ms") is not None
+                    else None
+                ),
+                "status": getattr(delivery.status, "value", str(delivery.status)),
+            }
+        )
+    activities = activities[:50]
+    return {
+        "integrations": rows,
+        "activity_log": activities,
+        "stats": {
+            "total": len(rows),
+            "enabled": sum(1 for row in rows if row["connector"].is_active),
+            "healthy": sum(1 for row in rows if row["health"] == "green"),
+        },
+    }
+
+
+def bulk_set_integrations_enabled(db: Session, connector_ids: list[str], *, enabled: bool) -> int:
+    updated = 0
+    for connector_id in connector_ids:
+        connector = connector_service.connector_configs.get(db, connector_id)
+        connector.is_active = enabled
+        db.add(connector)
+        updated += 1
+    db.commit()
+    return updated
+
+
+def set_relay_to_portal(db: Session, connector_id: str, *, relay: bool):
+    connector = connector_service.connector_configs.get(db, connector_id)
+    metadata = dict(connector.metadata_ or {})
+    registration = metadata.get("registration") if isinstance(metadata.get("registration"), dict) else {}
+    registration["relay_to_portal"] = bool(relay)
+    metadata["registration"] = registration
+    connector.metadata_ = metadata
+    db.add(connector)
+    db.commit()
+    db.refresh(connector)
+    return connector
+
+
+def uninstall_integration(db: Session, connector_id: str):
+    connector = connector_service.connector_configs.get(db, connector_id)
+    metadata = dict(connector.metadata_ or {})
+    registration = metadata.get("registration") if isinstance(metadata.get("registration"), dict) else {}
+    registration["status"] = "not_installed"
+    metadata["registration"] = registration
+    connector.metadata_ = metadata
+    connector.is_active = False
+    db.add(connector)
+    db.commit()
+    db.refresh(connector)
+    return connector
 
 
 def create_connector(

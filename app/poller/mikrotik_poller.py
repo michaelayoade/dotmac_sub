@@ -19,8 +19,15 @@ import redis.asyncio as redis
 from routeros_api import RouterOsApiPool
 
 from app.db import SessionLocal
-from app.models.catalog import NasDevice, NasDeviceStatus, NasVendor
+from app.models.catalog import (
+    NasDevice,
+    NasDeviceStatus,
+    NasVendor,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.services.queue_mapping import queue_mapping
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +218,74 @@ class DevicePool:
     def __init__(self, refresh_interval: int = 60):
         self._connections: dict[UUID, MikroTikConnection] = {}
         self._queue_mappings: dict[UUID, dict[str, UUID]] = {}
+        self._login_mappings: dict[UUID, dict[str, UUID]] = {}
         self._refresh_interval = refresh_interval
         self._last_refresh: datetime | None = None
+
+    @staticmethod
+    def _resolve_mikrotik_api_port(device: NasDevice) -> int:
+        """
+        Resolve MikroTik API port from device tags.
+
+        The NAS record's management_port is commonly SSH and should not be used
+        for RouterOS API polling. Preferred source is tag `mikrotik_api_port:NNNN`.
+        """
+        tags = getattr(device, "tags", None)
+        if isinstance(tags, list):
+            for tag in tags:
+                if not isinstance(tag, str):
+                    continue
+                token = tag.strip()
+                if token.lower().startswith("mikrotik_api_port:"):
+                    raw = token.split(":", 1)[1].strip()
+                    try:
+                        port = int(raw)
+                        if 1 <= port <= 65535:
+                            return port
+                    except Exception:
+                        continue
+        return 8728
+
+    @staticmethod
+    def _queue_aliases(queue_name: str) -> set[str]:
+        """Generate normalized aliases for queue name lookup."""
+        raw = (queue_name or "").strip()
+        if not raw:
+            return set()
+        aliases: set[str] = set()
+        candidates = {raw}
+        if raw.startswith("<") and raw.endswith(">") and len(raw) > 2:
+            candidates.add(raw[1:-1].strip())
+
+        # Build canonical variants
+        for candidate in list(candidates):
+            normalized = candidate.strip()
+            if not normalized:
+                continue
+            lower = normalized.lower()
+            aliases.add(normalized)
+            aliases.add(lower)
+
+            # Common queue prefixes that may wrap login/username
+            for prefix in ("queue-", "pppoe-", "hotspot-", "dhcp-", "sub-"):
+                if lower.startswith(prefix) and len(normalized) > len(prefix):
+                    stripped = normalized[len(prefix):].strip()
+                    if stripped:
+                        aliases.add(stripped)
+                        aliases.add(stripped.lower())
+                else:
+                    aliases.add(f"{prefix}{normalized}")
+                    aliases.add(f"{prefix}{lower}")
+        return aliases
+
+    @classmethod
+    def _build_mapping_alias_dict(cls, mapping_dict: dict[str, UUID]) -> dict[str, UUID]:
+        """Expand queue mapping keys to include common naming variants."""
+        expanded: dict[str, UUID] = {}
+        for queue_name, subscription_id in mapping_dict.items():
+            for alias in cls._queue_aliases(queue_name):
+                expanded[alias] = subscription_id
+        return expanded
 
     async def refresh_devices(self):
         """Refresh the list of devices from the database."""
@@ -241,18 +314,48 @@ class DevicePool:
 
                 # Create new connection if we have credentials
                 if device.api_username and device.api_password and device.management_ip:
+                    api_password = decrypt_credential(device.api_password)
+                    if not api_password:
+                        logger.warning(
+                            "Skipping NAS %s: API password could not be decrypted",
+                            device_id,
+                        )
+                        continue
                     self._connections[device_id] = MikroTikConnection(
                         device_id=device_id,
                         host=device.management_ip,
                         username=device.api_username,
-                        password=device.api_password,
-                        port=device.management_port or 8728,
+                        password=api_password,
+                        port=self._resolve_mikrotik_api_port(device),
                     )
 
                 # Load queue mappings for this device
-                self._queue_mappings[device_id] = queue_mapping.get_device_mapping_dict(
+                raw_mapping = queue_mapping.get_device_mapping_dict(
                     db, device_id
                 )
+                self._queue_mappings[device_id] = self._build_mapping_alias_dict(raw_mapping)
+
+                # Fallback mapping from active subscriptions on this NAS by login.
+                login_rows = (
+                    db.query(Subscription.id, Subscription.login)
+                    .filter(
+                        Subscription.provisioning_nas_device_id == device_id,
+                        Subscription.status.in_(
+                            [SubscriptionStatus.active, SubscriptionStatus.pending]
+                        ),
+                    )
+                    .all()
+                )
+                login_map: dict[str, UUID] = {}
+                for sub_id, login in login_rows:
+                    if not login:
+                        continue
+                    login_clean = str(login).strip()
+                    if not login_clean:
+                        continue
+                    for alias in self._queue_aliases(login_clean):
+                        login_map[alias] = sub_id
+                self._login_mappings[device_id] = login_map
 
             # Remove connections for devices that are no longer active
             removed_ids = current_ids - new_ids
@@ -261,6 +364,7 @@ class DevicePool:
                 if conn:
                     await conn.disconnect()
                 self._queue_mappings.pop(device_id, None)
+                self._login_mappings.pop(device_id, None)
 
             self._last_refresh = datetime.now(UTC)
             logger.info(f"Device pool refreshed: {len(self._connections)} devices")
@@ -310,8 +414,29 @@ class DevicePool:
 
     def resolve_subscription(self, device_id: UUID, queue_name: str) -> UUID | None:
         """Resolve a queue name to a subscription ID."""
+        queue_aliases = self._queue_aliases(queue_name)
+        if not queue_aliases:
+            return None
+
         mappings = self._queue_mappings.get(device_id, {})
-        return mappings.get(queue_name)
+        for key in queue_aliases:
+            if key in mappings:
+                return mappings[key]
+
+        login_mappings = self._login_mappings.get(device_id, {})
+        for key in queue_aliases:
+            if key in login_mappings:
+                return login_mappings[key]
+
+        # Legacy auto-generated fallback: sub-<uuid>
+        for key in queue_aliases:
+            if key.lower().startswith("sub-"):
+                candidate = key[4:]
+                try:
+                    return UUID(candidate)
+                except Exception:
+                    continue
+        return None
 
     async def close(self):
         """Close all connections."""
