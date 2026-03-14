@@ -8,10 +8,12 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import case, func, literal, or_
+from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.orm import Query, Session
 
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.domain_settings import SettingDomain
+from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
 from app.schemas.table_config import (
@@ -19,6 +21,7 @@ from app.schemas.table_config import (
     TableColumnPreference,
     TableColumnResolved,
 )
+from app.services import numbering, settings_spec
 
 ReservedParamKeys = {
     "limit",
@@ -198,8 +201,9 @@ class TableConfigurationService:
                 preferred_order = [
                     "subscriber_number",
                     "subscriber_name",
+                    "subscription_name",
                     "status",
-                    "reseller_id",
+                    "reseller_name",
                 ]
                 base_order = len(preferred_order)
                 for key, config in state.items():
@@ -389,6 +393,76 @@ class TableConfigurationService:
         return value
 
     @staticmethod
+    def _subscriber_number_prefix(db: Session) -> str:
+        prefix = settings_spec.resolve_value(
+            db,
+            SettingDomain.subscriber,
+            "subscriber_number_prefix",
+        )
+        if isinstance(prefix, str):
+            return prefix
+        return "SUB-"
+
+    @staticmethod
+    def _looks_like_valid_subscriber_number(value: Any, prefix: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        normalized = value.strip()
+        if not normalized:
+            return False
+        if not prefix:
+            return True
+        return normalized.startswith(prefix)
+
+    @staticmethod
+    def _ensure_subscriber_numbers(
+        db: Session,
+        items: list[dict[str, Any]],
+        selected_keys: list[str],
+    ) -> None:
+        if "subscriber_number" not in selected_keys:
+            return
+
+        prefix = TableConfigurationService._subscriber_number_prefix(db)
+        changed = False
+
+        for item in items:
+            current_value = item.get("subscriber_number")
+            if TableConfigurationService._looks_like_valid_subscriber_number(current_value, prefix):
+                continue
+
+            subscriber_id = item.get("id")
+            if not subscriber_id:
+                continue
+            subscriber = db.get(Subscriber, subscriber_id)
+            if not subscriber:
+                continue
+
+            existing_number = subscriber.subscriber_number
+            if TableConfigurationService._looks_like_valid_subscriber_number(existing_number, prefix):
+                item["subscriber_number"] = existing_number
+                continue
+
+            generated = numbering.generate_number(
+                db,
+                SettingDomain.subscriber,
+                "subscriber_number",
+                "subscriber_number_enabled",
+                "subscriber_number_prefix",
+                "subscriber_number_padding",
+                "subscriber_number_start",
+            )
+            if not generated:
+                continue
+
+            subscriber.subscriber_number = generated
+            item["subscriber_number"] = generated
+            changed = True
+
+        if changed:
+            db.commit()
+
+    @staticmethod
     def _apply_scalar_filters(
         query: Query,
         model: type,
@@ -508,6 +582,9 @@ class TableConfigurationService:
                 item[key] = TableConfigurationService._convert_value(getattr(row, attr))
             items.append(item)
 
+        if table_key == "subscribers":
+            TableConfigurationService._ensure_subscriber_numbers(db, items, selected_keys)
+
         return columns, items, total
 
 
@@ -537,6 +614,43 @@ def _tier_state_expression(model: type) -> Any:
     return case(
         (model.marketing_opt_in.is_(True), literal("opt_in")),
         else_=literal("standard"),
+    )
+
+
+def _reseller_name_expression(model: type) -> Any:
+    return (
+        select(Reseller.name)
+        .where(Reseller.id == model.reseller_id)
+        .correlate(model)
+        .scalar_subquery()
+    )
+
+
+def _subscription_name_expression(model: type) -> Any:
+    status_rank = case(
+        (Subscription.status == SubscriptionStatus.active, 0),
+        (Subscription.status == SubscriptionStatus.pending, 1),
+        (Subscription.status == SubscriptionStatus.suspended, 2),
+        else_=3,
+    )
+    return (
+        select(CatalogOffer.name)
+        .select_from(Subscription)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .where(Subscription.subscriber_id == model.id)
+        .where(
+            Subscription.status.in_(
+                (
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.pending,
+                    SubscriptionStatus.suspended,
+                )
+            )
+        )
+        .order_by(status_rank.asc(), Subscription.updated_at.desc(), Subscription.created_at.desc())
+        .limit(1)
+        .correlate(model)
+        .scalar_subquery()
     )
 
 
@@ -650,7 +764,6 @@ TableRegistry.register(
         "billing_enabled",
         "marketing_opt_in",
         "organization_id",
-        "reseller_id",
         "created_at",
         "updated_at",
     ],
@@ -707,6 +820,22 @@ TableRegistry.register(
             filter_resolver=lambda query, model, value: query.filter(
                 model.marketing_opt_in.is_(str(value).lower() == "opt_in")
             ),
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="reseller_name",
+            label="Reseller",
+            sortable=True,
+            filterable=False,
+            expression_resolver=_reseller_name_expression,
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="subscription_name",
+            label="Subscription",
+            sortable=True,
+            filterable=False,
+            expression_resolver=_subscription_name_expression,
             is_computed=True,
         ),
     ],

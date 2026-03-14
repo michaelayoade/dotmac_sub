@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,8 +8,16 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
-from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
+from app.models.network import (
+    OltConfigBackup,
+    OltConfigBackupType,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    PonPort,
+)
 from app.models.network_monitoring import (
+    DeviceInterface,
     DeviceMetric,
     DeviceRole,
     DeviceStatus,
@@ -62,6 +71,7 @@ from app.services import web_network_tr069 as web_network_tr069_service
 from app.services import web_network_weathermap as web_network_weathermap_service
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
 
 
@@ -1574,6 +1584,422 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
     assert payload["olts"][0]["name"] == "Metro OLT"
     assert payload["olts"][0]["detail_url"].startswith("/admin/network/olts/")
     assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.220")).first() is not None
+
+
+def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
+    olt = OLTDevice(name="OLT-PON-LINK", mgmt_ip="198.51.100.120")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/1/0", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(serial_number="ONT-PON-LINK-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+    db_session.add(assignment)
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    rows = payload["pon_port_table_rows"]
+    assert rows
+    assert rows[0]["action_url"] == f"/admin/network/onts?olt_id={olt.id}&pon_port_id={pon.id}"
+
+
+def test_olt_detail_page_data_pon_row_name_uses_short_port_number(db_session):
+    olt = OLTDevice(name="OLT-PON-LABEL", mgmt_ip="198.51.100.124")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(
+        olt_id=olt.id,
+        name="Huawei-MA5600-V800R013-GPON_UNI 0/2/0",
+        port_number=0,
+        is_active=True,
+    )
+    db_session.add(pon)
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    rows = payload["pon_port_table_rows"]
+    assert rows
+    assert rows[0]["name"] == "0"
+
+
+def test_olt_detail_page_data_ont_pon_display_prefers_port_description(db_session):
+    olt = OLTDevice(name="OLT-PON-DESC", mgmt_ip="198.51.100.123")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/2/0", notes="Main Street Splitter A", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(serial_number="ONT-PON-DESC-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    display = payload["pon_port_display_by_ont_id"].get(str(ont.id))
+    assert display == "0 - Main Street Splitter A"
+
+
+def test_olt_detail_page_data_ont_pon_display_uses_port_index_and_description(db_session):
+    olt = OLTDevice(name="OLT-PON-DESC-IDX", mgmt_ip="198.51.100.126")
+    db_session.add(olt)
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            PonPort(
+                olt_id=olt.id,
+                name="Huawei-MA5600-V800R013-GPON_UNI-A",
+                notes="Progressive Governors Forum",
+                is_active=True,
+            ),
+            PonPort(
+                olt_id=olt.id,
+                name="Huawei-MA5600-V800R013-GPON_UNI-B",
+                notes="AYA 2",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="ONT-PON-DESC-IDX-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="1",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    display = payload["pon_port_display_by_ont_id"].get(str(ont.id))
+    assert display == "1 - AYA 2"
+
+
+def test_olt_detail_page_data_maps_ont_mac_from_assigned_subscriber_cpe(db_session, subscriber):
+    olt = OLTDevice(name="OLT-ONT-MAC", mgmt_ip="198.51.100.127")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/2/0", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(serial_number="ONT-MAC-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="CPE-MAC-001",
+            mac_address="AA:BB:CC:DD:EE:FF",
+        ),
+    )
+
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            subscriber_id=subscriber.id,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    assert payload["ont_mac_by_ont_id"].get(str(ont.id)) == "AA:BB:CC:DD:EE:FF"
+
+
+def test_olt_detail_page_data_maps_ont_mac_directly_from_ont_unit(db_session):
+    olt = OLTDevice(name="OLT-ONT-MAC-DIRECT", mgmt_ip="198.51.100.128")
+    db_session.add(olt)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="ONT-MAC-DIRECT-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        mac_address="11:22:33:44:55:66",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    assert payload["ont_mac_by_ont_id"].get(str(ont.id)) == "11:22:33:44:55:66"
+
+
+def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-RUNTIME", mgmt_ip="198.51.100.129")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(serial_number="ONT-TR069-RUNTIME-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {}
+
+        @staticmethod
+        def extract_parameter_value(_device, path):
+            values = {
+                "Device.Ethernet.Interface.1.MACAddress": "AA:AA:AA:AA:AA:AA",
+                "Device.IP.Interface.1.IPv4Address.1.IPAddress": "100.64.10.5",
+                "Device.PPP.Interface.1.Username": "subscriber001",
+                "Device.IP.Interface.1.Status": "Up",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType": "PPPoE",
+                "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries": "5",
+                "Device.Hosts.HostNumberOfEntries": "12",
+                "Device.DHCPv4.Server.Enable": "true",
+            }
+            return values.get(path)
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (_FakeClient(), "fake-device-id"),
+    )
+
+    summary = OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=True,
+    )
+    assert summary.available is True
+    refreshed = db_session.get(OntUnit, ont.id)
+    assert refreshed is not None
+    assert refreshed.mac_address == "AA:AA:AA:AA:AA:AA"
+    assert refreshed.observed_wan_ip == "100.64.10.5"
+    assert refreshed.pppoe_username == "subscriber001"
+    assert refreshed.observed_pppoe_status == "Up"
+    assert refreshed.observed_wifi_clients == 5
+    assert refreshed.observed_lan_hosts == 12
+    assert refreshed.observed_lan_mode == "router"
+
+
+def test_onts_list_page_data_filters_by_pon_port(db_session):
+    olt = OLTDevice(name="OLT-PON-FILTER", mgmt_ip="198.51.100.121")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon_a = PonPort(olt_id=olt.id, name="0/1/0", is_active=True)
+    pon_b = PonPort(olt_id=olt.id, name="0/1/1", is_active=True)
+    db_session.add_all([pon_a, pon_b])
+    db_session.flush()
+
+    ont_a = OntUnit(serial_number="ONT-PON-A", is_active=True, olt_device_id=olt.id)
+    ont_b = OntUnit(serial_number="ONT-PON-B", is_active=True, olt_device_id=olt.id)
+    db_session.add_all([ont_a, ont_b])
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            OntAssignment(ont_unit_id=ont_a.id, pon_port_id=pon_a.id, active=True),
+            OntAssignment(ont_unit_id=ont_b.id, pon_port_id=pon_b.id, active=True),
+        ]
+    )
+    db_session.commit()
+
+    filtered = core_devices_views.onts_list_page_data(
+        db_session,
+        olt_id=str(olt.id),
+        pon_port_id=str(pon_a.id),
+        per_page=50,
+    )
+    serials = [ont.serial_number for ont in filtered["onts"]]
+    assert serials == ["ONT-PON-A"]
+    assert filtered["filters"]["pon_port_id"] == str(pon_a.id)
+
+
+def test_onts_list_page_data_filters_by_pon_hint_for_snmp_rows(db_session):
+    olt = OLTDevice(name="OLT-PON-HINT", mgmt_ip="198.51.100.122")
+    db_session.add(olt)
+    db_session.flush()
+
+    ont_a = OntUnit(
+        serial_number="ONT-HINT-A",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="7",
+    )
+    ont_b = OntUnit(
+        serial_number="ONT-HINT-B",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="8",
+    )
+    db_session.add_all([ont_a, ont_b])
+    db_session.commit()
+
+    filtered = core_devices_views.onts_list_page_data(
+        db_session,
+        olt_id=str(olt.id),
+        pon_hint="0/2/7",
+        per_page=50,
+    )
+    serials = [ont.serial_number for ont in filtered["onts"]]
+    assert serials == ["ONT-HINT-A"]
+    assert filtered["filters"]["pon_hint"] == "0/2/7"
+
+
+def test_olt_detail_snmp_pon_rows_use_ont_fallback_stats(db_session):
+    olt = OLTDevice(name="OLT-SNMP-PON", mgmt_ip="198.51.100.130", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+
+    monitoring = NetworkDevice(
+        name="OLT-SNMP-PON",
+        mgmt_ip="198.51.100.130",
+        vendor="Huawei",
+        model="MA5800",
+        role=DeviceRole.access,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(monitoring)
+    db_session.flush()
+
+    db_session.add(
+        DeviceInterface(
+            device_id=monitoring.id,
+            name="Huawei-MA5800-V100R019-GPON_UNI 0/2/7",
+            description="Zone 4",
+            status=InterfaceStatus.up,
+        )
+    )
+
+    ont_match = OntUnit(
+        serial_number="ONT-SNMP-ROW-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="7",
+        olt_rx_signal_dbm=-23.4,
+    )
+    ont_other = OntUnit(
+        serial_number="ONT-SNMP-ROW-002",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="8",
+        olt_rx_signal_dbm=-18.0,
+    )
+    db_session.add_all([ont_match, ont_other])
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    rows = payload["pon_port_table_rows"]
+    assert rows
+    row = rows[0]
+    assert row["name"] == "7"
+    assert row["onus"] == 1
+    assert row["avg_signal_dbm"] == -23.4
+    assert "pon_hint=0/2/7" in row["action_url"]
+
+
+def test_olt_detail_snmp_pon_rows_match_onts_with_channel_board_port_format(db_session):
+    olt = OLTDevice(name="OLT-SNMP-PON-CHAN", mgmt_ip="198.51.100.131", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+
+    monitoring = NetworkDevice(
+        name="OLT-SNMP-PON-CHAN",
+        mgmt_ip="198.51.100.131",
+        vendor="Huawei",
+        model="MA5800",
+        role=DeviceRole.access,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    db_session.add(monitoring)
+    db_session.flush()
+
+    db_session.add(
+        DeviceInterface(
+            device_id=monitoring.id,
+            name="Huawei-MA5800-V100R019-GPON_UNI 0/2/7",
+            description="Area 8",
+            status=InterfaceStatus.up,
+        )
+    )
+
+    ont = OntUnit(
+        serial_number="ONT-SNMP-CHAN-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        gpon_channel="0",
+        board="2",
+        port="7",
+        olt_rx_signal_dbm=-24.0,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    rows = payload["pon_port_table_rows"]
+    assert rows
+    assert rows[0]["onus"] == 1
+    assert rows[0]["avg_signal_dbm"] == -24.0
+
+
+def test_olt_detail_db_pon_rows_fallback_to_direct_ont_port_index(db_session):
+    olt = OLTDevice(name="OLT-DB-PON-FALLBACK", mgmt_ip="198.51.100.132")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(
+        olt_id=olt.id,
+        name="Huawei-MA5600-V800R013-GPON_UNI 0/2/0",
+        port_number=0,
+        is_active=True,
+    )
+    db_session.add(pon)
+    db_session.flush()
+
+    db_session.add(
+        OntUnit(
+            serial_number="ONT-DB-FALLBACK-001",
+            is_active=True,
+            olt_device_id=olt.id,
+            board="0/2",
+            port="0",
+            olt_rx_signal_dbm=-20.5,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.olt_detail_page_data(db_session, str(olt.id))
+    assert payload is not None
+    rows = payload["pon_port_table_rows"]
+    assert rows
+    assert rows[0]["onus"] == 1
+    assert rows[0]["avg_signal_dbm"] == -20.5
 
 
 def test_queue_backup_failure_notification_queues_notification(db_session, monkeypatch):

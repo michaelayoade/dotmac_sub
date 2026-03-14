@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit
+from app.models.network import OntUnit, WanMode
 from app.services.genieacs import GenieACSClient, GenieACSError
 from app.services.network._resolve import resolve_genieacs
 
@@ -34,6 +35,10 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
         "CPU Usage": [f"{_DEV}.DeviceInfo.ProcessStatus.CPUUsage"],
         "Memory Total": [f"{_DEV}.DeviceInfo.MemoryStatus.Total", f"{_IGD}.DeviceInfo.MemoryStatus.Total"],
         "Memory Free": [f"{_DEV}.DeviceInfo.MemoryStatus.Free", f"{_IGD}.DeviceInfo.MemoryStatus.Free"],
+        "MAC Address": [
+            f"{_DEV}.Ethernet.Interface.1.MACAddress",
+            f"{_IGD}.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
+        ],
     },
     "wan": {
         "Connection Type": [
@@ -85,6 +90,10 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
         "DHCP End": [
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.MaxAddress",
             f"{_DEV}.DHCPv4.Server.Pool.1.MaxAddress",
+        ],
+        "Connected Hosts": [
+            f"{_IGD}.LANDevice.1.Hosts.HostNumberOfEntries",
+            f"{_DEV}.Hosts.HostNumberOfEntries",
         ],
     },
     "wireless": {
@@ -212,7 +221,12 @@ class OntTR069:
     """Fetch and structure TR-069 parameters for ONT display."""
 
     @staticmethod
-    def get_device_summary(db: Session, ont_id: str) -> TR069Summary:
+    def get_device_summary(
+        db: Session,
+        ont_id: str,
+        *,
+        persist_observed_runtime: bool = False,
+    ) -> TR069Summary:
         """Return structured TR-069 data grouped by section.
 
         Args:
@@ -287,7 +301,128 @@ class OntTR069:
             except (ValueError, TypeError):
                 pass
 
+        if persist_observed_runtime:
+            OntTR069._persist_observed_runtime(db, ont, summary)
+
         return summary
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_bool(value: Any) -> bool | None:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+        return None
+
+    @staticmethod
+    def _persist_observed_runtime(db: Session, ont: OntUnit, summary: TR069Summary) -> None:
+        """Persist useful runtime/observed fields back onto OntUnit."""
+        if not summary.available:
+            return
+
+        tr069_serial = str(summary.system.get("Serial") or "").strip() if summary.system else ""
+        if tr069_serial:
+            # Replace synthetic SNMP serials with real TR-069 serials when available.
+            current_serial = str(getattr(ont, "serial_number", "") or "")
+            if (
+                not current_serial
+                or current_serial.startswith("HW-")
+                or current_serial.startswith("ZT-")
+                or current_serial.startswith("NK-")
+                or current_serial.startswith("OLT-")
+            ):
+                ont.serial_number = tr069_serial[:120]
+
+        mac_address = (
+            str(summary.system.get("MAC Address") or "").strip()
+            if summary.system
+            else ""
+        )
+        if not mac_address and summary.ethernet_ports:
+            for port in summary.ethernet_ports:
+                mac = str((port or {}).get("MACAddress") or "").strip()
+                if mac:
+                    mac_address = mac
+                    break
+
+        wan_ip = str(summary.wan.get("WAN IP") or "").strip() if summary.wan else ""
+        pppoe_user = str(summary.wan.get("Username") or "").strip() if summary.wan else ""
+        pppoe_status = str(summary.wan.get("Status") or "").strip() if summary.wan else ""
+        raw_wan_mode = str(summary.wan.get("Connection Type") or "").strip() if summary.wan else ""
+        wan_mode = ""
+        if raw_wan_mode:
+            normalized = raw_wan_mode.lower().replace(" ", "").replace("-", "").replace("_", "")
+            pppoe_mode = WanMode.pppoe.value if hasattr(WanMode, "pppoe") else ""
+            dhcp_mode = WanMode.dhcp.value if hasattr(WanMode, "dhcp") else ""
+            static_mode = (
+                WanMode.static.value
+                if hasattr(WanMode, "static")
+                else (WanMode.static_ip.value if hasattr(WanMode, "static_ip") else "")
+            )
+            wan_mode_map = {
+                "pppoe": pppoe_mode,
+                "dhcp": dhcp_mode,
+                "static": static_mode,
+                "bridge": (
+                    WanMode.bridge.value
+                    if hasattr(WanMode, "bridge")
+                    else (WanMode.bridged.value if hasattr(WanMode, "bridged") else "")
+                ),
+                "bridged": (
+                    WanMode.bridged.value
+                    if hasattr(WanMode, "bridged")
+                    else (WanMode.bridge.value if hasattr(WanMode, "bridge") else "")
+                ),
+            }
+            wan_mode = wan_mode_map.get(normalized, "")
+
+        wifi_clients = OntTR069._to_int(
+            summary.wireless.get("Connected Clients") if summary.wireless else None
+        )
+        lan_hosts_count = (
+            len(summary.lan_hosts)
+            if summary.lan_hosts
+            else OntTR069._to_int(summary.lan.get("Connected Hosts") if summary.lan else None)
+        )
+
+        dhcp_enabled = OntTR069._to_bool(summary.lan.get("DHCP Enabled") if summary.lan else None)
+        lan_mode = "router" if dhcp_enabled is True else "bridge" if dhcp_enabled is False else None
+
+        if mac_address:
+            ont.mac_address = mac_address
+        if wan_ip:
+            ont.observed_wan_ip = wan_ip
+            # Maintain existing field used across views where runtime WAN IP is desired.
+            ont.mgmt_ip_address = wan_ip
+        if pppoe_user:
+            ont.pppoe_username = pppoe_user
+        if pppoe_status:
+            ont.observed_pppoe_status = pppoe_status
+        if wan_mode:
+            ont.wan_mode = wan_mode
+        if lan_mode:
+            ont.observed_lan_mode = lan_mode
+        if wifi_clients is not None:
+            ont.observed_wifi_clients = wifi_clients
+        if lan_hosts_count is not None:
+            ont.observed_lan_hosts = lan_hosts_count
+        ont.observed_runtime_updated_at = datetime.now(UTC)
+
+        db.add(ont)
+        db.commit()
+        db.refresh(ont)
 
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:

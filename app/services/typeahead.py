@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, NasDevice, Subscription
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.models.subscriber import Organization, Reseller, Subscriber
+from app.models.subscriber import Organization, Reseller, Subscriber, UserType
 from app.services.response import list_response
 
 
@@ -66,6 +66,45 @@ def subscribers(db: Session, query: str, limit: int) -> list[dict]:
         .all()
     )
     return [{"id": sub.id, "label": _subscriber_label(sub)} for sub in results]
+
+
+def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[dict]:
+    """Search customer subscribers eligible for reseller linkage."""
+    term = (query or "").strip()
+    if not term:
+        return []
+    like_term = f"%{term}%"
+    results = (
+        db.query(Subscriber)
+        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
+        .options(joinedload(Subscriber.organization))
+        .filter(Subscriber.user_type == UserType.customer)
+        .filter(
+            or_(
+                Subscriber.first_name.ilike(like_term),
+                Subscriber.last_name.ilike(like_term),
+                Subscriber.email.ilike(like_term),
+                Subscriber.account_number.ilike(like_term),
+                Subscriber.subscriber_number.ilike(like_term),
+                Organization.name.ilike(like_term),
+                Organization.domain.ilike(like_term),
+            )
+        )
+        .limit(limit)
+        .all()
+    )
+    items: list[dict] = []
+    for sub in results:
+        full_name = f"{(sub.first_name or '').strip()} {(sub.last_name or '').strip()}".strip()
+        base_name = full_name or (sub.display_name or "").strip() or "Subscriber"
+        if sub.account_number:
+            base_name = f"{base_name} ({sub.account_number})"
+        org_name = (sub.organization.name or "").strip() if sub.organization else ""
+        email = (sub.email or "").strip()
+        suffix_parts = [part for part in [org_name, email] if part]
+        label = f"{base_name} - {' - '.join(suffix_parts)}" if suffix_parts else base_name
+        items.append({"id": sub.id, "label": label})
+    return items
 
 
 # Legacy alias for backwards compatibility
@@ -173,6 +212,10 @@ def accounts_response(db: Session, query: str, limit: int) -> dict:
 
 def subscribers_response(db: Session, query: str, limit: int) -> dict:
     return list_response(subscribers(db, query, limit), limit, 0)
+
+
+def reseller_linkable_subscribers_response(db: Session, query: str, limit: int) -> dict:
+    return list_response(reseller_linkable_subscribers(db, query, limit), limit, 0)
 
 
 def subscriptions_response(db: Session, query: str, limit: int) -> dict:

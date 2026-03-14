@@ -28,6 +28,15 @@ def search_subscribers(
     return typeahead_service.subscribers_response(db, q, limit)
 
 
+@router.get("/reseller-subscribers", response_model=ListResponse[TypeaheadItem])
+def search_reseller_linkable_subscribers(
+    q: str = Query(min_length=2),
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return typeahead_service.reseller_linkable_subscribers_response(db, q, limit)
+
+
 @router.get("/subscriptions", response_model=ListResponse[TypeaheadItem])
 def search_subscriptions(
     q: str = Query(min_length=2),

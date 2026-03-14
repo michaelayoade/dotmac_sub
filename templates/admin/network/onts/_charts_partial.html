@@ -19,6 +19,9 @@
     {# Signal Trend Chart #}
     <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
         <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Optical Signal Level</h4>
+        {% if signal_chart and signal_chart.available and signal_chart.error %}
+        <p class="mb-3 text-xs text-amber-700 dark:text-amber-300">{{ signal_chart.error }}</p>
+        {% endif %}
         {% if signal_chart and signal_chart.available and signal_chart.series %}
         <div class="relative" style="height: 280px;">
             <canvas id="signal-chart"></canvas>
@@ -36,6 +39,9 @@
     {# Traffic Chart #}
     <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
         <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Traffic Throughput</h4>
+        {% if traffic_chart and traffic_chart.available and traffic_chart.error %}
+        <p class="mb-3 text-xs text-amber-700 dark:text-amber-300">{{ traffic_chart.error }}</p>
+        {% endif %}
         {% if traffic_chart and traffic_chart.available and traffic_chart.series %}
         <div class="relative" style="height: 280px;">
             <canvas id="traffic-chart"></canvas>
@@ -85,7 +91,7 @@
             borderColor: signalColors[{{ loop.index0 }}] || '#6366f1',
             backgroundColor: 'transparent',
             borderWidth: 2,
-            pointRadius: 0,
+            pointRadius: ({{ s.values | tojson }}.length <= 2 ? 3 : 0),
             tension: 0.3,
         });
         {% endfor %}
@@ -179,7 +185,7 @@
             borderColor: trafficColors[{{ loop.index0 }}].border,
             backgroundColor: trafficColors[{{ loop.index0 }}].bg,
             borderWidth: 2,
-            pointRadius: 0,
+            pointRadius: ({{ s.values | tojson }}.length <= 2 ? 3 : 0),
             tension: 0.3,
             fill: true,
         });

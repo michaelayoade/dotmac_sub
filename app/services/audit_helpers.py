@@ -28,6 +28,17 @@ SENSITIVE_FIELDS = {
     "salt",
 }
 
+# Keys containing any of these tokens are treated as sensitive.
+SENSITIVE_FIELD_TOKENS = {
+    "password",
+    "secret",
+    "token",
+    "api_key",
+    "private_key",
+    "community",
+    "credential",
+}
+
 AUDIT_TIMEZONE = ZoneInfo("Africa/Lagos")
 
 
@@ -39,6 +50,13 @@ def _normalize_value(value):
     if isinstance(value, UUID):
         return str(value)
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    if lowered in SENSITIVE_FIELDS:
+        return True
+    return any(token in lowered for token in SENSITIVE_FIELD_TOKENS)
 
 
 def _to_audit_timezone(value: datetime | None) -> datetime | None:
@@ -65,7 +83,7 @@ def model_to_dict(model, include: set[str] | None = None, exclude: set[str] | No
         key = attr.key
         if include and key not in include:
             continue
-        if key in excluded:
+        if key in excluded or _is_sensitive_key(key):
             continue
         data[key] = _normalize_value(getattr(model, key))
     return data

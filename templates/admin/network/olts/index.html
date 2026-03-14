@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
 
 {% block title %}OLT Devices - Admin{% endblock %}
 
@@ -77,8 +77,25 @@
                                 {{ olt.pon_ports }} ports
                             </span>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {{ status_badge(olt.runtime_status_label, olt.runtime_status_variant, pulse=(olt.runtime_status_variant == 'online')) }}
+                        <td class="px-6 py-4">
+                            <div class="flex flex-col gap-1">
+                                {% set ping_state = olt.runtime_ping_state %}
+                                <span class="inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if ping_state == 'ok' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300
+                                    {% elif ping_state == 'fail' %}bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300
+                                    {% elif ping_state == 'unknown' %}bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300
+                                    {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                    Ping: {{ olt.runtime_ping_label }}
+                                </span>
+                                {% set snmp_state = olt.runtime_snmp_state %}
+                                <span class="inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if snmp_state == 'ok' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300
+                                    {% elif snmp_state == 'fail' %}bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300
+                                    {% elif snmp_state == 'unknown' %}bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300
+                                    {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                    SNMP: {{ olt.runtime_snmp_label }}
+                                </span>
+                            </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right">
                             <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">

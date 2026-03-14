@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -184,6 +185,47 @@ class VlanPurpose(enum.Enum):
     iptv = "iptv"
     voip = "voip"
     other = "other"
+
+
+class OntProfileType(enum.Enum):
+    residential = "residential"
+    business = "business"
+    management = "management"
+
+
+class WanServiceType(enum.Enum):
+    internet = "internet"
+    iptv = "iptv"
+    voip = "voip"
+    management = "management"
+    data = "data"
+
+
+class VlanMode(enum.Enum):
+    tagged = "tagged"
+    untagged = "untagged"
+    transparent = "transparent"
+    translate = "translate"
+
+
+class WanConnectionType(enum.Enum):
+    pppoe = "pppoe"
+    dhcp = "dhcp"
+    static = "static"
+    bridged = "bridged"
+
+
+class PppoePasswordMode(enum.Enum):
+    from_credential = "from_credential"
+    generate = "generate"
+    static = "static"
+
+
+class OntProvisioningStatus(enum.Enum):
+    unprovisioned = "unprovisioned"
+    provisioned = "provisioned"
+    drift_detected = "drift_detected"
+    failed = "failed"
 
 
 class CPEDevice(Base):
@@ -865,6 +907,14 @@ class OntUnit(Base):
     )
     pppoe_username: Mapped[str | None] = mapped_column(String(120))
     pppoe_password: Mapped[str | None] = mapped_column(String(120))
+    # Observed/runtime identity and access metrics (SNMP/TR-069 sourced)
+    mac_address: Mapped[str | None] = mapped_column(String(64))
+    observed_wan_ip: Mapped[str | None] = mapped_column(String(64))
+    observed_pppoe_status: Mapped[str | None] = mapped_column(String(60))
+    observed_lan_mode: Mapped[str | None] = mapped_column(String(60))
+    observed_wifi_clients: Mapped[int | None] = mapped_column(Integer)
+    observed_lan_hosts: Mapped[int | None] = mapped_column(Integer)
+    observed_runtime_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     # Management IP configuration
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -879,6 +929,15 @@ class OntUnit(Base):
     mgmt_ip_address: Mapped[str | None] = mapped_column(String(64))
     mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Provisioning profile tracking (desired → observed state bridge)
+    provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")
+    )
+    provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
+        Enum(OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False),
+    )
+    last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -899,6 +958,7 @@ class OntUnit(Base):
     download_speed_profile = relationship("SpeedProfile", foreign_keys=[download_speed_profile_id])
     upload_speed_profile = relationship("SpeedProfile", foreign_keys=[upload_speed_profile_id])
     tr069_acs_server = relationship("Tr069AcsServer")
+    provisioning_profile = relationship("OntProvisioningProfile")
 
 
 class OntAssignment(Base):
@@ -1492,3 +1552,263 @@ class SpeedProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
     )
+
+
+class OntProvisioningProfile(Base):
+    """Reusable ONT configuration template (desired state).
+
+    Defines what an ONT should look like when fully provisioned:
+    WAN services, speed profiles, WiFi, management, VoIP config.
+    Can be linked to a CatalogOffer as default for new subscriptions.
+    """
+
+    __tablename__ = "ont_provisioning_profiles"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", name="uq_ont_prov_profiles_org_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    profile_type: Mapped[OntProfileType] = mapped_column(
+        Enum(OntProfileType, name="ontprofiletype", create_constraint=False),
+        nullable=False,
+        default=OntProfileType.residential,
+    )
+    description: Mapped[str | None] = mapped_column(Text)
+
+    # Device-level defaults (reuse existing enums)
+    config_method: Mapped[ConfigMethod | None] = mapped_column(
+        Enum(ConfigMethod, name="configmethod", create_constraint=False),
+    )
+    onu_mode: Mapped[OnuMode | None] = mapped_column(
+        Enum(OnuMode, name="onumode", create_constraint=False),
+    )
+    ip_protocol: Mapped[IpProtocol | None] = mapped_column(
+        Enum(IpProtocol, name="ipprotocol", create_constraint=False),
+    )
+
+    # Speed profiles (OLT-level enforcement)
+    download_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speed_profiles.id"),
+    )
+    upload_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("speed_profiles.id"),
+    )
+
+    # Management plane (VLAN tag as integer, not FK — profile is region-agnostic)
+    mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
+        Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
+    )
+    mgmt_vlan_tag: Mapped[int | None] = mapped_column(Integer)
+    mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # WiFi defaults
+    wifi_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    wifi_ssid_template: Mapped[str | None] = mapped_column(String(120))
+    wifi_security_mode: Mapped[str | None] = mapped_column(String(40))
+    wifi_channel: Mapped[str | None] = mapped_column(String(10))
+    wifi_band: Mapped[str | None] = mapped_column(String(20))
+
+    # VoIP
+    voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Metadata
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="ont_provisioning_profiles")
+    download_speed_profile = relationship("SpeedProfile", foreign_keys=[download_speed_profile_id])
+    upload_speed_profile = relationship("SpeedProfile", foreign_keys=[upload_speed_profile_id])
+    wan_services = relationship(
+        "OntProfileWanService",
+        back_populates="profile",
+        cascade="all, delete-orphan",
+        order_by="OntProfileWanService.priority",
+    )
+
+
+class OntProfileWanService(Base):
+    """A single WAN service within a provisioning profile.
+
+    Each profile can have multiple WAN services (internet + IPTV + VoIP),
+    each with its own L2 VLAN config and L3 connection type.
+    """
+
+    __tablename__ = "ont_profile_wan_services"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Service identity
+    service_type: Mapped[WanServiceType] = mapped_column(
+        Enum(WanServiceType, name="wanservicetype", create_constraint=False),
+        nullable=False,
+        default=WanServiceType.internet,
+    )
+    name: Mapped[str | None] = mapped_column(String(120))
+    priority: Mapped[int] = mapped_column(Integer, default=1)
+
+    # L2: VLAN (plain integers — resolved to Vlan records at provisioning time)
+    vlan_mode: Mapped[VlanMode] = mapped_column(
+        Enum(VlanMode, name="vlanmode", create_constraint=False),
+        nullable=False,
+        default=VlanMode.tagged,
+    )
+    s_vlan: Mapped[int | None] = mapped_column(Integer)
+    c_vlan: Mapped[int | None] = mapped_column(Integer)
+    cos_priority: Mapped[int | None] = mapped_column(Integer)
+    mtu: Mapped[int] = mapped_column(Integer, default=1500)
+
+    # L3: Connection
+    connection_type: Mapped[WanConnectionType] = mapped_column(
+        Enum(WanConnectionType, name="wanconnectiontype", create_constraint=False),
+        nullable=False,
+        default=WanConnectionType.pppoe,
+    )
+    nat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ip_mode: Mapped[IpProtocol | None] = mapped_column(
+        Enum(IpProtocol, name="ipprotocol", create_constraint=False),
+    )
+
+    # PPPoE (when connection_type = pppoe)
+    pppoe_username_template: Mapped[str | None] = mapped_column(String(200))
+    pppoe_password_mode: Mapped[PppoePasswordMode | None] = mapped_column(
+        Enum(PppoePasswordMode, name="pppoepasswordmode", create_constraint=False),
+    )
+    pppoe_static_password: Mapped[str | None] = mapped_column(String(500))
+
+    # Static IP (when connection_type = static)
+    static_ip_source: Mapped[str | None] = mapped_column(String(200))
+
+    # LAN port binding
+    bind_lan_ports: Mapped[dict | None] = mapped_column(JSON)
+    bind_ssid_index: Mapped[int | None] = mapped_column(Integer)
+
+    # OMCI-specific (when config_method = omci)
+    gem_port_id: Mapped[int | None] = mapped_column(Integer)
+    t_cont_profile: Mapped[str | None] = mapped_column(String(120))
+
+    # Metadata
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    # Relationships
+    profile = relationship("OntProvisioningProfile", back_populates="wan_services")
+
+
+class VendorModelCapability(Base):
+    """Global hardware capability catalog for ONT/ONU vendor models.
+
+    Stores what a specific device model can do: max WAN services,
+    VLAN tagging support, QinQ, IPv6, LAN/SSID counts, etc.
+    Not org-scoped — hardware facts are universal.
+    """
+
+    __tablename__ = "vendor_model_capabilities"
+    __table_args__ = (
+        UniqueConstraint("vendor", "model", "firmware_pattern", name="uq_vmc_vendor_model_fw"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vendor: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    firmware_pattern: Mapped[str | None] = mapped_column(String(200))
+
+    # TR-069 root object path (e.g. "InternetGatewayDevice" or "Device")
+    tr069_root: Mapped[str | None] = mapped_column(String(200))
+
+    # Structured capability flags
+    supported_features: Mapped[dict | None] = mapped_column(JSON)
+    max_wan_services: Mapped[int] = mapped_column(Integer, default=1)
+    max_lan_ports: Mapped[int] = mapped_column(Integer, default=4)
+    max_ssids: Mapped[int] = mapped_column(Integer, default=2)
+    supports_vlan_tagging: Mapped[bool] = mapped_column(Boolean, default=True)
+    supports_qinq: Mapped[bool] = mapped_column(Boolean, default=False)
+    supports_ipv6: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Metadata
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    # Relationships
+    parameter_maps = relationship(
+        "Tr069ParameterMap",
+        back_populates="capability",
+        cascade="all, delete-orphan",
+        order_by="Tr069ParameterMap.canonical_name",
+    )
+
+
+class Tr069ParameterMap(Base):
+    """Maps canonical parameter names to device-specific TR-069 CWMP paths.
+
+    Example: canonical_name='wan.pppoe.username' maps to
+    tr069_path='InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username'
+    for a Huawei HG8245H.
+    """
+
+    __tablename__ = "tr069_parameter_maps"
+    __table_args__ = (
+        UniqueConstraint(
+            "capability_id", "canonical_name", name="uq_tr069_param_cap_canonical"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    capability_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vendor_model_capabilities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    canonical_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    tr069_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    writable: Mapped[bool] = mapped_column(Boolean, default=True)
+    value_type: Mapped[str | None] = mapped_column(String(40))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    # Relationships
+    capability = relationship("VendorModelCapability", back_populates="parameter_maps")

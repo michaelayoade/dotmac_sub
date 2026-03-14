@@ -408,11 +408,9 @@
         <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing {{ device_health_total }} device{{ '' if device_health_total == 1 else 's' }}{% if query %} matching "{{ query }}"{% endif %}.</p>
         {% else %}
         {% if query %}
-        {% call empty_state("No matching devices", "Try a different search term or clear the filter.") %}
-        {% endcall %}
+        {{ empty_state("No matching devices", "Try a different search term or clear the filter.") }}
         {% else %}
-        {% call empty_state("No devices monitored", "Network devices will appear here once monitoring is configured.") %}
-        {% endcall %}
+        {{ empty_state("No devices monitored", "Network devices will appear here once monitoring is configured.") }}
         {% endif %}
         {% endif %}
     {% endcall %}

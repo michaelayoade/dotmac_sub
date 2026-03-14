@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -18,8 +19,22 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
-from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
+from app.models.network import (
+    GponChannel,
+    OltConfigBackup,
+    OltConfigBackupType,
+    OLTDevice,
+    OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
+    PonType,
+)
+from app.models.network_monitoring import (
+    DeviceInterface,
+    DeviceRole,
+    DeviceType,
+    NetworkDevice,
+)
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
 from app.services.audit_helpers import (
@@ -264,16 +279,22 @@ def sync_monitoring_device(
         values.get("snmp_port") if isinstance(values.get("snmp_port"), int) else 161
     )
     linked.snmp_version = str(values.get("snmp_version") or "v2c")
-    linked.snmp_community = _encrypt_if_set(values, "snmp_community")
+    snmp_community_encrypted = _encrypt_if_set(values, "snmp_community")
+    if snmp_community_encrypted is not None:
+        linked.snmp_community = snmp_community_encrypted
     linked.snmp_username = str(values.get("snmp_username") or "").strip() or None
     linked.snmp_auth_protocol = (
         str(values.get("snmp_auth_protocol") or "").strip() or None
     )
-    linked.snmp_auth_secret = _encrypt_if_set(values, "snmp_auth_secret")
+    snmp_auth_secret_encrypted = _encrypt_if_set(values, "snmp_auth_secret")
+    if snmp_auth_secret_encrypted is not None:
+        linked.snmp_auth_secret = snmp_auth_secret_encrypted
     linked.snmp_priv_protocol = (
         str(values.get("snmp_priv_protocol") or "").strip() or None
     )
-    linked.snmp_priv_secret = _encrypt_if_set(values, "snmp_priv_secret")
+    snmp_priv_secret_encrypted = _encrypt_if_set(values, "snmp_priv_secret")
+    if snmp_priv_secret_encrypted is not None:
+        linked.snmp_priv_secret = snmp_priv_secret_encrypted
     linked.is_active = bool(values.get("is_active"))
     db.commit()
 
@@ -328,16 +349,24 @@ def create_olt(
         return None, integrity_error_message(exc)
 
 
-def _queue_acs_propagation(db: Session, olt: OLTDevice) -> None:
+def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     """Push ACS ManagementServer parameters to all active ONTs under an OLT."""
     from app.models.tr069 import Tr069AcsServer
     from app.services.credential_crypto import decrypt_credential
+    from app.services.network._resolve import resolve_genieacs_with_reason
+
+    stats = {
+        "attempted": 0,
+        "propagated": 0,
+        "unresolved": 0,
+        "errors": 0,
+    }
 
     if not olt.tr069_acs_server_id:
-        return
+        return stats
     server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
     if not server or not server.cwmp_url:
-        return
+        return stats
 
     onts = (
         db.query(OntUnit)
@@ -346,7 +375,7 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> None:
         .all()
     )
     if not onts:
-        return
+        return stats
 
     acs_params: dict[str, str] = {
         "Device.ManagementServer.URL": server.cwmp_url,
@@ -360,19 +389,29 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> None:
         if password:
             acs_params["Device.ManagementServer.Password"] = password
 
-    from app.services.network._resolve import resolve_genieacs
-
     for ont in onts:
+        stats["attempted"] += 1
         try:
-            resolved = resolve_genieacs(db, ont)
+            resolved, reason = resolve_genieacs_with_reason(db, ont)
             if resolved:
                 client, device_id = resolved
                 client.set_parameter_values(device_id, acs_params)
                 logger.info("Propagated ACS config to ONT %s", ont.serial_number)
+                stats["propagated"] += 1
+            else:
+                stats["unresolved"] += 1
+                logger.info(
+                    "Skipped ACS propagation for ONT %s: %s",
+                    ont.serial_number,
+                    reason,
+                )
         except Exception as exc:
             logger.error(
                 "Failed to propagate ACS to ONT %s: %s", ont.serial_number, exc
             )
+            stats["errors"] += 1
+
+    return stats
 
 
 def update_olt(
@@ -689,6 +728,478 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
     if ok and policy_key:
         return True, f"{message} ({policy_key})", policy_key
     return ok, message, policy_key
+
+
+def _parse_walk_composite(lines: list[str], *, suffix_parts: int = 4) -> dict[str, str]:
+    """Parse SNMP walk output while preserving composite ONU indexes."""
+    parsed: dict[str, str] = {}
+    for line in lines:
+        if " = " not in line:
+            continue
+        oid_part, value_part = line.split(" = ", 1)
+        oid_tokens = [p for p in oid_part.split(".") if p.isdigit()]
+        if not oid_tokens:
+            continue
+        if len(oid_tokens) >= 2 and int(oid_tokens[-2]) > 1_000_000:
+            # Huawei packed index format: <packed_fsp>.<onu_id>
+            index = f"{oid_tokens[-2]}.{oid_tokens[-1]}"
+        else:
+            index = ".".join(oid_tokens[-suffix_parts:]) if len(oid_tokens) >= suffix_parts else oid_tokens[-1]
+        value = value_part.split(": ", 1)[-1].strip().strip('"')
+        if value.lower().startswith("no such"):
+            continue
+        parsed[index] = value
+    return parsed
+
+
+def _parse_signal_dbm(raw: str | None, scale: float = 0.01) -> float | None:
+    if not raw:
+        return None
+    import re
+
+    match = re.search(r"(-?\d+)", raw)
+    if not match:
+        return None
+    try:
+        val = int(match.group(1))
+    except ValueError:
+        return None
+    dbm = val * scale
+    if -50.0 <= dbm <= 10.0:
+        return dbm
+    if -50.0 <= val <= 10.0:
+        return float(val)
+    return None
+
+
+def _parse_distance_m(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    import re
+
+    match = re.search(r"(\d+)", raw)
+    if not match:
+        return None
+    try:
+        value = int(match.group(1))
+    except ValueError:
+        return None
+    # Some OLTs return tiny sentinel distances (often 0/1) when ONU is offline.
+    if value <= 1:
+        return None
+    return value
+
+
+def _parse_online_status(raw: str | None) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
+    if not raw:
+        return OnuOnlineStatus.unknown, None
+    import re
+
+    lowered = raw.lower().strip()
+    match = re.search(r"(\d+)", lowered)
+    code = int(match.group(1)) if match else None
+    if code == 1 or "online" in lowered or "up" in lowered:
+        return OnuOnlineStatus.online, None
+    if code in {2, 3, 4, 5} or "offline" in lowered or "down" in lowered:
+        if code == 3:
+            return OnuOnlineStatus.offline, OnuOfflineReason.power_fail
+        if code == 4:
+            return OnuOnlineStatus.offline, OnuOfflineReason.los
+        if code == 5:
+            return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp
+        return OnuOnlineStatus.offline, OnuOfflineReason.unknown
+    return OnuOnlineStatus.unknown, None
+
+
+def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
+    parts = [p for p in str(raw_index).split(".") if p.isdigit()]
+    if len(parts) < 2:
+        return None
+    if len(parts) >= 4:
+        return parts[-4], parts[-3], parts[-2], parts[-1]
+    # Packed Huawei format: <packed_fsp>.<onu_id>
+    return parts[-2], parts[-1]
+
+
+def _decode_huawei_packed_fsp(packed_value: int) -> str | None:
+    """Best-effort decode of Huawei packed FSP index to frame/slot/port."""
+    if packed_value < 0:
+        return None
+    # Common Huawei ifIndex base used for GPON UNI rows.
+    base = 0xFA000000
+    if packed_value < base:
+        return None
+    delta = packed_value - base
+    if delta % 256 != 0:
+        return None
+    slot_port = delta // 256
+    frame = 0
+    slot = slot_port // 16
+    port = slot_port % 16
+    if slot < 0 or port < 0:
+        return None
+    return f"{frame}/{slot}/{port}"
+
+
+def _extract_pon_hint(value: str | None) -> str | None:
+    import re
+
+    if not value:
+        return None
+    match = re.search(r"(\d+/\d+/\d+)\s*$", str(value).strip())
+    if match:
+        return match.group(1)
+    return None
+
+
+def _pon_sort_key(hint: str) -> tuple[int, int, int]:
+    parts = hint.split("/")
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except Exception:
+        return (10**9, 10**9, 10**9)
+
+
+def _build_packed_fsp_map(db: Session, linked: NetworkDevice, indexes: set[str]) -> dict[str, str]:
+    """Map Huawei packed FSP integers to detected PON hints (0/s/p)."""
+    packed_values: list[int] = []
+    for idx in indexes:
+        parts = [p for p in idx.split(".") if p.isdigit()]
+        if len(parts) == 2:
+            try:
+                packed_values.append(int(parts[0]))
+            except ValueError:
+                continue
+    if not packed_values:
+        return {}
+    unique_packed = sorted(set(packed_values))
+
+    iface_names = list(
+        db.scalars(
+            select(DeviceInterface.name).where(DeviceInterface.device_id == linked.id)
+        ).all()
+    )
+    hints = sorted(
+        {
+            h
+            for name in iface_names
+            if (h := _extract_pon_hint(name))
+        },
+        key=_pon_sort_key,
+    )
+    if not hints:
+        return {}
+    return {str(packed): hint for packed, hint in zip(unique_packed, hints, strict=False)}
+
+
+def _run_simple_v2c_walk(linked: NetworkDevice, oid: str, *, timeout: int = 45, bulk: bool = False) -> list[str]:
+    """Run SNMP walk with minimal flags for Huawei compatibility."""
+    host = linked.mgmt_ip or linked.hostname
+    if not host:
+        raise RuntimeError("Missing SNMP host")
+    if linked.snmp_port:
+        host = f"{host}:{linked.snmp_port}"
+    if (linked.snmp_version or "v2c").lower() not in {"v2c", "2c"}:
+        raise RuntimeError("Only SNMP v2c is supported for ONT sync")
+    community = decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
+    if not community:
+        raise RuntimeError("SNMP community is not configured")
+
+    cmd = "snmpbulkwalk" if bulk else "snmpwalk"
+    args = [cmd, "-v2c", "-c", community, host, oid]
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "SNMP walk failed").strip()
+        raise RuntimeError(f"{oid}: {err}")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def sync_onts_from_olt_snmp(
+    db: Session, olt_id: str
+) -> tuple[bool, str, dict[str, object]]:
+    """Discover ONUs from an OLT by SNMP and upsert OntUnit rows.
+
+    Supports vendor-specific OID profiles (Huawei, ZTE, Nokia) with
+    automatic vendor detection from the linked monitoring device/OLT.
+    """
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", {"discovered": 0, "created": 0, "updated": 0}
+
+    linked = _find_linked_network_device(
+        db,
+        mgmt_ip=olt.mgmt_ip,
+        hostname=olt.hostname,
+        name=olt.name,
+    )
+    if not linked:
+        return False, "No linked monitoring device found for this OLT", {"discovered": 0, "created": 0, "updated": 0}
+    if not linked.snmp_enabled:
+        return False, "SNMP is disabled on the linked monitoring device", {"discovered": 0, "created": 0, "updated": 0}
+
+    vendor_text = str(linked.vendor or olt.vendor or "").lower()
+    vendor_key = "generic"
+    if "huawei" in vendor_text:
+        vendor_key = "huawei"
+    elif "zte" in vendor_text:
+        vendor_key = "zte"
+    elif "nokia" in vendor_text:
+        vendor_key = "nokia"
+
+    vendor_oid_profiles: dict[str, dict[str, str]] = {
+        "huawei": {
+            "status": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15",
+            "olt_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
+            "onu_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6",
+            "distance": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.20",
+        },
+        "zte": {
+            "status": ".1.3.6.1.4.1.3902.1082.500.10.2.2.1.1.10",
+            "olt_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.2",
+            "onu_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.3",
+            "distance": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.7",
+        },
+        "nokia": {
+            "status": ".1.3.6.1.4.1.637.61.1.35.10.1.1.8",
+            "olt_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.2",
+            "onu_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.4",
+            "distance": ".1.3.6.1.4.1.637.61.1.35.10.1.1.9",
+        },
+        "generic": {
+            "status": ".1.3.6.1.4.1.17409.2.3.6.1.1.8",
+            "olt_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.2",
+            "onu_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.3",
+            "distance": ".1.3.6.1.4.1.17409.2.3.6.1.1.9",
+        },
+    }
+    oids = vendor_oid_profiles[vendor_key]
+
+    try:
+        # Fast scalar probe first for clearer reachability errors.
+        sysname_oid = ".1.3.6.1.2.1.1.5.0"
+        _run_simple_v2c_walk(linked, sysname_oid, timeout=20, bulk=False)
+        # Mandatory table: ONU run status (used to discover ONUs).
+        status_rows = _parse_walk_composite(
+            _run_simple_v2c_walk(
+                linked,
+                oids["status"],
+                timeout=90,
+                bulk=False,
+            )
+        )
+    except Exception as exc:
+        return False, f"SNMP walk failed: {exc!s}", {"discovered": 0, "created": 0, "updated": 0}
+
+    # Optional tables: keep sync useful even when optical OIDs are slow/blocked.
+    olt_rx_rows: dict[str, str] = {}
+    onu_rx_rows: dict[str, str] = {}
+    distance_rows: dict[str, str] = {}
+    try:
+        olt_rx_rows = _parse_walk_composite(
+            _run_simple_v2c_walk(
+                linked,
+                oids["olt_rx"],
+                timeout=90,
+                bulk=False,
+            )
+        )
+    except Exception:
+        olt_rx_rows = {}
+    try:
+        onu_rx_rows = _parse_walk_composite(
+            _run_simple_v2c_walk(
+                linked,
+                oids["onu_rx"],
+                timeout=90,
+                bulk=False,
+            )
+        )
+    except Exception:
+        onu_rx_rows = {}
+    try:
+        distance_rows = _parse_walk_composite(
+            _run_simple_v2c_walk(
+                linked,
+                oids["distance"],
+                timeout=90,
+                bulk=False,
+            )
+        )
+    except Exception:
+        distance_rows = {}
+
+    all_indexes = set(status_rows) | set(olt_rx_rows) | set(onu_rx_rows) | set(distance_rows)
+    if not all_indexes:
+        return False, "No ONUs discovered from SNMP on this OLT", {"discovered": 0, "created": 0, "updated": 0}
+
+    existing_onts = list(
+        db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
+    )
+    by_external_id = {
+        str(o.external_id): o for o in existing_onts if getattr(o, "external_id", None)
+    }
+    by_serial = {o.serial_number: o for o in existing_onts if o.serial_number}
+
+    created = 0
+    updated = 0
+    now = datetime.now(UTC)
+    olt_tag = str(olt.id).split("-")[0].upper()
+
+    packed_fsp_map = (
+        _build_packed_fsp_map(db, linked, all_indexes)
+        if vendor_key == "huawei"
+        else {}
+    )
+
+    vendor_serial_prefix = {
+        "huawei": "HW",
+        "zte": "ZT",
+        "nokia": "NK",
+        "generic": "OLT",
+    }.get(vendor_key, "OLT")
+
+    for idx in sorted(all_indexes):
+        parsed = _split_onu_index(idx)
+        if not parsed:
+            continue
+        frame = "0"
+        slot = "0"
+        port = "0"
+        onu = "0"
+        if len(parsed) >= 4:
+            frame, slot, port, onu = parsed
+            fsp = f"{frame}/{slot}/{port}"
+        else:
+            packed, onu = parsed
+            if vendor_key == "huawei":
+                packed_int = int(packed) if str(packed).isdigit() else None
+                decoded = (
+                    _decode_huawei_packed_fsp(packed_int)
+                    if packed_int is not None
+                    else None
+                )
+                fsp = packed_fsp_map.get(str(packed)) or decoded or f"0/0/{packed}"
+            else:
+                # Best-effort for vendors exposing compact indexes.
+                fsp = f"0/0/{packed}"
+        fsp_parts = fsp.split("/")
+        frame = fsp_parts[0] if len(fsp_parts) > 0 else "0"
+        slot = fsp_parts[1] if len(fsp_parts) > 1 else "0"
+        port = fsp_parts[2] if len(fsp_parts) > 2 else "0"
+        board = f"{frame}/{slot}"
+        external_id = f"{vendor_key}:{idx}"
+        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{frame}{slot}{port}{onu}"
+
+        status, offline_reason = _parse_online_status(status_rows.get(idx))
+        olt_rx = _parse_signal_dbm(olt_rx_rows.get(idx))
+        onu_rx = _parse_signal_dbm(onu_rx_rows.get(idx))
+        distance = _parse_distance_m(distance_rows.get(idx))
+
+        ont = by_external_id.get(external_id) or by_serial.get(synthetic_serial)
+        if ont is None:
+            ont = OntUnit(
+                serial_number=synthetic_serial,
+                model=olt.model,
+                vendor=olt.vendor or vendor_key.title(),
+                is_active=True,
+                olt_device_id=olt.id,
+                pon_type=PonType.gpon,
+                gpon_channel=GponChannel.gpon,
+                board=board,
+                port=port,
+                external_id=external_id,
+                name=f"ONU {fsp}:{onu}",
+                online_status=status,
+                tr069_acs_server_id=olt.tr069_acs_server_id,
+            )
+            db.add(ont)
+            created += 1
+            by_external_id[external_id] = ont
+            by_serial[synthetic_serial] = ont
+        else:
+            updated += 1
+            ont.olt_device_id = olt.id
+            ont.vendor = ont.vendor or (olt.vendor or vendor_key.title())
+            ont.model = ont.model or olt.model
+            ont.board = board
+            ont.port = port
+            ont.external_id = external_id
+            ont.pon_type = PonType.gpon
+            ont.gpon_channel = GponChannel.gpon
+            ont.online_status = status
+            ont.tr069_acs_server_id = olt.tr069_acs_server_id
+
+        ont.olt_rx_signal_dbm = olt_rx
+        ont.onu_rx_signal_dbm = onu_rx
+        ont.distance_meters = distance
+        ont.signal_updated_at = now
+        if status == OnuOnlineStatus.online:
+            ont.last_seen_at = now
+            ont.offline_reason = None
+        elif status == OnuOnlineStatus.offline:
+            ont.offline_reason = offline_reason
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return False, f"Failed to save discovered ONTs: {exc!s}", {"discovered": len(all_indexes), "created": created, "updated": updated}
+
+    tr069_runtime_synced = 0
+    tr069_runtime_errors = 0
+    if olt.tr069_acs_server_id:
+        try:
+            from app.services.network.ont_tr069 import OntTR069
+
+            onts_for_olt = list(
+                db.scalars(
+                    select(OntUnit)
+                    .where(OntUnit.olt_device_id == olt.id)
+                    .where(OntUnit.is_active.is_(True))
+                ).all()
+            )
+            for ont in onts_for_olt:
+                try:
+                    summary = OntTR069.get_device_summary(
+                        db,
+                        str(ont.id),
+                        persist_observed_runtime=True,
+                    )
+                    if summary.available:
+                        tr069_runtime_synced += 1
+                except Exception:
+                    tr069_runtime_errors += 1
+        except Exception:
+            tr069_runtime_errors += 1
+
+    propagation_stats: dict[str, int] = {}
+    if olt.tr069_acs_server_id:
+        try:
+            propagation_stats = _queue_acs_propagation(db, olt)
+        except Exception as exc:
+            logger.error("ACS propagation after ONT sync failed: %s", exc)
+            propagation_stats = {"attempted": 0, "propagated": 0, "unresolved": 0, "errors": 1}
+
+    message = (
+        f"{vendor_key.title()} ONT sync complete: discovered {len(all_indexes)}, "
+        f"created {created}, updated {updated}."
+    )
+    result_stats = {
+        "discovered": len(all_indexes),
+        "created": created,
+        "updated": updated,
+        "tr069_runtime_synced": tr069_runtime_synced,
+        "tr069_runtime_errors": tr069_runtime_errors,
+    }
+    if propagation_stats:
+        result_stats["acs_propagation"] = propagation_stats
+    return True, message, result_stats
 
 
 def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, str]:

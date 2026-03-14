@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
 from app.services.genieacs import GenieACSError
-from app.services.network._resolve import resolve_genieacs
+from app.services.network._resolve import resolve_genieacs_with_reason
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,13 @@ class OntActions:
     """Remote ONT action dispatcher using GenieACS."""
 
     @staticmethod
+    def _resolve_or_error(db: Session, ont: OntUnit) -> tuple[Any | None, str | None]:
+        resolved, reason = resolve_genieacs_with_reason(db, ont)
+        if not resolved:
+            return None, reason
+        return resolved, None
+
+    @staticmethod
     def reboot(db: Session, ont_id: str) -> ActionResult:
         """Send reboot command to ONT via GenieACS.
 
@@ -90,11 +97,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -128,11 +135,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -168,11 +175,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -232,11 +239,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -282,11 +289,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -337,11 +344,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved
@@ -389,11 +396,11 @@ class OntActions:
         if not ont:
             return ActionResult(success=False, message="ONT not found.")
 
-        resolved = resolve_genieacs(db, ont)
+        resolved, reason = OntActions._resolve_or_error(db, ont)
         if not resolved:
             return ActionResult(
                 success=False,
-                message="No GenieACS server configured for this ONT.",
+                message=reason or "No GenieACS server configured for this ONT.",
             )
 
         client, device_id = resolved

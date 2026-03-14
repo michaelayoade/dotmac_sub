@@ -206,6 +206,8 @@ def olt_detail(
     ssh_test_message: str | None = None,
     snmp_test_status: str | None = None,
     snmp_test_message: str | None = None,
+    sync_status: str | None = None,
+    sync_message: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     page_data = web_network_core_devices_service.olt_detail_page_data(db, olt_id)
@@ -226,6 +228,8 @@ def olt_detail(
             "ssh_test_message": ssh_test_message,
             "snmp_test_status": snmp_test_status,
             "snmp_test_message": snmp_test_message,
+            "sync_status": sync_status,
+            "sync_message": sync_message,
         }
     )
     return templates.TemplateResponse("admin/network/olts/detail.html", context)
@@ -284,6 +288,45 @@ def olt_test_snmp_connection(request: Request, olt_id: str, db: Session = Depend
     )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post("/olts/{olt_id}/sync-onts", dependencies=[Depends(require_permission("network:write"))])
+def olt_sync_onts(request: Request, olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    ok, message, stats = web_network_olts_service.sync_onts_from_olt_snmp(db, olt_id)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="sync_onts",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "stats": stats,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.get("/olts/{olt_id}/sync-onts", dependencies=[Depends(require_permission("network:write"))])
+def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
+    """GET fallback for auth-refresh redirects targeting the sync POST endpoint."""
+    message = quote_plus("Sync ONTs uses POST. Please click Sync ONTs again.")
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
         status_code=303,
     )
 
@@ -421,6 +464,8 @@ def onts_list(
     request: Request,
     status: str | None = None,
     olt_id: str | None = None,
+    pon_port_id: str | None = None,
+    pon_hint: str | None = None,
     zone_id: str | None = None,
     online_status: str | None = None,
     signal_quality: str | None = None,
@@ -436,6 +481,8 @@ def onts_list(
         db,
         status=status,
         olt_id=olt_id,
+        pon_port_id=pon_port_id,
+        pon_hint=pon_hint,
         zone_id=zone_id,
         online_status=online_status,
         signal_quality=signal_quality,
@@ -624,6 +671,8 @@ def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db))
 
 @router.post("/onts/{ont_id}/assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_db)):
+    from sqlalchemy.exc import IntegrityError
+
     try:
         ont = network_service.ont_units.get(db=db, unit_id=ont_id)
     except HTTPException:
@@ -649,7 +698,25 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
             "form": web_network_ont_assignments_service.form_payload(values),
         })
         return templates.TemplateResponse("admin/network/onts/assign.html", context)
-    web_network_ont_assignments_service.create_assignment(db, ont, values)
+    try:
+        web_network_ont_assignments_service.create_assignment(db, ont, values)
+    except IntegrityError as exc:
+        db.rollback()
+        msg = (
+            "This ONT is already assigned. Refresh the page and try again."
+            if "ix_ont_assignments_active_unit" in str(exc)
+            else "Could not create assignment due to a data conflict."
+        )
+        deps = web_network_ont_assignments_service.assignment_form_dependencies(db)
+        context = _base_context(request, db, active_page="onts")
+        context.update({
+            "ont": ont,
+            **deps,
+            "action_url": f"/admin/network/onts/{ont.id}/assign",
+            "error": msg,
+            "form": web_network_ont_assignments_service.form_payload(values),
+        })
+        return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
     return RedirectResponse(f"/admin/network/onts/{ont.id}", status_code=303)
 
@@ -998,6 +1065,50 @@ def ont_factory_reset(
         metadata={"success": result.success, "message": result.message},
     )
     status_code = 200 if result.success else 502
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/apply-profile", dependencies=[Depends(require_permission("network:write"))])
+def ont_apply_profile(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Apply a provisioning profile to an ONT."""
+    form = parse_form_data_sync(request)
+    profile_id = _form_str(form, "profile_id")
+    if not profile_id:
+        return JSONResponse(
+            {"success": False, "message": "No profile selected"},
+            status_code=400,
+            headers={"HX-Trigger": '{"showToast": {"message": "No profile selected", "type": "error"}}'},
+        )
+
+    from app.services.network.ont_profile_apply import apply_profile_to_ont
+
+    result = apply_profile_to_ont(db, ont_id, profile_id)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="apply_profile",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"profile_id": profile_id, "success": result.success, "fields_updated": result.fields_updated},
+    )
+    status_code = 200 if result.success else 400
     headers = {
         "HX-Trigger": '{"showToast": {"message": "'
         + result.message.replace('"', '\\"')

@@ -1,5 +1,6 @@
 """Helpers for admin subscriber detail page."""
 
+import logging
 import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -26,6 +27,8 @@ from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
+
+logger = logging.getLogger(__name__)
 
 
 def _format_attachment_size(size_bytes: object) -> str:
@@ -196,63 +199,76 @@ def build_subscriber_geocode_target(primary_address):
 def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
     """Collect ONT/CPE devices and direct management links for subscriber detail."""
     equipment: list[dict[str, object]] = []
+    try:
+        ont_assignments = (
+            db.query(OntAssignment)
+            .options(joinedload(OntAssignment.ont_unit))
+            .filter(
+                OntAssignment.subscriber_id == subscriber_id,
+                OntAssignment.active.is_(True),
+            )
+            .order_by(OntAssignment.created_at.desc())
+            .all()
+        )
+        for assignment in ont_assignments:
+            ont = assignment.ont_unit
+            if not ont:
+                continue
+            status_value = (
+                ont.online_status.value
+                if getattr(ont, "online_status", None) is not None
+                and hasattr(ont.online_status, "value")
+                else str(getattr(ont, "online_status", "") or "")
+            ).strip().lower()
+            equipment.append(
+                {
+                    "type": "ONT",
+                    "model": ont.model or ont.name or "ONT",
+                    "serial": ont.serial_number or "-",
+                    "online": status_value == "online",
+                    "detail_url": f"/admin/network/onts/{ont.id}",
+                    "tr069_url": f"/admin/network/onts/{ont.id}?tab=tr069",
+                }
+            )
+    except Exception:
+        logger.exception(
+            "Failed to load subscriber ONT equipment snapshot",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
 
-    ont_assignments = (
-        db.query(OntAssignment)
-        .options(joinedload(OntAssignment.ont_unit))
-        .filter(
-            OntAssignment.subscriber_id == subscriber_id,
-            OntAssignment.active.is_(True),
+    try:
+        cpe_rows = db.execute(
+            select(
+                CPEDevice.id,
+                cast(CPEDevice.device_type, String).label("device_type"),
+                cast(CPEDevice.status, String).label("status"),
+                CPEDevice.model,
+                CPEDevice.vendor,
+                CPEDevice.serial_number,
+                CPEDevice.mac_address,
+            )
+            .where(CPEDevice.subscriber_id == subscriber_id)
+            .order_by(CPEDevice.created_at.desc())
+        ).all()
+        for cpe in cpe_rows:
+            cpe_type = str(getattr(cpe, "device_type", "") or "CPE")
+            status_value = str(getattr(cpe, "status", "") or "").strip().lower()
+            equipment.append(
+                {
+                    "type": cpe_type.upper(),
+                    "model": (cpe.model or cpe.vendor or cpe_type.upper()),
+                    "serial": (cpe.serial_number or cpe.mac_address or "-"),
+                    "online": status_value == "active",
+                    "detail_url": f"/admin/network/cpes/{cpe.id}",
+                }
+            )
+    except Exception:
+        logger.exception(
+            "Failed to load subscriber CPE equipment snapshot",
+            extra={"subscriber_id": str(subscriber_id)},
         )
-        .order_by(OntAssignment.created_at.desc())
-        .all()
-    )
-    for assignment in ont_assignments:
-        ont = assignment.ont_unit
-        if not ont:
-            continue
-        status_value = (
-            ont.online_status.value
-            if getattr(ont, "online_status", None) is not None
-            and hasattr(ont.online_status, "value")
-            else str(getattr(ont, "online_status", "") or "")
-        ).strip().lower()
-        equipment.append(
-            {
-                "type": "ONT",
-                "model": ont.model or ont.name or "ONT",
-                "serial": ont.serial_number or "-",
-                "online": status_value == "online",
-                "detail_url": f"/admin/network/onts/{ont.id}",
-                "tr069_url": f"/admin/network/onts/{ont.id}?tab=tr069",
-            }
-        )
-
-    cpe_rows = db.execute(
-        select(
-            CPEDevice.id,
-            cast(CPEDevice.device_type, String).label("device_type"),
-            cast(CPEDevice.status, String).label("status"),
-            CPEDevice.model,
-            CPEDevice.vendor,
-            CPEDevice.serial_number,
-            CPEDevice.mac_address,
-        )
-        .where(CPEDevice.subscriber_id == subscriber_id)
-        .order_by(CPEDevice.created_at.desc())
-    ).all()
-    for cpe in cpe_rows:
-        cpe_type = str(getattr(cpe, "device_type", "") or "CPE")
-        status_value = str(getattr(cpe, "status", "") or "").strip().lower()
-        equipment.append(
-            {
-                "type": cpe_type.upper(),
-                "model": (cpe.model or cpe.vendor or cpe_type.upper()),
-                "serial": (cpe.serial_number or cpe.mac_address or "-"),
-                "online": status_value == "active",
-                "detail_url": f"/admin/network/cpes/{cpe.id}",
-            }
-        )
+        db.rollback()
 
     primary_ont = next((item for item in equipment if item.get("type") == "ONT"), None)
     return {
@@ -298,6 +314,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             else:
                 online_status[str(sub.id)] = False
     except Exception:
+        logger.exception(
+            "Failed to load subscriber subscriptions/online status for detail snapshot",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
         subscriptions = []
         online_status = {}
 
@@ -358,6 +379,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             )
             current_balance = balance_due + available_credit
     except Exception:
+        logger.exception(
+            "Failed to load subscriber billing snapshot",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
         accounts = []
         invoices = []
         balance_due = Decimal("0.00")
@@ -386,6 +412,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 item for item in all_notifications if item.recipient in recipients
             ][:5]
     except Exception:
+        logger.exception(
+            "Failed to load subscriber notifications snapshot",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
         notifications = []
 
     monthly_bill = (
@@ -636,18 +667,34 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         subscriber=subscriber,
         subscriber_id=subscriber_id,
     )
-    timeline = build_subscriber_timeline(db=db, subscriber_id=subscriber_id)
-    offers = catalog_service.offers.list(
-        db=db,
-        service_type=None,
-        access_type=None,
-        status=OfferStatus.active.value,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=500,
-        offset=0,
-    )
+    try:
+        timeline = build_subscriber_timeline(db=db, subscriber_id=subscriber_id)
+    except Exception:
+        logger.exception(
+            "Failed to load subscriber timeline for detail page",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
+        timeline = []
+    try:
+        offers = catalog_service.offers.list(
+            db=db,
+            service_type=None,
+            access_type=None,
+            status=OfferStatus.active.value,
+            is_active=True,
+            order_by="name",
+            order_dir="asc",
+            limit=500,
+            offset=0,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to load active offers for subscriber detail page",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
+        offers = []
     try:
         subscriber_user_access = (
             web_customer_user_access_service.build_subscriber_user_access_state(
@@ -656,6 +703,11 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
             )
         )
     except Exception as exc:
+        logger.exception(
+            "Failed to load subscriber user access state for detail page",
+            extra={"subscriber_id": str(subscriber_id)},
+        )
+        db.rollback()
         subscriber_user_access = {"error": str(exc)}
 
     return {

@@ -20,6 +20,8 @@ from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
     PonPort,
 )
 from app.models.network_monitoring import NetworkDevice
@@ -63,6 +65,16 @@ _VENDOR_SIGNAL_SCALE: dict[str, float] = {
     "huawei": 0.01,
     "zte": 0.01,
     "nokia": 0.01,
+}
+
+# Sentinel values commonly used by vendors to indicate invalid/unavailable optics.
+_SIGNAL_SENTINELS: set[int] = {
+    2147483647,
+    2147483646,
+    65535,
+    65534,
+    32767,
+    -2147483648,
 }
 
 # Generic/fallback OIDs (ITU-T G.988 standard GPON MIB)
@@ -147,6 +159,146 @@ class OntSignalReading:
     onu_rx_dbm: float | None
     distance_m: int | None
     is_online: bool | None
+
+
+def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
+    """Split a raw SNMP index into normalized numeric parts."""
+    parts = [p for p in str(raw_index).split(".") if p.isdigit()]
+    if len(parts) >= 4:
+        return tuple(parts[-4:])
+    if len(parts) >= 2:
+        # Packed format: <packed_fsp>.<onu_id>
+        return tuple(parts[-2:])
+    return None
+
+
+def _reading_sort_key(index: str) -> tuple[int, ...]:
+    """Stable numeric sort key for ONU indexes."""
+    parts = [int(p) for p in str(index).split(".") if p.isdigit()]
+    if not parts:
+        return (10**9,)
+    return tuple(parts)
+
+
+def _fsp_hint_from_index(raw_index: str) -> str | None:
+    """Return frame/slot/port hint from a composite SNMP index."""
+    parsed = _split_onu_index(raw_index)
+    if not parsed or len(parsed) != 4:
+        return None
+    frame, slot, port, _onu = parsed
+    return f"{frame}/{slot}/{port}"
+
+
+def _fsp_hint_from_ont(ont: OntUnit) -> str | None:
+    """Derive frame/slot/port hint from ONT board/port fields."""
+    board_parts = [p for p in str(getattr(ont, "board", "")).split("/") if p.isdigit()]
+    port_parts = [p for p in str(getattr(ont, "port", "")).split("/") if p.isdigit()]
+
+    if len(port_parts) >= 3:
+        return f"{port_parts[-3]}/{port_parts[-2]}/{port_parts[-1]}"
+    if len(board_parts) >= 2 and len(port_parts) >= 1:
+        return f"{board_parts[-2]}/{board_parts[-1]}/{port_parts[-1]}"
+    return None
+
+
+def _build_reading_targets(
+    db: Session,
+    *,
+    olt: OLTDevice,
+    readings: list[OntSignalReading],
+    assignments: list[OntAssignment],
+) -> list[tuple[OntUnit, OntSignalReading]]:
+    """Map SNMP readings to ONTs using external_id/FSP hints, then fallback order."""
+    assignment_ont_ids = [
+        ont_id
+        for ont_id in (a.ont_unit_id for a in assignments)
+        if ont_id is not None
+    ]
+    direct_ont_ids = list(
+        db.scalars(
+            select(OntUnit.id)
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.is_active.is_(True))
+        ).all()
+    )
+
+    ordered_ids: list = []
+    seen_ids: set = set()
+    for ont_id in assignment_ont_ids + direct_ont_ids:
+        if ont_id in seen_ids:
+            continue
+        seen_ids.add(ont_id)
+        ordered_ids.append(ont_id)
+
+    if not ordered_ids:
+        return []
+
+    id_to_ont: dict = {
+        ont.id: ont
+        for ont in db.scalars(select(OntUnit).where(OntUnit.id.in_(ordered_ids))).all()
+    }
+    ordered_onts = [id_to_ont[ont_id] for ont_id in ordered_ids if ont_id in id_to_ont]
+    if not ordered_onts:
+        return []
+
+    by_external_id: dict[str, OntUnit] = {}
+    by_fsp_hint: dict[str, list[OntUnit]] = {}
+    for ont in ordered_onts:
+        external_id = str(getattr(ont, "external_id", "") or "").strip().lower()
+        if external_id:
+            by_external_id[external_id] = ont
+        fsp_hint = _fsp_hint_from_ont(ont)
+        if fsp_hint:
+            by_fsp_hint.setdefault(fsp_hint, []).append(ont)
+
+    used_ont_ids: set = set()
+    fallback_queue = list(ordered_onts)
+    targets: list[tuple[OntUnit, OntSignalReading]] = []
+    vendor_lower = str(getattr(olt, "vendor", "") or "").lower()
+
+    for reading in sorted(readings, key=lambda r: _reading_sort_key(r.onu_index)):
+        matched: OntUnit | None = None
+
+        # 1) Exact external_id match (preferred, deterministic)
+        external_candidates = []
+        if "huawei" in vendor_lower:
+            external_candidates.append(f"huawei:{reading.onu_index}")
+        if "zte" in vendor_lower:
+            external_candidates.append(f"zte:{reading.onu_index}")
+        if "nokia" in vendor_lower:
+            external_candidates.append(f"nokia:{reading.onu_index}")
+        external_candidates.append(reading.onu_index)
+
+        for candidate in external_candidates:
+            ont = by_external_id.get(candidate.lower())
+            if ont and ont.id not in used_ont_ids:
+                matched = ont
+                break
+
+        # 2) FSP hint match (frame/slot/port)
+        if matched is None:
+            fsp_hint = _fsp_hint_from_index(reading.onu_index)
+            if fsp_hint:
+                for ont in by_fsp_hint.get(fsp_hint, []):
+                    if ont.id not in used_ont_ids:
+                        matched = ont
+                        break
+
+        # 3) Fallback to ordered ONT queue to preserve legacy behavior
+        if matched is None:
+            while fallback_queue:
+                candidate = fallback_queue.pop(0)
+                if candidate.id not in used_ont_ids:
+                    matched = candidate
+                    break
+
+        if matched is None:
+            continue
+
+        used_ont_ids.add(matched.id)
+        targets.append((matched, reading))
+
+    return targets
 
 
 def _get_olt_snmp_config(db: Session, olt: OLTDevice) -> dict[str, str | int | None]:
@@ -247,18 +399,39 @@ def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 30) ->
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def _parse_snmp_table(lines: list[str]) -> dict[str, str]:
+def _normalize_numeric_oid(oid: str) -> str:
+    """Normalize an OID token to numeric-dot notation (strip 'iso.')."""
+    raw = oid.strip()
+    if raw.startswith("iso."):
+        return raw.replace("iso.", "1.", 1)
+    if raw.startswith("."):
+        return raw[1:]
+    return raw
+
+
+def _extract_index_from_oid(oid_part: str, base_oid: str | None = None) -> str | None:
+    """Extract SNMP table index from full OID, using base OID when provided."""
+    normalized = _normalize_numeric_oid(oid_part)
+    if base_oid:
+        base = _normalize_numeric_oid(base_oid)
+        if normalized.startswith(base + "."):
+            return normalized[len(base) + 1 :]
+    parts = normalized.rsplit(".", 1)
+    if len(parts) < 2:
+        return None
+    return parts[-1]
+
+
+def _parse_snmp_table(lines: list[str], *, base_oid: str | None = None) -> dict[str, str]:
     """Parse SNMP walk output into {index: value} dict."""
     parsed: dict[str, str] = {}
     for line in lines:
         if " = " not in line:
             continue
         oid_part, value_part = line.split(" = ", 1)
-        # Extract the index portion (everything after the base OID)
-        parts = oid_part.rsplit(".", 1)
-        if len(parts) < 2:
+        index = _extract_index_from_oid(oid_part, base_oid=base_oid)
+        if not index:
             continue
-        index = parts[-1]
         # Extract value after type prefix
         value = value_part.split(": ", 1)[-1].strip().strip('"')
         if value.lower().startswith("no such"):
@@ -267,18 +440,18 @@ def _parse_snmp_table(lines: list[str]) -> dict[str, str]:
     return parsed
 
 
-def _parse_snmp_table_composite(lines: list[str]) -> dict[str, str]:
+def _parse_snmp_table_composite(
+    lines: list[str], *, base_oid: str | None = None
+) -> dict[str, str]:
     """Parse SNMP walk output preserving composite indexes (e.g., shelf.slot.port.onu)."""
     parsed: dict[str, str] = {}
     for line in lines:
         if " = " not in line:
             continue
         oid_part, value_part = line.split(" = ", 1)
-        # Get full index by splitting after known base OID depth
-        # We take the last 4 components as the index for Huawei-style
-        index_parts = oid_part.split(".")
-        # Use last 4 parts as composite index
-        index = ".".join(index_parts[-4:]) if len(index_parts) >= 4 else index_parts[-1]
+        index = _extract_index_from_oid(oid_part, base_oid=base_oid)
+        if not index:
+            continue
         value = value_part.split(": ", 1)[-1].strip().strip('"')
         if value.lower().startswith("no such"):
             continue
@@ -286,23 +459,56 @@ def _parse_snmp_table_composite(lines: list[str]) -> dict[str, str]:
     return parsed
 
 
-def _parse_signal_value(raw: str, scale: float = 0.01) -> float | None:
-    """Parse an SNMP signal value string to dBm float."""
+def _parse_signal_value(
+    raw: str,
+    scale: float = 0.01,
+    *,
+    vendor: str = "",
+    metric: str = "olt_rx",
+    stats: dict[str, int] | None = None,
+) -> float | None:
+    """Parse an SNMP signal value string to dBm float.
+
+    Supports vendor/metric-specific decoding and explicit sentinel handling.
+    """
     match = re.search(r"(-?\d+)", raw)
     if not match:
+        if stats is not None:
+            stats["missing"] = stats.get("missing", 0) + 1
         return None
     try:
         raw_int = int(match.group(1))
     except ValueError:
+        if stats is not None:
+            stats["parse_error"] = stats.get("parse_error", 0) + 1
         return None
-    # Vendors report in 0.01 dBm units typically
-    dbm = raw_int * scale
+
+    if raw_int in _SIGNAL_SENTINELS:
+        if stats is not None:
+            stats["sentinel"] = stats.get("sentinel", 0) + 1
+        return None
+
+    vendor_lower = vendor.lower().strip()
+
+    # Huawei ONU Rx commonly reports offset integer values, e.g. 7113 -> -28.87 dBm.
+    if "huawei" in vendor_lower and metric == "onu_rx" and raw_int > 1000:
+        dbm = (raw_int - 10000) / 100.0
+    else:
+        # Vendors report in 0.01 dBm units typically.
+        dbm = raw_int * scale
+
     # Sanity check — optical signals are typically between 0 and -45 dBm
     if dbm < -50.0 or dbm > 10.0:
         # Might be in different units, try as-is
         if -50.0 <= raw_int <= 10.0:
+            if stats is not None:
+                stats["parsed"] = stats.get("parsed", 0) + 1
             return float(raw_int)
+        if stats is not None:
+            stats["out_of_range"] = stats.get("out_of_range", 0) + 1
         return None
+    if stats is not None:
+        stats["parsed"] = stats.get("parsed", 0) + 1
     return dbm
 
 
@@ -312,9 +518,13 @@ def _parse_distance(raw: str) -> int | None:
     if not match:
         return None
     try:
-        return int(match.group(1))
+        value = int(match.group(1))
     except ValueError:
         return None
+    # Treat tiny values as unknown sentinel responses from some OLTs.
+    if value <= 1:
+        return None
+    return value
 
 
 def _parse_online_status(raw: str) -> bool | None:
@@ -323,9 +533,12 @@ def _parse_online_status(raw: str) -> bool | None:
     match = re.search(r"(\d+)", lowered)
     if match:
         code = int(match.group(1))
-        # Huawei: 1=online, 2=offline, 3=power_off
-        # ZTE: similar convention
-        return code == 1
+        # Known vendor conventions: 1=online, 2/3/4/5=offline states.
+        if code == 1:
+            return True
+        if code in {2, 3, 4, 5}:
+            return False
+        return None
     if "online" in lowered or "up" in lowered:
         return True
     if "offline" in lowered or "down" in lowered:
@@ -392,16 +605,31 @@ def poll_olt_ont_signals(
     oids = _resolve_oid_set(vendor)
     scale = _get_signal_scale(vendor)
 
+    # Huawei ONT indexes are composite (e.g., 4194320384.0), preserve full indexes.
+    parse_table = _parse_snmp_table_composite if "huawei" in vendor else _parse_snmp_table
+
     # Walk signal tables from OLT
-    olt_rx_raw = _parse_snmp_table(_run_olt_snmpwalk(host, oids["olt_rx"], community))
-    onu_rx_raw = _parse_snmp_table(_run_olt_snmpwalk(host, oids["onu_rx"], community))
+    olt_rx_raw = parse_table(
+        _run_olt_snmpwalk(host, oids["olt_rx"], community),
+        base_oid=oids["olt_rx"],
+    )
+    onu_rx_raw = parse_table(
+        _run_olt_snmpwalk(host, oids["onu_rx"], community),
+        base_oid=oids["onu_rx"],
+    )
     distance_raw = (
-        _parse_snmp_table(_run_olt_snmpwalk(host, oids.get("distance", ""), community))
+        parse_table(
+            _run_olt_snmpwalk(host, oids.get("distance", ""), community),
+            base_oid=oids.get("distance", ""),
+        )
         if oids.get("distance")
         else {}
     )
     status_raw = (
-        _parse_snmp_table(_run_olt_snmpwalk(host, oids.get("status", ""), community))
+        parse_table(
+            _run_olt_snmpwalk(host, oids.get("status", ""), community),
+            base_oid=oids.get("status", ""),
+        )
         if oids.get("status")
         else {}
     )
@@ -415,19 +643,45 @@ def poll_olt_ont_signals(
         set(olt_rx_raw.keys()) | set(onu_rx_raw.keys()) | set(status_raw.keys())
     )
     readings: list[OntSignalReading] = []
+    parse_stats: dict[str, int] = {
+        "parsed": 0,
+        "sentinel": 0,
+        "out_of_range": 0,
+        "missing": 0,
+        "parse_error": 0,
+    }
     for idx in all_indexes:
         readings.append(
             OntSignalReading(
                 onu_index=idx,
-                olt_rx_dbm=_parse_signal_value(olt_rx_raw.get(idx, ""), scale),
-                onu_rx_dbm=_parse_signal_value(onu_rx_raw.get(idx, ""), scale),
+                olt_rx_dbm=_parse_signal_value(
+                    olt_rx_raw.get(idx, ""),
+                    scale,
+                    vendor=vendor,
+                    metric="olt_rx",
+                    stats=parse_stats,
+                ),
+                onu_rx_dbm=_parse_signal_value(
+                    onu_rx_raw.get(idx, ""),
+                    scale,
+                    vendor=vendor,
+                    metric="onu_rx",
+                    stats=parse_stats,
+                ),
                 distance_m=_parse_distance(distance_raw.get(idx, "")),
                 is_online=_parse_online_status(status_raw.get(idx, "")),
             )
         )
 
     polled = len(readings)
-    logger.info("Polled %d ONT signal readings from OLT %s", polled, olt.name)
+    logger.info(
+        "Polled %d ONT signal readings from OLT %s (parsed=%d sentinel=%d out_of_range=%d)",
+        polled,
+        olt.name,
+        parse_stats.get("parsed", 0),
+        parse_stats.get("sentinel", 0),
+        parse_stats.get("out_of_range", 0),
+    )
 
     # Map readings to OntUnit records via assignments
     # Get all active assignments for this OLT's PON ports
@@ -441,53 +695,61 @@ def poll_olt_ont_signals(
     )
     assignments = list(db.scalars(stmt).all())
 
-    # For now, update all ONTs assigned to this OLT in round-robin fashion
-    # (SNMP index-to-ONT mapping is vendor-specific and requires registration)
     now = datetime.now(UTC)
     updated = 0
     errors = 0
 
-    if assignments and readings:
-        # Bulk update: apply readings to assigned ONTs
-        # In production, the SNMP index maps to specific PON port + ONU slot
-        # For now, we update based on position within each PON port
-        ont_unit_ids = [a.ont_unit_id for a in assignments]
-        if ont_unit_ids:
-            # When we have more readings than assignments or vice versa,
-            # update what we can
-            for i, reading in enumerate(readings):
-                if i >= len(ont_unit_ids):
-                    break
-                try:
-                    update_values: dict = {"signal_updated_at": now}
-                    if reading.olt_rx_dbm is not None:
-                        update_values["olt_rx_signal_dbm"] = reading.olt_rx_dbm
-                    if reading.onu_rx_dbm is not None:
-                        update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
-                    if reading.distance_m is not None:
-                        update_values["distance_meters"] = reading.distance_m
-                    if reading.is_online is not None:
-                        status = "online" if reading.is_online else "offline"
-                        update_values["online_status"] = status
-                        if reading.is_online:
-                            update_values["last_seen_at"] = now
-                            update_values["offline_reason"] = None
-                        else:
-                            status_val = status_raw.get(reading.onu_index, "")
-                            reason = _derive_offline_reason(status_val)
-                            update_values["offline_reason"] = reason
+    targets = _build_reading_targets(
+        db,
+        olt=olt,
+        readings=readings,
+        assignments=assignments,
+    )
+    for ont, reading in targets:
+        try:
+            update_values: dict = {}
+            if reading.olt_rx_dbm is not None:
+                update_values["olt_rx_signal_dbm"] = reading.olt_rx_dbm
+            if reading.onu_rx_dbm is not None:
+                update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
+            if reading.distance_m is not None:
+                update_values["distance_meters"] = reading.distance_m
 
-                    db.execute(
-                        update(OntUnit)
-                        .where(OntUnit.id == ont_unit_ids[i])
-                        .values(**update_values)
-                    )
-                    updated += 1
-                except Exception as e:
-                    logger.error("Error updating ONT %s: %s", ont_unit_ids[i], e)
-                    errors += 1
+            if reading.is_online is not None:
+                if reading.is_online:
+                    update_values["online_status"] = OnuOnlineStatus.online
+                    update_values["last_seen_at"] = now
+                    update_values["offline_reason"] = None
+                else:
+                    update_values["online_status"] = OnuOnlineStatus.offline
+                    status_val = status_raw.get(reading.onu_index, "")
+                    reason = _derive_offline_reason(status_val)
+                    if reason is None:
+                        update_values["offline_reason"] = None
+                    else:
+                        try:
+                            update_values["offline_reason"] = OnuOfflineReason(reason)
+                        except ValueError:
+                            update_values["offline_reason"] = OnuOfflineReason.unknown
 
-    return {"polled": polled, "updated": updated, "errors": errors, "skipped": 0}
+            # Mark telemetry freshness only when at least one field was observed.
+            if update_values:
+                update_values["signal_updated_at"] = now
+            else:
+                continue
+
+            db.execute(
+                update(OntUnit)
+                .where(OntUnit.id == ont.id)
+                .values(**update_values)
+            )
+            updated += 1
+        except Exception as e:
+            logger.error("Error updating ONT %s: %s", ont.id, e)
+            errors += 1
+
+    skipped = max(0, polled - len(targets))
+    return {"polled": polled, "updated": updated, "errors": errors, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -666,11 +928,15 @@ def _push_signal_metrics(db: Session) -> int:
             OLTDevice.name.label("olt_name"),
             PonPort.name.label("pon_port_name"),
         )
-        .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
-        .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
-        .join(OLTDevice, PonPort.olt_id == OLTDevice.id)
+        .select_from(OntUnit)
+        .outerjoin(
+            OntAssignment,
+            (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+        )
+        .outerjoin(PonPort, PonPort.id == OntAssignment.pon_port_id)
+        .outerjoin(OLTDevice, OLTDevice.id == func.coalesce(PonPort.olt_id, OntUnit.olt_device_id))
         .where(
-            OntAssignment.active.is_(True),
+            OntUnit.is_active.is_(True),
             OntUnit.signal_updated_at.is_not(None),
         )
     )
@@ -682,8 +948,12 @@ def _push_signal_metrics(db: Session) -> int:
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     lines: list[str] = []
 
+    seen_serials: set[str] = set()
     for row in rows:
         serial = row.serial_number
+        if not serial or serial in seen_serials:
+            continue
+        seen_serials.add(serial)
         olt_name = row.olt_name or "unknown"
         pon_port = row.pon_port_name or "unknown"
         labels = f'ont_serial="{serial}",olt_name="{olt_name}",pon_port="{pon_port}"'

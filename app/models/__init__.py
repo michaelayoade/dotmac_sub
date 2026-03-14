@@ -203,6 +203,10 @@ from app.models.network import (  # noqa: F401
     OltSfpModule,
     OltShelf,
     OntAssignment,
+    OntProfileType,
+    OntProfileWanService,
+    OntProvisioningProfile,
+    OntProvisioningStatus,
     OntUnit,
     OnuCapability,
     OnuMode,
@@ -216,6 +220,7 @@ from app.models.network import (  # noqa: F401
     PortStatus,
     PortType,
     PortVlan,
+    PppoePasswordMode,
     SpeedProfile,
     SpeedProfileDirection,
     SpeedProfileType,
@@ -223,8 +228,13 @@ from app.models.network import (  # noqa: F401
     SplitterPort,
     SplitterPortAssignment,
     SplitterPortType,
+    Tr069ParameterMap,
+    VendorModelCapability,
     Vlan,
+    VlanMode,
+    WanConnectionType,
     WanMode,
+    WanServiceType,
 )
 from app.models.network_monitoring import (  # noqa: F401
     Alert,
@@ -362,6 +372,17 @@ from app.models.subscription_engine import (  # noqa: F401
     SettingValueType,
     SubscriptionEngine,
     SubscriptionEngineSetting,
+)
+from app.models.support import (  # noqa: F401
+    Ticket,
+    TicketAssignee,
+    TicketChannel,
+    TicketComment,
+    TicketLink,
+    TicketMerge,
+    TicketPriority,
+    TicketSlaEvent,
+    TicketStatus,
 )
 from app.models.system_user import SystemUser  # noqa: F401
 from app.models.table_column_config import TableColumnConfig  # noqa: F401

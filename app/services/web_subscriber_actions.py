@@ -199,7 +199,7 @@ def update_subscriber_from_full_form(
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
         category=_parse_category(subscriber_category),
         notes=(subscriber_notes or form_data.get("notes") or "").strip() or None,
-        is_active=is_active == "true",
+        is_active=before.is_active if is_active is None else (is_active == "true"),
     )
     updated = subscriber_service.subscribers.update(
         db=db,
@@ -262,7 +262,7 @@ def update_subscriber_from_form(
         person_id=person_id,
         organization_id=organization_id,
     )
-    active = is_active == "true"
+    active = before.is_active if is_active is None else (is_active == "true")
     payload = SubscriberUpdate(
         organization_id=org_uuid if resolved_type == "organization" else None,
         subscriber_number=subscriber_number.strip() if subscriber_number else None,

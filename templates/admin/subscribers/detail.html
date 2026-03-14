@@ -34,6 +34,7 @@
 
 {% block page_header %}
 {{ ambient_background("amber", "emerald") }}
+{% set subscriber_status = subscriber.status.value if subscriber.status is not string and subscriber.status else (subscriber.status | default('active')) %}
 
 <div class="relative z-30 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6 animate-fade-in-up">
     <div class="flex items-start gap-4">
@@ -46,7 +47,7 @@
             {% set subscriber_first_initial = (subscriber.first_name or '')[:1] %}
             {% set subscriber_last_initial = (subscriber.last_name or '')[:1] %}
             <div class="relative flex h-16 w-16 items-center justify-center rounded-2xl text-xl font-bold shadow-lg
-                {% if subscriber.is_active %}bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600 shadow-amber-500/25{% else %}from-violet-500 to-purple-600 shadow-violet-500/25{% endif %} text-white
+                {% if subscriber_status == 'active' %}bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600 shadow-amber-500/25{% else %}from-violet-500 to-purple-600 shadow-violet-500/25{% endif %} text-white
                 {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
                 {% if subscriber.person %}
                     {{ (person_first_initial ~ person_last_initial) or 'S' }}
@@ -68,7 +69,9 @@
                     {{ (subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber' }}
                     {% endif %}
                 </h1>
-                {% if subscriber.is_active %}
+                {% if subscriber_status == 'suspended' %}
+                {{ status_badge("Blocked", "warning", size="sm") }}
+                {% elif subscriber_status == 'active' %}
                 {{ status_badge("Active", "active", size="sm") }}
                 {% else %}
                 {{ status_badge("Inactive", "inactive", size="sm") }}

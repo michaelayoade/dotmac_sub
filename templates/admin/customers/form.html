@@ -313,10 +313,10 @@
                             <div>
                                 <label for="status" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Status</label>
                                 <select name="status" id="status"
-                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
-                                    <option value="active" {% if current_status == 'active' or not current_status %}selected{% endif %}>Active</option>
-                                    <option value="inactive" {% if current_status == 'inactive' %}selected{% endif %}>Inactive</option>
-                                    <option value="archived" {% if current_status == 'archived' %}selected{% endif %}>Archived</option>
+                                        class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:border-amber-500 focus:bg-slate-50 focus:text-slate-900 focus:ring-2 focus:ring-amber-500 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:focus:bg-slate-700 dark:focus:text-slate-100">
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="active" {% if current_status == 'active' or not customer %}selected{% endif %}>Active</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="blocked" {% if customer and current_status == 'suspended' %}selected{% endif %}>Blocked</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="inactive" {% if customer and not customer.is_active and current_status != 'suspended' %}selected{% endif %}>Inactive</option>
                                 </select>
                             </div>
                             <div>

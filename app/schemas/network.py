@@ -520,6 +520,13 @@ class OntUnitRead(OntUnitBase):
     online_status: str | None = None
     last_seen_at: datetime | None = None
     offline_reason: str | None = None
+    mac_address: str | None = None
+    observed_wan_ip: str | None = None
+    observed_pppoe_status: str | None = None
+    observed_lan_mode: str | None = None
+    observed_wifi_clients: int | None = None
+    observed_lan_hosts: int | None = None
+    observed_runtime_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.subscriber import Subscriber, SubscriberStatus as AccountStatus
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
@@ -60,6 +61,12 @@ class EnforcementHandler:
             logger.warning("Skipping session disconnect: missing subscription_id.")
             return
         try:
+            subscription = db.get(Subscription, subscription_id)
+            if subscription:
+                subscriber = db.get(Subscriber, subscription.subscriber_id)
+                if subscriber and subscriber.status != AccountStatus.suspended:
+                    subscriber.status = AccountStatus.suspended
+                    db.flush()
             reject_reason = _reject_reason_from_event_payload(event.payload)
             ip_result = radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id), reject_reason=reject_reason
@@ -87,6 +94,12 @@ class EnforcementHandler:
         )
         refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
         try:
+            subscription = db.get(Subscription, subscription_id)
+            if subscription:
+                subscriber = db.get(Subscriber, subscription.subscriber_id)
+                if subscriber and subscriber.status != AccountStatus.active:
+                    subscriber.status = AccountStatus.active
+                    db.flush()
             ip_result = radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id)
             )

@@ -15,6 +15,11 @@
         {{ snmp_test_message }}
     </div>
     {% endif %}
+    {% if sync_message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if sync_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
+        {{ sync_message }}
+    </div>
+    {% endif %}
 
     {# Header #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -74,7 +79,7 @@
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                 ONTs
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont_assignments | length }}</span>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont_summary.total }}</span>
             </button>
             <button @click="activeTab = 'activity'"
                     :class="activeTab === 'activity' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
@@ -114,12 +119,34 @@
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.serial_number or 'N/A' }}</dd>
                     </div>
                     <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Device Status</dt>
-                        {% set device_status = (info.status or 'unknown') | lower %}
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Connectivity Checks</dt>
                         <dd class="mt-1 text-sm">
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if device_status == 'online' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200{% elif device_status == 'offline' %}bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-                                {{ (info.status or 'unknown') | replace('_', ' ') | title }}
-                            </span>
+                            <div class="flex flex-col gap-1">
+                                {% if info.ping_enabled %}
+                                    {% set ping_state = 'ok' if info.last_ping_ok is sameas true else ('fail' if info.last_ping_ok is sameas false else 'unknown') %}
+                                {% else %}
+                                    {% set ping_state = 'disabled' %}
+                                {% endif %}
+                                <span class="inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if ping_state == 'ok' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300
+                                    {% elif ping_state == 'fail' %}bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300
+                                    {% elif ping_state == 'unknown' %}bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300
+                                    {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                    Ping: {{ 'OK' if ping_state == 'ok' else ('Fail' if ping_state == 'fail' else ('Unknown' if ping_state == 'unknown' else 'Disabled')) }}
+                                </span>
+                                {% if info.snmp_enabled %}
+                                    {% set snmp_state = 'ok' if info.last_snmp_ok is sameas true else ('fail' if info.last_snmp_ok is sameas false else 'unknown') %}
+                                {% else %}
+                                    {% set snmp_state = 'disabled' %}
+                                {% endif %}
+                                <span class="inline-flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                    {% if snmp_state == 'ok' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300
+                                    {% elif snmp_state == 'fail' %}bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300
+                                    {% elif snmp_state == 'unknown' %}bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300
+                                    {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                    SNMP: {{ 'OK' if snmp_state == 'ok' else ('Fail' if snmp_state == 'fail' else ('Unknown' if snmp_state == 'unknown' else 'Disabled')) }}
+                                </span>
+                            </div>
                         </dd>
                     </div>
                     <div>
@@ -135,8 +162,11 @@
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.last_ping_at.strftime('%Y-%m-%d %H:%M:%S') if info.last_ping_at else 'N/A' }}</dd>
                     </div>
                     <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">SNMP Result</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'OK' if info.last_snmp_ok else ('Failed' if info.last_snmp_at else 'Unknown') }}</dd>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Device Runtime</dt>
+                        {% set runtime_state = (info.status or 'unknown') | lower %}
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                            {% if runtime_state == 'online' %}Operational{% elif runtime_state == 'offline' %}Offline{% elif runtime_state == 'degraded' %}Issue Detected{% else %}Unknown{% endif %}
+                        </dd>
                     </div>
                     {% if monitoring_data and monitoring_data.snmp_system %}
                     <div>
@@ -230,7 +260,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Connected ONTs</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont_assignments | length }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ ont_summary.total }}</p>
                     </div>
                     {% if shelves %}
                     <div>
@@ -370,6 +400,13 @@
                             Test SNMP Connection
                         </button>
                     </form>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/sync-onts">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h11M9 21V3m7 10h5m-2-2l2 2-2 2"/></svg>
+                            Sync ONTs From OLT (SNMP)
+                        </button>
+                    </form>
                 </div>
                 {% endcall %}
             </div>
@@ -437,7 +474,7 @@
             {% call card("PON Ports", color="blue") %}
             {% if pon_port_table_rows %}
             {% call data_table() %}
-                {{ table_head(["Port", "Type", "Admin state", "Status", "ONUs", "Average signal", "Description", "Range", "Tx power", "Action"]) }}
+                {{ table_head(["Port", "Type", "Admin state", "Status", "ONTs", "Average signal", "Description", "Range", "Tx power", "Action"]) }}
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                     {% for row in pon_port_table_rows %}
                     {% set row_status = (row.status or 'unknown') | lower %}
@@ -490,25 +527,36 @@
     {# ===================== ONTs TAB ===================== #}
     <div x-show="activeTab === 'onts'" x-transition x-cloak>
         {% call card("Connected ONTs", color="blue") %}
-        {% if ont_assignments %}
+        {% if onts_on_olt %}
         {% call data_table() %}
-            {{ table_head(["Serial Number", "Vendor / Model", "PON Port", "Online", "OLT Rx (dBm)", "ONU Rx (dBm)", "Signal", "Distance"]) }}
+            {{ table_head(["MAC Address", "PON Port", "Online", "OLT Rx (dBm)", "ONU Rx (dBm)", "Signal", "Distance"]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                {% for assignment in ont_assignments %}
-                {% set ont = assignment.ont_unit %}
+                {% for ont in onts_on_olt %}
+                {% set assignment = assignment_by_ont_id.get(ont.id | string) %}
                 {% set sd = signal_data.get(ont.id | string, {}) if ont else {} %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if ont %}
-                        <a href="/admin/network/onts/{{ ont.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono">{{ ont.serial_number }}</a>
+                        {% set mac_display = ont_mac_by_ont_id.get(ont.id | string) if ont_mac_by_ont_id else '' %}
+                        {% if not mac_display and ont.serial_number %}
+                        {% set mac_display = ont.serial_number %}
+                        {% endif %}
+                        <a href="/admin/network/onts/{{ ont.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono">{{ mac_display or '&mdash;' }}</a>
                         {% else %}
                         <span class="text-sm text-slate-400">&mdash;</span>
                         {% endif %}
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                        {{ ont.vendor or '' }} {{ ont.model or '' }}
+                        {% if pon_port_display_by_ont_id and pon_port_display_by_ont_id.get(ont.id | string) %}
+                        {{ pon_port_display_by_ont_id.get(ont.id | string) }}
+                        {% elif assignment and assignment.pon_port %}
+                        {{ assignment.pon_port.notes or assignment.pon_port.name }}
+                        {% elif ont.board and ont.port %}
+                        {{ ont.board }}/{{ ont.port }}
+                        {% else %}
+                        &mdash;
+                        {% endif %}
                     </td>
-                    <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ assignment.pon_port.name if assignment.pon_port else '&mdash;' }}</td>
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if sd.get('status') == 'online' %}
                         <span class="inline-flex items-center gap-1.5 text-xs font-medium">
@@ -541,7 +589,7 @@
                         {% endif %}
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm tabular-nums text-slate-600 dark:text-slate-300">
-                        {% if sd.get('distance_meters') is not none %}{{ sd.distance_meters }} m{% else %}&mdash;{% endif %}
+                        {% if sd.get('distance_meters') is not none %}{{ sd.distance_meters }} m{% else %}Unknown{% endif %}
                     </td>
                 </tr>
                 {% endfor %}

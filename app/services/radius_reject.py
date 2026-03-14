@@ -323,39 +323,89 @@ def _firewall_commands(
     captive_portal_ip: str = "",
 ) -> list[str]:
     commands: list[str] = []
+    block_chain = "dotmac-block-chain"
+    oss_ports = "80,443,8101,8102,8103,8104"
+    portal_text = _sanitize_routeros_value(captive_portal_ip) if captive_portal_ip else ""
+    portal_target = _sanitize_routeros_value(_nat_target_ip(captive_portal_ip)) if captive_portal_ip else ""
+
+    # Refresh shared block-chain rules in a deterministic order.
+    block_dns_comment = "dotmac-block-allow-dns"
+    block_oss_comment = "dotmac-block-allow-oss"
+    block_reject_tcp_comment = "dotmac-block-reject-non-oss-tcp"
+    block_reject_udp_comment = "dotmac-block-reject-non-oss-udp"
+    block_drop_comment = "dotmac-block-drop-non-oss"
+    commands.extend(
+        [
+            f'/ip firewall filter remove [find comment="{block_dns_comment}"]',
+            f'/ip firewall filter remove [find comment="{block_oss_comment}"]',
+            f'/ip firewall filter remove [find comment="{block_reject_tcp_comment}"]',
+            f'/ip firewall filter remove [find comment="{block_reject_udp_comment}"]',
+            f'/ip firewall filter remove [find comment="{block_drop_comment}"]',
+            f'/ip firewall filter add chain="{block_chain}" protocol=udp dst-port=53 action=accept comment="{block_dns_comment}"',
+        ]
+    )
+    if portal_text:
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" dst-address="{portal_text}" protocol=tcp dst-port={oss_ports} action=accept comment="{block_oss_comment}"'
+        )
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" dst-address=!{portal_text} protocol=tcp action=reject reject-with=icmp-admin-prohibited comment="{block_reject_tcp_comment}"'
+        )
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" dst-address=!{portal_text} protocol=udp action=reject reject-with=icmp-admin-prohibited comment="{block_reject_udp_comment}"'
+        )
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" dst-address=!{portal_text} action=drop comment="{block_drop_comment}"'
+        )
+    else:
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" protocol=tcp action=reject reject-with=icmp-admin-prohibited comment="{block_reject_tcp_comment}"'
+        )
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" protocol=udp action=reject reject-with=icmp-admin-prohibited comment="{block_reject_udp_comment}"'
+        )
+        commands.append(
+            f'/ip firewall filter add chain="{block_chain}" action=drop comment="{block_drop_comment}"'
+        )
+
     for reason in ("not_found", "blocked", "negative", "bad_mac", "bad_password"):
         network = networks.get(reason)
         if not network:
             continue
         list_name = _sanitize_routeros_value(f"dotmac-reject-{reason.replace('_', '-')}")
         net_text = _sanitize_routeros_value(str(network))
-        rule_comment = _sanitize_routeros_value(f"dotmac-reject-drop-{reason}")
+        jump_comment = _sanitize_routeros_value(f"dotmac-reject-jump-{reason}")
+        allow_dns_comment = _sanitize_routeros_value(f"dotmac-reject-allow-dns-{reason}")
+        allow_oss_comment = _sanitize_routeros_value(f"dotmac-reject-allow-oss-{reason}")
+        redirect_comment = _sanitize_routeros_value(f"dotmac-negative-redirect-http-{reason}")
+        legacy_drop_comment = _sanitize_routeros_value(f"dotmac-reject-drop-{reason}")
         commands.extend(
             [
                 f'/ip firewall address-list remove [find list="{list_name}"]',
                 f'/ip firewall address-list add list="{list_name}" address="{net_text}" comment="dotmac reject {reason}"',
-                f'/ip firewall filter remove [find comment="{rule_comment}"]',
+                f'/ip firewall filter remove [find comment="{legacy_drop_comment}"]',
+                f'/ip firewall filter remove [find comment="{jump_comment}"]',
+                f'/ip firewall filter remove [find comment="{allow_dns_comment}"]',
+                f'/ip firewall filter remove [find comment="{allow_oss_comment}"]',
+                f'/ip firewall nat remove [find comment="{redirect_comment}"]',
             ]
         )
-        if reason == "negative" and captive_enabled and captive_portal_ip:
-            portal_text = _sanitize_routeros_value(captive_portal_ip)
-            portal_target = _sanitize_routeros_value(_nat_target_ip(captive_portal_ip))
-            allow_comment = "dotmac-negative-allow-portal"
-            redirect_comment = "dotmac-negative-redirect-http"
-            https_drop_comment = "dotmac-negative-drop-https"
-            commands.extend(
-                [
-                    f'/ip firewall filter remove [find comment="{allow_comment}"]',
-                    f'/ip firewall nat remove [find comment="{redirect_comment}"]',
-                    f'/ip firewall filter remove [find comment="{https_drop_comment}"]',
-                    f'/ip firewall filter add chain=forward src-address-list="{list_name}" dst-address="{portal_text}" protocol=tcp dst-port=443 action=accept comment="{allow_comment}"',
-                    f'/ip firewall nat add chain=dstnat src-address-list="{list_name}" protocol=tcp dst-port=80 action=dst-nat to-addresses={portal_target} to-ports=80 comment="{redirect_comment}"',
-                    f'/ip firewall filter add chain=forward src-address-list="{list_name}" dst-address=!{portal_text} protocol=tcp dst-port=443 action=drop comment="{https_drop_comment}"',
-                ]
-            )
         commands.append(
-            f'/ip firewall filter add chain=forward src-address-list="{list_name}" action=drop comment="{rule_comment}"'
+            f'/ip firewall filter add chain=forward src-address-list="{list_name}" protocol=udp dst-port=53 action=accept comment="{allow_dns_comment}"'
         )
+        if portal_text:
+            commands.append(
+                f'/ip firewall filter add chain=forward src-address-list="{list_name}" dst-address="{portal_text}" protocol=tcp dst-port={oss_ports} action=accept comment="{allow_oss_comment}"'
+            )
+        if reason == "negative":
+            if captive_enabled and portal_target:
+                commands.append(
+                    f'/ip firewall nat add chain=dstnat src-address-list="{list_name}" protocol=tcp dst-port=80 action=dst-nat to-addresses={portal_target} to-ports=80 comment="{redirect_comment}"'
+                )
+        else:
+            commands.append(
+                f'/ip firewall filter add chain=forward src-address-list="{list_name}" action=jump jump-target="{block_chain}" comment="{jump_comment}"'
+            )
     return commands
 
 

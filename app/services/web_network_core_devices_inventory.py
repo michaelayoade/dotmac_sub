@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
-from app.models.network_monitoring import NetworkDevice
+from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
 
 if TYPE_CHECKING:
@@ -78,6 +78,17 @@ def _status_presenter(raw_status: str | None) -> tuple[str, str]:
     if status:
         return status.replace("_", " ").title(), "default"
     return "Unknown", "default"
+
+
+def _probe_state_presenter(*, enabled: bool, last_ok: bool | None) -> tuple[str, str]:
+    """Map probe config/result to a user-facing label + tone."""
+    if not enabled:
+        return "Disabled", "disabled"
+    if last_ok is True:
+        return "OK", "ok"
+    if last_ok is False:
+        return "Fail", "fail"
+    return "Unknown", "unknown"
 
 
 def _find_linked_monitoring_status(
@@ -322,17 +333,129 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
 
     all_olts = sorted(all_olts_by_id.values(), key=lambda olt: str(olt.name or "").lower())
     monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
+
+    # Keep OLT list statuses fresh without forcing full live polls on every request.
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.services import web_network_core_runtime as core_runtime_service
+        from app.services.settings_spec import resolve_value
+
+        ping_interval = int(
+            str(
+                resolve_value(
+                    db,
+                    SettingDomain.network_monitoring,
+                    "core_device_ping_interval_seconds",
+                )
+                or 120
+            )
+        )
+        snmp_interval = int(
+            str(
+                resolve_value(
+                    db,
+                    SettingDomain.network_monitoring,
+                    "core_device_snmp_walk_interval_seconds",
+                )
+                or 300
+            )
+        )
+
+        by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
+        by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
+        by_name = {d.name: d for d in monitoring_devices if d.name}
+        linked_devices: list[NetworkDevice] = []
+        seen_device_ids: set[str] = set()
+        for olt in all_olts:
+            linked = None
+            if olt.mgmt_ip:
+                linked = by_mgmt_ip.get(olt.mgmt_ip)
+            if linked is None and olt.hostname:
+                linked = by_hostname.get(olt.hostname)
+            if linked is None and olt.name:
+                linked = by_name.get(olt.name)
+            if linked and str(linked.id) not in seen_device_ids:
+                seen_device_ids.add(str(linked.id))
+                linked_devices.append(linked)
+
+        if linked_devices:
+            core_runtime_service.refresh_stale_devices_health(
+                db,
+                linked_devices,
+                ping_interval_seconds=max(ping_interval, 10),
+                snmp_interval_seconds=max(snmp_interval, 30),
+                include_snmp=True,
+                force=False,
+                max_workers=8,
+            )
+            db.expire_all()
+            monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
+    except Exception:
+        logger.exception("Failed to refresh stale OLT-linked monitoring statuses.")
+
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
     by_name = {d.name: d for d in monitoring_devices if d.name}
 
+    linked_monitoring_by_olt_id: dict[str, NetworkDevice] = {}
+    for olt in all_olts:
+        linked = None
+        if olt.mgmt_ip:
+            linked = by_mgmt_ip.get(olt.mgmt_ip)
+        if linked is None and olt.hostname:
+            linked = by_hostname.get(olt.hostname)
+        if linked is None and olt.name:
+            linked = by_name.get(olt.name)
+        if linked is not None:
+            linked_monitoring_by_olt_id[str(olt.id)] = linked
+
+    linked_ids = [d.id for d in linked_monitoring_by_olt_id.values() if d.id]
+    interfaces_by_device_id: dict[str, list[DeviceInterface]] = {}
+    if linked_ids:
+        interfaces = list(
+            db.scalars(
+                select(DeviceInterface).where(DeviceInterface.device_id.in_(linked_ids))
+            ).all()
+        )
+        for iface in interfaces:
+            interfaces_by_device_id.setdefault(str(iface.device_id), []).append(iface)
+
+    # Apply detail-page style fallback: if no modeled PON ports exist for an OLT,
+    # use discovered SNMP interfaces with PON-like naming.
+    for olt in all_olts:
+        olt_id = str(olt.id)
+        db_count = int(olt_stats.get(olt_id, {}).get("pon_ports", 0))
+        linked = linked_monitoring_by_olt_id.get(olt_id)
+        snmp_count = 0
+        if linked and linked.id:
+            iface_rows = interfaces_by_device_id.get(str(linked.id), [])
+            snmp_count = sum(
+                1
+                for iface in iface_rows
+                if any(
+                    token in f"{iface.name or ''} {iface.description or ''}".lower()
+                    for token in ("pon", "gpon", "epon", "xgpon", "xgs")
+                )
+            )
+        resolved_count = db_count if db_count > 0 else snmp_count
+        olt_stats[olt_id] = {"pon_ports": resolved_count}
+
     olts = []
     for olt in all_olts:
+        linked = linked_monitoring_by_olt_id.get(str(olt.id))
         status_label, status_variant = _find_linked_monitoring_status(
             olt=olt,
             by_mgmt_ip=by_mgmt_ip,
             by_hostname=by_hostname,
             by_name=by_name,
+        )
+        ping_label, ping_state = _probe_state_presenter(
+            enabled=bool(linked and linked.ping_enabled),
+            last_ok=(linked.last_ping_ok if linked else None),
+        )
+        snmp_label, snmp_state = _probe_state_presenter(
+            enabled=bool(linked and linked.snmp_enabled),
+            last_ok=(linked.last_snmp_ok if linked else None),
         )
         olts.append(
             {
@@ -345,6 +468,10 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
             "is_active": bool(olt.is_active),
             "runtime_status_label": status_label,
             "runtime_status_variant": status_variant,
+            "runtime_ping_label": ping_label,
+            "runtime_ping_state": ping_state,
+            "runtime_snmp_label": snmp_label,
+            "runtime_snmp_state": snmp_state,
             "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
             "detail_url": f"/admin/network/olts/{olt.id}",
             "edit_url": f"/admin/network/olts/{olt.id}/edit",

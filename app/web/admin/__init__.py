@@ -43,6 +43,9 @@ from app.web.admin.network_fiber_splice import router as network_fiber_splice_ro
 from app.web.admin.network_ip_management import router as network_ip_management_router
 from app.web.admin.network_monitoring import router as network_monitoring_router
 from app.web.admin.network_olts_onts import router as network_olts_onts_router
+from app.web.admin.network_ont_provisioning_profiles import (
+    router as network_ont_provisioning_profiles_router,
+)
 from app.web.admin.network_onu_types import router as network_onu_types_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
@@ -50,6 +53,9 @@ from app.web.admin.network_site_survey import router as network_site_survey_rout
 from app.web.admin.network_speed_profiles import router as network_speed_profiles_router
 from app.web.admin.network_speedtests import router as network_speedtests_router
 from app.web.admin.network_tr069 import router as network_tr069_router
+from app.web.admin.network_vendor_capabilities import (
+    router as network_vendor_capabilities_router,
+)
 from app.web.admin.network_weathermap import router as network_weathermap_router
 from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
@@ -251,6 +257,14 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
+    network_ont_provisioning_profiles_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_vendor_capabilities_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
     catalog_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("catalog"))],
 )
@@ -296,5 +310,4 @@ router.include_router(
     provisioning_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("provisioning"))],
 )
-
 __all__ = ["router"]

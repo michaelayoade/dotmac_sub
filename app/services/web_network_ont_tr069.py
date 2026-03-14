@@ -21,7 +21,11 @@ def tr069_tab_data(db: Session, ont_id: str) -> dict[str, object]:
     Returns:
         Template context dict with TR-069 summary data.
     """
-    summary: TR069Summary = OntTR069.get_device_summary(db, ont_id)
+    summary: TR069Summary = OntTR069.get_device_summary(
+        db,
+        ont_id,
+        persist_observed_runtime=True,
+    )
     return {
         "tr069": summary,
         "tr069_available": summary.available,

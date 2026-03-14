@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
+from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.models.provisioning import ProvisioningVendor
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
@@ -339,6 +340,27 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    def test_subscription_block_sets_subscriber_status_suspended(
+        self, mock_reject_ip, mock_disconnect, mock_block, db_session, subscription, subscriber
+    ):
+        mock_reject_ip.return_value = {"ok": False}
+        subscription.status = SubscriptionStatus.suspended
+        db_session.add(subscription)
+        db_session.commit()
+
+        handler = EnforcementHandler()
+        event = self._make_event(
+            EventType.subscription_suspended,
+            subscription_id=subscription.id,
+        )
+        handler.handle(db_session, event)
+        db_session.refresh(subscriber)
+
+        assert subscriber.status == AccountStatus.suspended
+
+    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
     def test_subscription_canceled_disconnects_and_blocks(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -452,6 +474,37 @@ class TestEnforcementHandler:
         handler.handle(db_session, event)
         mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="restore")
         mock_remove_block.assert_called_once_with(db_session, str(sub_id))
+
+    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
+    @patch("app.services.events.handlers.enforcement.settings_spec")
+    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    def test_subscription_restore_sets_subscriber_status_active(
+        self,
+        mock_reject_ip,
+        mock_settings,
+        mock_disconnect,
+        mock_remove_block,
+        db_session,
+        subscription,
+        subscriber,
+    ):
+        mock_reject_ip.return_value = {"ok": False}
+        mock_settings.resolve_value.return_value = "false"
+        subscriber.status = AccountStatus.suspended
+        subscription.status = SubscriptionStatus.active
+        db_session.add_all([subscriber, subscription])
+        db_session.commit()
+
+        handler = EnforcementHandler()
+        event = self._make_event(
+            EventType.subscription_resumed,
+            subscription_id=subscription.id,
+        )
+        handler.handle(db_session, event)
+        db_session.refresh(subscriber)
+
+        assert subscriber.status == AccountStatus.active
 
     @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")

@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -234,6 +234,7 @@ class OntUnits(CRUDManager[OntUnit]):
         *,
         olt_id: str | None = None,
         pon_port_id: str | None = None,
+        pon_hint: str | None = None,
         zone_id: str | None = None,
         signal_quality: str | None = None,
         online_status: str | None = None,
@@ -255,16 +256,41 @@ class OntUnits(CRUDManager[OntUnit]):
         stmt = select(OntUnit)
 
         # Filter by OLT or PON port via active assignment join
-        if olt_id or pon_port_id:
+        if pon_port_id:
             stmt = stmt.join(
                 OntAssignment,
                 (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
             )
-            if pon_port_id:
-                stmt = stmt.where(OntAssignment.pon_port_id == coerce_uuid(pon_port_id))
-            elif olt_id:
-                stmt = stmt.join(PonPort, PonPort.id == OntAssignment.pon_port_id)
-                stmt = stmt.where(PonPort.olt_id == coerce_uuid(olt_id))
+            stmt = stmt.where(OntAssignment.pon_port_id == coerce_uuid(pon_port_id))
+        elif olt_id:
+            # Include ONTs linked by assignment->pon_port and ONTs directly linked to OLT.
+            stmt = stmt.outerjoin(
+                OntAssignment,
+                (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+            ).outerjoin(PonPort, PonPort.id == OntAssignment.pon_port_id)
+            olt_uuid = coerce_uuid(olt_id)
+            stmt = stmt.where(
+                or_(
+                    PonPort.olt_id == olt_uuid,
+                    OntUnit.olt_device_id == olt_uuid,
+                )
+            )
+
+        # Optional hint for SNMP-only PON rows (e.g., "0/2/7")
+        if pon_hint:
+            like_hint = f"%{pon_hint.strip()}%"
+            combined = func.concat(
+                func.coalesce(OntUnit.board, ""),
+                "/",
+                func.coalesce(OntUnit.port, ""),
+            )
+            stmt = stmt.where(
+                or_(
+                    OntUnit.board.ilike(like_hint),
+                    OntUnit.port.ilike(like_hint),
+                    combined.ilike(like_hint),
+                )
+            )
 
         # Filter by zone
         if zone_id:
@@ -294,7 +320,10 @@ class OntUnits(CRUDManager[OntUnit]):
                 stmt = stmt.where(OntUnit.olt_rx_signal_dbm < crit)
             elif signal_quality == "warning":
                 stmt = stmt.where(
-                    OntUnit.olt_rx_signal_dbm.between(crit, warn)
+                    and_(
+                        OntUnit.olt_rx_signal_dbm >= crit,
+                        OntUnit.olt_rx_signal_dbm < warn,
+                    )
                 )
             elif signal_quality == "good":
                 stmt = stmt.where(OntUnit.olt_rx_signal_dbm >= warn)

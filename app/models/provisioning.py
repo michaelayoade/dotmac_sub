@@ -58,6 +58,9 @@ class ProvisioningStepType(enum.Enum):
     assign_ont = "assign_ont"
     push_config = "push_config"
     confirm_up = "confirm_up"
+    resolve_profile = "resolve_profile"
+    push_ont_profile = "push_ont_profile"
+    verify_ont_config = "verify_ont_config"
 
 
 class ProvisioningRunStatus(enum.Enum):

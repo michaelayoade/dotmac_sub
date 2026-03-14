@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import text
+
 from app.celery_app import celery_app
 from app.db import SessionLocal
 
 logger = logging.getLogger(__name__)
+_OLT_POLLING_LOCK_KEY = 70420611
 
 
 @celery_app.task(name="app.tasks.olt_polling.poll_all_olt_signals")
@@ -22,7 +25,24 @@ def poll_all_olt_signals() -> dict[str, int]:
     """
     logger.info("Starting OLT signal polling task")
     db = SessionLocal()
+    lock_acquired = False
     try:
+        lock_acquired = bool(
+            db.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _OLT_POLLING_LOCK_KEY},
+            ).scalar()
+        )
+        if not lock_acquired:
+            logger.warning("Skipping OLT signal polling: previous run still in progress.")
+            return {
+                "olts_polled": 0,
+                "total_polled": 0,
+                "total_updated": 0,
+                "total_errors": 0,
+                "skipped_due_to_lock": 1,
+            }
+
         from app.services.network.olt_polling import poll_all_olts
 
         result = poll_all_olts(db)
@@ -39,4 +59,12 @@ def poll_all_olt_signals() -> dict[str, int]:
         db.rollback()
         raise
     finally:
+        if lock_acquired:
+            try:
+                db.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": _OLT_POLLING_LOCK_KEY},
+                )
+            except Exception:
+                logger.exception("Failed to release OLT polling advisory lock.")
         db.close()

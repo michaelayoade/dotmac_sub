@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.auth import AuthProvider
 from app.models.subscriber import Organization, Subscriber
 from app.schemas.auth import UserCredentialCreate
@@ -13,6 +14,7 @@ from app.schemas.subscriber import SubscriberUpdate
 from app.services import auth as auth_service
 from app.services import subscriber as subscriber_service
 from app.services.auth_flow import hash_password
+from app.services import settings_spec
 
 
 def parse_customer_ref(value: str | None) -> tuple[str, UUID]:
@@ -166,12 +168,24 @@ def create_subscriber_with_optional_login(
         if existing:
             raise ValueError("Customer already has a portal login.")
 
+    subscriber_number_value = subscriber_number.strip() if subscriber_number else None
+    if subscriber_number_value:
+        prefix = settings_spec.resolve_value(
+            db,
+            SettingDomain.subscriber,
+            "subscriber_number_prefix",
+        )
+        configured_prefix = prefix if isinstance(prefix, str) else "SUB-"
+        if configured_prefix and not subscriber_number_value.startswith(configured_prefix):
+            # Keep manual numbers only when they respect configured numbering format.
+            subscriber_number_value = None
+
     payload = SubscriberUpdate(
         organization_id=organization_uuid if subscriber_type == "organization" else None,
-        subscriber_number=subscriber_number.strip() if subscriber_number else None,
+        subscriber_number=subscriber_number_value,
         category=subscriber_category.strip().lower() if subscriber_category else None,
         notes=notes.strip() if notes else None,
-        is_active=is_active == "true",
+        is_active=True if is_active is None else (is_active == "true"),
     )
     subscriber = subscriber_service.subscribers.update(
         db=db,
@@ -270,5 +284,5 @@ def build_subscriber_update_form_values(
         "subscriber_number": subscriber_number or "",
         "subscriber_category": subscriber_category or "",
         "notes": notes or "",
-        "is_active": is_active == "true",
+        "is_active": True if is_active is None else (is_active == "true"),
     }

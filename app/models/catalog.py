@@ -424,6 +424,11 @@ class CatalogOffer(Base):
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Default ONT provisioning profile for fiber offers
+    default_ont_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -440,6 +445,7 @@ class CatalogOffer(Base):
     radius_profiles = relationship("OfferRadiusProfile", back_populates="offer")
     subscriptions = relationship("Subscription", back_populates="offer")
     versions = relationship("OfferVersion", back_populates="offer")
+    default_ont_profile = relationship("OntProvisioningProfile")
 
 
 class OfferVersion(Base):

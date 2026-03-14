@@ -30,6 +30,7 @@
                 {% set sub_type = subscriber.subscriber_type.value if subscriber.subscriber_type is not string and subscriber.subscriber_type else (subscriber.subscriber_type | default('unknown')) %}
                 {% set name = (subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name) if subscriber.person else (subscriber.organization.name if subscriber.organization else 'Subscriber') %}
                 {% set email = subscriber.person.email if subscriber.person else (subscriber.organization.domain if subscriber.organization else '') %}
+                {% set sub_status = subscriber.status.value if subscriber.status is not string and subscriber.status else (subscriber.status | default('active')) %}
 
                 <tr class="group transition-colors hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
                     <td class="w-12 px-3 py-4">
@@ -63,7 +64,13 @@
                         {{ type_badge(sub_type) }}
                     </td>
                     <td class="whitespace-nowrap px-5 py-4">
-                        {{ status_badge("Active" if subscriber.is_active else "Inactive", "active" if subscriber.is_active else "inactive") }}
+                        {% if sub_status == 'suspended' %}
+                        {{ status_badge("Blocked", "warning") }}
+                        {% elif sub_status == 'active' %}
+                        {{ status_badge("Active", "active") }}
+                        {% else %}
+                        {{ status_badge(sub_status | title, "inactive") }}
+                        {% endif %}
                     </td>
                     <td class="whitespace-nowrap px-5 py-4">
                         <div class="text-sm font-medium text-slate-900 dark:text-white">
