@@ -17,6 +17,7 @@ from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.catalog import Subscription
+from app.models.catalog import SubscriptionStatus
 from app.models.subscriber import (
     AddressType,
     ChannelType,
@@ -33,6 +34,7 @@ from app.schemas.subscriber import (
     SubscriberCreate,
     SubscriberUpdate,
 )
+from app.schemas.catalog import SubscriptionUpdate
 from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
@@ -47,6 +49,23 @@ def _normalize_optional(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _suspend_customer_subscriptions(db: Session, customer_id: str) -> int:
+    """Suspend active/pending subscriptions for a customer via catalog flow."""
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == coerce_uuid(customer_id))
+        .filter(Subscription.status.in_([SubscriptionStatus.active, SubscriptionStatus.pending]))
+        .all()
+    )
+    for subscription in subscriptions:
+        catalog_service.subscriptions.update(
+            db,
+            str(subscription.id),
+            SubscriptionUpdate(status=SubscriptionStatus.suspended),
+        )
+    return len(subscriptions)
 
 
 def _create_subscriber(db: Session, payload: dict[str, Any]) -> Subscriber:
@@ -509,8 +528,11 @@ def update_person_customer(
     account_start_date: str | None,
     metadata_json: dict | None,
 ):
+    raw_status = str(status or "").strip().lower()
+    should_block_subscriptions = raw_status == "blocked"
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    active = is_active == "true"
+    active = before.is_active if is_active is None else (is_active == "true")
+    normalized_status, active = _normalize_status_for_customer_edit(status, is_active=active)
     data = {
         "first_name": first_name,
         "last_name": last_name,
@@ -530,7 +552,7 @@ def update_person_customer(
         "region": _normalize_optional(region),
         "postal_code": _normalize_optional(postal_code),
         "country_code": _normalize_optional(country_code),
-        "status": status or None,
+        "status": normalized_status,
         "is_active": active,
         "marketing_opt_in": marketing_opt_in == "true",
         "notes": _normalize_optional(notes),
@@ -541,6 +563,8 @@ def update_person_customer(
         subscriber_id=customer_id,
         payload=SubscriberUpdate.model_validate(data),
     )
+    if should_block_subscriptions:
+        _suspend_customer_subscriptions(db, customer_id)
     after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if account_start_date:
         subscriber = db.get(Subscriber, customer_id)
@@ -550,6 +574,19 @@ def update_person_customer(
                 subscriber.account_start_date = parsed_date
                 db.commit()
     return before, after
+
+
+def _normalize_status_for_customer_edit(
+    status: str | None, *, is_active: bool
+) -> tuple[SubscriberStatus | None, bool]:
+    raw = str(status or "").strip().lower()
+    if raw == "blocked":
+        return SubscriberStatus.suspended, True
+    if raw == "inactive":
+        return SubscriberStatus.active, False
+    if raw == "active":
+        return SubscriberStatus.active, True
+    return _status_from_legacy(status, is_active=None), is_active
 
 
 def update_organization_customer(
@@ -848,6 +885,7 @@ def _status_from_legacy(value: str | None, is_active: bool | None = None) -> Sub
         "lead": SubscriberStatus.active,
         "contact": SubscriberStatus.active,
         "inactive": SubscriberStatus.suspended,
+        "blocked": SubscriberStatus.suspended,
         "suspended": SubscriberStatus.suspended,
         "delinquent": SubscriberStatus.delinquent,
         "canceled": SubscriberStatus.canceled,

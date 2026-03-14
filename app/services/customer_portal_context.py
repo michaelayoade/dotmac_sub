@@ -10,9 +10,10 @@ from typing import cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import CatalogOffer, PriceType
+from app.models.catalog import CatalogOffer, PriceType, SubscriptionStatus
 from app.models.provisioning import InstallAppointment, ServiceOrder
 from app.models.subscriber import AccountStatus, Organization, Subscriber
+from app.models.support import Ticket, TicketStatus
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
@@ -84,7 +85,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             db=db,
             subscriber_id=account_id,
             offer_id=None,
-            status=None,
+            status=SubscriptionStatus.active.value,
             order_by="created_at",
             order_dir="desc",
             limit=25,
@@ -143,8 +144,29 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             plan_name=services[0].name,
         )
 
-    # Tickets module removed - always return 0
     open_count = 0
+    if account_id:
+        try:
+            open_count = (
+                db.query(func.count(Ticket.id))
+                .filter(Ticket.is_active.is_(True))
+                .filter(
+                    (Ticket.subscriber_id == account_id) | (Ticket.customer_account_id == account_id)
+                )
+                .filter(
+                    Ticket.status.notin_(
+                        (
+                            TicketStatus.closed,
+                            TicketStatus.canceled,
+                            TicketStatus.merged,
+                        )
+                    )
+                )
+                .scalar()
+                or 0
+            )
+        except Exception:
+            open_count = 0
 
     return {
         "user": SimpleNamespace(**user),

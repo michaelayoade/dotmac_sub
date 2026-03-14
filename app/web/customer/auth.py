@@ -52,6 +52,18 @@ def customer_stop_impersonation(request: Request, next: str = Form("/admin/subsc
     return web_customer_auth_service.customer_stop_impersonation(request, next)
 
 
+@router.get("/stop-impersonation")
+def customer_stop_impersonation_get(request: Request, next: str | None = Query(default=None)):
+    """Backwards-compatible GET stop impersonation endpoint.
+
+    Preferred flow is POST from the portal banner form.
+    """
+    return web_customer_auth_service.customer_stop_impersonation(
+        request,
+        next or "/admin/subscribers",
+    )
+
+
 @router.get("/session", response_class=HTMLResponse)
 def customer_session_info(request: Request, db: Session = Depends(get_db)):
     """Get current session info (for HTMX polling)."""

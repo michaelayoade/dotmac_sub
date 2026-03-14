@@ -1,6 +1,6 @@
 """Admin reseller portal web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.models.subscriber import Reseller
 from app.schemas.subscriber import ResellerCreate, ResellerUpdate
 from app.services import rbac as rbac_service
 from app.services import subscriber as subscriber_service
@@ -22,6 +23,14 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
+def _form_int(form: FormData, key: str, default: int) -> int:
+    raw = _form_str(form, key, str(default)).strip()
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
     return {
@@ -34,17 +43,44 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
 
 
 @router.get("", response_class=HTMLResponse)
-def resellers_list(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def resellers_list(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=200),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    total = (
+        db.query(Reseller)
+        .filter(Reseller.is_active.is_(True))
+        .count()
+    )
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+    offset = (page - 1) * per_page
     resellers = subscriber_service.resellers.list(
         db=db,
         is_active=True,
         order_by="name",
         order_dir="asc",
-        limit=200,
-        offset=0,
+        limit=per_page,
+        offset=offset,
+    )
+    reseller_subscriber_counts = reseller_svc.count_subscribers_by_reseller_ids(
+        db,
+        [str(item.id) for item in resellers],
     )
     context = _base_context(request, db, active_page="resellers")
-    context.update({"resellers": resellers})
+    context.update(
+        {
+            "resellers": resellers,
+            "reseller_subscriber_counts": reseller_subscriber_counts,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        }
+    )
     return templates.TemplateResponse("admin/resellers/index.html", context)
 
 
@@ -99,11 +135,10 @@ def reseller_create(
             "first_name": _form_str(form, "user_first_name").strip(),
             "last_name": _form_str(form, "user_last_name").strip(),
             "email": _form_str(form, "user_email").strip(),
-            "username": _form_str(form, "user_username").strip(),
-            "password": _form_str(form, "user_password").strip(),
+            "username": (_form_str(form, "user_email").strip() or None),
             "role": _form_str(form, "user_role").strip() or None,
         }
-        missing = [key for key, value in user_payload.items() if key != "role" and not value]
+        missing = [key for key, value in user_payload.items() if key not in {"role", "username"} and not value]
         if missing:
             context = _base_context(request, db, active_page="resellers")
             roles = rbac_service.roles.list(
@@ -119,7 +154,7 @@ def reseller_create(
                     "reseller": payload,
                     "action_url": "/admin/resellers",
                     "roles": roles,
-                    "error": "Provide all user fields to create a login.",
+                    "error": "Provide first name, last name, and email to create a reseller portal user.",
                 }
             )
             return templates.TemplateResponse(
@@ -230,9 +265,18 @@ def reseller_update(
 
 @router.get("/{reseller_id}", response_class=HTMLResponse)
 def reseller_detail(
-    reseller_id: str, request: Request, db: Session = Depends(get_db)
+    reseller_id: str,
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=200),
+    db: Session = Depends(get_db),
 ):
-    detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
+    detail = reseller_svc.get_reseller_detail_context(
+        db,
+        reseller_id,
+        page=page,
+        per_page=per_page,
+    )
     if not detail:
         return RedirectResponse(url="/admin/resellers", status_code=303)
     context = _base_context(request, db, active_page="resellers")
@@ -247,12 +291,31 @@ def reseller_user_link(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    page = _form_int(form, "page", 1)
+    per_page = _form_int(form, "per_page", 50)
     subscriber_id = _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
     if subscriber_id:
-        reseller_svc.link_existing_subscriber_to_reseller(
-            db, reseller_id=reseller_id, subscriber_id=subscriber_id
-        )
-    return RedirectResponse(url=f"/admin/resellers/{reseller_id}", status_code=303)
+        try:
+            reseller_svc.link_existing_subscriber_to_reseller(
+                db, reseller_id=reseller_id, subscriber_id=subscriber_id
+            )
+        except Exception as exc:
+            detail = reseller_svc.get_reseller_detail_context(
+                db,
+                reseller_id,
+                page=page,
+                per_page=per_page,
+            )
+            context = _base_context(request, db, active_page="resellers")
+            context.update(detail or {})
+            context["error"] = str(exc) or "Unable to link subscriber."
+            return templates.TemplateResponse(
+                "admin/resellers/detail.html", context, status_code=400
+            )
+    return RedirectResponse(
+        url=f"/admin/resellers/{reseller_id}?page={page}&per_page={per_page}",
+        status_code=303,
+    )
 
 
 @router.post("/{reseller_id}/users/create", response_class=HTMLResponse)
@@ -262,20 +325,24 @@ def reseller_user_create(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
+    page = _form_int(form, "page", 1)
+    per_page = _form_int(form, "per_page", 50)
     fields = {
         "first_name": _form_str(form, "first_name").strip(),
         "last_name": _form_str(form, "last_name").strip(),
         "email": _form_str(form, "email").strip(),
-        "username": _form_str(form, "username").strip(),
-        "password": _form_str(form, "password").strip(),
+        "username": _form_str(form, "email").strip(),
     }
-    if not all(
-        [fields["first_name"], fields["last_name"], fields["email"], fields["username"], fields["password"]]
-    ):
-        detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
+    if not all([fields["first_name"], fields["last_name"], fields["email"]]):
+        detail = reseller_svc.get_reseller_detail_context(
+            db,
+            reseller_id,
+            page=page,
+            per_page=per_page,
+        )
         context = _base_context(request, db, active_page="resellers")
         context.update(detail or {})
-        context["error"] = "All user fields are required to create a login."
+        context["error"] = "First name, last name, and email are required."
         return templates.TemplateResponse(
             "admin/resellers/detail.html", context, status_code=400
         )
@@ -287,14 +354,21 @@ def reseller_user_create(
             last_name=fields["last_name"],
             email=fields["email"],
             username=fields["username"],
-            password=fields["password"],
         )
     except Exception as exc:
-        detail = reseller_svc.get_reseller_detail_context(db, reseller_id)
+        detail = reseller_svc.get_reseller_detail_context(
+            db,
+            reseller_id,
+            page=page,
+            per_page=per_page,
+        )
         context = _base_context(request, db, active_page="resellers")
         context.update(detail or {})
         context["error"] = str(exc) or "Unable to create reseller user."
         return templates.TemplateResponse(
             "admin/resellers/detail.html", context, status_code=400
         )
-    return RedirectResponse(url=f"/admin/resellers/{reseller_id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/resellers/{reseller_id}?page={page}&per_page={per_page}",
+        status_code=303,
+    )

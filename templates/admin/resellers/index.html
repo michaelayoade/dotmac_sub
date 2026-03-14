@@ -23,14 +23,14 @@
     {% call card("Resellers", color="indigo") %}
         {% if resellers %}
         {% call data_table() %}
-            {{ table_head(["Reseller", "Contact", "Status", ""]) }}
+            {{ table_head(["Reseller", "Subscribers", "Status", ""]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for reseller in resellers %}
                 {% call table_row(reseller.id) %}
                     <td class="px-6 py-4 whitespace-nowrap">
                         <a href="/admin/resellers/{{ reseller.id }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ reseller.name }}</a>
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ reseller.contact_email or '—' }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ reseller_subscriber_counts.get(reseller.id|string, 0) }}</td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         {% if reseller.is_active %}
                         {{ status_badge("Active", "active", size="sm") }}
@@ -48,6 +48,31 @@
                 {% endfor %}
             </tbody>
         {% endcall %}
+        {% set start_item = ((page - 1) * per_page) + 1 if total else 0 %}
+        {% set end_item = [page * per_page, total] | min if total else 0 %}
+        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+                Showing {{ start_item }} to {{ end_item }} of {{ total }} resellers
+            </p>
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-500 dark:text-slate-400">Rows</span>
+                {% for size in [10, 25, 50, 100] %}
+                <a href="/admin/resellers?page=1&per_page={{ size }}"
+                   class="inline-flex items-center rounded-md border px-2 py-1 text-xs {{ 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/20 dark:text-primary-300' if per_page == size else 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700' }}">
+                    {{ size }}
+                </a>
+                {% endfor %}
+                <a href="/admin/resellers?page={{ page - 1 if page > 1 else 1 }}&per_page={{ per_page }}"
+                   class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page <= 1 %}pointer-events-none opacity-50{% endif %}">
+                    Prev
+                </a>
+                <span class="px-1 text-xs text-slate-500 dark:text-slate-400">Page {{ page }} / {{ total_pages }}</span>
+                <a href="/admin/resellers?page={{ page + 1 }}&per_page={{ per_page }}"
+                   class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page >= total_pages %}pointer-events-none opacity-50{% endif %}">
+                    Next
+                </a>
+            </div>
+        </div>
         {% else %}
         {{ empty_state(
             "No resellers",

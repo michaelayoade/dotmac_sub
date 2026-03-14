@@ -17,6 +17,8 @@ from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.services.bandwidth import bandwidth_samples
 from app.services import customer_portal
+from app.services import support as support_service
+from app.services.audit_helpers import build_audit_activities
 from app.services.metrics_store import get_metrics_store
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.web.customer.auth import get_current_customer_from_request
@@ -44,6 +46,22 @@ def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription 
         return bandwidth_samples.get_user_active_subscription(db, {"account_id": account_id_str})
     except HTTPException:
         return None
+
+
+def _customer_allowed_ticket(db: Session, customer: dict, ticket_lookup: str):
+    ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    allowed_account_ids = set(customer_portal.get_allowed_account_ids(customer, db))
+    customer_subscriber_id = str(customer.get("subscriber_id") or "")
+    related_ids = {
+        str(ticket.subscriber_id) if ticket.subscriber_id else "",
+        str(ticket.customer_account_id) if ticket.customer_account_id else "",
+        str(ticket.customer_person_id) if ticket.customer_person_id else "",
+    }
+    if customer_subscriber_id in related_ids:
+        return ticket
+    if allowed_account_ids & related_ids:
+        return ticket
+    raise HTTPException(status_code=404, detail="Ticket not found")
 
 
 @router.get("", response_class=HTMLResponse)
@@ -85,6 +103,95 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
             "active_page": "dashboard",
         },
     )
+
+
+@router.get("/support", response_class=HTMLResponse)
+def customer_support(
+    request: Request,
+    search: str | None = None,
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=10, le=100),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
+
+    allowed_account_ids = customer_portal.get_allowed_account_ids(customer, db)
+    offset = (page - 1) * per_page
+    tickets: list = []
+    for account_id in allowed_account_ids:
+        tickets.extend(
+            support_service.tickets.list(
+                db,
+                search=search,
+                status=status,
+                subscriber_id=account_id,
+                limit=per_page,
+                offset=offset,
+            )
+        )
+    deduped = {str(ticket.id): ticket for ticket in tickets}
+    sorted_tickets = sorted(
+        deduped.values(),
+        key=lambda item: item.updated_at or item.created_at,
+        reverse=True,
+    )
+
+    return templates.TemplateResponse(
+        "customer/support/index.html",
+        {
+            "request": request,
+            "customer": customer,
+            "tickets": sorted_tickets[:per_page],
+            "search": search or "",
+            "status": status or "",
+            "all_statuses": [item.value for item in support_service.TicketStatus],
+            "active_page": "support",
+        },
+    )
+
+
+@router.get("/support/new", response_class=HTMLResponse)
+def customer_support_new_redirect() -> Response:
+    return RedirectResponse(url="/portal/support", status_code=303)
+
+
+@router.post("/support/new", response_class=HTMLResponse)
+def customer_support_create_redirect() -> Response:
+    return RedirectResponse(url="/portal/support", status_code=303)
+
+
+@router.get("/support/{ticket_lookup}", response_class=HTMLResponse)
+def customer_support_detail(request: Request, ticket_lookup: str, db: Session = Depends(get_db)) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
+
+    ticket = _customer_allowed_ticket(db, customer, ticket_lookup)
+    comments = [
+        comment
+        for comment in support_service.ticket_comments.list(db, str(ticket.id), limit=500, offset=0)
+        if not comment.is_internal
+    ]
+    activities = build_audit_activities(db, "support_ticket", str(ticket.id), limit=100)
+    return templates.TemplateResponse(
+        "customer/support/detail.html",
+        {
+            "request": request,
+            "customer": customer,
+            "ticket": ticket,
+            "comments": comments,
+            "activities": activities,
+            "active_page": "support",
+        },
+    )
+
+
+@router.post("/support/{ticket_lookup}/comment", response_class=HTMLResponse)
+def customer_support_comment_redirect(ticket_lookup: str) -> Response:
+    return RedirectResponse(url=f"/portal/support/{ticket_lookup}", status_code=303)
 
 
 @router.get("/billing", response_class=HTMLResponse)

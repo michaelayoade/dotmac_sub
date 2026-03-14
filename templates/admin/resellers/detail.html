@@ -43,66 +43,102 @@
 
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 lg:col-span-2">
             <div class="flex items-center justify-between">
-                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Linked Users</h2>
-                <span class="text-xs text-slate-400">{{ reseller_users|length }} total</span>
+                <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Linked Subscribers</h2>
+                <span class="text-xs text-slate-400">{{ reseller_subscribers_total|default(reseller_subscribers|length) }} total</span>
             </div>
             <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
                 <table class="w-full text-sm">
                     <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                         <tr>
-                            <th class="px-4 py-3">User</th>
+                            <th class="px-4 py-3">Subscriber</th>
+                            <th class="px-4 py-3">Account #</th>
                             <th class="px-4 py-3">Email</th>
                             <th class="px-4 py-3">Status</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                        {% for link in reseller_users %}
+                        {% for link in reseller_subscribers %}
                         <tr>
                             <td class="px-4 py-3 font-medium text-slate-900 dark:text-white">
-                                <a href="/admin/system/users/{{ link.person.id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
+                                <a href="/admin/subscribers/{{ link.person.id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
                                     {{ link.person.first_name }} {{ link.person.last_name }}
                                 </a>
                             </td>
+                            <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ link.person.account_number or '—' }}</td>
                             <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ link.person.email }}</td>
                             <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ 'Active' if link.is_active else 'Inactive' }}</td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td class="px-4 py-6 text-center text-slate-500 dark:text-slate-400" colspan="3">No linked users yet.</td>
+                            <td class="px-4 py-6 text-center text-slate-500 dark:text-slate-400" colspan="4">No linked subscribers yet.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+            </div>
+            {% set total = reseller_subscribers_total|default(reseller_subscribers|length) %}
+            {% set current_page = page|default(1) %}
+            {% set rows_per_page = per_page|default(50) %}
+            {% set start_item = ((current_page - 1) * rows_per_page) + 1 if total else 0 %}
+            {% set end_item = [current_page * rows_per_page, total] | min if total else 0 %}
+            <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-xs text-slate-500 dark:text-slate-400">
+                    Showing {{ start_item }} to {{ end_item }} of {{ total }} subscribers
+                </p>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Rows</span>
+                    {% for size in [25, 50, 100, 200] %}
+                    <a href="/admin/resellers/{{ reseller.id }}?page=1&per_page={{ size }}"
+                       class="inline-flex items-center rounded-md border px-2 py-1 text-xs {{ 'border-primary-500 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900/20 dark:text-primary-300' if rows_per_page == size else 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700' }}">
+                        {{ size }}
+                    </a>
+                    {% endfor %}
+                    <a href="/admin/resellers/{{ reseller.id }}?page={{ current_page - 1 if current_page > 1 else 1 }}&per_page={{ rows_per_page }}"
+                       class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if current_page <= 1 %}pointer-events-none opacity-50{% endif %}">
+                        Prev
+                    </a>
+                    <span class="px-1 text-xs text-slate-500 dark:text-slate-400">Page {{ current_page }} / {{ total_pages|default(1) }}</span>
+                    <a href="/admin/resellers/{{ reseller.id }}?page={{ current_page + 1 }}&per_page={{ rows_per_page }}"
+                       class="inline-flex items-center rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if current_page >= (total_pages|default(1)) %}pointer-events-none opacity-50{% endif %}">
+                        Next
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 
     <div class="grid gap-6 lg:grid-cols-2">
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Link Existing User</h2>
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Link Existing Subscriber</h2>
             <form method="post" action="/admin/resellers/{{ reseller.id }}/users/link" class="mt-4 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="page" value="{{ page|default(1) }}" />
+                <input type="hidden" name="per_page" value="{{ per_page|default(50) }}" />
                 <div>
-                    <label for="person_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">User</label>
-                    <div class="relative mt-2" data-typeahead-url="/api/v1/search/people" data-typeahead-min="2" data-typeahead-limit="8">
+                    <label for="subscriber_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
+                    <div class="relative mt-2" data-typeahead-url="/api/v1/search/reseller-subscribers" data-typeahead-min="2" data-typeahead-limit="8">
                         <input type="text"
-                               id="person_search"
+                               id="subscriber_search"
                                data-typeahead-input
                                autocomplete="off"
-                               placeholder="Search by name, email, or phone..."
+                               placeholder="Search by name, account number, or email..."
                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                        <input type="hidden" name="person_id" data-typeahead-hidden required />
+                        <input type="hidden" name="subscriber_id" data-typeahead-hidden required />
                         <div data-typeahead-results></div>
                     </div>
                 </div>
-                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Link User</button>
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Link Subscriber</button>
             </form>
         </div>
-
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create Reseller User</h2>
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Create Reseller Portal User</h2>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Creates login credentials and sends a welcome invite to the reseller portal.
+            </p>
             <form method="post" action="/admin/resellers/{{ reseller.id }}/users/create" class="mt-4 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="page" value="{{ page|default(1) }}" />
+                <input type="hidden" name="per_page" value="{{ per_page|default(50) }}" />
                 <div class="grid gap-4 sm:grid-cols-2">
                     <div>
                         <label for="first_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">First Name</label>
@@ -117,17 +153,7 @@
                     <label for="email" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Email</label>
                     <input type="email" name="email" id="email" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
                 </div>
-                <div class="grid gap-4 sm:grid-cols-2">
-                    <div>
-                        <label for="username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
-                        <input type="text" name="username" id="username" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                    </div>
-                    <div>
-                        <label for="password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
-                        <input type="password" name="password" id="password" required class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                    </div>
-                </div>
-                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Create User & Link</button>
+                <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">Create User & Send Invite</button>
             </form>
         </div>
     </div>
