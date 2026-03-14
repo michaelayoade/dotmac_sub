@@ -1,0 +1,261 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, action_button, icon_ticket, icon_plus %}
+{% from "admin/support/tickets/_components.html" import support_card, people_select %}
+{% block title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+{{ ambient_background('amber', 'orange') }}
+<div class="relative z-10 space-y-6" x-data="ticketFormPage()" x-init="init()">
+    {% call page_header(
+        title=page_title,
+        subtitle='Capture issue context, assignment, and workflow metadata in one pass.',
+        icon=icon_ticket('h-7 w-7 text-white'),
+        color='amber',
+        color2='orange'
+    ) %}
+        <a href="/admin/support/tickets" class="inline-flex items-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+    {% endcall %}
+
+    <form method="post"
+          action="{% if form_mode == 'edit' and ticket %}/admin/support/tickets/{{ ticket.id }}/edit{% else %}/admin/support/tickets{% endif %}"
+          enctype="multipart/form-data"
+          class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        {% call support_card(title='Ticket Information', subtitle='Structured form for support operations workflow.') %}
+        <div class="grid gap-5 lg:grid-cols-2">
+            <div class="lg:col-span-2">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Title *</label>
+                <input name="title" required value="{{ prefill.title }}" placeholder="Brief description of the issue" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div class="lg:col-span-2">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Description</label>
+                <textarea name="description" rows="5" placeholder="Detailed description of the issue..." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ prefill.description }}</textarea>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Customer</label>
+                <input type="hidden" name="customer_person_id" x-model="selected.customer_person_id">
+                <input type="text" x-model="labels.customer_person_id" @input="onLookupInput('customer_person_id', $event.target.value)" list="people-options" placeholder="Search customer/contact" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Subscriber</label>
+                <input type="hidden" name="customer_account_id" x-model="selected.customer_account_id">
+                <input type="hidden" name="subscriber_id" x-model="selected.subscriber_id">
+                <input type="text" x-model="labels.subscriber_id" @input="onLookupInput('subscriber_id', $event.target.value)" list="people-options" placeholder="Search subscriber/account" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Attachments</label>
+                <input type="file" name="attachments" multiple @change="onAttachmentChange($event)" class="block w-full rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm dark:border-slate-600 dark:bg-slate-700/40">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Allowed: PNG, JPG, GIF, WEBP, PDF. Max 5 MB each.</p>
+                <template x-if="attachmentNames.length">
+                    <div class="mt-2 flex flex-wrap gap-2">
+                        <template x-for="name in attachmentNames" :key="name"><span class="rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200" x-text="name"></span></template>
+                    </div>
+                </template>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Related Outage Ticket</label>
+                <input name="related_outage_ticket_id" value="{{ prefill.related_outage_ticket_id }}" placeholder="Existing ticket number or UUID" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Links this ticket to outage context while keeping it separate.</p>
+            </div>
+
+            <div class="lg:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-600 dark:bg-slate-700/30">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Customer Details</h3>
+                <div class="mt-3 grid gap-3 text-xs text-slate-600 dark:text-slate-300 md:grid-cols-2">
+                    <p><span class="font-semibold">Name:</span> <span x-text="currentPerson.label || '-'">-</span></p>
+                    <p><span class="font-semibold">Email:</span> <span x-text="currentPerson.email || '-'">-</span></p>
+                    <p><span class="font-semibold">Phone:</span> <span x-text="currentPerson.phone || '-'">-</span></p>
+                    <p><span class="font-semibold">Organization:</span> <span x-text="currentPerson.organization || '-'">-</span></p>
+                    <p class="md:col-span-2"><span class="font-semibold">Address:</span> <span x-text="currentPerson.address || '-'">-</span></p>
+                </div>
+                <div class="mt-4 border-t border-slate-200 pt-3 dark:border-slate-600">
+                    <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber Details</h4>
+                    <div class="mt-2 grid gap-3 text-xs text-slate-600 dark:text-slate-300 md:grid-cols-2">
+                        <p><span class="font-semibold">Subscriber #:</span> <span x-text="currentPerson.subscriber_number || '-'">-</span></p>
+                        <p><span class="font-semibold">Account #:</span> <span x-text="currentPerson.account_number || '-'">-</span></p>
+                        <p><span class="font-semibold">Status:</span> <span x-text="currentPerson.account_status || '-'">-</span></p>
+                        <p><span class="font-semibold">Plan:</span> <span x-text="currentPerson.plan || '-'">-</span></p>
+                        <p class="md:col-span-2"><span class="font-semibold">Service Address:</span> <span x-text="currentPerson.service_address || '-'">-</span></p>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Region</label>
+                <select name="region" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select region</option>
+                    {% for region in region_options %}
+                    <option value="{{ region }}" {% if prefill.region == region %}selected{% endif %}>{{ region|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Ticket Type</label>
+                <select name="ticket_type" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select type</option>
+                    {% for t in ticket_type_options %}
+                    <option value="{{ t }}" {% if prefill.ticket_type == t %}selected{% endif %}>{{ t|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="lg:col-span-2 rounded-2xl border border-slate-200 p-4 dark:border-slate-600">
+                <label class="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Technicians / User Group</label>
+                <input type="text" x-model="assigneeSearch" placeholder="Search technicians..." class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <div class="mt-2 max-h-40 overflow-auto rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-600 dark:bg-slate-700/40">
+                    <template x-for="person in filteredPeople" :key="person.id">
+                        <label class="flex cursor-pointer items-center justify-between rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                            <span x-text="person.label"></span>
+                            <input type="checkbox" :value="person.id" @change="toggleAssignee(person.id, $event.target.checked)" :checked="selectedAssignees.includes(person.id)" class="rounded border-slate-300 text-amber-600">
+                        </label>
+                    </template>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2">
+                    <template x-for="assigneeId in selectedAssignees" :key="assigneeId">
+                        <span class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                            <span x-text="labelFor(assigneeId)"></span>
+                            <button type="button" @click="toggleAssignee(assigneeId, false)" class="text-amber-700 hover:text-red-600">x</button>
+                        </span>
+                    </template>
+                </div>
+                <template x-for="assigneeId in selectedAssignees" :key="`hidden-${assigneeId}`">
+                    <input type="hidden" name="assignee_person_ids" :value="assigneeId">
+                </template>
+
+                <div class="mt-4">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service / User Group</label>
+                    <select name="service_team_id" x-model="selectedTeam" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">No service group</option>
+                        {% for team in service_team_options %}
+                        <option value="{{ team.id }}" {% if prefill.service_team_id == team.id %}selected{% endif %}>{{ team.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <template x-if="selectedTeam">
+                        <div class="mt-2 inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" x-text="teamLabel(selectedTeam)"></div>
+                    </template>
+                </div>
+            </div>
+
+            {{ people_select('ticket_manager_person_id', people_options, prefill.ticket_manager_person_id, 'Project Manager') }}
+            {{ people_select('site_coordinator_person_id', people_options, prefill.site_coordinator_person_id, 'Site Project Coordinator') }}
+            {{ people_select('technician_person_id', people_options, prefill.technician_person_id, 'Primary Technician') }}
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Priority</label>
+                <select name="priority" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for p in all_priorities %}<option value="{{ p }}" {% if prefill.priority == p %}selected{% endif %}>{{ p|title }}</option>{% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Channel</label>
+                <select name="channel" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for c in all_channels %}<option value="{{ c }}" {% if prefill.channel == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Status</label>
+                <select name="status" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for s in all_statuses %}<option value="{{ s }}" {% if prefill.status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>{% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Due Date</label>
+                <input type="datetime-local" name="due_at" value="{{ prefill.due_at }}" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+
+            <div class="lg:col-span-2">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Tags</label>
+                <input name="tags" value="{{ prefill.tags }}" placeholder="field_visit, escalation" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        {% endcall %}
+
+        <datalist id="people-options">
+            {% for person in people_options %}<option value="{{ person.label }}" data-id="{{ person.id }}">{{ person.label }}</option>{% endfor %}
+        </datalist>
+
+        <div class="flex justify-end gap-3">
+            <a href="{% if form_mode == 'edit' and ticket %}/admin/support/tickets/{{ ticket.id }}{% else %}/admin/support/tickets{% endif %}" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button class="rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-amber-500/20 hover:shadow-md">{% if form_mode == 'edit' %}Save Changes{% else %}Create Ticket{% endif %}</button>
+        </div>
+    </form>
+</div>
+
+<script>
+function ticketFormPage() {
+    return {
+        people: {{ people_options|tojson }},
+        teams: {{ service_team_options|tojson }},
+        selected: {
+            subscriber_id: {{ (prefill.subscriber_id or '')|tojson }},
+            customer_person_id: {{ (prefill.customer_person_id or '')|tojson }},
+            customer_account_id: {{ (prefill.customer_account_id or '')|tojson }},
+        },
+        labels: {
+            subscriber_id: '',
+            customer_person_id: '',
+        },
+        selectedAssignees: {{ prefill.assignee_person_ids|tojson }},
+        selectedTeam: {{ (prefill.service_team_id or '')|tojson }},
+        assigneeSearch: '',
+        attachmentNames: [],
+        currentPerson: {},
+        init() {
+            if (this.selected.subscriber_id) {
+                this.labels.subscriber_id = this.labelFor(this.selected.subscriber_id);
+            }
+            if (this.selected.customer_person_id) {
+                this.labels.customer_person_id = this.labelFor(this.selected.customer_person_id);
+            }
+            this.refreshCurrentPerson();
+        },
+        get filteredPeople() {
+            const search = this.assigneeSearch.trim().toLowerCase();
+            if (!search) return this.people;
+            return this.people.filter((p) => (p.label || '').toLowerCase().includes(search) || (p.email || '').toLowerCase().includes(search));
+        },
+        labelFor(id) {
+            const person = this.people.find((p) => p.id === id);
+            return person ? person.label : id;
+        },
+        teamLabel(id) {
+            const team = this.teams.find((t) => t.id === id);
+            return team ? team.label : id;
+        },
+        onLookupInput(field, value) {
+            const found = this.people.find((p) => (p.label || '').toLowerCase() === value.trim().toLowerCase());
+            this.labels[field] = value;
+            this.selected[field] = found ? found.id : '';
+            if (field === 'subscriber_id') {
+                this.selected.customer_account_id = found ? found.id : '';
+            }
+            this.refreshCurrentPerson();
+        },
+        refreshCurrentPerson() {
+            const key = this.selected.subscriber_id || this.selected.customer_person_id;
+            this.currentPerson = this.people.find((p) => p.id === key) || {};
+        },
+        toggleAssignee(personId, checked) {
+            if (checked && !this.selectedAssignees.includes(personId)) {
+                this.selectedAssignees.push(personId);
+            }
+            if (!checked) {
+                this.selectedAssignees = this.selectedAssignees.filter((id) => id !== personId);
+            }
+        },
+        onAttachmentChange(event) {
+            this.attachmentNames = Array.from(event.target.files || []).map((file) => file.name);
+        },
+    };
+}
+</script>
+{% endblock %}
