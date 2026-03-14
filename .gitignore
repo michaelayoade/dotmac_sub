@@ -52,3 +52,9 @@ htmlcov/
 .coverage
 .pytest_cache/
 .claude/
+
+# Reference materials & artifacts
+screenshots/
+uploads/
+*.zip
+mypy_errors.txt

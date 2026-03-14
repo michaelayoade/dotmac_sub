@@ -31,7 +31,7 @@ This document provides a comprehensive overview of the DotMac Sub system archite
 | Templates | Jinja2 |
 | Frontend | HTMX + Alpine.js + Tailwind CSS v4 |
 | Task Queue | Celery + Redis |
-| Migrations | Alembic (66 migration files) |
+| Migrations | Alembic (119 migration files) |
 | Testing | pytest, Playwright (E2E) |
 
 ### Directory Structure
@@ -87,7 +87,7 @@ This document provides a comprehensive overview of the DotMac Sub system archite
 │   │   │   └── dependencies.py
 │   │   └── public/             # Public pages
 │   │
-│   ├── models/                 # SQLAlchemy ORM models (38 files)
+│   ├── models/                 # SQLAlchemy ORM models (40+ files)
 │   │   ├── subscriber.py       # Unified Subscriber, Organization, Reseller
 │   │   ├── catalog.py          # CatalogOffer, Subscription, Pricing
 │   │   ├── billing.py          # Invoice, Payment, CreditNote, Ledger
@@ -170,7 +170,7 @@ This document provides a comprehensive overview of the DotMac Sub system archite
 │   │   ├── provisioning.py
 │   │   └── subscriber.py
 │   │
-│   ├── tasks/                  # Celery background tasks (18 files)
+│   ├── tasks/                  # Celery background tasks (26 files)
 │   │   ├── bandwidth.py        # Bandwidth monitoring tasks
 │   │   ├── billing.py          # Invoice/payment processing
 │   │   ├── catalog.py          # Catalog sync tasks
@@ -1206,4 +1206,51 @@ def task_name(arg1, arg2):
 
 ---
 
-*Generated: 2026-01-27*
+## 11. Recent Additions (Since Initial Documentation)
+
+### New Modules
+
+| Module | Models | Services | Web Routes | Status |
+|--------|--------|----------|------------|--------|
+| **Support Tickets** | `support.py` | `support.py` | `support_tickets.py` | In development |
+| **ONT Provisioning Profiles** | via `provisioning.py` | `network/ont_provisioning_profiles.py`, `ont_profile_apply.py` | `network_ont_provisioning_profiles.py` | In development |
+| **Vendor Capabilities** | via `network.py` | `network/vendor_capabilities.py` | `network_vendor_capabilities.py` | In development |
+| **ONU Types** | via `network.py` | existing | `network_onu_types.py` | Committed |
+| **Speed Profiles** | via `catalog.py` | existing | `network_speed_profiles.py` | Committed |
+| **DNS Threat Monitoring** | — | — | `network_dns_threats.py` | Committed |
+| **Network Weathermap** | — | — | `network_weathermap.py` | Committed |
+| **Speed Tests** | — | — | `network_speedtests.py` | Committed |
+| **POP/Network Sites** | — | — | `network_pop_sites.py` | Committed |
+| **Site Survey** | — | — | `network_site_survey.py` | Committed |
+
+### Admin Web Route Growth
+
+The admin portal has grown from ~10 route files to **53 route files**, reflecting the decomposition of monolithic modules:
+
+- **Billing** decomposed into: `billing_accounts`, `billing_arrangements`, `billing_channels`, `billing_collection_accounts`, `billing_credits`, `billing_dunning`, `billing_invoice_actions`, `billing_invoice_batch`, `billing_invoice_bulk`, `billing_invoices`, `billing_payments`, `billing_providers`, `billing_reporting`
+- **Network** decomposed into: `network`, `network_core_devices`, `network_cpes`, `network_dns_threats`, `network_fiber_plant`, `network_fiber_splice`, `network_ip_management`, `network_monitoring`, `network_olts_onts`, `network_onu_types`, `network_ont_provisioning_profiles`, `network_pop_sites`, `network_radius`, `network_site_survey`, `network_speed_profiles`, `network_speedtests`, `network_tr069`, `network_vendor_capabilities`, `network_weathermap`, `network_zones`
+
+### Network Service Decomposition
+
+`app/services/network/` now has **20 files** including:
+- `olt.py`, `olt_polling.py` — OLT management and polling
+- `ont_actions.py`, `ont_tr069.py` — ONT operations
+- `ont_provisioning_profiles.py`, `ont_profile_apply.py` — Profile-based provisioning
+- `vendor_capabilities.py` — Per-vendor/model feature registry
+- `_resolve.py` — Network entity resolution
+
+### Customer Portal Expansion
+
+The customer portal (`/portal/*`) now includes:
+- Service detail with subscription management
+- Billing with payment arrangements
+- Profile management
+- Support ticket submission (in development)
+
+### Reseller Portal
+
+Enhanced with detail views, forms, and management capabilities.
+
+---
+
+*Generated: 2026-01-27 | Updated: 2026-03-14*
