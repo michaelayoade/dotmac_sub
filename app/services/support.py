@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -41,6 +42,8 @@ from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.events import emit_event
 from app.services.events.types import EventType
+
+logger = logging.getLogger(__name__)
 
 MENTION_EMAIL_RE = re.compile(r"@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
@@ -1021,6 +1024,105 @@ class Tickets:
         db.commit()
         db.refresh(target)
         return target
+
+
+# ---------------------------------------------------------------------------
+# Ticket list-page helpers
+# ---------------------------------------------------------------------------
+
+
+def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
+    """Return active subscribers formatted for ticket people selectors."""
+    from app.models.subscriber import Subscriber
+
+    rows = (
+        db.query(Subscriber)
+        .options(selectinload(Subscriber.organization))
+        .filter(Subscriber.is_active.is_(True))
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(limit)
+        .all()
+    )
+    people: list[dict[str, str]] = []
+    for row in rows:
+        full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
+        label = row.display_name or full_name or row.email or str(row.id)
+        people.append(
+            {
+                "id": str(row.id),
+                "label": label,
+                "email": row.email or "",
+                "phone": row.phone or "",
+                "organization": row.organization.name if row.organization else "",
+                "address": ", ".join(
+                    [p for p in [row.address_line1, row.city, row.region] if p]
+                ),
+                "subscriber_number": row.subscriber_number or "",
+                "account_number": row.account_number or "",
+                "account_status": (row.status.value if row.status else "") or "",
+                "plan": "",
+                "service_address": ", ".join(
+                    [p for p in [row.address_line1, row.city, row.region] if p]
+                ),
+            }
+        )
+    return people
+
+
+def status_totals(db: Session) -> dict[str, int]:
+    """Return ticket counts grouped by status."""
+    from sqlalchemy import func
+
+    statuses = [
+        TicketStatus.new,
+        TicketStatus.open,
+        TicketStatus.pending,
+        TicketStatus.on_hold,
+        TicketStatus.resolved,
+        TicketStatus.closed,
+    ]
+    counts = {item.value: 0 for item in statuses}
+    rows = (
+        db.query(Ticket.status, func.count(Ticket.id))
+        .filter(Ticket.is_active.is_(True))
+        .group_by(Ticket.status)
+        .all()
+    )
+    for status_value, count in rows:
+        key = status_value.value if hasattr(status_value, "value") else str(status_value)
+        if key in counts:
+            counts[key] = int(count)
+    return counts
+
+
+def ticket_types(db: Session) -> list[str]:
+    """Return distinct ticket types with defaults."""
+    rows = (
+        db.query(Ticket.ticket_type)
+        .filter(Ticket.is_active.is_(True), Ticket.ticket_type.isnot(None), Ticket.ticket_type != "")
+        .distinct()
+        .order_by(Ticket.ticket_type.asc())
+        .limit(200)
+        .all()
+    )
+    discovered = [str(item[0]) for item in rows if item and item[0]]
+    defaults = ["incident", "request", "change", "maintenance", "outage"]
+    return sorted(set(discovered + defaults))
+
+
+def regions(db: Session) -> list[str]:
+    """Return distinct ticket regions with defaults."""
+    rows = (
+        db.query(Ticket.region)
+        .filter(Ticket.is_active.is_(True), Ticket.region.isnot(None), Ticket.region != "")
+        .distinct()
+        .order_by(Ticket.region.asc())
+        .limit(200)
+        .all()
+    )
+    discovered = [str(item[0]) for item in rows if item and item[0]]
+    defaults = ["north", "south", "east", "west", "central"]
+    return sorted(set(discovered + defaults))
 
 
 tickets = Tickets()

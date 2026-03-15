@@ -5,8 +5,7 @@ import re
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import or_
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, or_, text
 from sqlalchemy.orm import Session
 
 from app.metrics import observe_job

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from app.models.network_monitoring import (
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid, validate_enum
 
+logger = logging.getLogger(__name__)
 
 def _parse_float(raw: str | None) -> float | None:
     text = str(raw or "").strip()

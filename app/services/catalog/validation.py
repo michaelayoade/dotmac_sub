@@ -1,5 +1,6 @@
 """Offer validation service."""
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -24,6 +25,7 @@ from app.schemas.catalog import (
 from app.services.response import ListResponseMixin
 from app.validators import catalog as catalog_validators
 
+logger = logging.getLogger(__name__)
 
 class OfferValidation(ListResponseMixin):
     @staticmethod

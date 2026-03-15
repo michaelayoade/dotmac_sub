@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from app.services import radius as radius_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def active_servers(db: Session) -> list[RadiusServer]:
     """Return active RADIUS servers for client form select options."""

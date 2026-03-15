@@ -99,18 +99,23 @@ class BulkTariffChange:
         changed_ids: list[str] = []
 
         for sub in subscriptions:
+            savepoint = db.begin_nested()
             try:
                 previous_offer_id = sub.offer_id
                 sub.offer_id = target_uuid
-                from app.services.catalog.subscriptions import apply_offer_radius_profile
+                from app.services.catalog.subscriptions import (
+                    apply_offer_radius_profile,
+                )
                 apply_offer_radius_profile(
                     db,
                     sub,
                     previous_offer_id=previous_offer_id,
                 )
+                savepoint.commit()
                 changed += 1
                 changed_ids.append(str(sub.id))
             except Exception as e:
+                savepoint.rollback()
                 logger.error("Error changing subscription %s: %s", sub.id, e)
                 errors += 1
 

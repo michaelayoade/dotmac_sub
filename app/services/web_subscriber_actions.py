@@ -6,16 +6,18 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 from app.models.subscriber import SubscriberCategory
 from app.schemas.subscriber import SubscriberUpdate
+from app.services import audit as audit_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_system_restore_tool as web_system_restore_tool_service
+from app.services.audit_helpers import log_audit_event
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
     resolve_form_customer_ids,
@@ -333,3 +335,49 @@ def bulk_delete_inactive_subscribers(
             failed_count += 1
             continue
     return deleted_count, skipped_active, failed_count
+
+
+def toggle_comment_todo(
+    db: Session,
+    request: Request,
+    *,
+    subscriber_id: UUID,
+    event_id: UUID,
+    actor_id: str | None,
+) -> bool:
+    """Toggle todo completion state for a subscriber comment event.
+
+    Returns:
+        True if the todo was toggled, False if the event is not a todo.
+    """
+    event = audit_service.audit_events.get(db=db, event_id=str(event_id))
+    if (
+        event.entity_type != "subscriber"
+        or str(event.entity_id) != str(subscriber_id)
+        or event.action != "comment"
+    ):
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    metadata = dict(getattr(event, "metadata_", None) or {})
+    if not metadata.get("is_todo"):
+        return False
+
+    current_completed = bool(metadata.get("is_completed"))
+    metadata["is_completed"] = not current_completed
+    event.metadata_ = metadata
+    db.add(event)
+    db.commit()
+
+    log_audit_event(
+        db=db,
+        request=request,
+        action="comment_todo_toggle",
+        entity_type="subscriber",
+        entity_id=str(subscriber_id),
+        actor_id=actor_id,
+        metadata={
+            "source_comment_event_id": str(event_id),
+            "is_completed": metadata["is_completed"],
+        },
+    )
+    return True

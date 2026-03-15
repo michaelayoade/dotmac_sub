@@ -75,8 +75,7 @@ class ProvisioningHandler:
     def _push_nas_provisioning(self, db: Session, subscription_id: str) -> None:
         """Push NAS provisioning commands on subscription activation."""
         try:
-            from app.models.catalog import NasDevice, Subscription
-            from app.models.catalog import ProvisioningAction
+            from app.models.catalog import NasDevice, ProvisioningAction, Subscription
             from app.services.connection_type_provisioning import (
                 build_nas_provisioning_commands,
             )

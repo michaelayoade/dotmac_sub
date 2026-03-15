@@ -43,8 +43,8 @@ from app.api.rbac import router as rbac_router
 from app.api.scheduler import router as scheduler_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
-from app.api.support import router as support_router
 from app.api.subscribers import router as subscriber_router
+from app.api.support import router as support_router
 from app.api.tables import router as tables_router
 from app.api.validation import router as validation_router
 from app.api.webhooks import router as webhooks_router

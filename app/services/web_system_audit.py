@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -18,6 +19,7 @@ from app.services.audit_helpers import (
     humanize_entity,
 )
 
+logger = logging.getLogger(__name__)
 
 def get_audit_page_data(
     db: Session,

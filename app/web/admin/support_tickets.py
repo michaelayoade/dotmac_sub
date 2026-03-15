@@ -9,8 +9,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.subscriber import Subscriber
@@ -108,96 +108,12 @@ def _subscriber_label(row: Subscriber) -> str:
     return row.display_name or full_name or row.email or str(row.id)
 
 
-def _list_people(db: Session, limit: int = 500) -> list[dict[str, str]]:
-    rows = (
-        db.query(Subscriber)
-        .options(selectinload(Subscriber.organization))
-        .filter(Subscriber.is_active.is_(True))
-        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
-        .limit(limit)
-        .all()
-    )
-    people: list[dict[str, str]] = []
-    for row in rows:
-        people.append(
-            {
-                "id": str(row.id),
-                "label": _subscriber_label(row),
-                "email": row.email or "",
-                "phone": row.phone or "",
-                "organization": row.organization.name if row.organization else "",
-                "address": ", ".join(
-                    [p for p in [row.address_line1, row.city, row.region] if p]
-                ),
-                "subscriber_number": row.subscriber_number or "",
-                "account_number": row.account_number or "",
-                "account_status": (row.status.value if row.status else "") or "",
-                "plan": "",
-                "service_address": ", ".join(
-                    [p for p in [row.address_line1, row.city, row.region] if p]
-                ),
-            }
-        )
-    return people
-
-
-def _status_totals(db: Session) -> dict[str, int]:
-    statuses = [
-        TicketStatus.new,
-        TicketStatus.open,
-        TicketStatus.pending,
-        TicketStatus.on_hold,
-        TicketStatus.resolved,
-        TicketStatus.closed,
-    ]
-    counts = {item.value: 0 for item in statuses}
-    rows = (
-        db.query(Ticket.status, func.count(Ticket.id))
-        .filter(Ticket.is_active.is_(True))
-        .group_by(Ticket.status)
-        .all()
-    )
-    for status_value, count in rows:
-        key = status_value.value if hasattr(status_value, "value") else str(status_value)
-        if key in counts:
-            counts[key] = int(count)
-    return counts
-
-
 def _service_team_options() -> list[dict[str, str]]:
     return [
         {"id": "8e4f0b90-2de0-4d8c-8af1-c3f3a5f6ca01", "label": "Field Operations"},
         {"id": "3ac5eb8c-bdcf-4d03-9c8c-623ee7f8898e", "label": "Core Network"},
         {"id": "df39d87d-d31e-4dc8-9968-6fd95d7bb67f", "label": "Customer Support"},
     ]
-
-
-def _ticket_types(db: Session) -> list[str]:
-    rows = (
-        db.query(Ticket.ticket_type)
-        .filter(Ticket.is_active.is_(True), Ticket.ticket_type.isnot(None), Ticket.ticket_type != "")
-        .distinct()
-        .order_by(Ticket.ticket_type.asc())
-        .limit(200)
-        .all()
-    )
-    discovered = [str(item[0]) for item in rows if item and item[0]]
-    defaults = ["incident", "request", "change", "maintenance", "outage"]
-    return sorted(set(discovered + defaults))
-
-
-def _regions(db: Session) -> list[str]:
-    rows = (
-        db.query(Ticket.region)
-        .filter(Ticket.is_active.is_(True), Ticket.region.isnot(None), Ticket.region != "")
-        .distinct()
-        .order_by(Ticket.region.asc())
-        .limit(200)
-        .all()
-    )
-    discovered = [str(item[0]) for item in rows if item and item[0]]
-    defaults = ["north", "south", "east", "west", "central"]
-    return sorted(set(discovered + defaults))
 
 
 def _upload_ticket_attachments(
@@ -256,7 +172,7 @@ def _upload_ticket_attachments(
 
 
 def _build_form_context(request: Request, db: Session, *, ticket: Ticket | None = None) -> dict:
-    people = _list_people(db)
+    people = support_service.list_people(db)
     teams = _service_team_options()
 
     current_assignees: list[str] = []
@@ -288,8 +204,8 @@ def _build_form_context(request: Request, db: Session, *, ticket: Ticket | None 
         "all_statuses": [item.value for item in TicketStatus],
         "all_priorities": [item.value for item in TicketPriority],
         "all_channels": [item.value for item in TicketChannel],
-        "region_options": _regions(db),
-        "ticket_type_options": _ticket_types(db),
+        "region_options": support_service.regions(db),
+        "ticket_type_options": support_service.ticket_types(db),
         "service_team_options": teams,
         "people_options": people,
         "prefill": prefill,
@@ -350,13 +266,13 @@ def tickets_list(
             "page": page,
             "per_page": per_page,
             "has_next_page": len(tickets) >= per_page,
-            "status_totals": _status_totals(db),
+            "status_totals": support_service.status_totals(db),
             "visible_columns": visible_columns,
             "ticket_columns": _TICKET_COLUMNS,
             "all_statuses": [item.value for item in TicketStatus],
             "all_priorities": [item.value for item in TicketPriority],
-            "ticket_type_options": _ticket_types(db),
-            "people_options": _list_people(db),
+            "ticket_type_options": support_service.ticket_types(db),
+            "people_options": support_service.list_people(db),
         }
     )
 
@@ -440,12 +356,7 @@ def ticket_create(
             attachments=attachments,
             entity_type="support_ticket_attachment",
         )
-        ticket = support_service.tickets.get(db, str(ticket.id))
-        ticket.attachments = (ticket.attachments or []) + uploaded
-        metadata = dict(ticket.metadata_ or {})
-        metadata["uploaded_attachment_count"] = len(ticket.attachments)
-        ticket.metadata_ = metadata
-        db.commit()
+        support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
 
     return RedirectResponse(url=f"/admin/support/tickets/{ticket.id}", status_code=303)
 
@@ -478,7 +389,7 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             "all_statuses": [item.value for item in TicketStatus],
             "all_priorities": [item.value for item in TicketPriority],
             "all_channels": [item.value for item in TicketChannel],
-            "people_options": _list_people(db),
+            "people_options": support_service.list_people(db),
             "service_team_options": _service_team_options(),
             "is_merged_source": bool(ticket.merged_into_ticket_id or ticket.status.value == "merged"),
         }

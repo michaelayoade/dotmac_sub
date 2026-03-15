@@ -7,6 +7,7 @@ configuration generation, and MikroTik RouterOS 7 script generation.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -610,7 +611,6 @@ class WireGuardPeerService:
     @staticmethod
     def _auto_deploy(db: Session, server: WireGuardServer) -> None:
         """Auto-deploy WireGuard config if enabled for this server."""
-        import logging
         logger = logging.getLogger(__name__)
 
         # Check if auto_deploy is enabled

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.services import billing as billing_service
 
+logger = logging.getLogger(__name__)
 
 def list_data(db) -> dict[str, object]:
     rates = billing_service.tax_rates.list(

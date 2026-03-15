@@ -6,6 +6,7 @@ Provides Celery tasks for:
 - Expired provision token cleanup
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
@@ -14,6 +15,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.wireguard import WireGuardConnectionLog, WireGuardPeer
 from app.services import wireguard as wg_service
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_RETENTION_DAYS = 90
 
@@ -52,6 +55,10 @@ def cleanup_connection_logs(retention_days: int | None = None) -> dict[str, int]
             session, days=retention_days
         )
         return {"deleted_logs": deleted_count}
+    except Exception as e:
+        logger.error("Error in cleanup_connection_logs: %s", e)
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -132,6 +139,10 @@ def sync_peer_stats(peer_id: str | None = None) -> dict[str, int]:
         synced_count = len(peers)
 
         return {"synced_peers": synced_count}
+    except Exception as e:
+        logger.error("Error in sync_peer_stats: %s", e)
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -194,5 +205,9 @@ def generate_connection_log_report(
             "total_tx_bytes": total_tx,
             "avg_session_duration_seconds": round(avg_duration, 2),
         }
+    except Exception as e:
+        logger.error("Error in generate_connection_log_report: %s", e)
+        session.rollback()
+        raise
     finally:
         session.close()

@@ -1,5 +1,6 @@
 """Invoice and invoice line management services."""
 
+import logging
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -42,6 +43,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class Invoices(ListResponseMixin):
     @staticmethod

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from app.services import network as network_service
 from app.services import subscriber as subscriber_service
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def assignment_form_dependencies(db: Session) -> dict[str, object]:
     """Return common select options for ONT assignment form."""

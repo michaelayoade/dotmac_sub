@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -17,6 +18,7 @@ from app.services import network as network_service
 from app.services import provisioning as operations_service
 from app.services import subscriber as subscriber_service
 
+logger = logging.getLogger(__name__)
 
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
     if value is None:

@@ -10,6 +10,7 @@ Provides CRUD operations and business logic for:
 import hashlib
 import ipaddress
 import json
+import logging
 import re
 import secrets
 import string
@@ -39,8 +40,13 @@ from app.models.catalog import (
     RadiusProfile,
 )
 from app.models.domain_settings import SettingDomain
-from app.models.network_monitoring import DeviceMetric, DeviceStatus, MetricType, NetworkDevice
-from app.models.network_monitoring import PopSite
+from app.models.network_monitoring import (
+    DeviceMetric,
+    DeviceStatus,
+    MetricType,
+    NetworkDevice,
+    PopSite,
+)
 from app.models.subscriber import Organization
 from app.schemas.catalog import (
     NasConfigBackupCreate,
@@ -58,6 +64,8 @@ from app.services.credential_crypto import decrypt_credential, encrypt_nas_crede
 from app.services.response import ListResponseMixin
 from app.services.settings_spec import resolve_value
 
+logger = logging.getLogger(__name__)
+
 _REDACT_KEYS = {
     "password",
     "secret",
@@ -74,14 +82,12 @@ RADIUS_REQUIRED_CONNECTION_TYPES = {
 }
 TEMPLATE_AUDIT_EXCLUDE_FIELDS = {"template_content"}
 
-
 def list_pop_sites(db: Session, *, is_active: bool = True, limit: int = 500) -> list[PopSite]:
     """Return POP sites for NAS form/dropdown usage."""
     query = db.query(PopSite)
     if is_active:
         query = query.filter(PopSite.is_active.is_(True))
     return query.order_by(PopSite.name.asc()).limit(limit).all()
-
 
 def get_pop_site(db: Session, pop_site_id: str | UUID) -> PopSite | None:
     """Return POP site by id or None."""
@@ -90,7 +96,6 @@ def get_pop_site(db: Session, pop_site_id: str | UUID) -> PopSite | None:
     except (TypeError, ValueError):
         return None
     return db.get(PopSite, site_uuid)
-
 
 def list_organizations(
     db: Session,
@@ -103,7 +108,6 @@ def list_organizations(
     if ids:
         query = query.filter(Organization.id.in_(ids))
     return query.order_by(Organization.name.asc()).limit(limit).all()
-
 
 def get_nas_form_options(db: Session) -> dict[str, object]:
     """Return dropdown/reference data for NAS web forms."""
@@ -134,7 +138,6 @@ def get_nas_form_options(db: Session) -> dict[str, object]:
         ],
     }
 
-
 def validate_ipv4_address(value: str | None, field_label: str) -> str | None:
     if not value:
         return None
@@ -146,7 +149,6 @@ def validate_ipv4_address(value: str | None, field_label: str) -> str | None:
         return f"{field_label} must be an IPv4 address."
     return None
 
-
 def prefixed_values_from_tags(tags: list[str] | None, prefix: str) -> list[str]:
     if not tags:
         return []
@@ -156,35 +158,28 @@ def prefixed_values_from_tags(tags: list[str] | None, prefix: str) -> list[str]:
             values.append(tag.split(":", 1)[1])
     return values
 
-
 def prefixed_value_from_tags(tags: list[str] | None, prefix: str) -> str | None:
     values = prefixed_values_from_tags(tags, prefix)
     return values[0] if values else None
 
-
 def radius_pool_ids_from_tags(tags: list[str] | None) -> list[str]:
     return prefixed_values_from_tags(tags, "radius_pool:")
-
 
 def upsert_prefixed_tags(existing_tags: list[str] | None, prefix: str, values: list[str]) -> list[str]:
     base = [tag for tag in (existing_tags or []) if not tag.startswith(prefix)]
     return base + [f"{prefix}{value}" for value in values if value]
 
-
 def merge_single_tag(existing_tags: list[str] | None, prefix: str, value: str | None) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, prefix, [value] if value else [])
     return merged or None
-
 
 def merge_radius_pool_tags(existing_tags: list[str] | None, radius_pool_ids: list[str]) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, "radius_pool:", radius_pool_ids)
     return merged or None
 
-
 def merge_partner_org_tags(existing_tags: list[str] | None, partner_org_ids: list[str]) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, "partner_org:", partner_org_ids)
     return merged or None
-
 
 def extract_enhanced_fields(tags: list[str] | None) -> dict[str, str | list[str] | None]:
     return {
@@ -204,7 +199,6 @@ def extract_enhanced_fields(tags: list[str] | None) -> dict[str, str | list[str]
         "blocking_rules_enabled": prefixed_value_from_tags(tags, "blocking_rules_enabled:"),
     }
 
-
 def extract_mikrotik_status(tags: list[str] | None) -> dict[str, str | None]:
     return {
         "platform": prefixed_value_from_tags(tags, "mikrotik_status_platform:"),
@@ -223,7 +217,6 @@ def extract_mikrotik_status(tags: list[str] | None) -> dict[str, str | None]:
         "last_status_check": prefixed_value_from_tags(tags, "mikrotik_status_last_check:"),
     }
 
-
 def resolve_radius_pool_names(db: Session, device: NasDevice) -> list[str]:
     from app.services import network as network_service
 
@@ -241,7 +234,6 @@ def resolve_radius_pool_names(db: Session, device: NasDevice) -> list[str]:
     )
     return [str(pool.name) for pool in pools if str(pool.id) in ids]
 
-
 def resolve_partner_org_names(db: Session, device: NasDevice) -> list[str]:
     ids = prefixed_values_from_tags(device.tags, "partner_org:")
     if not ids:
@@ -257,7 +249,6 @@ def resolve_partner_org_names(db: Session, device: NasDevice) -> list[str]:
     orgs = list_organizations(db, ids=valid_ids, limit=500)
     return [str(org.name) for org in orgs]
 
-
 def pop_site_label(device: NasDevice | None) -> str | None:
     if device and device.pop_site:
         label = str(device.pop_site.name)
@@ -265,7 +256,6 @@ def pop_site_label(device: NasDevice | None) -> str | None:
             label = f"{label} ({str(device.pop_site.city)})"
         return label
     return None
-
 
 def pop_site_label_by_id(db: Session, pop_site_id: str | None) -> str | None:
     if not pop_site_id:
@@ -280,7 +270,6 @@ def pop_site_label_by_id(db: Session, pop_site_id: str | None) -> str | None:
     if pop_site.city:
         label = f"{label} ({str(pop_site.city)})"
     return label
-
 
 def build_nas_device_payload(
     db: Session,
@@ -445,7 +434,6 @@ def build_nas_device_payload(
         return None, [str(exc)]
     return payload, []
 
-
 def build_provisioning_template_payload(
     *,
     form: dict[str, Any],
@@ -483,7 +471,6 @@ def build_provisioning_template_payload(
         return None, [str(exc)]
     return payload, []
 
-
 def create_provisioning_template_with_metadata(
     db: Session,
     *,
@@ -492,7 +479,6 @@ def create_provisioning_template_with_metadata(
     """Create template and return audit metadata."""
     template = ProvisioningTemplates.create(db, payload)
     return template, {"name": template.name}
-
 
 def update_provisioning_template_with_metadata(
     db: Session,
@@ -508,7 +494,6 @@ def update_provisioning_template_with_metadata(
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata = {"changes": changes} if changes else None
     return updated_template, metadata
-
 
 def build_nas_dashboard_data(
     db: Session,
@@ -646,7 +631,6 @@ def build_nas_dashboard_data(
         },
     }
 
-
 def _resolve_linked_monitoring_devices(
     db: Session,
     devices: list[NasDevice],
@@ -673,7 +657,7 @@ def _resolve_linked_monitoring_devices(
     if not unresolved:
         return mapping
     mgmt_hosts = {
-        str((d.management_ip or d.ip_address or "")).strip()
+        str(d.management_ip or d.ip_address or "").strip()
         for d in unresolved
         if (d.management_ip or d.ip_address)
     }
@@ -685,11 +669,10 @@ def _resolve_linked_monitoring_devices(
     ).scalars().all()
     by_host = {str(row.mgmt_ip): row for row in rows if row.mgmt_ip}
     for d in unresolved:
-        host = str((d.management_ip or d.ip_address or "")).strip()
+        host = str(d.management_ip or d.ip_address or "").strip()
         if host and host in by_host:
             mapping[str(d.id)] = by_host[host]
     return mapping
-
 
 def build_nas_device_detail_data(
     db: Session,
@@ -798,7 +781,6 @@ def build_nas_device_detail_data(
         "resolved_ssh_port": device.management_port,
     }
 
-
 def _recent_nas_connection_auth_logs(
     db: Session,
     *,
@@ -815,7 +797,6 @@ def _recent_nas_connection_auth_logs(
     ).scalars().all()
     return list(rows)
 
-
 def _resolve_linked_monitoring_device(db: Session, device: NasDevice) -> NetworkDevice | None:
     """Resolve monitoring device linked to a NAS device."""
     if device.network_device_id:
@@ -830,7 +811,6 @@ def _resolve_linked_monitoring_device(db: Session, device: NasDevice) -> Network
         .where(NetworkDevice.mgmt_ip == host)
         .limit(1)
     ).scalar_one_or_none()
-
 
 def _latest_monitoring_metrics(
     db: Session, linked_device: NetworkDevice | None
@@ -877,7 +857,6 @@ def _latest_monitoring_metrics(
         latest["latest_recorded_at"] = latest_recorded_at
     return latest
 
-
 def _resolve_nas_health_status(
     device: NasDevice, linked_device: NetworkDevice | None
 ) -> str:
@@ -899,7 +878,6 @@ def _resolve_nas_health_status(
         }
         return status_map.get(linked_device.status, "unknown")
     return "unknown"
-
 
 def build_nas_device_backups_page_data(
     db: Session,
@@ -931,7 +909,6 @@ def build_nas_device_backups_page_data(
         },
     }
 
-
 def build_nas_backup_detail_data(
     db: Session,
     *,
@@ -947,7 +924,6 @@ def build_nas_backup_detail_data(
         "device": device,
         "activities": activities,
     }
-
 
 def build_nas_backup_compare_data(
     db: Session,
@@ -966,7 +942,6 @@ def build_nas_backup_compare_data(
         "device": device,
         "diff": diff,
     }
-
 
 def build_nas_templates_list_data(
     db: Session,
@@ -1005,7 +980,6 @@ def build_nas_templates_list_data(
         "filters": {"vendor": vendor, "action": action},
     }
 
-
 def build_nas_template_form_data(
     db: Session,
     *,
@@ -1017,7 +991,6 @@ def build_nas_template_form_data(
         "template": template,
         "errors": [],
     }
-
 
 def build_nas_logs_list_data(
     db: Session,
@@ -1066,7 +1039,6 @@ def build_nas_logs_list_data(
         },
     }
 
-
 def build_nas_log_detail_data(
     db: Session,
     *,
@@ -1078,7 +1050,6 @@ def build_nas_log_detail_data(
     device = NasDevices.get(db, str(log.nas_device_id)) if log.nas_device_id else None
     activities = build_activities_fn(db, "nas_provision_log", log_id, limit=10)
     return {"log": log, "device": device, "activities": activities}
-
 
 def trigger_backup_for_device(
     db: Session,
@@ -1107,7 +1078,6 @@ def trigger_backup_for_device(
             db.rollback()
         return {"ok": False, "backup": None, "error": error_message}
 
-
 def get_ping_status(host: str | None) -> dict[str, object]:
     """Return lightweight ping status for list/detail badges."""
     if not host:
@@ -1118,7 +1088,6 @@ def get_ping_status(host: str | None) -> dict[str, object]:
     if latency_ms is None:
         return {"state": "reachable", "label": "Reachable"}
     return {"state": "reachable", "label": f"Reachable {latency_ms:.1f} ms", "latency_ms": latency_ms}
-
 
 def get_cached_ping_status(device: NasDevice, *, stale_after_minutes: int = 10) -> dict[str, object]:
     """Return cached reachability for list pages without active probing."""
@@ -1139,7 +1108,6 @@ def get_cached_ping_status(device: NasDevice, *, stale_after_minutes: int = 10) 
     if age_seconds <= stale_after_seconds:
         return {"state": "reachable", "label": f"Seen {age_minutes}m ago"}
     return {"state": "unreachable", "label": f"Stale ({age_minutes}m)"}
-
 
 def _parse_routeros_uptime_to_seconds(value: object) -> int | None:
     """Parse RouterOS uptime strings into seconds."""
@@ -1176,7 +1144,6 @@ def _parse_routeros_uptime_to_seconds(value: object) -> int | None:
     seconds = int(token_match.group("s") or 0)
     return (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds
 
-
 def _mikrotik_api_port(device: NasDevice) -> int:
     raw_port = prefixed_value_from_tags(device.tags, "mikrotik_api_port:")
     if raw_port:
@@ -1186,12 +1153,10 @@ def _mikrotik_api_port(device: NasDevice) -> int:
             pass
     return 8728
 
-
 def _mikrotik_rest_auth(
     device: NasDevice,
 ) -> tuple[str, tuple[str, str] | None, dict[str, str], bool]:
     """Build MikroTik REST auth context."""
-    import requests
 
     if device.vendor != NasVendor.mikrotik:
         raise HTTPException(status_code=400, detail="Vendor-specific API status is only available for MikroTik devices.")
@@ -1211,7 +1176,6 @@ def _mikrotik_rest_auth(
     verify_tls = device.api_verify_tls if device.api_verify_tls is not None else False
     return base_url, auth, headers, verify_tls
 
-
 def _mikrotik_routeros_auth(device: NasDevice) -> tuple[str, int, str, str]:
     if device.vendor != NasVendor.mikrotik:
         raise HTTPException(status_code=400, detail="Vendor-specific API status is only available for MikroTik devices.")
@@ -1222,7 +1186,6 @@ def _mikrotik_routeros_auth(device: NasDevice) -> tuple[str, int, str, str]:
     if not (device.api_username and device.api_password):
         raise HTTPException(status_code=400, detail="API credentials are not configured.")
     return host, _mikrotik_api_port(device), device.api_username, decrypt_credential(device.api_password)
-
 
 def _mikrotik_rest_get(
     *,
@@ -1247,7 +1210,6 @@ def _mikrotik_rest_get(
     if not resp.text:
         return {}
     return resp.json()
-
 
 def _select_primary_mac(interfaces: object) -> str | None:
     """Select the most useful MAC address from interface list."""
@@ -1284,7 +1246,6 @@ def _select_primary_mac(interfaces: object) -> str | None:
         return None
     candidates.sort(key=lambda row: row[0])
     return candidates[0][1]
-
 
 def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
     base_url, auth, headers, verify_tls = _mikrotik_rest_auth(device)
@@ -1360,7 +1321,6 @@ def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
         "api_source": "rest",
     }
 
-
 def _mikrotik_routeros_query(device: NasDevice) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
     from routeros_api import RouterOsApiPool
 
@@ -1390,7 +1350,6 @@ def _mikrotik_routeros_query(device: NasDevice) -> tuple[dict[str, object], list
         return cast(dict[str, object], resource), interfaces, ppp_active
     finally:
         pool.disconnect()
-
 
 def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
     resource_data, interfaces, _ppp_active = _mikrotik_routeros_query(device)
@@ -1445,7 +1404,6 @@ def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
         "api_source": "routeros_api",
     }
 
-
 def _record_mikrotik_auth_attempt(
     *,
     nas_device_id: UUID,
@@ -1474,7 +1432,6 @@ def _record_mikrotik_auth_attempt(
         session.rollback()
     finally:
         session.close()
-
 
 def get_mikrotik_api_status(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
     """Test MikroTik API and return basic runtime status fields."""
@@ -1530,7 +1487,6 @@ def get_mikrotik_api_status(device: NasDevice, *, db: Session | None = None) -> 
             status_code=400,
             detail=f"MikroTik API test failed. REST error: {rest_msg}. RouterOS API error: {api_exc}",
         ) from api_exc
-
 
 def get_mikrotik_api_telemetry(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
     """Fetch MikroTik telemetry with REST-first, RouterOS-API fallback."""
@@ -1638,7 +1594,6 @@ def get_mikrotik_api_telemetry(device: NasDevice, *, db: Session | None = None) 
     status["memory_percent"] = memory_percent
     return status
 
-
 def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
     def redact_value(value: Any) -> Any:
         if isinstance(value, dict):
@@ -1654,7 +1609,6 @@ def _redact_sensitive(data: dict[str, Any]) -> dict[str, Any]:
         else:
             redacted[key] = redact_value(value)
     return redacted
-
 
 # =============================================================================
 # NAS DEVICE SERVICE
@@ -1860,7 +1814,6 @@ class NasDevices(ListResponseMixin):
             "by_status": NasDevices.count_by_status(db),
         }
 
-
 # =============================================================================
 # NAS CONNECTION RULE SERVICE
 # =============================================================================
@@ -1966,7 +1919,6 @@ class NasConnectionRules(ListResponseMixin):
         db.delete(rule)
         db.commit()
 
-
 def create_connection_rule_for_device(
     db: Session,
     *,
@@ -1992,7 +1944,6 @@ def create_connection_rule_for_device(
     )
     return "Connection rule created."
 
-
 def toggle_connection_rule_for_device(
     db: Session,
     *,
@@ -2009,7 +1960,6 @@ def toggle_connection_rule_for_device(
     )
     return "Connection rule enabled." if active else "Connection rule disabled."
 
-
 def delete_connection_rule_for_device(
     db: Session,
     *,
@@ -2018,7 +1968,6 @@ def delete_connection_rule_for_device(
 ) -> str:
     NasConnectionRules.delete(db, rule_id=rule_id, nas_device_id=device_id)
     return "Connection rule deleted."
-
 
 def refresh_mikrotik_status_for_device(db: Session, *, device_id: str) -> str:
     device = NasDevices.get(db, device_id)
@@ -2055,11 +2004,9 @@ def refresh_mikrotik_status_for_device(db: Session, *, device_id: str) -> str:
         f"RouterOS={status.get('routeros_version') or '-'}"
     )
 
-
 def _generate_router_password(length: int = 20) -> str:
     alphabet = string.ascii_letters + string.digits + "@#%+=_-"
     return "".join(secrets.choice(alphabet) for _ in range(max(12, length)))
-
 
 def generate_mikrotik_bootstrap_script_for_device(
     db: Session,
@@ -2125,7 +2072,6 @@ def generate_mikrotik_bootstrap_script_for_device(
         "api_port": str(api_port),
         "rest_port": str(rest_port),
     }
-
 
 # =============================================================================
 # NAS CONFIG BACKUP SERVICE
@@ -2344,7 +2290,6 @@ class NasConfigBackups(ListResponseMixin):
             "removed": removed[:100],
         }
 
-
 # =============================================================================
 # PROVISIONING TEMPLATE SERVICE
 # =============================================================================
@@ -2514,7 +2459,6 @@ class ProvisioningTemplates(ListResponseMixin):
             content = content.replace(f"{{{{{key}}}}}", str(value))
         return content
 
-
 # =============================================================================
 # PROVISIONING LOG SERVICE
 # =============================================================================
@@ -2612,7 +2556,6 @@ class ProvisioningLogs(ListResponseMixin):
         db.refresh(log)
         return log
 
-
 # =============================================================================
 # RADIUS PROFILE SERVICE (Enhanced)
 # =============================================================================
@@ -2681,7 +2624,6 @@ class RadiusProfiles(ListResponseMixin):
                     rate_limit += f" {profile.burst_time}s/{profile.burst_time}s"
 
         return rate_limit
-
 
 # =============================================================================
 # DEVICE PROVISIONER - Execute commands on NAS devices
@@ -3017,7 +2959,6 @@ class DeviceProvisioner:
                 status_code=400,
                 detail=f"API backup not implemented for vendor {device.vendor.value}",
             )
-
 
 # =============================================================================
 # CONVENIENCE FUNCTIONS

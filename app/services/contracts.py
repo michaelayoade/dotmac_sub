@@ -1,5 +1,6 @@
 """Service for contract signatures (click-to-sign workflow)."""
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -12,6 +13,7 @@ from app.models.subscriber import Subscriber
 from app.schemas.contracts import ContractSignatureCreate
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 class ContractSignatures:
     """Service for managing contract signatures."""

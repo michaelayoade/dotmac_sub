@@ -5,11 +5,13 @@ plus the Event dataclass that encapsulates event data.
 """
 
 import enum
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+logger = logging.getLogger(__name__)
 
 class EventType(enum.Enum):
     """All event types supported by the event system (~40 events).
@@ -84,7 +86,6 @@ class EventType(enum.Enum):
     # Custom event type for extensibility
     custom = "custom"
 
-
 # Mapping from EventType to LifecycleEventType for subscription events
 SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_activated: "activate",
@@ -94,7 +95,6 @@ SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_upgraded: "upgrade",
     EventType.subscription_downgraded: "downgrade",
 }
-
 
 @dataclass
 class Event:

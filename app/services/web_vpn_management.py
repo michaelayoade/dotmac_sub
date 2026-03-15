@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,6 +24,8 @@ from app.services import job_log_store
 from app.services import wireguard as wg_service
 from app.services.audit_helpers import log_audit_event
 from app.services.wireguard_system import WireGuardSystemService
+
+logger = logging.getLogger(__name__)
 
 OPENVPN_CLIENTS_KEY = "openvpn_clients"
 OPENVPN_SERVER_CONFIG_KEY = "openvpn_server_config"

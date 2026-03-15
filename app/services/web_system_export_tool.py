@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import re
 import smtplib
@@ -35,6 +36,8 @@ from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 from app.services import email as email_service
 from app.services import settings_spec
+
+logger = logging.getLogger(__name__)
 
 EXPORT_CONFIG: dict[str, dict[str, Any]] = {
     "subscribers": {"label": "Subscribers", "model": Subscriber, "date_field": "created_at", "status_field": "status"},

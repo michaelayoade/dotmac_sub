@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import PopSite
 
+logger = logging.getLogger(__name__)
 
 def build_fiber_plant_geojson(
     db: Session,

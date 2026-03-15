@@ -1,9 +1,11 @@
+import logging
 import os
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 
+logger = logging.getLogger(__name__)
 
 def is_openbao_ref(value: str | None) -> bool:
     if not value:

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.services import customer_portal, reseller_portal
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

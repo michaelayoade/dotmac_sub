@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -15,6 +16,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Organization, Subscriber, UserType
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 INVITE_AUDIT_ACTION = "customer_user_invite"
 RESET_AUDIT_ACTION = "customer_user_reset_link"

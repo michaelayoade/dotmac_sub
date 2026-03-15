@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -45,6 +46,7 @@ from app.services.common import (
 )
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 def _severity_rank(severity: AlertSeverity) -> int:
     order = {

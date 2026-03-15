@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -16,6 +17,7 @@ from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services import domain_settings as domain_settings_service
 
+logger = logging.getLogger(__name__)
 
 def parse_billing_cycle(value: str | None, parse_cycle_fn):
     return parse_cycle_fn(value)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.webhook import WebhookEndpoint
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def get_webhook_new_form_context() -> dict:
     """Return default context fragment for webhook create form."""

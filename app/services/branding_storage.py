@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
 from app.services.file_storage import file_uploads
+
+logger = logging.getLogger(__name__)
 
 BRANDING_URL_PREFIX = "/branding/assets/"
 

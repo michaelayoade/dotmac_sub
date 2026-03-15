@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -12,6 +13,8 @@ from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.subscriber import Reseller, Subscriber
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
+
+logger = logging.getLogger(__name__)
 
 _CATEGORY_SOURCES: dict[str, tuple[LedgerSource, ...]] = {
     "service": (LedgerSource.invoice,),

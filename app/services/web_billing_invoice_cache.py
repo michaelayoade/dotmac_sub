@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.models.subscriber import Subscriber
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services.common import parse_date_filter as _parse_date
 
+logger = logging.getLogger(__name__)
 
 def _format_size(size: int) -> str:
     if size >= 1024 * 1024 * 1024:

@@ -1,5 +1,7 @@
 """Tax rate management service."""
 
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.schemas.billing import TaxRateCreate, TaxRateUpdate
 from app.services.common import apply_ordering, apply_pagination, get_by_id
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class TaxRates(ListResponseMixin):
     @staticmethod

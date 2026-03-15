@@ -77,7 +77,7 @@ def retry_failed_events():
             "succeeded": succeeded,
             "failed": failed,
         }
-        logger.info(f"Event retry task completed: {result}")
+        logger.info("Event retry task completed: %s", result)
         return result
 
     except Exception:
@@ -113,7 +113,7 @@ def cleanup_old_events(retention_days: int = 30):
 
         session.commit()
 
-        logger.info(f"Cleaned up {deleted_count} old completed events")
+        logger.info("Cleaned up %s old completed events", deleted_count)
         return {"deleted": deleted_count}
 
     except Exception:
@@ -157,7 +157,7 @@ def mark_stale_processing_events(stale_minutes: int = 30):
 
         session.commit()
 
-        logger.info(f"Marked {len(stuck_events)} stale processing events as failed")
+        logger.info("Marked %s stale processing events as failed", len(stuck_events))
         return {"marked_failed": len(stuck_events)}
 
     except Exception:

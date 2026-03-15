@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ from app.services.dynamic_filters import (
     parse_filter_payload,
 )
 
+logger = logging.getLogger(__name__)
 
 USER_TYPE_OPTIONS = [("system_user", "System User")]
 USER_TYPE_LABELS = {key: label for key, label in USER_TYPE_OPTIONS}

@@ -26,8 +26,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.services.queue_mapping import queue_mapping
 from app.services.credential_crypto import decrypt_credential
+from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
 

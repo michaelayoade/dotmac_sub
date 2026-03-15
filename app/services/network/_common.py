@@ -3,6 +3,8 @@
 These are re-exported from app.services.common for backwards compatibility.
 """
 
+import logging
+
 from app.services.common import (
     apply_ordering as _apply_ordering,
 )
@@ -12,5 +14,7 @@ from app.services.common import (
 from app.services.common import (
     validate_enum as _validate_enum,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["_apply_ordering", "_apply_pagination", "_validate_enum"]

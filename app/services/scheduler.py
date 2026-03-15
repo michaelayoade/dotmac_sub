@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,7 @@ from app.services.common import (
 )
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 def _validate_schedule_type(value):
     if value is None:

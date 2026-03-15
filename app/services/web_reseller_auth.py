@@ -1,5 +1,7 @@
 """Service helpers for reseller auth routes."""
 
+import logging
+
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -7,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.services import reseller_portal
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

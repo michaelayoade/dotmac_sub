@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID
@@ -22,6 +23,7 @@ from app.services import webhook as webhook_service
 from app.services.common import validate_enum
 from app.services.integrations import registry as integration_registry
 
+logger = logging.getLogger(__name__)
 
 def _parse_uuid(value: str | None, field: str, required: bool = True) -> UUID | None:
     if not value:

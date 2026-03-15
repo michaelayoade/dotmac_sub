@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.exc import IntegrityError
 
+logger = logging.getLogger(__name__)
 
 def is_admin_request(request) -> bool:
     auth = getattr(request.state, "auth", {}) or {}

@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import secrets
 import time
@@ -44,6 +45,7 @@ from app.services.common import (
 )
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 def hash_api_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException
 from pyrad.client import Client
 from pyrad.dictionary import Dictionary
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 
+logger = logging.getLogger(__name__)
 
 def _setting_value(db: Session, key: str) -> str | None:
     setting = (

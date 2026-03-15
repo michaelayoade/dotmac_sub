@@ -1,5 +1,6 @@
 """Credit note management services."""
 
+import logging
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -42,6 +43,7 @@ from app.services.common import (
 )
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class CreditNotes(ListResponseMixin):
     @staticmethod

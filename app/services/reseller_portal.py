@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -18,6 +19,8 @@ from app.services import customer_portal
 from app.services.common import coerce_uuid
 from app.services.session_store import delete_session, load_session, store_session
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "reseller_session"
 # Default values for fallback

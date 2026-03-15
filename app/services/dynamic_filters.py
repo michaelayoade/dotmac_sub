@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -8,7 +9,9 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, or_
-from sqlalchemy.sql.elements import BinaryExpression, ClauseElement, ColumnElement
+from sqlalchemy.sql.elements import ClauseElement, ColumnElement
+
+logger = logging.getLogger(__name__)
 
 FilterExpressionBuilder = Callable[[str, Any], ClauseElement]
 

@@ -6,6 +6,7 @@ Now stubbed as CRM functionality has been removed.
 
 import hashlib
 import hmac
+import logging
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -13,8 +14,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.logging import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
+logger = get_logger(__name__)
 
 def verify_webhook_signature(
     payload: bytes,
@@ -46,23 +48,19 @@ def verify_webhook_signature(
 
     return hmac.compare_digest(expected_signature, actual_signature)
 
-
 def process_messenger_webhook(db: Session, payload) -> list:
     """Process Facebook Messenger webhook - CRM removed, no-op."""
     logger.info("messenger_webhook_received_but_crm_removed")
     return []
-
 
 def process_instagram_webhook(db: Session, payload) -> list:
     """Process Instagram webhook - CRM removed, no-op."""
     logger.info("instagram_webhook_received_but_crm_removed")
     return []
 
-
 def receive_facebook_message(db: Session, **kwargs) -> None:
     """Receive Facebook message - CRM removed, no-op."""
     pass
-
 
 def receive_instagram_message(db: Session, **kwargs) -> None:
     """Receive Instagram message - CRM removed, no-op."""

@@ -684,9 +684,7 @@ def vpn_client_wizard_submit(
             actor_id=_get_actor_id(request),
             request=request,
         )
-        db.commit()
     except Exception as exc:
-        db.rollback()
         errors.append(str(exc))
 
     return templates.TemplateResponse(

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import cast
 
 from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
 from app.services import web_system_settings_views as web_system_settings_views_service
 
+logger = logging.getLogger(__name__)
 
 def form_bool(value: str | None) -> bool:
     """Parse common HTML form boolean values."""

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}")
 

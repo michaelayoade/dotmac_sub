@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -18,6 +19,7 @@ from app.services.common import (
 )
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class ExternalReferences(ListResponseMixin):
     @staticmethod

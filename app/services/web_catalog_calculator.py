@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.services import catalog as catalog_service
 
+logger = logging.getLogger(__name__)
 
 def calculator_page_data(db) -> dict[str, object]:
     """Build payload for pricing calculator page."""

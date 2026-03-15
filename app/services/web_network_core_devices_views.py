@@ -484,7 +484,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         ).all()
     )
     onts_by_id = {
-        str(getattr(ont, "id")): ont
+        str(ont.id): ont
         for ont in direct_onts
         if getattr(ont, "id", None)
     }
@@ -964,7 +964,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                 ]
 
             signal_values = [
-                float(getattr(ont, "olt_rx_signal_dbm"))
+                float(ont.olt_rx_signal_dbm)
                 for ont in matched_onts
                 if getattr(ont, "olt_rx_signal_dbm", None) is not None
             ]
@@ -975,7 +975,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                 avg_signal_dbm = snmp_avg_signal_by_fsp.get(pon_hint)
 
             distance_values = [
-                int(getattr(ont, "distance_meters"))
+                int(ont.distance_meters)
                 for ont in matched_onts
                 if getattr(ont, "distance_meters", None) is not None
             ]
@@ -1620,10 +1620,10 @@ def consolidated_page_data(
     for olt in olts:
         linked_monitor = _linked_monitoring(olt)
         if linked_monitor and linked_monitor.status:
-            setattr(olt, "runtime_status", linked_monitor.status.value)
+            olt.runtime_status = linked_monitor.status.value
         else:
             # Keep unknown when we have no linked monitoring telemetry.
-            setattr(olt, "runtime_status", "unknown")
+            olt.runtime_status = "unknown"
 
         pon_ports = network_service.pon_ports.list(
             db=db,

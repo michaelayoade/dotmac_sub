@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from app.services import web_system_profiles as web_system_profiles_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def get_subscriber_or_none(db: Session, user_id: str) -> SystemUser | None:
     return db.get(SystemUser, coerce_uuid(user_id))

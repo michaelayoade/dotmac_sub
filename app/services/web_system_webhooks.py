@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint
 
+logger = logging.getLogger(__name__)
 
 def get_webhooks_list_data(db: Session) -> dict[str, object]:
     """Return webhook endpoints and 24h delivery statistics."""

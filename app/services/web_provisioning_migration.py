@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +23,8 @@ from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store
 from app.services.catalog.subscriptions import apply_offer_radius_profile
 from app.services.radius import sync_account_credentials_to_radius
+
+logger = logging.getLogger(__name__)
 
 SERVICE_MIGRATION_JOBS_KEY = "service_migration_jobs_log"
 SERVICE_MIGRATION_DEFAULT_LIMIT = 500

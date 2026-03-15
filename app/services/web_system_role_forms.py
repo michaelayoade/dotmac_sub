@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
@@ -11,6 +12,7 @@ from app.models.rbac import Permission, RolePermission
 from app.schemas.rbac import RoleCreate, RolePermissionCreate, RoleUpdate
 from app.services import rbac as rbac_service
 
+logger = logging.getLogger(__name__)
 
 def get_permissions_for_form(db: Session):
     """Return permission options for role forms."""

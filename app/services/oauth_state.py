@@ -8,6 +8,7 @@ Environment Variables:
 """
 
 import json
+import logging
 import os
 from datetime import timedelta
 from typing import Any, cast
@@ -16,17 +17,17 @@ import redis
 
 from app.logging import get_logger
 
+logger = logging.getLogger(__name__)
+
 logger = get_logger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 STATE_TTL = timedelta(minutes=10)
 STATE_PREFIX = "oauth_state:"
 
-
 def _get_redis_client() -> redis.Redis:
     """Get a Redis client connection."""
     return cast(redis.Redis, redis.from_url(REDIS_URL, decode_responses=True))
-
 
 def _loads_dict(value: str) -> dict[str, Any] | None:
     """Best-effort JSON->dict loader for state payloads."""
@@ -35,7 +36,6 @@ def _loads_dict(value: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
-
 
 def store_oauth_state(state: str, data: dict) -> None:
     """Store OAuth state with associated data.
@@ -58,7 +58,6 @@ def store_oauth_state(state: str, data: dict) -> None:
     except redis.RedisError as exc:
         logger.error("failed_to_store_oauth_state error=%s", exc)
         raise
-
 
 def get_and_delete_oauth_state(state: str) -> dict[str, Any] | None:
     """Get and delete OAuth state (one-time use).
@@ -95,7 +94,6 @@ def get_and_delete_oauth_state(state: str) -> dict[str, Any] | None:
         logger.error("failed_to_get_oauth_state error=%s", exc)
         return None
 
-
 def verify_oauth_state(state: str) -> dict[str, Any] | None:
     """Verify OAuth state exists without deleting it.
 
@@ -120,7 +118,6 @@ def verify_oauth_state(state: str) -> dict[str, Any] | None:
     except redis.RedisError as exc:
         logger.error("failed_to_verify_oauth_state error=%s", exc)
         return None
-
 
 def delete_oauth_state(state: str) -> bool:
     """Delete an OAuth state token.

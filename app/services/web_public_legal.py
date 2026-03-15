@@ -1,5 +1,7 @@
 """Service helpers for public legal document pages."""
 
+import logging
+
 from fastapi import Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -9,6 +11,8 @@ from app.models.legal import LegalDocumentType
 from app.services import legal as legal_service
 from app.services.file_storage import build_content_disposition
 from app.services.object_storage import ObjectNotFoundError
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

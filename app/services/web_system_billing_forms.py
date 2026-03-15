@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -10,6 +11,7 @@ from app.models.billing import BankAccountType
 from app.schemas.billing import BankAccountCreate, BankAccountUpdate
 from app.services.common import validate_enum
 
+logger = logging.getLogger(__name__)
 
 def _form_bool(value: str | None) -> bool:
     if value is None:

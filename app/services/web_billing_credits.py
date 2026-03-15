@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from app.models.billing import CreditNote, CreditNoteStatus
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 
+logger = logging.getLogger(__name__)
 
 def build_credits_list_data(
     db,

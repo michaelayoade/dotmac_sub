@@ -1,5 +1,7 @@
 """Service helpers for admin configuration pages."""
 
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,7 @@ from app.models.radius import RadiusServer
 from app.models.webhook import WebhookEndpoint
 from app.models.wireguard import WireGuardPeer, WireGuardServer
 
+logger = logging.getLogger(__name__)
 
 def get_configuration_counts(db: Session) -> dict[str, int]:
     """Return section counts for the admin configuration overview page."""

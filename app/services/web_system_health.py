@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.models.domain_settings import SettingDomain
@@ -9,6 +10,7 @@ from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import settings_spec
 from app.services import system_health as system_health_service
 
+logger = logging.getLogger(__name__)
 
 def build_health_data(db) -> dict[str, object]:
     health = system_health_service.get_system_health()

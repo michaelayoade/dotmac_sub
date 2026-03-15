@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -6,6 +7,7 @@ from fastapi import HTTPException, UploadFile
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 
 def get_allowed_types() -> set[str]:
     return set(settings.avatar_allowed_types.split(","))

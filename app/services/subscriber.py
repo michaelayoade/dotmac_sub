@@ -1,4 +1,5 @@
 import builtins
+import logging
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -42,6 +43,8 @@ from app.services.common import (
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
 
 _validate_enum = validate_enum
 

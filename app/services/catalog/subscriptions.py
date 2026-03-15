@@ -3,6 +3,7 @@
 Provides services for Subscriptions and SubscriptionAddOns.
 """
 
+import logging
 from calendar import monthrange
 from datetime import UTC, datetime, timedelta
 
@@ -15,8 +16,8 @@ from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     ContractTerm,
-    OfferRadiusProfile,
     OfferPrice,
+    OfferRadiusProfile,
     OfferVersionPrice,
     PriceType,
     Subscription,
@@ -39,6 +40,7 @@ from app.services.query_builders import apply_optional_equals
 from app.services.response import ListResponseMixin
 from app.validators import catalog as catalog_validators
 
+logger = logging.getLogger(__name__)
 
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
@@ -46,7 +48,6 @@ def _add_months(value: datetime, months: int) -> datetime:
     month = total % 12 + 1
     day = min(value.day, monthrange(year, month)[1])
     return value.replace(year=year, month=month, day=day)
-
 
 def _resolve_billing_cycle(
     db: Session,
@@ -75,7 +76,6 @@ def _resolve_billing_cycle(
     offer = db.get(CatalogOffer, offer_id)
     return offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
 
-
 def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetime:
     """Compute the next billing date based on the billing cycle.
 
@@ -95,14 +95,12 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
     # Default to monthly
     return _add_months(start_at, 1)
 
-
 def _compute_contract_end_at(start_at: datetime, term: ContractTerm) -> datetime | None:
     if term == ContractTerm.twelve_month:
         return _add_months(start_at, 12)
     if term == ContractTerm.twentyfour_month:
         return _add_months(start_at, 24)
     return None
-
 
 def _generate_proration_if_enabled(
     db: Session,
@@ -133,7 +131,6 @@ def _generate_proration_if_enabled(
             f"Failed to generate prorated invoice for subscription {subscription.id}: {exc}"
         )
 
-
 def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
     """Reconcile internal/external RADIUS state for active subscriptions."""
     try:
@@ -152,7 +149,6 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
             f"Failed to reconcile RADIUS state for subscriber {subscriber_id}: {exc}"
         )
 
-
 def _resolve_offer_radius_profile_id(
     db: Session, offer_id: str | None
 ):
@@ -164,7 +160,6 @@ def _resolve_offer_radius_profile_id(
         .first()
     )
     return link.profile_id if link else None
-
 
 def apply_offer_radius_profile(
     db: Session,
@@ -208,7 +203,6 @@ def apply_offer_radius_profile(
                 credential.radius_profile_id = resolved_target
 
     return resolved_target
-
 
 def _emit_subscription_status_event(
     db: Session,
@@ -280,7 +274,6 @@ def _emit_subscription_status_event(
             account_id=subscription.subscriber_id,
         )
 
-
 def _create_service_order_for_subscription(db: Session, subscription: Subscription):
     """Create a service order for a new subscription that needs provisioning."""
     from app.models.provisioning import ServiceOrderStatus
@@ -302,7 +295,6 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
     except Exception:
         # Don't fail subscription creation if service order creation fails
         pass
-
 
 class Subscriptions(ListResponseMixin):
     @staticmethod
@@ -661,7 +653,6 @@ class Subscriptions(ListResponseMixin):
             "subscriptions_expired": expired_count,
             "dry_run": dry_run,
         }
-
 
 class SubscriptionAddOns(CRUDManager[SubscriptionAddOn]):
     model = SubscriptionAddOn

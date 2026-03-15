@@ -1,5 +1,7 @@
 """Service helpers for admin notifications dropdown."""
 
+import logging
+
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -7,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.models.notification import Notification
 from app.services import notification as notification_service
 from app.services import web_admin as web_admin_service
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

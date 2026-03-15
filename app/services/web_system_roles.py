@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.rbac import Permission, Role
 from app.models.rbac import SubscriberRole as SubscriberRoleModel
 
+logger = logging.getLogger(__name__)
 
 def get_roles_page_data(
     db: Session,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,8 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
+
+logger = logging.getLogger(__name__)
 
 PASSWORD_CONTEXT = CryptContext(
     schemes=["pbkdf2_sha256", "bcrypt", "sha512_crypt"],

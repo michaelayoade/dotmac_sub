@@ -3,6 +3,8 @@
 Compatibility module that re-exports helpers from focused submodules.
 """
 
+import logging
+
 from app.services.web_network_core_devices_forms import (
     CoreDeviceSubmitResult,
     _form_str,
@@ -67,6 +69,8 @@ from app.services.web_network_core_devices_views import (
     ont_detail_page_data,
     onts_list_page_data,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CoreDeviceSubmitResult",

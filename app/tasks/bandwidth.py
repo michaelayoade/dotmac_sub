@@ -156,7 +156,7 @@ def process_bandwidth_stream():
                     sample_at=sample_at,
                 ))
             except Exception as e:
-                logger.error(f"Failed to parse sample {msg_id}: {e}")
+                logger.error("Failed to parse sample %s: %s", msg_id, e)
 
         # Bulk insert samples
         if samples:
@@ -167,11 +167,11 @@ def process_bandwidth_stream():
         if message_ids:
             r.xack(REDIS_STREAM, group_name, *message_ids)
 
-        logger.info(f"Processed {len(samples)} bandwidth samples")
+        logger.info("Processed %s bandwidth samples", len(samples))
         return {"processed": len(samples)}
 
     except Exception as e:
-        logger.error(f"Error processing bandwidth stream: {e}")
+        logger.error("Error processing bandwidth stream: %s", e)
         db.rollback()
         raise
     finally:
@@ -198,11 +198,11 @@ def cleanup_hot_data():
         deleted = result.rowcount
         db.commit()
 
-        logger.info(f"Cleaned up {deleted} bandwidth samples older than {cutoff}")
+        logger.info("Cleaned up %s bandwidth samples older than %s", deleted, cutoff)
         return {"deleted": deleted}
 
     except Exception as e:
-        logger.error(f"Error cleaning up hot data: {e}")
+        logger.error("Error cleaning up hot data: %s", e)
         db.rollback()
         raise
     finally:
@@ -265,11 +265,11 @@ def aggregate_to_metrics():
 
         asyncio.run(push_aggregates())
 
-        logger.info(f"Pushed {len(aggregates)} aggregates to VictoriaMetrics")
+        logger.info("Pushed %s aggregates to VictoriaMetrics", len(aggregates))
         return {"pushed": len(aggregates)}
 
     except Exception as e:
-        logger.error(f"Error aggregating to metrics: {e}")
+        logger.error("Error aggregating to metrics: %s", e)
         raise
     finally:
         db.close()
@@ -290,11 +290,11 @@ def trim_redis_stream():
         max_length = _get_redis_stream_max_length(db)
         # Trim stream to max length
         trimmed = r.xtrim(REDIS_STREAM, maxlen=max_length, approximate=True)
-        logger.info(f"Trimmed {trimmed} entries from bandwidth stream")
+        logger.info("Trimmed %s entries from bandwidth stream", trimmed)
         return {"trimmed": trimmed}
 
     except Exception as e:
-        logger.error(f"Error trimming Redis stream: {e}")
+        logger.error("Error trimming Redis stream: %s", e)
         raise
     finally:
         db.close()

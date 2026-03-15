@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -15,10 +16,11 @@ from app.schemas.tr069 import (
     Tr069CpeDeviceUpdate,
     Tr069JobCreate,
 )
-from app.services.genieacs import GenieACSClient, GenieACSError
 from app.services import tr069 as tr069_service
 from app.services.common import coerce_uuid
+from app.services.genieacs import GenieACSClient, GenieACSError
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class JobAction:

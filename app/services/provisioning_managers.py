@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -59,6 +60,7 @@ from app.services.provisioning_helpers import (
 from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.validators import provisioning as provisioning_validators
 
+logger = logging.getLogger(__name__)
 
 class ServiceOrders(CRUDManager[ServiceOrder]):
     model = ServiceOrder

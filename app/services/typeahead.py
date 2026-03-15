@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -7,6 +9,7 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Organization, Reseller, Subscriber, UserType
 from app.services.response import list_response
 
+logger = logging.getLogger(__name__)
 
 def _subscriber_label(subscriber: Subscriber) -> str:
     """Generate label for a subscriber."""

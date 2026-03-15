@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from app.schemas.network import FiberStrandCreate, FiberStrandUpdate
 from app.services import network as network_service
 from app.services.common import validate_enum
 
+logger = logging.getLogger(__name__)
 
 def list_page_data(db: Session) -> dict[str, object]:
     """Return strand list and summary stats for index page."""

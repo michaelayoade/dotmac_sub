@@ -117,6 +117,10 @@ def encrypt_credential(value: str | None) -> str | None:
     encryption_key = get_encryption_key()
     if not encryption_key:
         # No encryption configured - store with plain prefix
+        _logger.warning(
+            "CREDENTIAL_ENCRYPTION_KEY not configured "
+            "— storing credential as plaintext"
+        )
         return f"plain:{value}"
 
     fernet = Fernet(encryption_key)

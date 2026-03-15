@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import BankReconciliationItem, BankReconciliationRun, Payment
 from app.services import web_billing_payments as web_billing_payments_service
 
+logger = logging.getLogger(__name__)
 
 def _date_start_for_range(date_range: str | None) -> datetime | None:
     now = datetime.now(UTC)

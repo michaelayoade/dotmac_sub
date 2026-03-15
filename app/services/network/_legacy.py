@@ -4,6 +4,8 @@ Keep imports stable for code still importing from `_legacy` while the service
 implementations live in dedicated modules.
 """
 
+import logging
+
 from app.services.network.fiber_services import (
     FiberSegments,
     FiberSpliceClosures,
@@ -30,6 +32,8 @@ from app.services.network.splitters import (
     splitter_ports,
     splitters,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FdhCabinets",

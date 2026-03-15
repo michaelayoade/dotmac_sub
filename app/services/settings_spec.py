@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,6 +13,8 @@ from app.services.settings_cache import SettingsCache
 if TYPE_CHECKING:
     from app.models.domain_settings import DomainSetting
 
+
+logger = logging.getLogger(__name__)
 
 def _coerce_int_value(value: object) -> int | None:
     # Domain settings values are stored as text/json and flow through `object` types here.

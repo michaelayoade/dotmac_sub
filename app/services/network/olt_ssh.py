@@ -6,9 +6,7 @@ import logging
 import re
 import socket
 from dataclasses import dataclass
-from typing import Any
 
-import paramiko
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
@@ -96,7 +94,7 @@ def _read_until_prompt(channel: Channel, prompt_regex: str, timeout_sec: float =
     while True:
         try:
             chunk = channel.recv(4096).decode("utf-8", errors="replace")
-        except socket.timeout:
+        except TimeoutError:
             if compiled.search(buffer):
                 return buffer
             if timeout_sec <= 0:
@@ -149,7 +147,7 @@ def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
 def test_connection(olt: OLTDevice) -> tuple[bool, str, str | None]:
     try:
         policy_key, output = run_version_probe(olt)
-    except (SSHException, socket.error, OSError) as exc:
+    except (SSHException, OSError) as exc:
         return False, f"Connection failed: {type(exc).__name__}: {exc}", None
     except Exception as exc:
         logger.error("Unexpected error testing OLT %s connection: %s", olt.name, exc)

@@ -3,6 +3,8 @@
 Re-exports customer portal helpers from focused submodules.
 """
 
+import logging
+
 from app.services.customer_portal_context import (
     _format_address,
     get_allowed_account_ids,
@@ -56,6 +58,8 @@ from app.services.customer_portal_session import (
     invalidate_customer_session,
     refresh_customer_session,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "SESSION_COOKIE_NAME",

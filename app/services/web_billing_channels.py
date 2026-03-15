@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.models.billing import PaymentChannelType
 from app.services import billing as billing_service
 
+logger = logging.getLogger(__name__)
 
 def list_payment_channels_data(db) -> dict[str, object]:
     channels = billing_service.payment_channels.list(

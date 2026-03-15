@@ -7,13 +7,13 @@ import uuid
 from datetime import UTC, datetime, time
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Enum,
     Float,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
     Time,

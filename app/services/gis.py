@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import logging
 
 from fastapi import HTTPException
 from geoalchemy2.functions import (
@@ -38,6 +39,7 @@ from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.services.response import ListResponseMixin, list_response
 
+logger = logging.getLogger(__name__)
 
 class GeoLocations(CRUDManager[GeoLocation]):
     model = GeoLocation

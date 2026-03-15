@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.auth import ApiKey
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def revoke_api_key(db: Session, *, key_id: str) -> bool:
     """Revoke API key by id. Returns True when key exists."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from ipaddress import ip_address, ip_network
 from uuid import UUID
@@ -12,6 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models.wireguard import WireGuardPeer, WireGuardServer
 from app.services.wireguard_system import WireGuardSystemService
 
+logger = logging.getLogger(__name__)
 
 class VpnRoutingError(RuntimeError):
     """Raised when a VPN interface is unavailable for device access."""

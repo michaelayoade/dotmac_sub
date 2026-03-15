@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import logging
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from app.schemas.rbac import (
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class Roles(ListResponseMixin):
     @staticmethod

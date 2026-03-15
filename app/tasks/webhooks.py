@@ -55,20 +55,20 @@ def deliver_webhook(self, delivery_id: str):
     try:
         delivery = session.get(WebhookDelivery, delivery_id)
         if not delivery:
-            logger.error(f"WebhookDelivery not found: {delivery_id}")
+            logger.error("WebhookDelivery not found: %s", delivery_id)
             return
 
         # Get endpoint
         endpoint = delivery.endpoint
         if not endpoint:
-            logger.error(f"Endpoint not found for delivery {delivery_id}")
+            logger.error("Endpoint not found for delivery %s", delivery_id)
             delivery.status = WebhookDeliveryStatus.failed
             delivery.error = "Endpoint not found"
             session.commit()
             return
 
         if not endpoint.is_active:
-            logger.info(f"Endpoint {endpoint.id} is inactive, skipping delivery")
+            logger.info("Endpoint %s is inactive, skipping delivery", endpoint.id)
             delivery.status = WebhookDeliveryStatus.failed
             delivery.error = "Endpoint is inactive"
             session.commit()
@@ -161,7 +161,7 @@ def deliver_webhook(self, delivery_id: str):
         raise
 
     except Exception as exc:
-        logger.exception(f"Unexpected error delivering webhook {delivery_id}: {exc}")
+        logger.exception("Unexpected error delivering webhook %s: %s", delivery_id, exc)
         try:
             delivery = session.get(WebhookDelivery, delivery_id)
             if delivery:
@@ -204,7 +204,7 @@ def retry_failed_deliveries():
             requeued += 1
 
         if requeued:
-            logger.info(f"Requeued {requeued} failed webhook deliveries")
+            logger.info("Requeued %s failed webhook deliveries", requeued)
 
     except Exception:
         session.rollback()

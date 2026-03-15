@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from app.models.subscriber import Subscriber, SubscriberStatus
@@ -11,6 +12,7 @@ from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata
 
+logger = logging.getLogger(__name__)
 
 def build_accounts_list_data(
     db,

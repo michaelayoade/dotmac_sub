@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_service
 
+logger = logging.getLogger(__name__)
 
 def _parse_bool(value: str | None) -> bool:
     return value in {"on", "true", "1", "yes"}

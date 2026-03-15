@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -21,7 +22,14 @@ from app.models.integration_hook import (
     IntegrationHookExecutionStatus,
     IntegrationHookType,
 )
-from app.services.common import apply_ordering, apply_pagination, coerce_uuid, validate_enum
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
+
+logger = logging.getLogger(__name__)
 
 HOOK_TEMPLATES: dict[str, dict[str, Any]] = {
     "n8n": {
@@ -389,7 +397,7 @@ def _execute_http_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tup
         username = str(auth_config.get("username") or "")
         password = str(auth_config.get("password") or "")
         if username or password:
-            token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {token}"
     elif hook.auth_type == IntegrationHookAuthType.hmac:
         secret = str(auth_config.get("secret") or "")

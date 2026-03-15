@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import logging
 import os
 import re
 from datetime import UTC, datetime
@@ -46,12 +47,14 @@ from app.schemas.usage import (
     UsageRecordCreate,
     UsageRecordUpdate,
 )
-from app.services import settings_spec
 from app.services import domain_settings as domain_settings_service
+from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
 
 _MAC_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
 _RADIUS_ACCOUNTING_CURSOR_KEY = "radius_accounting_last_radacctid"

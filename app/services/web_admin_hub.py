@@ -1,5 +1,7 @@
 """Service helpers for admin hub pages."""
 
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.models.integration import IntegrationJob
 from app.models.rbac import Role
 from app.models.scheduler import ScheduledTask
 
+logger = logging.getLogger(__name__)
 
 def get_admin_hub_counts(db: Session) -> dict[str, int]:
     """Return summary counts for admin hub overview cards."""

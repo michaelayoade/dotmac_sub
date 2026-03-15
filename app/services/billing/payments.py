@@ -1,5 +1,6 @@
 """Payment and payment method management services."""
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -67,6 +68,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class PaymentMethods(ListResponseMixin):
     @staticmethod

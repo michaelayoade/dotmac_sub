@@ -16,8 +16,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
-from app.models.catalog import Subscription
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import (
     AddressType,
     ChannelType,
@@ -27,6 +26,7 @@ from app.models.subscriber import (
     SubscriberStatus,
 )
 from app.schemas.audit import AuditEventCreate
+from app.schemas.catalog import SubscriptionUpdate
 from app.schemas.subscriber import (
     AddressCreate,
     OrganizationCreate,
@@ -34,12 +34,12 @@ from app.schemas.subscriber import (
     SubscriberCreate,
     SubscriberUpdate,
 )
-from app.schemas.catalog import SubscriptionUpdate
 from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
-from app.services.common import coerce_uuid, parse_date_filter as _parse_date
+from app.services.common import coerce_uuid
+from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -976,3 +976,25 @@ def delete_customer_contact(db: Session, *, contact_id: str) -> None:
     if channel:
         db.delete(channel)
         db.commit()
+
+
+def update_customer_profile(
+    db: Session,
+    *,
+    subscriber_id: str,
+    name: str,
+    email: str,
+    phone: str | None,
+) -> Subscriber | None:
+    """Update a customer's basic profile fields."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber:
+        return None
+    name_parts = name.strip().split(None, 1)
+    subscriber.first_name = name_parts[0] if name_parts else name.strip()
+    subscriber.last_name = name_parts[1] if len(name_parts) > 1 else ""
+    subscriber.email = email.strip()
+    subscriber.phone = phone.strip() if phone else None
+    db.commit()
+    db.refresh(subscriber)
+    return subscriber

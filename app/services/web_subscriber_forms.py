@@ -1,21 +1,23 @@
 """Service helpers for subscriber create/edit web forms."""
 
+import logging
 import re
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain
 from app.models.auth import AuthProvider
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Organization, Subscriber
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import auth as auth_service
+from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services.auth_flow import hash_password
-from app.services import settings_spec
 
+logger = logging.getLogger(__name__)
 
 def parse_customer_ref(value: str | None) -> tuple[str, UUID]:
     if not value:

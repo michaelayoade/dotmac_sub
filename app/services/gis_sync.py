@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SyncResult(ListResponseMixin):

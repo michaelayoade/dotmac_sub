@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Subscriber, SubscriberStatus as AccountStatus
+from app.models.subscriber import Subscriber
+from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec

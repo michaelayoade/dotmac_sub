@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.auth import ApiKey
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def list_api_keys_for_subscriber(db: Session, subscriber_id: str | None) -> list[ApiKey]:
     """Return API keys for a subscriber sorted by most recent."""

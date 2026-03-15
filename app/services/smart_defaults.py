@@ -1,5 +1,6 @@
 """Smart Defaults Service - Provides intelligent default values for forms."""
 
+import logging
 from datetime import date, timedelta
 from typing import Any
 
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services.settings_cache import SettingsCache
 
+logger = logging.getLogger(__name__)
 
 class SmartDefaultsService:
     """Service for providing smart default values based on domain settings.

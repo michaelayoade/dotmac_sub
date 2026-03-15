@@ -3,6 +3,8 @@
 Provides services for RegionZones, UsageAllowances, and SlaProfiles.
 """
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.catalog import RegionZone, SlaProfile, UsageAllowance
@@ -15,6 +17,7 @@ from app.services.common import apply_ordering, apply_pagination
 from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state
 
+logger = logging.getLogger(__name__)
 
 class RegionZones(CRUDManager[RegionZone]):
     model = RegionZone
@@ -53,7 +56,6 @@ class RegionZones(CRUDManager[RegionZone]):
     def delete(cls, db: Session, zone_id: str):
         return super().delete(db, zone_id)
 
-
 class UsageAllowances(CRUDManager[UsageAllowance]):
     model = UsageAllowance
     not_found_detail = "Usage allowance not found"
@@ -90,7 +92,6 @@ class UsageAllowances(CRUDManager[UsageAllowance]):
     @classmethod
     def delete(cls, db: Session, allowance_id: str):
         return super().delete(db, allowance_id)
-
 
 class SlaProfiles(CRUDManager[SlaProfile]):
     model = SlaProfile

@@ -4,6 +4,7 @@ This module provides validation and calculation helpers shared across
 billing service modules.
 """
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -35,6 +36,7 @@ from app.models.billing import (
 from app.models.subscriber import Subscriber
 from app.services.common import get_by_id, round_money
 
+logger = logging.getLogger(__name__)
 
 def _validate_account(db: Session, account_id: str):
     """Validate that a subscriber exists."""
@@ -42,7 +44,6 @@ def _validate_account(db: Session, account_id: str):
     if not account:
         raise HTTPException(status_code=404, detail="Subscriber account not found")
     return account
-
 
 def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
     """Calculate the credit balance for an account from ledger entries.
@@ -82,7 +83,6 @@ def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
 
     return round_money(Decimal(str(credit_total)) - Decimal(str(debit_total)))
 
-
 def _validate_invoice_totals(data: dict):
     """Validate invoice monetary totals are consistent."""
     subtotal = data.get("subtotal")
@@ -104,7 +104,6 @@ def _validate_invoice_totals(data: dict):
             )
     if balance_due is not None and total is not None and balance_due > total:
         raise HTTPException(status_code=400, detail="Balance due exceeds total")
-
 
 def _validate_credit_note_totals(data: dict):
     """Validate credit note monetary totals are consistent."""
@@ -128,7 +127,6 @@ def _validate_credit_note_totals(data: dict):
     if applied_total is not None and total is not None and applied_total > total:
         raise HTTPException(status_code=400, detail="Applied total exceeds total")
 
-
 def _validate_invoice_line_amount(quantity: Decimal, unit_price: Decimal, amount: Decimal | None):
     """Validate and calculate invoice line amount."""
     if quantity <= 0:
@@ -144,7 +142,6 @@ def _validate_invoice_line_amount(quantity: Decimal, unit_price: Decimal, amount
         raise HTTPException(status_code=400, detail="Amount must equal quantity * unit price")
     return round_money(amount)
 
-
 def _resolve_tax_rate(db: Session, tax_rate_id: str | None) -> TaxRate | None:
     """Look up a tax rate by ID."""
     if not tax_rate_id:
@@ -154,12 +151,10 @@ def _resolve_tax_rate(db: Session, tax_rate_id: str | None) -> TaxRate | None:
         raise HTTPException(status_code=404, detail="Tax rate not found")
     return rate
 
-
 def _validate_invoice_currency(invoice: Invoice, currency: str | None):
     """Validate that currency matches the invoice."""
     if currency and invoice.currency != currency:
         raise HTTPException(status_code=400, detail="Currency does not match invoice")
-
 
 def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     """Recalculate invoice totals from lines and payments."""
@@ -254,7 +249,6 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     elif paid_amount > 0 or credit_amount > 0:
         invoice.status = InvoiceStatus.partially_paid
 
-
 def _validate_payment_channel(db: Session, channel_id: str | None) -> PaymentChannel | None:
     if not channel_id:
         return None
@@ -264,7 +258,6 @@ def _validate_payment_channel(db: Session, channel_id: str | None) -> PaymentCha
     if not channel.is_active:
         raise HTTPException(status_code=400, detail="Payment channel is inactive")
     return channel
-
 
 def _validate_collection_account(
     db: Session, collection_account_id: str | None, currency: str | None
@@ -281,7 +274,6 @@ def _validate_collection_account(
             status_code=400, detail="Collection account currency does not match payment"
         )
     return account
-
 
 def _resolve_payment_channel(
     db: Session,
@@ -313,7 +305,6 @@ def _resolve_payment_channel(
                 detail="Multiple payment channels match provider; set a default",
             )
     return None
-
 
 def _resolve_collection_account(
     db: Session,
@@ -354,7 +345,6 @@ def _resolve_collection_account(
             db, str(channel.default_collection_account_id), currency
         )
     return None
-
 
 def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
     """Recalculate credit note totals from lines and applications."""
@@ -428,7 +418,6 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
         else:
             credit_note.status = CreditNoteStatus.applied
 
-
 def _validate_payment_linkages(db: Session, account_id: str, invoice_id: str | None, payment_method_id: str | None):
     """Validate payment relationships to account, invoice, and method."""
     _validate_account(db, account_id)
@@ -447,7 +436,6 @@ def _validate_payment_linkages(db: Session, account_id: str, invoice_id: str | N
                 status_code=400, detail="Payment method does not belong to account"
             )
 
-
 def _validate_payment_provider(db: Session, provider_id: str | None):
     """Validate that a payment provider exists and is active."""
     if not provider_id:
@@ -456,7 +444,6 @@ def _validate_payment_provider(db: Session, provider_id: str | None):
     if not provider or not provider.is_active:
         raise HTTPException(status_code=404, detail="Payment provider not found")
     return provider
-
 
 def _validate_ledger_linkages(db: Session, account_id: str, invoice_id: str | None, payment_id: str | None):
     """Validate ledger entry relationships to account, invoice, and payment."""

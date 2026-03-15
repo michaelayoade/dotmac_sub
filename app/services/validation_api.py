@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Organization, Subscriber
+
+logger = logging.getLogger(__name__)
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PHONE_PATTERN = re.compile(r"^\+?[0-9\s\-\(\)\.]{7,20}$")

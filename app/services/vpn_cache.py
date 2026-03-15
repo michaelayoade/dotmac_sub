@@ -11,6 +11,7 @@ Caching reduces database load and speeds up configuration downloads.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable
 from functools import wraps
@@ -18,6 +19,8 @@ from typing import Any, TypeVar, cast
 
 from app.models.domain_settings import SettingDomain
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 # Redis is optional - if not available, caching is disabled
 try:
@@ -28,12 +31,10 @@ except ImportError:
     REDIS_AVAILABLE = False
     redis = None  # type: ignore[assignment]
 
-
 # Configuration
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/1")
 CACHE_PREFIX = "wg:"
 _DEFAULT_TTL = 900  # 15 minutes fallback
-
 
 def _coerce_int(value: object) -> int | None:
     if value is None:
@@ -52,7 +53,6 @@ def _coerce_int(value: object) -> int | None:
             return None
     return None
 
-
 def _get_default_ttl() -> int:
     """Get the default VPN cache TTL from settings."""
     # In many call sites (and unit tests) we don't have a DB session available.
@@ -68,22 +68,17 @@ def _get_default_ttl() -> int:
     parsed = _coerce_int(ttl)
     return parsed if parsed is not None else _DEFAULT_TTL
 
-
 # Cache TTL functions - these allow runtime configuration
 def _get_server_config_ttl() -> int:
     return _get_default_ttl()
 
-
 def _get_peer_config_ttl() -> int:
     return _get_default_ttl()
-
 
 def _get_mikrotik_script_ttl() -> int:
     return _get_default_ttl()
 
-
 _redis_client: Any | None = None
-
 
 def get_redis_client() -> Any | None:
     """Get or create Redis client.
@@ -105,7 +100,6 @@ def get_redis_client() -> Any | None:
 
     return _redis_client
 
-
 def is_cache_available() -> bool:
     """Check if caching is available."""
     client = get_redis_client()
@@ -117,13 +111,11 @@ def is_cache_available() -> bool:
     except Exception:
         return False
 
-
 def _make_key(prefix: str, *args: Any) -> str:
     """Generate a cache key from prefix and arguments."""
     parts = [str(arg) for arg in args if arg is not None]
     key_data = ":".join(parts)
     return f"{CACHE_PREFIX}{prefix}:{key_data}"
-
 
 def get_cached(key: str) -> str | None:
     """Get a value from cache.
@@ -138,7 +130,6 @@ def get_cached(key: str) -> str | None:
         return cast(str | None, client.get(key))
     except Exception:
         return None
-
 
 def set_cached(key: str, value: str, ttl: int | None = None) -> bool:
     """Set a value in cache with TTL.
@@ -159,7 +150,6 @@ def set_cached(key: str, value: str, ttl: int | None = None) -> bool:
     except Exception:
         return False
 
-
 def delete_cached(key: str) -> bool:
     """Delete a value from cache.
 
@@ -174,7 +164,6 @@ def delete_cached(key: str) -> bool:
         return True
     except Exception:
         return False
-
 
 def delete_pattern(pattern: str) -> int:
     """Delete all keys matching a pattern.
@@ -193,21 +182,17 @@ def delete_pattern(pattern: str) -> int:
     except Exception:
         return 0
 
-
 # ============== Server Cache ==============
-
 
 def get_server_config(server_id: str) -> str | None:
     """Get cached server configuration."""
     key = _make_key("server_config", server_id)
     return get_cached(key)
 
-
 def set_server_config(server_id: str, config: str) -> bool:
     """Cache server configuration."""
     key = _make_key("server_config", server_id)
     return set_cached(key, config, _get_server_config_ttl())
-
 
 def invalidate_server(server_id: str) -> int:
     """Invalidate all cache entries for a server."""
@@ -219,15 +204,12 @@ def invalidate_server(server_id: str) -> int:
     count += delete_pattern(f"mikrotik_script:{server_id}:")
     return count
 
-
 # ============== Peer Cache ==============
-
 
 def get_peer_config(peer_id: str) -> str | None:
     """Get cached peer configuration."""
     key = _make_key("peer_config", peer_id)
     return get_cached(key)
-
 
 def set_peer_config(peer_id: str, config: str, server_id: str) -> bool:
     """Cache peer configuration.
@@ -243,7 +225,6 @@ def set_peer_config(peer_id: str, config: str, server_id: str) -> bool:
         set_cached(reverse_key, peer_id, ttl)
     return success
 
-
 def invalidate_peer(peer_id: str) -> bool:
     """Invalidate cache entries for a peer."""
     key = _make_key("peer_config", peer_id)
@@ -252,27 +233,21 @@ def invalidate_peer(peer_id: str) -> bool:
     delete_cached(script_key)
     return True
 
-
 # ============== MikroTik Script Cache ==============
-
 
 def get_mikrotik_script(peer_id: str) -> str | None:
     """Get cached MikroTik script."""
     key = _make_key("mikrotik_script", peer_id)
     return get_cached(key)
 
-
 def set_mikrotik_script(peer_id: str, script: str, server_id: str) -> bool:
     """Cache MikroTik script."""
     key = _make_key("mikrotik_script", peer_id)
     return set_cached(key, script, _get_mikrotik_script_ttl())
 
-
 # ============== Decorator for Caching ==============
 
-
 T = TypeVar("T")
-
 
 def cached(
     key_prefix: str,
@@ -335,9 +310,7 @@ def cached(
 
     return decorator
 
-
 # ============== Cache Stats ==============
-
 
 def get_cache_stats() -> dict[str, Any]:
     """Get cache statistics.
@@ -362,7 +335,6 @@ def get_cache_stats() -> dict[str, Any]:
         }
     except Exception as e:
         return {"available": False, "error": str(e)}
-
 
 def flush_all_vpn_cache() -> int:
     """Flush all VPN-related cache entries.

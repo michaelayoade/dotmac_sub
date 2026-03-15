@@ -11,8 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
-from app.models.network import OntUnit
-from app.models.network import OntAssignment
+from app.models.network import OntAssignment, OntUnit
 from app.services.network.olt_polling import get_signal_thresholds
 from app.services.network.ont_metrics import (
     ChartData,

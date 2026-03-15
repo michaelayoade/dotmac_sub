@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -14,6 +15,8 @@ from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
+
+logger = logging.getLogger(__name__)
 
 SENSITIVE_FIELDS = {
     "password",

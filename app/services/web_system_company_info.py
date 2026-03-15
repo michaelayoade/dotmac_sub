@@ -67,3 +67,4 @@ def save_company_info(db: Session, data: Mapping[str, Any]) -> None:
             )
             db.add(setting)
     db.flush()
+    db.commit()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import LedgerEntry, LedgerEntryType
 
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class StatementRange:

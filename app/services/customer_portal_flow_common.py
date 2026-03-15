@@ -1,7 +1,6 @@
 """Shared helpers for customer portal flow modules."""
 
 import logging
-
 from datetime import date, datetime
 from typing import Any, cast
 

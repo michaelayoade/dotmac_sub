@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from sqlalchemy.orm import Session
@@ -29,6 +30,7 @@ from app.services.domain_settings import (
 )
 from app.services.secrets import is_openbao_ref
 
+logger = logging.getLogger(__name__)
 
 def seed_auth_settings(db: Session) -> None:
     auth_settings.ensure_by_key(

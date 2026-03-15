@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 import math
 from datetime import datetime
 from uuid import UUID
@@ -30,6 +31,7 @@ from app.models.subscriber import Address, Subscriber
 from app.services import fiber_change_requests as change_request_service
 from app.services import settings_spec
 
+logger = logging.getLogger(__name__)
 
 def _coerce_float(value: object, default: float) -> float:
     if value is None:

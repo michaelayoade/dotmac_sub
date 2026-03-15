@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
 
+logger = logging.getLogger(__name__)
 
 def build_network_map_context(db: Session) -> dict:
     features: list[dict] = []

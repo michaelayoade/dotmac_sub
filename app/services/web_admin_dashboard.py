@@ -1,5 +1,6 @@
 """Service helpers for admin dashboard routes."""
 
+import logging
 from datetime import datetime
 
 from fastapi import Request
@@ -33,6 +34,8 @@ from app.services.audit_helpers import (
     humanize_action,
     humanize_entity,
 )
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

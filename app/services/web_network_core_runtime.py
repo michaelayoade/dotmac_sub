@@ -144,7 +144,9 @@ def _refresh_device_health_worker(device_id: str, do_ping: bool, do_snmp: bool) 
         if do_ping:
             ping_device(db, device_id)
         if do_snmp:
-            from app.services.network_vendor_polling import refresh_device_from_vendor_api
+            from app.services.network_vendor_polling import (
+                refresh_device_from_vendor_api,
+            )
 
             handled, success = refresh_device_from_vendor_api(db, device)
             if not handled or not success:

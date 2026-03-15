@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from urllib.parse import quote
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 
+logger = logging.getLogger(__name__)
 
 def _setting_value(db: Session, key: str) -> str | None:
     setting = (

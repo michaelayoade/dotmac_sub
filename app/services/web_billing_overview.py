@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -16,6 +17,8 @@ from app.services import billing as billing_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services.common import validate_enum
+
+logger = logging.getLogger(__name__)
 
 _BUCKET_SEQUENCE = ("current", "1_30", "31_60", "61_90", "90_plus")
 _BUCKET_LABELS = {

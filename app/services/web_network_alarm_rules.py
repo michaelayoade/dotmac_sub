@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TypedDict
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from app.models.network_monitoring import (
 from app.schemas.network_monitoring import AlertRuleCreate
 from app.services import network_monitoring as monitoring_service
 
+logger = logging.getLogger(__name__)
 
 class AlarmRuleFormValues(TypedDict):
     name: str

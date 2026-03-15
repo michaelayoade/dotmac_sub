@@ -2884,7 +2884,6 @@ def company_info_page(request: Request, db: Session = Depends(get_db)):
 def company_info_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_company_info_service.save_company_info(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/company-info", status_code=303)
 
 
@@ -2987,7 +2986,6 @@ def config_preferences_page(request: Request, db: Session = Depends(get_db)):
 def config_preferences_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_preferences(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/preferences", status_code=303)
 
 
@@ -3002,7 +3000,6 @@ def config_email_page(request: Request, db: Session = Depends(get_db)):
 def config_email_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_email_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/email", status_code=303)
 
 
@@ -3017,7 +3014,6 @@ def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
 def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_subscriber_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/subscribers", status_code=303)
 
 
@@ -3032,7 +3028,6 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_portal_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/portal", status_code=303)
 
 
@@ -3047,7 +3042,6 @@ def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
 def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_retention(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/data-retention", status_code=303)
 
 
@@ -3062,7 +3056,6 @@ def config_finance_auto_page(request: Request, db: Session = Depends(get_db)):
 def config_finance_auto_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_finance_automation(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/finance-automation", status_code=303)
 
 
@@ -3077,7 +3070,6 @@ def config_billing_page(request: Request, db: Session = Depends(get_db)):
 def config_billing_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_billing_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/billing", status_code=303)
 
 
@@ -3106,7 +3098,6 @@ def config_reminders_page(request: Request, db: Session = Depends(get_db)):
 def config_reminders_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_reminders(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/reminders", status_code=303)
 
 
@@ -3121,7 +3112,6 @@ def config_billing_notif_page(request: Request, db: Session = Depends(get_db)):
 def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_billing_notifications(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/billing-notifications", status_code=303)
 
 
@@ -3136,7 +3126,6 @@ def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
 def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_plan_change(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/plan-change", status_code=303)
 
 
@@ -3165,7 +3154,6 @@ def config_radius_page(request: Request, db: Session = Depends(get_db)):
 def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_radius_config(db, form)
-    db.commit()
     try:
         radius_reject_service.push_reject_rules_once(db)
     except Exception:
@@ -3196,7 +3184,6 @@ def config_cpe_page(request: Request, db: Session = Depends(get_db)):
 def config_cpe_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_cpe_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/cpe", status_code=303)
 
 
@@ -3211,7 +3198,6 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_monitoring_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/monitoring", status_code=303)
 
 
@@ -3226,7 +3212,6 @@ def config_fup_page(request: Request, db: Session = Depends(get_db)):
 def config_fup_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_fup_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/fup", status_code=303)
 
 
@@ -3248,5 +3233,4 @@ def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
 def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_ipv6_config(db, form)
-    db.commit()
     return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.scheduler import ScheduledTask
 from app.services import scheduler as scheduler_service
 
+logger = logging.getLogger(__name__)
 
 def get_scheduler_overview_data(
     db: Session,

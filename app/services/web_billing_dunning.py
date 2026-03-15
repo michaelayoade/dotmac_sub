@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.services import collections as collections_service
 from app.services import web_billing_customers as web_billing_customers_service
 
+logger = logging.getLogger(__name__)
 
 def build_listing_data(
     db,

@@ -3,6 +3,8 @@
 Provides services for AddOns, AddOnPrices, and OfferAddOns.
 """
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AddOn, AddOnPrice, AddOnType, PriceType
@@ -18,6 +20,7 @@ from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
+logger = logging.getLogger(__name__)
 
 class AddOns(CRUDManager[AddOn]):
     model = AddOn
@@ -78,7 +81,6 @@ class AddOns(CRUDManager[AddOn]):
     @classmethod
     def delete(cls, db: Session, add_on_id: str):
         return super().delete(db, add_on_id)
-
 
 class AddOnPrices(CRUDManager[AddOnPrice]):
     model = AddOnPrice

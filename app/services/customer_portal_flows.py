@@ -1,5 +1,7 @@
 """Compatibility exports for customer portal flow helpers."""
 
+import logging
+
 from app.services.customer_portal_flow_billing import (
     get_arrangement_error_context,
     get_billing_page,
@@ -34,6 +36,8 @@ from app.services.customer_portal_flow_services import (
     get_services_page,
     get_usage_page,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "_compute_total_pages",

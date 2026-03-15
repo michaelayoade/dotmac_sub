@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections import defaultdict
 
@@ -9,6 +10,8 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import DeviceMetric, MetricType, NetworkDevice
+
+logger = logging.getLogger(__name__)
 
 _WARN_BPS = int(os.getenv("WEATHERMAP_WARN_BPS", "100000000"))
 _HIGH_BPS = int(os.getenv("WEATHERMAP_HIGH_BPS", "500000000"))

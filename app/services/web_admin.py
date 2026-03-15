@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from threading import Lock
 from time import monotonic
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.notification import Notification, NotificationStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 
+logger = logging.getLogger(__name__)
 
 def _get_initials(name: str) -> str:
     if not name:

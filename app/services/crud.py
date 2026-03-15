@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any, Generic, TypeVar, cast
 
 from fastapi import HTTPException
 
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel")
 

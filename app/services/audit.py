@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import DetachedInstanceError
@@ -7,6 +9,7 @@ from app.schemas.audit import AuditEventCreate
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class AuditEvents(ListResponseMixin):
     @staticmethod

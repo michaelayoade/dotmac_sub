@@ -4,9 +4,12 @@ This module provides backwards compatibility for code that imports from
 `app.services.collections`. The actual implementation is in the
 `app.services.collections` package (collections/_core.py).
 
-For new code, prefer importing from the package:
+For new code, prefer importing from the package::
+
     from app.services.collections import dunning_cases, prepaid_enforcement
 """
+
+import logging
 
 # Re-export everything from the package for backwards compatibility
 from app.services.collections._core import (
@@ -20,6 +23,8 @@ from app.services.collections._core import (
     prepaid_enforcement,
     restore_account_services,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DunningCases",

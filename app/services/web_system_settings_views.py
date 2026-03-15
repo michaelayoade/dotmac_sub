@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.services import email as email_service
 from app.services import settings_spec
+
+logger = logging.getLogger(__name__)
 
 ENFORCEMENT_DOMAIN = "enforcement"
 BRANDING_DOMAIN = "branding"

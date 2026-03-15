@@ -7,6 +7,7 @@ normalization. Network calls are optional and disabled by default.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -15,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.services.credential_crypto import decrypt_credential
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 WHATSAPP_PROVIDER_META = "meta_cloud_api"
 WHATSAPP_PROVIDER_TWILIO = "twilio"
@@ -25,19 +28,14 @@ SUPPORTED_WHATSAPP_PROVIDERS = {
     WHATSAPP_PROVIDER_MESSAGEBIRD,
 }
 
-
 class WhatsAppConfigError(ValueError):
     """Raised when WhatsApp configuration is invalid or missing."""
-
-
 
 def _read_setting(db: Session, key: str, default: str = "") -> str:
     value = resolve_value(db, SettingDomain.comms, key)
     if value is None:
         return default
     return str(value).strip()
-
-
 
 def _read_templates(db: Session) -> list[dict[str, Any]]:
     raw = resolve_value(db, SettingDomain.comms, "whatsapp_message_templates")
@@ -51,8 +49,6 @@ def _read_templates(db: Session) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             return []
     return []
-
-
 
 def load_whatsapp_config(db: Session) -> dict[str, Any]:
     """Load normalized WhatsApp connector settings."""
@@ -72,8 +68,6 @@ def load_whatsapp_config(db: Session) -> dict[str, Any]:
         "templates": _read_templates(db),
     }
 
-
-
 def _require_config(config: dict[str, Any]) -> None:
     provider = str(config.get("provider", ""))
     if provider not in SUPPORTED_WHATSAPP_PROVIDERS:
@@ -82,8 +76,6 @@ def _require_config(config: dict[str, Any]) -> None:
         raise WhatsAppConfigError("WhatsApp API key is required")
     if not str(config.get("phone_number", "")).strip():
         raise WhatsAppConfigError("WhatsApp phone number is required")
-
-
 
 def build_template_payload(
     *,
@@ -131,8 +123,6 @@ def build_template_payload(
             },
         }
     raise WhatsAppConfigError("Unsupported WhatsApp provider")
-
-
 
 def send_template_message(
     db: Session,
@@ -186,8 +176,6 @@ def send_template_message(
         "status_code": response.status_code,
         "response": response.text,
     }
-
-
 
 def send_text_message(
     db: Session,
@@ -249,7 +237,6 @@ def send_text_message(
         "status_code": response.status_code,
         "response": response.text,
     }
-
 
 def normalize_inbound_webhook(*, provider: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize inbound provider webhook payload to a common shape."""

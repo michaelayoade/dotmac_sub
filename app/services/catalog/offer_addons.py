@@ -7,6 +7,7 @@ CatalogOffers and AddOns via the OfferAddOn model.
 from __future__ import annotations
 
 import builtins
+import logging
 import uuid
 from typing import Any, cast
 
@@ -18,6 +19,7 @@ from app.services.common import apply_ordering, apply_pagination
 from app.services.query_builders import apply_optional_equals
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class OfferAddOns(ListResponseMixin):
     """Service for managing offer-addon links."""

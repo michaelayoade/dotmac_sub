@@ -4,8 +4,8 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
-import anyio
 
+import anyio
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -14,13 +14,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.db import SessionLocal, get_db
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription, SubscriptionStatus
-from app.services.bandwidth import bandwidth_samples
+from app.models.catalog import Subscription
 from app.services import customer_portal
 from app.services import support as support_service
-from app.services.audit_helpers import build_audit_activities
-from app.services.metrics_store import get_metrics_store
 from app.services import web_network_speedtests as web_network_speedtests_service
+from app.services.audit_helpers import build_audit_activities
+from app.services.bandwidth import bandwidth_samples
+from app.services.metrics_store import get_metrics_store
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -783,19 +783,12 @@ def customer_update_profile(
 
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
-        from app.models.subscriber import Subscriber
+        from app.services.web_customer_actions import update_customer_profile
 
-        subscriber = db.get(Subscriber, subscriber_id)
-        if subscriber:
-            name_parts = name.strip().split(None, 1)
-            subscriber.first_name = name_parts[0] if name_parts else name.strip()
-            subscriber.last_name = name_parts[1] if len(name_parts) > 1 else ""
-            subscriber.email = email.strip()
-            subscriber.phone = phone.strip() if phone else None
-            db.commit()
-            db.refresh(subscriber)
-            # Refresh customer dict with updated values
-            customer = get_current_customer_from_request(request, db)
+        update_customer_profile(
+            db, subscriber_id=subscriber_id, name=name, email=email, phone=phone
+        )
+        customer = get_current_customer_from_request(request, db)
 
     return templates.TemplateResponse(
         "customer/profile/index.html",

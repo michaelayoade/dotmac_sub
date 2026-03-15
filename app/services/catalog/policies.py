@@ -3,6 +3,8 @@
 Provides services for PolicySets and PolicyDunningSteps.
 """
 
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,7 @@ from app.services import settings_spec
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 class PolicySets(ListResponseMixin):
     @staticmethod
@@ -115,7 +118,6 @@ class PolicySets(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Policy set not found")
         policy.is_active = False
         db.commit()
-
 
 class PolicyDunningSteps(ListResponseMixin):
     @staticmethod

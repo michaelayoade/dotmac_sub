@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store
 from app.services.auth_flow import hash_service_secret
 from app.services.catalog.subscriptions import apply_offer_radius_profile
+
+logger = logging.getLogger(__name__)
 
 TAB_TO_CATEGORY: dict[str, PlanCategory] = {
     "internet": PlanCategory.internet,

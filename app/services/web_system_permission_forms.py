@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.schemas.rbac import PermissionCreate, PermissionUpdate
 
+logger = logging.getLogger(__name__)
 
 def build_permission_create_payload(
     *,

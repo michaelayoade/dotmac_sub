@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
@@ -21,6 +22,7 @@ from app.services import settings_spec
 from app.services import usage as usage_service
 from app.services.common import coerce_uuid, validate_enum
 
+logger = logging.getLogger(__name__)
 
 def get_dashboard_data(db: Session) -> dict[str, object]:
     records = usage_service.usage_records.list(

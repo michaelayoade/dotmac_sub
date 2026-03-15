@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.models.network import PortVlan, VlanPurpose
 from app.services import catalog as catalog_service
 from app.services import network as network_service
+
+logger = logging.getLogger(__name__)
 
 PURPOSE_DISPLAY: dict[str, dict[str, str]] = {
     "internet": {"label": "Internet", "classes": "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"},

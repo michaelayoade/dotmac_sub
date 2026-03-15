@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -22,6 +23,8 @@ from app.models.network import (
     SplitterPort,
 )
 from app.services.common import coerce_uuid
+
+logger = logging.getLogger(__name__)
 
 ASSET_MODEL_MAP = {
     "fdh_cabinet": FdhCabinet,

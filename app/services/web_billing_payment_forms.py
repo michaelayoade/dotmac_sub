@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import cast
 
@@ -10,6 +11,7 @@ from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import subscriber as subscriber_service
 
+logger = logging.getLogger(__name__)
 
 def account_label(account) -> str:
     """Build a human label for account/subscriber objects."""

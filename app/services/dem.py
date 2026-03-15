@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import struct
@@ -7,6 +8,8 @@ import zipfile
 from collections import OrderedDict
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 SRTM_TILE_SIZE = 3601
 SRTM_SAMPLES_PER_DEGREE = 3600

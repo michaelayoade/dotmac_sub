@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRo
 from app.models.system_user import SystemUser
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def get_subscriber(db: Session, user_id: str | UUID | None) -> SystemUser | None:
     """Resolve a system user by id."""

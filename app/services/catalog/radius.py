@@ -1,5 +1,7 @@
 """RADIUS profile and attribute management services."""
 
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,7 @@ from app.services.common import apply_ordering, apply_pagination, validate_enum
 from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
+logger = logging.getLogger(__name__)
 
 class RadiusProfiles(CRUDManager[RadiusProfile]):
     model = RadiusProfile

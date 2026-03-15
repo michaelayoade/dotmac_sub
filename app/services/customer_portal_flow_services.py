@@ -13,8 +13,8 @@ from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.services import catalog as catalog_service
-from app.services import provisioning as provisioning_service
 from app.services import customer_portal_context
+from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_portal_flow_common import (

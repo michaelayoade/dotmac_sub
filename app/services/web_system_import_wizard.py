@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import re
 import uuid
 import zipfile
@@ -35,6 +36,8 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store, settings_spec
+
+logger = logging.getLogger(__name__)
 
 IMPORT_HISTORY_KEY = "import_history_log"
 IMPORT_ROLLBACK_WINDOW_KEY = "import_rollback_window_hours"

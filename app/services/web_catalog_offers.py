@@ -44,8 +44,8 @@ from app.services.audit_helpers import (
     log_audit_event,
     model_to_dict,
 )
-from app.services.common import coerce_uuid
 from app.services.catalog.subscriptions import apply_offer_radius_profile
+from app.services.common import coerce_uuid
 from app.services.radius import reconcile_subscription_connectivity
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -13,6 +14,7 @@ from app.models.provisioning import ProvisioningVendor
 from app.services.genieacs import GenieACSClient
 from app.services.response import ListResponseMixin
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ProvisioningResult(ListResponseMixin):

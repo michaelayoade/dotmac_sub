@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import resource
 import shutil
 from datetime import UTC, datetime
 from typing import Any
 
+logger = logging.getLogger(__name__)
 
 def _read_first_line(path: str) -> str | None:
     try:

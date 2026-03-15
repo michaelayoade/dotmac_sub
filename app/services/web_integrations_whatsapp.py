@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,6 +15,8 @@ from app.services import domain_settings as domain_settings_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.settings_spec import resolve_value
+
+logger = logging.getLogger(__name__)
 
 _PROVIDER_OPTIONS = [
     {"id": whatsapp_connector.WHATSAPP_PROVIDER_META, "label": "Meta Cloud API"},

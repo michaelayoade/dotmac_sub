@@ -1,5 +1,7 @@
 """Service helpers for vendor portal routes."""
 
+import logging
+
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +12,8 @@ from app.services import vendor as vendor_service
 from app.services import vendor_portal
 from app.services.common import coerce_uuid
 from app.web.request_parsing import parse_json_body_sync
+
+logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 

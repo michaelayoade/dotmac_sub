@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from app.db import SessionLocal
 from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain

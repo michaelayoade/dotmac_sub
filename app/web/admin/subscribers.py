@@ -33,7 +33,6 @@ from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.stored_file import StoredFile
 from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import AddressUpdate, SubscriberUpdate
-from app.services import audit as audit_service
 from app.services import customer_portal
 from app.services import geocoding as geocoding_service
 from app.services import gis_sync as gis_sync_service
@@ -1054,35 +1053,12 @@ def subscriber_toggle_comment_todo(
     db: Session = Depends(get_db),
 ):
     """Toggle todo completion state for a subscriber comment event."""
-    event = audit_service.audit_events.get(db=db, event_id=str(event_id))
-    if (
-        event.entity_type != "subscriber"
-        or str(event.entity_id) != str(subscriber_id)
-        or event.action != "comment"
-    ):
-        raise HTTPException(status_code=404, detail="Comment not found")
-
-    metadata = dict(getattr(event, "metadata_", None) or {})
-    if not metadata.get("is_todo"):
-        return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
-
-    current_completed = bool(metadata.get("is_completed"))
-    metadata["is_completed"] = not current_completed
-    event.metadata_ = metadata
-    db.add(event)
-    db.commit()
-
-    log_audit_event(
-        db=db,
-        request=request,
-        action="comment_todo_toggle",
-        entity_type="subscriber",
-        entity_id=str(subscriber_id),
+    web_subscriber_actions_service.toggle_comment_todo(
+        db,
+        request,
+        subscriber_id=subscriber_id,
+        event_id=event_id,
         actor_id=_actor_id(request),
-        metadata={
-            "source_comment_event_id": str(event_id),
-            "is_completed": metadata["is_completed"],
-        },
     )
     return RedirectResponse(url=f"/admin/subscribers/{subscriber_id}", status_code=303)
 

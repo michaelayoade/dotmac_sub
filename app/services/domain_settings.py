@@ -1,4 +1,5 @@
 import builtins
+import logging
 from typing import Any
 
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from app.services.common import (
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 
+logger = logging.getLogger(__name__)
 
 class DomainSettings(ListResponseMixin):
     def __init__(self, domain: SettingDomain | None = None) -> None:

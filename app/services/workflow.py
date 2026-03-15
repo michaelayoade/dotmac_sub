@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TypeVar, cast
 from uuid import UUID
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.schemas.workflow import StatusTransitionRequest
 from app.services.common import coerce_uuid, validate_enum
+
+logger = logging.getLogger(__name__)
 
 TModel = TypeVar("TModel")
 

@@ -48,6 +48,7 @@ from app.services.audit_helpers import (
 )
 from app.services.auth_dependencies import require_permission
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
+from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
 
@@ -230,11 +231,11 @@ def bulk_activate_page(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("provisioning:read"))],
 )
-async def bulk_activate_preview(
+def bulk_activate_preview(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    form = await request.form()
+    form = parse_form_data_sync(request)
     filters = bulk_activate_service.parse_filters(dict(form))
     mapping = bulk_activate_service.parse_mapping(dict(form))
     preview = bulk_activate_service.build_preview(db, filters=filters, mapping=mapping)
@@ -249,15 +250,13 @@ async def bulk_activate_preview(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("provisioning:write"))],
 )
-async def bulk_activate_execute(
+def bulk_activate_execute(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    from urllib.parse import quote_plus
-
     from app.web.admin import get_current_user
 
-    form = await request.form()
+    form = parse_form_data_sync(request)
     filters = bulk_activate_service.parse_filters(dict(form))
     mapping = bulk_activate_service.parse_mapping(dict(form))
     current_user = get_current_user(request)
@@ -353,11 +352,11 @@ def service_migration_page(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("provisioning:read"))],
 )
-async def service_migration_preview(
+def service_migration_preview(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    form = await request.form()
+    form = parse_form_data_sync(request)
     filters = migration_service.parse_filters(dict(form))
     targets = migration_service.parse_targets(dict(form))
     selected_ids = migration_service.parse_selected_ids(form)
@@ -378,13 +377,13 @@ async def service_migration_preview(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("provisioning:write"))],
 )
-async def service_migration_execute(
+def service_migration_execute(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     from app.web.admin import get_current_user
 
-    form = await request.form()
+    form = parse_form_data_sync(request)
     filters = migration_service.parse_filters(dict(form))
     targets = migration_service.parse_targets(dict(form))
     selected_ids = migration_service.parse_selected_ids(form)

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -27,6 +28,8 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.response import ListResponseMixin
+
+logger = logging.getLogger(__name__)
 
 logger = get_logger(__name__)
 

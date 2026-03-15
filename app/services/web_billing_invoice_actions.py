@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
+logger = logging.getLogger(__name__)
 
 def html_notice(message: str) -> str:
     return (

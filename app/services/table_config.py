@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +23,8 @@ from app.schemas.table_config import (
     TableColumnResolved,
 )
 from app.services import numbering, settings_spec
+
+logger = logging.getLogger(__name__)
 
 ReservedParamKeys = {
     "limit",

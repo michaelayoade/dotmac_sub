@@ -10,6 +10,7 @@ Uses the Meta Graph API.
 """
 
 import asyncio
+import logging
 from typing import Any, cast
 
 import httpx
@@ -21,6 +22,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.oauth_token import OAuthToken
 from app.services.settings_spec import resolve_value
 
+logger = logging.getLogger(__name__)
+
 logger = get_logger(__name__)
 
 _PAGE_POST_SCOPES = {"pages_manage_posts"}
@@ -29,7 +32,6 @@ _IG_MESSAGE_SCOPES = {"instagram_manage_messages"}
 _IG_COMMENT_SCOPES = {"instagram_manage_comments"}
 _IG_PUBLISH_SCOPES = {"instagram_content_publish"}
 _IG_BASIC_SCOPES = {"instagram_basic"}
-
 
 def _ensure_token_scopes(token: OAuthToken | None, required_scopes: set[str], context: str) -> None:
     if not token or not token.scopes:
@@ -40,7 +42,6 @@ def _ensure_token_scopes(token: OAuthToken | None, required_scopes: set[str], co
     missing = required_scopes - granted
     if missing:
         raise ValueError(f"Missing required Meta permissions for {context}: {sorted(missing)}")
-
 
 async def _request_with_retry(
     client: httpx.AsyncClient,
@@ -76,7 +77,6 @@ def _get_meta_graph_base_url(db: Session) -> str:
         version = settings.meta_graph_api_version
     return f"https://graph.facebook.com/{version}"
 
-
 def _get_page_token_record(db: Session, page_id: str) -> OAuthToken | None:
     """Get the access token for a specific Facebook Page."""
     return cast(
@@ -91,11 +91,9 @@ def _get_page_token_record(db: Session, page_id: str) -> OAuthToken | None:
         ),
     )
 
-
 def _get_page_token(db: Session, page_id: str) -> str | None:
     token = _get_page_token_record(db, page_id)
     return token.access_token if token else None
-
 
 def _get_instagram_token_record(db: Session, ig_account_id: str) -> OAuthToken | None:
     """Get the access token for a specific Instagram Business account.
@@ -114,16 +112,13 @@ def _get_instagram_token_record(db: Session, ig_account_id: str) -> OAuthToken |
         ),
     )
 
-
 def _get_instagram_token(db: Session, ig_account_id: str) -> str | None:
     token = _get_instagram_token_record(db, ig_account_id)
     return token.access_token if token else None
 
-
 # ---------------------------------------------------------------------------
 # Facebook Page Posts
 # ---------------------------------------------------------------------------
-
 
 async def create_page_post(
     db: Session,
@@ -178,7 +173,6 @@ async def create_page_post(
 
     return result
 
-
 async def create_page_photo_post(
     db: Session,
     page_id: str,
@@ -228,11 +222,9 @@ async def create_page_photo_post(
 
     return result
 
-
 # ---------------------------------------------------------------------------
 # Facebook Comments
 # ---------------------------------------------------------------------------
-
 
 async def reply_to_comment(
     db: Session,
@@ -278,7 +270,6 @@ async def reply_to_comment(
 
     return result
 
-
 async def get_post_comments(
     db: Session,
     page_id: str,
@@ -317,7 +308,6 @@ async def get_post_comments(
 
     return cast(list[dict[str, Any]], result.get("data", []))
 
-
 async def get_page_posts(
     db: Session,
     page_id: str,
@@ -345,11 +335,9 @@ async def get_page_posts(
 
     return cast(list[dict[str, Any]], result.get("data", []))
 
-
 # ---------------------------------------------------------------------------
 # Instagram Media Posts
 # ---------------------------------------------------------------------------
-
 
 async def create_instagram_image_post(
     db: Session,
@@ -428,7 +416,6 @@ async def create_instagram_image_post(
     )
 
     return publish_result
-
 
 async def create_instagram_carousel_post(
     db: Session,
@@ -530,11 +517,9 @@ async def create_instagram_carousel_post(
 
     return publish_result
 
-
 # ---------------------------------------------------------------------------
 # Instagram Comments
 # ---------------------------------------------------------------------------
-
 
 async def reply_to_instagram_comment(
     db: Session,
@@ -580,7 +565,6 @@ async def reply_to_instagram_comment(
 
     return result
 
-
 async def get_instagram_media_comments(
     db: Session,
     ig_account_id: str,
@@ -619,7 +603,6 @@ async def get_instagram_media_comments(
 
     return cast(list[dict[str, Any]], result.get("data", []))
 
-
 async def get_instagram_media(
     db: Session,
     ig_account_id: str,
@@ -647,11 +630,9 @@ async def get_instagram_media(
 
     return cast(list[dict[str, Any]], result.get("data", []))
 
-
 # ---------------------------------------------------------------------------
 # Utility Functions
 # ---------------------------------------------------------------------------
-
 
 def get_connected_pages(db: Session) -> list[dict[str, Any]]:
     """Get all connected Facebook Pages.
@@ -680,7 +661,6 @@ def get_connected_pages(db: Session) -> list[dict[str, Any]]:
         })
 
     return pages
-
 
 def get_connected_instagram_accounts(db: Session) -> list[dict[str, Any]]:
     """Get all connected Instagram Business accounts.

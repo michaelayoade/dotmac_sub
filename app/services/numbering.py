@@ -1,9 +1,12 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.sequence import DocumentSequence
 from app.services import settings_spec
 
+logger = logging.getLogger(__name__)
 
 def _format_number(prefix: str | None, padding: int | None, value: int) -> str:
     prefix_value = prefix or ""

@@ -1,7 +1,10 @@
 """Compatibility wrapper for legacy contact service imports."""
 
+import logging
+
 from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
 
 class Contacts:
     @staticmethod

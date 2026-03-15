@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
 
+logger = logging.getLogger(__name__)
 
 def _invite_login_route_for_user(_system_user: SystemUser) -> str:
     return "/auth/login?next=/admin/dashboard"

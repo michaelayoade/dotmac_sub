@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +15,8 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
 from app.services.settings_cache import SettingsCache
+
+logger = logging.getLogger(__name__)
 
 _CACHE_DOMAIN = "modules"
 _CACHE_KEY = "states"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import ipaddress
+import logging
 import re
 from collections import defaultdict
 from uuid import UUID
@@ -14,11 +15,19 @@ from sqlalchemy.orm import joinedload
 
 from app.models.network import IPAssignment, IPv4Address, IPv6Address, IPVersion
 from app.schemas.catalog import SubscriptionUpdate
-from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate, IpBlockCreate, IpPoolCreate, IpPoolUpdate
+from app.schemas.network import (
+    IPAssignmentCreate,
+    IPAssignmentUpdate,
+    IpBlockCreate,
+    IpPoolCreate,
+    IpPoolUpdate,
+)
 from app.services import catalog as catalog_service
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
+
+logger = logging.getLogger(__name__)
 
 _FALLBACK_MARKER = "[fallback]"
 _POOL_META_KEYS = (
@@ -889,19 +898,20 @@ def build_ip_management_data(
         pools=pools,
         blocks=blocks,
     )
-    
+
     # Pagination for addresses
     offset = (page - 1) * address_limit
     search_term = search.strip() if search else None
     pool_id = pool_filter if pool_filter else None
-    
+
     # Get total counts using SQL
     from sqlalchemy import func, select
+
     from app.models.network import IPv4Address, IPv6Address
-    
+
     total_ipv4 = db.execute(select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)).scalar() or 0
     total_ipv6 = db.execute(select(func.count(IPv6Address.id)).where(IPv6Address.is_reserved == False)).scalar() or 0
-    
+
     # Fetch paginated addresses
     ipv4_addresses = network_service.ipv4_addresses.list(
         db=db,
@@ -921,15 +931,15 @@ def build_ip_management_data(
         limit=address_limit,
         offset=offset,
     )
-    
+
     # If there's a search term, filter in-memory for better UX (server-side search)
     if search_term:
         ipv4_addresses = [addr for addr in ipv4_addresses if search_term in str(addr.address).lower()]
         ipv6_addresses = [addr for addr in ipv6_addresses if search_term in str(addr.address).lower()]
-    
+
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)
-    
+
     stats = {
         "total_pools": len(pools),
         "total_blocks": len(blocks),
