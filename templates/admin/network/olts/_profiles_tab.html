@@ -1,0 +1,95 @@
+{# HTMX partial: OLT profile display tab #}
+{% from "components/ui/macros.html" import card, empty_state %}
+
+{% if error %}
+<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/30 dark:bg-amber-900/10 dark:text-amber-300">
+    {{ error }}
+</div>
+{% endif %}
+
+{# Line Profiles #}
+{% if line_profiles is defined %}
+<div class="mb-6">
+    <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">GPON Line Profiles</h3>
+    {% if line_profiles %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-800">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                {% for p in line_profiles %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="whitespace-nowrap px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ p.profile_id }}</td>
+                    <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-900 dark:text-white">{{ p.name }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No Line Profiles", "No GPON line profiles found on this OLT.", icon="settings") }}
+    {% endif %}
+</div>
+{% endif %}
+
+{# Service Profiles #}
+{% if service_profiles is defined %}
+<div class="mb-6">
+    <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">GPON Service Profiles</h3>
+    {% if service_profiles %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-800">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                {% for p in service_profiles %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="whitespace-nowrap px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ p.profile_id }}</td>
+                    <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-900 dark:text-white">{{ p.name }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No Service Profiles", "No GPON service profiles found on this OLT.", icon="settings") }}
+    {% endif %}
+</div>
+{% endif %}
+
+{# TR-069 Server Profiles #}
+{% if tr069_profiles is defined %}
+<div class="mb-6">
+    <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">TR-069 Server Profiles</h3>
+    {% if tr069_profiles %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-800">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">ID</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                {% for p in tr069_profiles %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="whitespace-nowrap px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ p.profile_id }}</td>
+                    <td class="whitespace-nowrap px-4 py-3 text-sm text-slate-900 dark:text-white">{{ p.name }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No TR-069 Profiles", "No TR-069 server profiles found on this OLT.", icon="settings") }}
+    {% endif %}
+</div>
+{% endif %}

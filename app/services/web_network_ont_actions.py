@@ -46,3 +46,82 @@ def toggle_lan_port(
 ) -> ActionResult:
     """Toggle a LAN port and return result."""
     return OntActions.toggle_lan_port(db, ont_id, port, enabled)
+
+
+def set_pppoe_credentials(
+    db: Session, ont_id: str, username: str, password: str
+) -> ActionResult:
+    """Push PPPoE credentials to ONT via TR-069."""
+    return OntActions.set_pppoe_credentials(db, ont_id, username, password)
+
+
+def run_ping_diagnostic(
+    db: Session, ont_id: str, host: str, count: int = 4
+) -> ActionResult:
+    """Run ping diagnostic from ONT via TR-069."""
+    return OntActions.run_ping_diagnostic(db, ont_id, host, count)
+
+
+def run_traceroute_diagnostic(
+    db: Session, ont_id: str, host: str
+) -> ActionResult:
+    """Run traceroute diagnostic from ONT via TR-069."""
+    return OntActions.run_traceroute_diagnostic(db, ont_id, host)
+
+
+def execute_omci_reboot(db: Session, ont_id: str) -> tuple[bool, str]:
+    """Reboot ONT via OMCI through the OLT."""
+    from app.services.network.olt_ssh import reboot_ont_omci
+    from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT"
+    return reboot_ont_omci(olt, fsp, olt_ont_id)
+
+
+def configure_management_ip(
+    db: Session,
+    ont_id: str,
+    vlan_id: int,
+    ip_mode: str = "dhcp",
+    ip_address: str | None = None,
+    subnet: str | None = None,
+    gateway: str | None = None,
+) -> tuple[bool, str]:
+    """Configure ONT management IP via OLT IPHOST command."""
+    from app.services.network.olt_ssh import configure_ont_iphost
+    from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT"
+    return configure_ont_iphost(
+        olt, fsp, olt_ont_id,
+        vlan_id=vlan_id, ip_mode=ip_mode,
+        ip_address=ip_address, subnet=subnet, gateway=gateway,
+    )
+
+
+def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, str]]:
+    """Fetch ONT IPHOST config from OLT."""
+    from app.services.network.olt_ssh import get_ont_iphost_config
+    from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT", {}
+    return get_ont_iphost_config(olt, fsp, olt_ont_id)
+
+
+def bind_tr069_profile(
+    db: Session, ont_id: str, profile_id: int
+) -> tuple[bool, str]:
+    """Bind TR-069 server profile to ONT via OLT."""
+    from app.services.network.olt_ssh import bind_tr069_server_profile
+    from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT"
+    return bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)

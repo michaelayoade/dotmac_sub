@@ -163,6 +163,18 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 Charts
             </button>
+            <button data-tab="service-ports" @click="activeTab = 'service-ports'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'service-ports' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                Service Ports
+            </button>
+            <button data-tab="provisioning" @click="activeTab = 'provisioning'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#provisioning-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'provisioning' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                Provisioning
+            </button>
         </nav>
     </div>
 
@@ -527,6 +539,43 @@
                     {% endif %}
                 </div>
                 {% endcall %}
+
+                {# -- Firmware Upgrade Card -- #}
+                {% call card("Firmware", color="blue") %}
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Current Version</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.firmware_version or 'Unknown' }}</p>
+                        </div>
+                        {% if ont.vendor %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont.vendor }}</span>
+                        {% endif %}
+                    </div>
+
+                    {% if available_firmware %}
+                    <form hx-post="/admin/network/onts/{{ ont.id }}/firmware-upgrade"
+                          hx-swap="none"
+                          class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <select name="firmware_image_id" required
+                            class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select firmware...</option>
+                            {% for fw in available_firmware %}
+                            <option value="{{ fw.id }}">{{ fw.vendor }} {{ fw.model or '' }} v{{ fw.version }}{% if fw.file_size_bytes %} ({{ (fw.file_size_bytes / 1048576) | round(1) }} MB){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" hx-confirm="Upgrade firmware? The ONT will download the image and reboot automatically."
+                            class="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                            Upgrade
+                        </button>
+                    </form>
+                    {% else %}
+                    <p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No firmware images available{% if ont.vendor %} for {{ ont.vendor }}{% endif %}.</p>
+                    {% endif %}
+                </div>
+                {% endcall %}
             </div>
         </div>
     </div>
@@ -677,7 +726,7 @@
                         <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
                             {% if pa.subscriber %}
                             <a href="/admin/subscribers/{{ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
-                                {% if pa.subscriber.person %}{{ pa.subscriber.person.first_name }} {{ pa.subscriber.person.last_name }}{% elif pa.subscriber.organization %}{{ pa.subscriber.organization.name }}{% else %}{{ pa.subscriber.id | string | truncate(12) }}{% endif %}
+                                {% if pa.subscriber.person %}{{ pa.subscriber.first_name }} {{ pa.subscriber.last_name }}{% elif pa.subscriber.organization %}{{ pa.subscriber.organization.name }}{% else %}{{ pa.subscriber.id | string | truncate(12) }}{% endif %}
                             </a>
                             {% else %}&mdash;{% endif %}
                         </td>
@@ -733,6 +782,29 @@
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
             </div>
         </div>
+    </div>
+
+    {# ===================== SERVICE PORTS TAB ===================== #}
+    <div x-show="activeTab === 'service-ports'" x-transition x-cloak>
+        <div id="service-ports-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading service-port data...</span>
+            </div>
+        </div>
+    </div>
+
+    {# ===================== PROVISIONING TAB ===================== #}
+    <div x-show="activeTab === 'provisioning'" x-transition x-cloak>
+        <div id="provisioning-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading provisioning data...</span>
+            </div>
+        </div>
+
+        {# Provisioning Preview & One-Click #}
+        {% include "admin/network/onts/_provision_action.html" %}
     </div>
 </div>
 
