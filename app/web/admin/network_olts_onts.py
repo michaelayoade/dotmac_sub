@@ -1,7 +1,10 @@
 """Admin network OLT/ONT web routes."""
 
+import logging
 from datetime import datetime
 from urllib.parse import quote_plus
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -20,6 +23,7 @@ from app.models.network import (
 )
 from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
+from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
@@ -28,6 +32,7 @@ from app.services import (
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_onts as web_network_onts_service
+from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -219,11 +224,25 @@ def olt_detail(
         )
 
     activities = build_audit_activities(db, "olt", str(olt_id))
+    available_olt_firmware = web_network_olts_service.get_olt_firmware_images(db, olt_id)
+
+    # ACS prefill for the TR-069 create modal
+    olt_obj = page_data.get("olt")
+    acs_prefill: dict[str, str] = {}
+    if olt_obj and getattr(olt_obj, "tr069_acs_server", None):
+        acs = olt_obj.tr069_acs_server
+        acs_prefill = {
+            "cwmp_url": acs.cwmp_url or "",
+            "cwmp_username": acs.cwmp_username or "",
+        }
+
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             **page_data,
             "activities": activities,
+            "available_olt_firmware": available_olt_firmware,
+            "acs_prefill": acs_prefill,
             "ssh_test_status": ssh_test_status,
             "ssh_test_message": ssh_test_message,
             "snmp_test_status": snmp_test_status,
@@ -233,6 +252,79 @@ def olt_detail(
         }
     )
     return templates.TemplateResponse("admin/network/olts/detail.html", context)
+
+
+@router.post("/olts/{olt_id}/vlans/assign", dependencies=[Depends(require_permission("network:write"))])
+def olt_assign_vlan(
+    request: Request,
+    olt_id: str,
+    vlan_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_network_olts_service.assign_vlan_to_olt(db, olt_id, vlan_id)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+
+
+@router.post("/olts/{olt_id}/vlans/unassign", dependencies=[Depends(require_permission("network:write"))])
+def olt_unassign_vlan(
+    request: Request,
+    olt_id: str,
+    vlan_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_network_olts_service.unassign_vlan_from_olt(db, olt_id, vlan_id)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+
+
+@router.post("/olts/{olt_id}/ip-pools/assign", dependencies=[Depends(require_permission("network:write"))])
+def olt_assign_ip_pool(
+    request: Request,
+    olt_id: str,
+    pool_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_network_olts_service.assign_ip_pool_to_olt(db, olt_id, pool_id)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+
+
+@router.post("/olts/{olt_id}/ip-pools/unassign", dependencies=[Depends(require_permission("network:write"))])
+def olt_unassign_ip_pool(
+    request: Request,
+    olt_id: str,
+    pool_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_network_olts_service.unassign_ip_pool_from_olt(db, olt_id, pool_id)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+
+
+@router.post("/olts/{olt_id}/cli", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def olt_run_cli_command(
+    request: Request,
+    olt_id: str,
+    command: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Execute a read-only CLI command on an OLT and return the output as HTML partial."""
+    cmd = command.strip()
+    if not cmd:
+        return HTMLResponse(
+            '<pre class="text-sm text-slate-400 dark:text-slate-500">Enter a command above.</pre>'
+        )
+    import html as html_mod
+
+    ok, message, output = web_network_olts_service.execute_cli_command(db, olt_id, cmd)
+    if not ok:
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
+            f'dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{html_mod.escape(message)}</div>'
+        )
+    escaped_output = html_mod.escape(output)
+    return HTMLResponse(
+        f'<pre class="whitespace-pre-wrap break-words text-sm font-mono text-emerald-800 '
+        f'dark:text-emerald-300 bg-slate-900 dark:bg-slate-950 rounded-lg p-4 overflow-x-auto">'
+        f'{escaped_output or "(no output)"}</pre>'
+    )
 
 
 @router.post("/olts/{olt_id}/test-ssh", dependencies=[Depends(require_permission("network:write"))])
@@ -292,6 +384,57 @@ def olt_test_snmp_connection(request: Request, olt_id: str, db: Session = Depend
     )
 
 
+@router.post("/olts/{olt_id}/test-netconf", dependencies=[Depends(require_permission("network:write"))])
+def olt_test_netconf_connection(request: Request, olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    ok, message, capabilities = web_network_olts_service.test_olt_netconf_connection(db, olt_id)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="test_netconf_connection",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "capabilities_count": len(capabilities),
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post("/olts/{olt_id}/netconf-get-config", dependencies=[Depends(require_permission("network:read"))])
+def olt_netconf_get_config(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Fetch OLT running config via NETCONF and return as formatted HTML."""
+    import html as html_mod
+
+    ok, message, config_xml = web_network_olts_service.get_olt_netconf_config(db, olt_id)
+    escaped_msg = html_mod.escape(message)
+    if not ok:
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
+            f'dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">{escaped_msg}</div>'
+        )
+
+    escaped_xml = html_mod.escape(config_xml)
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
+        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">{escaped_msg}</div>'
+        f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
+        f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_xml}</pre>'
+    )
+
+
 @router.post("/olts/{olt_id}/sync-onts", dependencies=[Depends(require_permission("network:write"))])
 def olt_sync_onts(request: Request, olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     from app.web.admin import get_current_user
@@ -327,6 +470,272 @@ def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
     message = quote_plus("Sync ONTs uses POST. Please click Sync ONTs again.")
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
+        status_code=303,
+    )
+
+
+@router.post("/olts/{olt_id}/autofind", dependencies=[Depends(require_permission("network:read"))])
+def olt_autofind_scan(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Scan OLT for unregistered ONTs via SSH autofind."""
+    from app.web.admin import get_current_user
+
+    ok, message, entries = web_network_olts_service.get_autofind_onts(db, olt_id)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="autofind_scan",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={"result": "success" if ok else "error", "message": message, "count": len(entries)},
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    autofind_data = [
+        {
+            "fsp": e.fsp,
+            "serial_number": e.serial_number,
+            "serial_hex": e.serial_hex,
+            "vendor_id": e.vendor_id,
+            "model": e.model,
+            "software_version": e.software_version,
+            "mac": e.mac,
+            "equipment_sn": e.equipment_sn,
+            "autofind_time": e.autofind_time,
+        }
+        for e in entries
+    ]
+    return templates.TemplateResponse(
+        "admin/network/olts/_autofind_results.html",
+        {
+            "request": request,
+            "olt_id": olt_id,
+            "autofind_ok": ok,
+            "autofind_message": message,
+            "autofind_entries": autofind_data,
+        },
+    )
+
+
+@router.post("/olts/{olt_id}/authorize-ont", dependencies=[Depends(require_permission("network:write"))])
+def olt_authorize_ont(request: Request, olt_id: str, fsp: str = Form(""), serial_number: str = Form(""), db: Session = Depends(get_db)) -> RedirectResponse:
+    """Authorize a discovered ONT on the OLT via SSH."""
+    from app.web.admin import get_current_user
+
+    if not fsp or not serial_number:
+        msg = quote_plus("Missing port or serial number")
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
+            status_code=303,
+        )
+
+    ok, message = web_network_olts_service.authorize_autofind_ont(db, olt_id, fsp, serial_number)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="authorize_ont",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": status,
+            "message": message,
+            "fsp": fsp,
+            "serial_number": serial_number,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+
+    # Trigger SNMP discovery to pick up the newly authorized ONT
+    if ok:
+        try:
+            web_network_olts_service.sync_onts_from_olt_snmp(db, olt_id)
+        except Exception as e:
+            logger.warning("Post-authorize SNMP sync failed for OLT %s: %s", olt_id, e)
+
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+# ---------------------------------------------------------------------------
+# TR-069 ACS profile management
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/olts/{olt_id}/tr069-profiles",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_tr069_profiles_ssh(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Read TR-069 server profiles from OLT via SSH and return partial."""
+    ok, message, profiles, extra = web_network_olts_service.get_tr069_profiles_context(
+        db, olt_id
+    )
+    return templates.TemplateResponse(
+        "admin/network/olts/_tr069_profiles.html",
+        {
+            "request": request,
+            "olt_id": olt_id,
+            "tr069_ok": ok,
+            "tr069_message": message,
+            "tr069_profiles": profiles,
+            "tr069_onts": extra.get("onts", []),
+            "acs_prefill": extra.get("acs_prefill", {}),
+        },
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/tr069-profiles/create",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_tr069_profile_create(
+    request: Request,
+    olt_id: str,
+    profile_name: str = Form(""),
+    acs_url: str = Form(""),
+    acs_username: str = Form(""),
+    acs_password: str = Form(""),
+    inform_interval: int = Form(300),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Create a TR-069 server profile on the OLT via SSH."""
+    from app.web.admin import get_current_user
+
+    ok, message = web_network_olts_service.handle_create_tr069_profile(
+        db,
+        olt_id,
+        profile_name=profile_name.strip(),
+        acs_url=acs_url.strip(),
+        username=acs_username.strip(),
+        password=acs_password.strip(),
+        inform_interval=inform_interval,
+    )
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create_tr069_profile",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={"result": "success" if ok else "error", "profile_name": profile_name},
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return JSONResponse(
+        {"ok": ok, "message": message},
+        status_code=200 if ok else 400,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/tr069-profiles/rebind",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+async def olt_tr069_rebind(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Rebind selected ONTs to a TR-069 server profile."""
+    from app.web.admin import get_current_user
+
+    form = await request.form()
+    target_profile_id = int(form.get("target_profile_id", 0))
+    ont_ids = form.getlist("ont_ids")
+    if not ont_ids or not target_profile_id:
+        return JSONResponse(
+            {"ok": False, "message": "Missing ONT selection or target profile"},
+            status_code=400,
+        )
+
+    stats = web_network_olts_service.handle_rebind_tr069_profiles(
+        db, olt_id, list(ont_ids), target_profile_id
+    )
+    rebound = stats.get("rebound", 0)
+    failed = stats.get("failed", 0)
+    errors = stats.get("errors", [])
+
+    message = f"Rebound {rebound} ONT(s) to profile {target_profile_id}"
+    if failed:
+        message += f", {failed} failed"
+
+    ok = int(rebound) > 0
+
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="rebind_tr069_profiles",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "rebound": rebound,
+            "failed": failed,
+            "target_profile_id": target_profile_id,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return JSONResponse(
+        {"ok": ok, "message": message, "rebound": rebound, "failed": failed, "errors": errors},
+        status_code=200 if ok else 400,
+    )
+
+
+@router.post("/olts/{olt_id}/firmware-upgrade", dependencies=[Depends(require_permission("network:write"))])
+def olt_firmware_upgrade(
+    request: Request,
+    olt_id: str,
+    firmware_image_id: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Trigger firmware upgrade on OLT via SSH."""
+    from app.web.admin import get_current_user
+
+    if not firmware_image_id:
+        msg = quote_plus("No firmware image selected")
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
+            status_code=303,
+        )
+
+    ok, message = web_network_olts_service.trigger_olt_firmware_upgrade(db, olt_id, firmware_image_id)
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="firmware_upgrade",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": status,
+            "message": message,
+            "firmware_image_id": firmware_image_id,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
     )
 
@@ -429,6 +838,17 @@ def olt_backup_test_backup(olt_id: str, db: Session = Depends(get_db)) -> Redire
     )
 
 
+@router.post("/olts/{olt_id}/backups/ssh-backup", dependencies=[Depends(require_permission("network:write"))])
+def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+    """Fetch full running config via SSH and save as backup."""
+    backup, message = web_network_olts_service.backup_running_config_ssh(db, olt_id)
+    status = "success" if backup is not None else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
 @router.get("/olts/backups/compare", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def olt_backup_compare(
     request: Request,
@@ -495,6 +915,30 @@ def onts_list(
     context = _base_context(request, db, active_page="onts")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/onts/index.html", context)
+
+
+@router.post("/onts/bulk-action", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def onts_bulk_action(
+    request: Request,
+    action: str = Form(""),
+    ont_ids: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Execute a bulk action (reboot/refresh/factory_reset) on selected ONTs."""
+    stats = web_network_onts_service.execute_bulk_action(db, ont_ids, action)
+    error = stats.get("error")
+    if error:
+        summary = f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{error}</div>'
+    else:
+        skipped_text = f", {stats.get('skipped', 0)} skipped (max 50)" if stats.get("skipped") else ""
+        summary = (
+            f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 '
+            f'dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">'
+            f'Bulk <strong>{action}</strong>: {stats["succeeded"]} succeeded, {stats["failed"]} failed'
+            f"{skipped_text}."
+            f"</div>"
+        )
+    return HTMLResponse(summary)
 
 
 @router.get("/onts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
@@ -607,7 +1051,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
 @router.get("/onts/{ont_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -639,19 +1083,21 @@ def ont_detail(
             status_code=404,
         )
 
-    allowed_tabs = {"overview", "network", "history", "tr069", "charts"}
+    allowed_tabs = {"overview", "network", "history", "tr069", "charts", "service-ports", "provisioning"}
     active_tab = tab if tab in allowed_tabs else "overview"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
+    profiles = web_network_onts_service.get_provisioning_profiles(db)
+
     context = _base_context(request, db, active_page="onts")
-    context.update({**page_data, "activities": activities, "ont_active_tab": active_tab})
+    context.update({**page_data, "activities": activities, "ont_active_tab": active_tab, "profiles": profiles})
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
 
 
 @router.get("/onts/{ont_id}/assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -674,7 +1120,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
     from sqlalchemy.exc import IntegrityError
 
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -730,7 +1176,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
     from app.schemas.network import OntUnitUpdate
 
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -783,7 +1229,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
         before_snapshot = model_to_dict(ont)
         ont = network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-        after = network_service.ont_units.get(db=db, unit_id=ont_id)
+        after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
         after_snapshot = model_to_dict(after)
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata_payload = {"changes": changes} if changes else None
@@ -827,7 +1273,7 @@ def ont_onu_mode_modal(
 ) -> HTMLResponse:
     """Serve ONU mode configuration modal partial."""
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
@@ -870,13 +1316,13 @@ def ont_onu_mode_update(
     )
 
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    after = network_service.ont_units.get(db=db, unit_id=ont_id)
+    after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     after_snapshot = model_to_dict(after)
     changes = diff_dicts(before_snapshot, after_snapshot)
 
@@ -905,7 +1351,7 @@ def ont_mgmt_ip_modal(
 ) -> HTMLResponse:
     """Serve management/VoIP IP modal partial."""
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
@@ -942,13 +1388,13 @@ def ont_mgmt_ip_update(
     )
 
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    after = network_service.ont_units.get(db=db, unit_id=ont_id)
+    after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     after_snapshot = model_to_dict(after)
     changes = diff_dicts(before_snapshot, after_snapshot)
 
@@ -1123,6 +1569,51 @@ def ont_apply_profile(
     )
 
 
+@router.post("/onts/{ont_id}/firmware-upgrade", dependencies=[Depends(require_permission("network:write"))])
+def ont_firmware_upgrade(
+    request: Request,
+    ont_id: str,
+    firmware_image_id: str = Form(""),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Trigger firmware upgrade on ONT via TR-069 Download RPC."""
+    if not firmware_image_id:
+        return JSONResponse(
+            {"success": False, "message": "No firmware image selected"},
+            status_code=400,
+            headers={"HX-Trigger": '{"showToast": {"message": "No firmware image selected", "type": "error"}}'},
+        )
+
+    from app.services.network.ont_actions import OntActions
+
+    result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="firmware_upgrade",
+        entity_type="ont",
+        entity_id=ont_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"firmware_image_id": firmware_image_id, "success": result.success},
+    )
+    status_code = 200 if result.success else 400
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
 @router.post("/onts/{ont_id}/wifi-ssid", dependencies=[Depends(require_permission("network:write"))])
 def ont_set_wifi_ssid(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1236,6 +1727,122 @@ def ont_toggle_lan_port(
     )
 
 
+@router.post("/onts/{ont_id}/pppoe-credentials", dependencies=[Depends(require_permission("network:write"))])
+def ont_set_pppoe_credentials(
+    request: Request,
+    ont_id: str,
+    username: str = Form(""),
+    password: str = Form(""),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Push PPPoE credentials to ONT via TR-069."""
+    from app.web.admin import get_current_user
+
+    result = web_network_ont_actions_service.set_pppoe_credentials(db, ont_id, username, password)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="set_pppoe_credentials",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=actor_id,
+        metadata={"result": "success" if result.success else "error", "message": result.message, "username": username},
+        status_code=200 if result.success else 500,
+        is_success=result.success,
+    )
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=200 if result.success else 502,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/ping-diagnostic", dependencies=[Depends(require_permission("network:read"))])
+def ont_ping_diagnostic(
+    request: Request,
+    ont_id: str,
+    host: str = Form(""),
+    count: int = Form(4),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Run ping diagnostic from ONT via TR-069."""
+    from app.web.admin import get_current_user
+
+    result = web_network_ont_actions_service.run_ping_diagnostic(db, ont_id, host, count)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="ping_diagnostic",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=actor_id,
+        metadata={"result": "success" if result.success else "error", "host": host, "count": count},
+        status_code=200 if result.success else 500,
+        is_success=result.success,
+    )
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=200 if result.success else 502,
+        headers=headers,
+    )
+
+
+@router.post("/onts/{ont_id}/traceroute-diagnostic", dependencies=[Depends(require_permission("network:read"))])
+def ont_traceroute_diagnostic(
+    request: Request,
+    ont_id: str,
+    host: str = Form(""),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Run traceroute diagnostic from ONT via TR-069."""
+    from app.web.admin import get_current_user
+
+    result = web_network_ont_actions_service.run_traceroute_diagnostic(db, ont_id, host)
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="traceroute_diagnostic",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=actor_id,
+        metadata={"result": "success" if result.success else "error", "host": host},
+        status_code=200 if result.success else 500,
+        is_success=result.success,
+    )
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=200 if result.success else 502,
+        headers=headers,
+    )
+
+
 @router.get("/onts/{ont_id}/tr069", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_tr069_detail(
     request: Request, ont_id: str, db: Session = Depends(get_db)
@@ -1262,4 +1869,259 @@ def ont_charts(
     context.update(data)
     return templates.TemplateResponse(
         "admin/network/onts/_charts_partial.html", context
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Service-port management routes (Phase 1)
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/onts/{ont_id}/service-ports", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ont_service_ports(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Service-ports tab for ONT detail page."""
+    data = web_network_service_ports_service.list_context(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_service_ports_tab.html", context
+    )
+
+
+@router.post("/onts/{ont_id}/service-ports/create", dependencies=[Depends(require_permission("network:write"))])
+def ont_service_port_create(
+    request: Request,
+    ont_id: str,
+    vlan_id: int = Form(...),
+    gem_index: int = Form(default=1),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Create a single service-port on the OLT for this ONT."""
+    ok, msg = web_network_service_ports_service.handle_create(db, ont_id, vlan_id, gem_index)
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+@router.post("/onts/{ont_id}/service-ports/{index}/delete", dependencies=[Depends(require_permission("network:write"))])
+def ont_service_port_delete(
+    request: Request,
+    ont_id: str,
+    index: int,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Delete a service-port from the OLT by index."""
+    ok, msg = web_network_service_ports_service.handle_delete(db, ont_id, index)
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+@router.post("/onts/{ont_id}/service-ports/clone", dependencies=[Depends(require_permission("network:write"))])
+def ont_service_port_clone(
+    request: Request,
+    ont_id: str,
+    ref_ont_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Clone service-ports from a reference ONT."""
+    ok, msg = web_network_service_ports_service.handle_clone(db, ont_id, ref_ont_id)
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# ONT management IP / OMCI / TR-069 routes (Phase 2)
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.post("/onts/{ont_id}/actions/omci-reboot", dependencies=[Depends(require_permission("network:write"))])
+def ont_omci_reboot(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Reboot ONT via OMCI through the OLT."""
+    ok, msg = web_network_ont_actions_service.execute_omci_reboot(db, ont_id)
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+@router.post("/onts/{ont_id}/actions/configure-mgmt-ip", dependencies=[Depends(require_permission("network:write"))])
+def ont_configure_mgmt_ip(
+    request: Request,
+    ont_id: str,
+    vlan_id: int = Form(...),
+    ip_mode: str = Form(default="dhcp"),
+    ip_address: str = Form(default=""),
+    subnet: str = Form(default=""),
+    gateway: str = Form(default=""),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Configure ONT management IP via OLT IPHOST command."""
+    ok, msg = web_network_ont_actions_service.configure_management_ip(
+        db, ont_id, vlan_id, ip_mode,
+        ip_address=ip_address or None,
+        subnet=subnet or None,
+        gateway=gateway or None,
+    )
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+@router.post("/onts/{ont_id}/actions/bind-tr069-profile", dependencies=[Depends(require_permission("network:write"))])
+def ont_bind_tr069_profile(
+    request: Request,
+    ont_id: str,
+    profile_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Bind TR-069 server profile to ONT via OLT."""
+    ok, msg = web_network_ont_actions_service.bind_tr069_profile(db, ont_id, profile_id)
+    return JSONResponse(
+        content={"success": ok, "message": msg},
+        status_code=200 if ok else 400,
+        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    )
+
+
+@router.get("/onts/{ont_id}/iphost-config", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ont_iphost_config(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Management IP config for ONT detail page."""
+    ok, msg, config = web_network_ont_actions_service.fetch_iphost_config(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update({"iphost_config": config, "iphost_ok": ok, "iphost_msg": msg})
+    return templates.TemplateResponse(
+        "admin/network/onts/_mgmt_config.html", context
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# OLT profile display routes (Phase 3)
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/olts/{olt_id}/profiles/line", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def olt_line_profiles(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: OLT line and service profiles."""
+    data = web_network_olt_profiles_service.line_profiles_context(db, olt_id)
+    context = _base_context(request, db, active_page="olts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/olts/_profiles_tab.html", context
+    )
+
+
+@router.get("/olts/{olt_id}/profiles/tr069", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def olt_tr069_profiles(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: OLT TR-069 server profiles."""
+    data = web_network_olt_profiles_service.tr069_profiles_context(db, olt_id)
+    context = _base_context(request, db, active_page="olts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/olts/_profiles_tab.html", context
+    )
+
+
+@router.get("/onts/{ont_id}/provisioning-preview", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ont_provisioning_preview(
+    request: Request,
+    ont_id: str,
+    profile_id: str = Query(...),
+    tr069_profile_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Command preview for provisioning an ONT."""
+    data = web_network_olt_profiles_service.command_preview_context(
+        db, ont_id, profile_id, tr069_olt_profile_id=tr069_profile_id
+    )
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_provisioning_preview.html", context
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# End-to-end provisioning routes (Phase 4)
+# ────────────────────────────────────────────────────────────────────
+
+
+@router.post("/onts/{ont_id}/provision", dependencies=[Depends(require_permission("network:write"))])
+def ont_provision(
+    request: Request,
+    ont_id: str,
+    profile_id: str = Form(...),
+    dry_run: bool = Form(default=False),
+    tr069_profile_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Trigger end-to-end ONT provisioning (dispatches Celery task)."""
+    from app.tasks.provisioning import provision_ont
+
+    task = provision_ont.delay(
+        ont_id=ont_id,
+        profile_id=profile_id,
+        dry_run=dry_run,
+        tr069_olt_profile_id=tr069_profile_id,
+    )
+    return JSONResponse(
+        content={
+            "success": True,
+            "message": "Provisioning task dispatched",
+            "task_id": task.id,
+        },
+        headers={"HX-Trigger": '{"showToast": {"message": "Provisioning task started", "type": "success"}}'},
+    )
+
+
+@router.get("/onts/{ont_id}/provision-status", dependencies=[Depends(require_permission("network:read"))])
+def ont_provision_status(
+    request: Request,
+    ont_id: str,
+    task_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Poll provisioning task status."""
+    from celery.result import AsyncResult
+
+    result = AsyncResult(task_id)
+    if result.ready():
+        return JSONResponse(
+            content={
+                "status": "complete",
+                "result": result.result if isinstance(result.result, dict) else {"message": str(result.result)},
+            }
+        )
+    return JSONResponse(
+        content={"status": "pending", "state": result.state}
     )

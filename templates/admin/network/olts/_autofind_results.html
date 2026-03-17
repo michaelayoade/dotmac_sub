@@ -1,0 +1,47 @@
+{# HTMX partial: ONT autofind scan results #}
+{% from "components/ui/macros.html" import data_table, table_head, empty_state %}
+
+{% if not autofind_ok %}
+<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">
+    {{ autofind_message }}
+</div>
+{% elif autofind_entries | length == 0 %}
+{{ empty_state("No Unregistered ONTs", "All physically connected ONTs on this OLT are already authorized.") }}
+{% else %}
+<div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/30 dark:bg-blue-900/10 dark:text-blue-300 mb-4">
+    {{ autofind_message }}
+</div>
+{% call data_table() %}
+    {{ table_head(["Serial Number", "Port (F/S/P)", "Model", "MAC Address", "Software", "Found At", ""]) }}
+    <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+        {% for entry in autofind_entries %}
+        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+            <td class="px-6 py-3 whitespace-nowrap">
+                <span class="text-sm font-medium font-mono text-slate-900 dark:text-white">{{ entry.serial_number }}</span>
+                {% if entry.vendor_id %}
+                <span class="ml-2 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ entry.vendor_id }}</span>
+                {% endif %}
+            </td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm font-mono text-slate-600 dark:text-slate-300">{{ entry.fsp }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ entry.model or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm font-mono text-slate-600 dark:text-slate-300">{{ entry.mac or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ entry.software_version or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ entry.autofind_time or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-right">
+                <form method="POST" action="/admin/network/olts/{{ olt_id }}/authorize-ont" class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="fsp" value="{{ entry.fsp }}">
+                    <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
+                    <button type="submit"
+                            onclick="return confirm('Authorize ONT {{ entry.serial_number }} on port {{ entry.fsp }}?')"
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-teal-700 hover:-translate-y-0.5 transition-all">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Authorize
+                    </button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+{% endcall %}
+{% endif %}

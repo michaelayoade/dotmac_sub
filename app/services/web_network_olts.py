@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import uuid
 from collections.abc import Mapping
@@ -24,9 +25,11 @@ from app.models.network import (
     OltConfigBackup,
     OltConfigBackupType,
     OLTDevice,
+    OntAssignment,
     OntUnit,
     OnuOfflineReason,
     OnuOnlineStatus,
+    PonPort,
     PonType,
 )
 from app.models.network_monitoring import (
@@ -43,6 +46,8 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.network import olt_ssh as olt_ssh_service
 
 logger = logging.getLogger(__name__)
@@ -100,6 +105,18 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "snmp_auth_secret": form.get("snmp_auth_secret", "").strip() or None,
         "snmp_priv_protocol": form.get("snmp_priv_protocol", "").strip() or None,
         "snmp_priv_secret": form.get("snmp_priv_secret", "").strip() or None,
+        "snmp_rw_community": form.get("snmp_rw_community", "").strip() or None,
+        "supported_pon_types": ",".join(
+            t
+            for t in (
+                form.getlist("supported_pon_types")
+                if hasattr(form, "getlist")
+                else [form.get("supported_pon_types", "")]
+            )
+            if t and t.strip()
+        )
+        or None,
+        "status": form.get("status", "").strip() or "active",
         "notes": form.get("notes", "").strip() or None,
         "is_active": form.get("is_active") == "true",
     }
@@ -163,9 +180,16 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
             "ssh_username": values.get("ssh_username"),
             "ssh_password": encrypted_password,
             "ssh_port": values.get("ssh_port"),
-            "netconf_enabled": values.get("netconf_enabled"),
+            "snmp_enabled": bool(values.get("snmp_enabled")),
+            "snmp_port": values.get("snmp_port"),
+            "snmp_version": values.get("snmp_version"),
+            "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
+            "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
+            "netconf_enabled": bool(values.get("netconf_enabled")),
             "netconf_port": values.get("netconf_port"),
             "tr069_acs_server_id": values.get("tr069_acs_server_id"),
+            "supported_pon_types": values.get("supported_pon_types"),
+            "status": values.get("status"),
             "notes": values.get("notes"),
             "is_active": values.get("is_active"),
         }
@@ -178,24 +202,32 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     encrypted_password = encrypt_credential(
         ssh_password if isinstance(ssh_password, str) else None
     )
-    return OLTDeviceUpdate.model_validate(
-        {
-            "name": values.get("name"),
-            "hostname": values.get("hostname"),
-            "mgmt_ip": values.get("mgmt_ip"),
-            "vendor": values.get("vendor"),
-            "model": values.get("model"),
-            "serial_number": values.get("serial_number"),
-            "ssh_username": values.get("ssh_username"),
-            "ssh_password": encrypted_password,
-            "ssh_port": values.get("ssh_port"),
-            "netconf_enabled": values.get("netconf_enabled"),
-            "netconf_port": values.get("netconf_port"),
-            "tr069_acs_server_id": values.get("tr069_acs_server_id"),
-            "notes": values.get("notes"),
-            "is_active": values.get("is_active"),
-        }
-    )
+    data: dict[str, object] = {
+        "name": values.get("name"),
+        "hostname": values.get("hostname"),
+        "mgmt_ip": values.get("mgmt_ip"),
+        "vendor": values.get("vendor"),
+        "model": values.get("model"),
+        "serial_number": values.get("serial_number"),
+        "ssh_username": values.get("ssh_username"),
+        "ssh_password": encrypted_password,
+        "ssh_port": values.get("ssh_port"),
+        "snmp_enabled": values.get("snmp_enabled"),
+        "snmp_port": values.get("snmp_port"),
+        "snmp_version": values.get("snmp_version"),
+        "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
+        "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
+        "netconf_enabled": values.get("netconf_enabled"),
+        "netconf_port": values.get("netconf_port"),
+        "tr069_acs_server_id": values.get("tr069_acs_server_id"),
+        "notes": values.get("notes"),
+        "is_active": values.get("is_active"),
+    }
+    if "supported_pon_types" in values:
+        data["supported_pon_types"] = values["supported_pon_types"]
+    if "status" in values and values["status"] is not None:
+        data["status"] = values["status"]
+    return OLTDeviceUpdate.model_validate(data)
 
 
 def _find_linked_network_device(
@@ -253,6 +285,7 @@ def sync_monitoring_device(
             else 161,
             snmp_version=str(values.get("snmp_version") or "v2c"),
             snmp_community=_encrypt_if_set(values, "snmp_community"),
+            snmp_rw_community=_encrypt_if_set(values, "snmp_rw_community"),
             snmp_username=str(values.get("snmp_username") or "").strip() or None,
             snmp_auth_protocol=str(values.get("snmp_auth_protocol") or "").strip()
             or None,
@@ -282,6 +315,9 @@ def sync_monitoring_device(
     snmp_community_encrypted = _encrypt_if_set(values, "snmp_community")
     if snmp_community_encrypted is not None:
         linked.snmp_community = snmp_community_encrypted
+    snmp_rw_community_encrypted = _encrypt_if_set(values, "snmp_rw_community")
+    if snmp_rw_community_encrypted is not None:
+        linked.snmp_rw_community = snmp_rw_community_encrypted
     linked.snmp_username = str(values.get("snmp_username") or "").strip() or None
     linked.snmp_auth_protocol = (
         str(values.get("snmp_auth_protocol") or "").strip() or None
@@ -315,6 +351,10 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         vendor=olt.vendor,
         model=olt.model,
         serial_number=olt.serial_number,
+        firmware_version=olt.firmware_version,
+        software_version=olt.software_version,
+        supported_pon_types=getattr(olt, "supported_pon_types", None),
+        status=olt.status.value if hasattr(olt.status, "value") else str(olt.status or "active"),
         ssh_username=olt.ssh_username,
         ssh_password="",
         ssh_port=olt.ssh_port,
@@ -323,10 +363,20 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         tr069_acs_server_id=olt.tr069_acs_server_id,
         notes=olt.notes,
         is_active=olt.is_active,
-        snmp_enabled=bool(getattr(linked, "snmp_enabled", False)),
-        snmp_port=getattr(linked, "snmp_port", 161),
-        snmp_version=getattr(linked, "snmp_version", "v2c"),
-        snmp_community=decrypt_credential(v) if (v := getattr(linked, "snmp_community", None)) else None,
+        # SNMP: prefer OLT's own fields, fall back to linked NetworkDevice
+        snmp_enabled=getattr(olt, "snmp_enabled", False) or bool(getattr(linked, "snmp_enabled", False)),
+        snmp_port=getattr(olt, "snmp_port", None) or getattr(linked, "snmp_port", 161),
+        snmp_version=getattr(olt, "snmp_version", None) or getattr(linked, "snmp_version", "v2c"),
+        snmp_community=(
+            decrypt_credential(v)
+            if (v := getattr(olt, "snmp_ro_community", None))
+            else (decrypt_credential(v) if (v := getattr(linked, "snmp_community", None)) else None)
+        ),
+        snmp_rw_community=(
+            decrypt_credential(v)
+            if (v := getattr(olt, "snmp_rw_community", None))
+            else (decrypt_credential(v) if (v := getattr(linked, "snmp_rw_community", None)) else None)
+        ),
         snmp_username=getattr(linked, "snmp_username", None),
         snmp_auth_protocol=getattr(linked, "snmp_auth_protocol", None),
         snmp_auth_secret="",
@@ -426,6 +476,17 @@ def update_olt(
         payload_values = dict(values)
         if payload_values.get("ssh_password") is None:
             payload_values["ssh_password"] = current.ssh_password
+        # Preserve SNMP fields when form doesn't submit new values
+        if payload_values.get("snmp_community") is None:
+            payload_values["snmp_community"] = getattr(current, "snmp_ro_community", None)
+        if payload_values.get("snmp_rw_community") is None:
+            payload_values["snmp_rw_community"] = getattr(current, "snmp_rw_community", None)
+        if payload_values.get("snmp_enabled") is None:
+            payload_values["snmp_enabled"] = getattr(current, "snmp_enabled", False)
+        if payload_values.get("snmp_port") is None:
+            payload_values["snmp_port"] = getattr(current, "snmp_port", 161)
+        if payload_values.get("snmp_version") is None:
+            payload_values["snmp_version"] = getattr(current, "snmp_version", "v2c")
         olt = network_service.olt_devices.update(
             db=db,
             device_id=olt_id,
@@ -726,8 +787,169 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
         return False, "OLT not found", None
     ok, message, policy_key = olt_ssh_service.test_connection(olt)
     if ok and policy_key:
+        # Attempt to extract and persist firmware version from the probe output
+        try:
+            _policy_key, version_output = olt_ssh_service.run_version_probe(olt)
+            fw = _extract_firmware_version(version_output)
+            if fw and fw != olt.firmware_version:
+                olt.firmware_version = fw
+                db.commit()
+        except Exception:
+            pass  # Non-critical; SSH test already passed
         return True, f"{message} ({policy_key})", policy_key
     return ok, message, policy_key
+
+
+def _extract_firmware_version(version_output: str) -> str | None:
+    """Extract firmware version string from OLT CLI version output."""
+    import re
+
+    for pattern in [
+        r"(?:software\s+version|version)\s*[:=]?\s*([^\s,()]+)",
+        r"VRP\s+\(R\)\s+software,\s+Version\s+(\S+)",
+        r"Version\s+(\S+)",
+    ]:
+        match = re.search(pattern, version_output, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()[:120]
+    return None
+
+
+def get_autofind_onts(
+    db: Session, olt_id: str
+) -> tuple[bool, str, list[olt_ssh_service.AutofindEntry]]:
+    """Retrieve unregistered ONTs from an OLT's autofind table via SSH."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", []
+    return olt_ssh_service.get_autofind_onts(olt)
+
+
+def authorize_autofind_ont(
+    db: Session, olt_id: str, fsp: str, serial_number: str
+) -> tuple[bool, str]:
+    """Authorize an unregistered ONT on an OLT via SSH, then provision service-ports."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+
+    # Step 1: Authorize the ONT
+    ok, msg = olt_ssh_service.authorize_ont(olt, fsp, serial_number)
+    if not ok:
+        return False, msg
+
+    # Step 2: Provision service-ports using neighbor-learning
+    sp_ok, sp_msg = provision_ont_service_ports(db, olt_id, fsp)
+    if sp_ok:
+        return True, f"{msg}. {sp_msg}"
+    # Authorization succeeded even if service-port provisioning failed
+    logger.warning("Service-port provisioning failed after ONT authorize: %s", sp_msg)
+    return True, f"{msg}. Warning: service-port provisioning failed — {sp_msg}"
+
+
+def provision_ont_service_ports(
+    db: Session, olt_id: str, fsp: str
+) -> tuple[bool, str]:
+    """Provision service-ports for the most recently authorized ONT on a port.
+
+    Uses the neighbor-learning pattern: inspects existing service-ports on the
+    same PON port, finds the VLAN/GEM pattern from a reference ONT, and
+    replicates it for the newest ONT-ID.
+    """
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+
+    # Get all service-ports on this PON port
+    ok, msg, entries = olt_ssh_service.get_service_ports(olt, fsp)
+    if not ok or not entries:
+        return False, f"Cannot read service-ports: {msg}"
+
+    # Find the reference ONT (most common ONT-ID with most service-ports)
+    from collections import Counter
+    ont_counts = Counter(e.ont_id for e in entries)
+    if not ont_counts:
+        return False, "No existing service-ports to learn from"
+
+    # The newest ONT-ID is likely the one we just authorized (highest ID)
+    all_ont_ids = sorted(ont_counts.keys())
+    new_ont_id = all_ont_ids[-1]  # Highest ONT-ID
+
+    # Check if new ONT already has service-ports
+    new_ont_ports = [e for e in entries if e.ont_id == new_ont_id]
+    if new_ont_ports:
+        return True, f"ONT {new_ont_id} already has {len(new_ont_ports)} service-port(s)"
+
+    # Find a reference ONT (pick one with service-ports that's not the new one)
+    reference_ont_id = None
+    for ont_id, count in ont_counts.most_common():
+        if ont_id != new_ont_id:
+            reference_ont_id = ont_id
+            break
+    if reference_ont_id is None:
+        return False, "No reference ONT found to learn service-port pattern from"
+
+    reference_ports = [e for e in entries if e.ont_id == reference_ont_id]
+    logger.info(
+        "Learning service-port pattern from ONT %d (%d ports) for new ONT %d on %s",
+        reference_ont_id, len(reference_ports), new_ont_id, fsp,
+    )
+
+    return olt_ssh_service.create_service_ports(olt, fsp, new_ont_id, reference_ports)
+
+
+def test_olt_netconf_connection(
+    db: Session, olt_id: str
+) -> tuple[bool, str, list[str]]:
+    """Test NETCONF connectivity to an OLT."""
+    from app.services.network import olt_netconf
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", []
+    return olt_netconf.test_connection(olt)
+
+
+def get_olt_netconf_config(
+    db: Session, olt_id: str, *, filter_xpath: str | None = None
+) -> tuple[bool, str, str]:
+    """Fetch running config from OLT via NETCONF."""
+    from app.services.network import olt_netconf
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", ""
+    return olt_netconf.get_running_config(olt, filter_xpath=filter_xpath)
+
+
+def get_olt_firmware_images(db: Session, olt_id: str) -> list:
+    """Get available firmware images matching an OLT's vendor/model."""
+    from app.models.network import OltFirmwareImage
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return []
+    stmt = select(OltFirmwareImage).where(OltFirmwareImage.is_active.is_(True))
+    if olt.vendor:
+        stmt = stmt.where(OltFirmwareImage.vendor.ilike(f"%{olt.vendor}%"))
+    return list(db.scalars(stmt.order_by(OltFirmwareImage.version.desc())).all())
+
+
+def trigger_olt_firmware_upgrade(
+    db: Session, olt_id: str, image_id: str
+) -> tuple[bool, str]:
+    """Validate and trigger an OLT firmware upgrade via SSH."""
+    from app.models.network import OltFirmwareImage
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+    image = db.get(OltFirmwareImage, image_id)
+    if not image:
+        return False, "Firmware image not found"
+    if not image.is_active:
+        return False, "Firmware image is not active"
+    return olt_ssh_service.upgrade_firmware(olt, image.file_url, method=image.upgrade_method or "sftp")
 
 
 def _parse_walk_composite(lines: list[str], *, suffix_parts: int = 4) -> dict[str, str]:
@@ -938,8 +1160,24 @@ def sync_onts_from_olt_snmp(
         hostname=olt.hostname,
         name=olt.name,
     )
+
+    # If no linked NetworkDevice, build a stand-in from the OLT's own SNMP fields
     if not linked:
-        return False, "No linked monitoring device found for this OLT", {"discovered": 0, "created": 0, "updated": 0}
+        raw_ro = getattr(olt, "snmp_ro_community", None)
+        if raw_ro and raw_ro.strip():
+            from types import SimpleNamespace
+
+            linked = SimpleNamespace(
+                mgmt_ip=olt.mgmt_ip,
+                hostname=olt.hostname,
+                snmp_enabled=True,
+                snmp_community=raw_ro.strip(),
+                snmp_version="v2c",
+                snmp_port=None,
+                vendor=olt.vendor,
+            )
+        else:
+            return False, "No linked monitoring device and no SNMP community on OLT", {"discovered": 0, "created": 0, "updated": 0}
     if not linked.snmp_enabled:
         return False, "SNMP is disabled on the linked monitoring device", {"discovered": 0, "created": 0, "updated": 0}
 
@@ -1151,6 +1389,85 @@ def sync_onts_from_olt_snmp(
         db.rollback()
         return False, f"Failed to save discovered ONTs: {exc!s}", {"discovered": len(all_indexes), "created": created, "updated": updated}
 
+    # Auto-create OntAssignment records linking ONTs to PON ports
+    assignment_created = 0
+    assignment_errors = 0
+    try:
+        # Build lookup of existing PON ports by name for this OLT
+        olt_pon_ports = {
+            pp.name: pp
+            for pp in db.scalars(
+                select(PonPort).where(
+                    PonPort.olt_id == olt.id,
+                    PonPort.is_active.is_(True),
+                )
+            ).all()
+        }
+        # Get ONTs for this OLT that lack an active assignment
+        onts_needing_assignment = list(
+            db.scalars(
+                select(OntUnit)
+                .outerjoin(
+                    OntAssignment,
+                    (OntAssignment.ont_unit_id == OntUnit.id)
+                    & (OntAssignment.active.is_(True)),
+                )
+                .where(
+                    OntUnit.olt_device_id == olt.id,
+                    OntUnit.is_active.is_(True),
+                    OntAssignment.id.is_(None),
+                )
+            ).all()
+        )
+        for ont_item in onts_needing_assignment:
+            ont_board = getattr(ont_item, "board", "") or ""
+            ont_port = getattr(ont_item, "port", "") or ""
+            pon_name = f"pon-{ont_board}/{ont_port}" if ont_board and ont_port else None
+            if not pon_name:
+                continue
+            pon_port = olt_pon_ports.get(pon_name)
+            if not pon_port:
+                # Auto-create the PON port
+                pon_port = PonPort(
+                    olt_id=olt.id,
+                    name=pon_name,
+                    is_active=True,
+                )
+                db.add(pon_port)
+                db.flush()
+                olt_pon_ports[pon_name] = pon_port
+            assignment = OntAssignment(
+                ont_unit_id=ont_item.id,
+                pon_port_id=pon_port.id,
+                active=True,
+                assigned_at=now,
+            )
+            db.add(assignment)
+            assignment_created += 1
+        if assignment_created:
+            db.commit()
+    except Exception as exc:
+        logger.warning("Failed to auto-create ONT assignments: %s", exc)
+        db.rollback()
+        assignment_errors += 1
+
+    if created > 0:
+        try:
+            emit_event(
+                db,
+                EventType.ont_discovered,
+                {
+                    "olt_id": str(olt.id),
+                    "olt_name": olt.name,
+                    "created": created,
+                    "updated": updated,
+                    "total_discovered": len(all_indexes),
+                },
+                actor="system",
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit ont_discovered event: %s", exc)
+
     tr069_runtime_synced = 0
     tr069_runtime_errors = 0
     if olt.tr069_acs_server_id:
@@ -1194,6 +1511,8 @@ def sync_onts_from_olt_snmp(
         "discovered": len(all_indexes),
         "created": created,
         "updated": updated,
+        "assignments_created": assignment_created,
+        "assignment_errors": assignment_errors,
         "tr069_runtime_synced": tr069_runtime_synced,
         "tr069_runtime_errors": tr069_runtime_errors,
     }
@@ -1236,3 +1555,391 @@ def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, s
     except Exception as exc:
         db.rollback()
         return None, f"Test backup failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# VLAN / IP Pool assignment helpers
+# ---------------------------------------------------------------------------
+
+
+def available_vlans_for_olt(db: Session, olt_id: str) -> list:
+    """Return VLANs not yet assigned to this OLT."""
+    from app.models.network import Vlan
+
+    return list(
+        db.scalars(
+            select(Vlan)
+            .where(Vlan.olt_device_id.is_(None))
+            .where(Vlan.is_active.is_(True))
+            .order_by(Vlan.tag.asc())
+        ).all()
+    )
+
+
+def available_ip_pools_for_olt(db: Session, olt_id: str) -> list:
+    """Return IP pools not yet assigned to any OLT."""
+    from app.models.network import IpPool
+
+    return list(
+        db.scalars(
+            select(IpPool)
+            .where(IpPool.olt_device_id.is_(None))
+            .where(IpPool.is_active.is_(True))
+            .order_by(IpPool.name.asc())
+        ).all()
+    )
+
+
+def assign_vlan_to_olt(db: Session, olt_id: str, vlan_id: str) -> tuple[bool, str]:
+    """Assign a VLAN to an OLT. Returns (success, message)."""
+    from app.models.network import Vlan
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+    vlan = db.get(Vlan, vlan_id)
+    if not vlan:
+        return False, "VLAN not found"
+    if vlan.olt_device_id is not None:
+        return False, f"VLAN {vlan.tag} is already assigned to an OLT"
+    vlan.olt_device_id = olt.id
+    db.commit()
+    logger.info("Assigned VLAN %s (tag %d) to OLT %s", vlan_id, vlan.tag, olt.name)
+    return True, f"VLAN {vlan.tag} assigned"
+
+
+def unassign_vlan_from_olt(db: Session, olt_id: str, vlan_id: str) -> tuple[bool, str]:
+    """Remove VLAN assignment from an OLT."""
+    from app.models.network import Vlan
+
+    vlan = db.get(Vlan, vlan_id)
+    if not vlan:
+        return False, "VLAN not found"
+    if str(vlan.olt_device_id) != olt_id:
+        return False, "VLAN is not assigned to this OLT"
+    vlan.olt_device_id = None
+    db.commit()
+    logger.info("Unassigned VLAN %s (tag %d) from OLT %s", vlan_id, vlan.tag, olt_id)
+    return True, f"VLAN {vlan.tag} unassigned"
+
+
+def assign_ip_pool_to_olt(
+    db: Session, olt_id: str, pool_id: str
+) -> tuple[bool, str]:
+    """Assign an IP pool to an OLT."""
+    from app.models.network import IpPool
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+    pool = db.get(IpPool, pool_id)
+    if not pool:
+        return False, "IP pool not found"
+    if pool.olt_device_id is not None:
+        return False, f"Pool '{pool.name}' is already assigned to an OLT"
+    pool.olt_device_id = olt.id
+    db.commit()
+    logger.info("Assigned IP pool %s (%s) to OLT %s", pool_id, pool.name, olt.name)
+    return True, f"Pool '{pool.name}' assigned"
+
+
+def unassign_ip_pool_from_olt(
+    db: Session, olt_id: str, pool_id: str
+) -> tuple[bool, str]:
+    """Remove IP pool assignment from an OLT."""
+    from app.models.network import IpPool
+
+    pool = db.get(IpPool, pool_id)
+    if not pool:
+        return False, "IP pool not found"
+    if str(pool.olt_device_id) != olt_id:
+        return False, "Pool is not assigned to this OLT"
+    pool.olt_device_id = None
+    db.commit()
+    logger.info("Unassigned IP pool %s (%s) from OLT %s", pool_id, pool.name, olt_id)
+    return True, f"Pool '{pool.name}' unassigned"
+
+
+# ---------------------------------------------------------------------------
+# CLI Command Runner
+# ---------------------------------------------------------------------------
+
+# Allowed command prefixes — read-only / diagnostic commands only.
+# Anything not starting with one of these is rejected.
+_CLI_ALLOWED_PREFIXES: list[str] = [
+    "display ",
+    "show ",
+    "ping ",
+    "traceroute ",
+    "dir ",
+    "list ",
+]
+
+# Explicitly blocked patterns — dangerous even if prefix matches.
+_CLI_BLOCKED_PATTERNS: list[str] = [
+    "config",
+    "reset",
+    "reboot",
+    "shutdown",
+    "delete",
+    "undo ",
+    "save",
+    "commit",
+    "system-software",
+    "startup",
+    "format",
+]
+
+
+def validate_cli_command(command: str) -> str | None:
+    """Check if a CLI command is safe to execute. Returns error or None."""
+    cmd = command.strip()
+    if not cmd:
+        return "Command is empty"
+    if len(cmd) > 500:
+        return "Command too long (max 500 characters)"
+
+    cmd_lower = cmd.lower()
+
+    # Check blocked patterns first
+    for pattern in _CLI_BLOCKED_PATTERNS:
+        if pattern in cmd_lower:
+            return f"Command contains blocked keyword: {pattern}"
+
+    # Check allowed prefixes
+    if not any(cmd_lower.startswith(prefix) for prefix in _CLI_ALLOWED_PREFIXES):
+        allowed = ", ".join(p.strip() for p in _CLI_ALLOWED_PREFIXES)
+        return f"Only read-only commands allowed. Permitted prefixes: {allowed}"
+
+    return None
+
+
+def execute_cli_command(
+    db: Session, olt_id: str, command: str
+) -> tuple[bool, str, str]:
+    """Execute a validated CLI command on an OLT.
+
+    Returns (success, message, output).
+    """
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", ""
+
+    error = validate_cli_command(command)
+    if error:
+        return False, error, ""
+
+    ok, message, output = olt_ssh_service.run_cli_command(olt, command.strip())
+    logger.info(
+        "CLI command on OLT %s: %s → %s",
+        olt.name, command.strip(), "ok" if ok else "failed",
+    )
+    return ok, message, output
+
+
+def backup_running_config_ssh(
+    db: Session, olt_id: str
+) -> tuple[OltConfigBackup | None, str]:
+    """Fetch full running config via SSH and save as backup."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return None, "OLT not found"
+
+    ok, message, config_text = olt_ssh_service.fetch_running_config_ssh(olt)
+    if not ok or not config_text:
+        return None, f"SSH config backup failed: {message}"
+
+    try:
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        safe_name = olt.name.replace(" ", "_").replace("/", "_")[:60]
+        filename = f"{safe_name}_ssh_{timestamp}.txt"
+        base = _olt_backup_base_dir()
+        olt_dir = base / str(olt.id)
+        olt_dir.mkdir(parents=True, exist_ok=True)
+        filepath = olt_dir / filename
+        filepath.write_text(config_text)
+        backup = OltConfigBackup(
+            id=uuid.uuid4(),
+            olt_device_id=olt.id,
+            backup_type=OltConfigBackupType.manual,
+            file_path=str(filepath.relative_to(base)),
+            file_size_bytes=len(config_text.encode()),
+        )
+        db.add(backup)
+        db.commit()
+        db.refresh(backup)
+        logger.info("SSH config backup saved for OLT %s: %s", olt.name, filename)
+        return backup, "Full running config backed up via SSH"
+    except Exception as exc:
+        db.rollback()
+        return None, f"Failed to save SSH backup: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# TR-069 ACS profile management
+# ---------------------------------------------------------------------------
+
+_ONU_INDEX_RE = re.compile(r"\.(\d+)$")
+_ONU_NAME_RE = re.compile(r":(\d+)$")
+
+
+def _extract_onu_index(ont: OntUnit) -> int | None:
+    """Extract the ONU index from an ONT's external_id or name.
+
+    Patterns:
+        external_id ``huawei:XXXX.{N}`` → N
+        name ``ONU F/S/P:{N}`` → N
+    """
+    if ont.external_id:
+        m = _ONU_INDEX_RE.search(ont.external_id)
+        if m:
+            return int(m.group(1))
+    if ont.name:
+        m = _ONU_NAME_RE.search(ont.name)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def get_tr069_profiles_context(
+    db: Session, olt_id: str
+) -> tuple[bool, str, list[dict[str, Any]], dict[str, Any]]:
+    """Read TR-069 server profiles from an OLT and prepare template context.
+
+    Returns:
+        Tuple of (ok, message, profiles_data, acs_prefill).
+    """
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", [], {}
+
+    ok, message, profiles = olt_ssh_service.get_tr069_server_profiles(olt)
+
+    profiles_data = [
+        {
+            "profile_id": p.profile_id,
+            "name": p.name,
+            "acs_url": p.acs_url,
+            "acs_username": p.acs_username,
+            "inform_interval": p.inform_interval,
+            "binding_count": p.binding_count,
+        }
+        for p in profiles
+    ]
+
+    # Pre-fill from linked ACS server if available
+    acs_prefill: dict[str, Any] = {}
+    if olt.tr069_acs_server:
+        acs = olt.tr069_acs_server
+        acs_prefill = {
+            "acs_url": acs.cwmp_url or "",
+            "acs_username": acs.cwmp_username or "",
+            "acs_name": acs.name or "",
+        }
+
+    # Load ONTs on this OLT for the binding table
+    stmt = (
+        select(OntUnit)
+        .where(OntUnit.olt_device_id == olt.id)
+        .order_by(OntUnit.board, OntUnit.port, OntUnit.name)
+    )
+    onts = db.scalars(stmt).all()
+    ont_rows = []
+    for ont in onts:
+        onu_index = _extract_onu_index(ont)
+        if onu_index is None:
+            continue
+        ont_rows.append({
+            "id": str(ont.id),
+            "serial_number": ont.serial_number,
+            "board": ont.board or "",
+            "port": ont.port or "",
+            "onu_index": onu_index,
+            "name": ont.name or "",
+            "online": ont.online_status.value if ont.online_status else "unknown",
+            "subscriber_name": getattr(ont, "address_or_comment", "") or "",
+        })
+
+    return ok, message, profiles_data, {
+        "acs_prefill": acs_prefill,
+        "onts": ont_rows,
+    }
+
+
+def handle_create_tr069_profile(
+    db: Session,
+    olt_id: str,
+    *,
+    profile_name: str,
+    acs_url: str,
+    username: str = "",
+    password: str = "",
+    inform_interval: int = 300,
+) -> tuple[bool, str]:
+    """Validate and create a TR-069 server profile on an OLT."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+
+    return olt_ssh_service.create_tr069_server_profile(
+        olt,
+        profile_name=profile_name,
+        acs_url=acs_url,
+        username=username,
+        password=password,
+        inform_interval=inform_interval,
+    )
+
+
+def handle_rebind_tr069_profiles(
+    db: Session,
+    olt_id: str,
+    ont_ids: list[str],
+    target_profile_id: int,
+) -> dict[str, int | list[str]]:
+    """Rebind selected ONTs to a TR-069 server profile.
+
+    Returns:
+        Stats dict with keys: rebound, failed, errors (list of messages).
+    """
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return {"rebound": 0, "failed": 1, "errors": ["OLT not found"]}
+
+    stats: dict[str, int | list[str]] = {"rebound": 0, "failed": 0, "errors": []}
+    errors_list: list[str] = []
+
+    for ont_id in ont_ids:
+        ont = db.get(OntUnit, ont_id)
+        if not ont:
+            errors_list.append(f"ONT {ont_id} not found")
+            stats["failed"] = int(stats["failed"]) + 1
+            continue
+
+        onu_index = _extract_onu_index(ont)
+        if onu_index is None:
+            errors_list.append(f"ONT {ont.serial_number}: cannot determine ONU index")
+            stats["failed"] = int(stats["failed"]) + 1
+            continue
+
+        # Build F/S/P from board + port
+        board = ont.board or ""
+        port = ont.port or ""
+        if not board or not port:
+            errors_list.append(f"ONT {ont.serial_number}: missing board/port")
+            stats["failed"] = int(stats["failed"]) + 1
+            continue
+
+        fsp = f"{board}/{port}"
+
+        ok, msg = olt_ssh_service.bind_tr069_server_profile(
+            olt, fsp, onu_index, target_profile_id
+        )
+        if ok:
+            stats["rebound"] = int(stats["rebound"]) + 1
+        else:
+            stats["failed"] = int(stats["failed"]) + 1
+            errors_list.append(f"ONT {ont.serial_number}: {msg}")
+
+    stats["errors"] = errors_list
+    return stats

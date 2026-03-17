@@ -4,7 +4,7 @@
 {% block title %}{{ olt.name }} - OLT - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data="{ activeTab: 'overview' }">
+<div class="space-y-6" x-data="{ activeTab: new URLSearchParams(window.location.search).get('tab') || 'overview' }">
     {% if ssh_test_message %}
     <div class="rounded-lg border px-4 py-3 text-sm {% if ssh_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
         {{ ssh_test_message }}
@@ -36,8 +36,13 @@
             </p>
         </div>
         <div class="flex items-center gap-2">
-            {% if olt.is_active %}
+            {% set olt_status = olt.status.value if olt.status and olt.status is not string else (olt.status or 'active') %}
+            {% if olt_status == 'active' %}
             {{ status_badge("Active", "active", size="sm") }}
+            {% elif olt_status == 'maintenance' %}
+            {{ status_badge("Maintenance", "pending", size="sm") }}
+            {% elif olt_status == 'retired' %}
+            {{ status_badge("Retired", "canceled", size="sm") }}
             {% else %}
             {{ status_badge("Inactive", "inactive", size="sm") }}
             {% endif %}
@@ -81,11 +86,43 @@
                 ONTs
                 <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont_summary.total }}</span>
             </button>
+            <button @click="activeTab = 'autofind'"
+                    :class="activeTab === 'autofind' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                Autofind
+            </button>
+            {% if olt.vendor and 'huawei' in olt.vendor|lower %}
+            <button @click="activeTab = 'tr069'"
+                    :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+                TR-069
+            </button>
+            {% endif %}
+            <button @click="activeTab = 'config'"
+                    :class="activeTab === 'config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Configuration
+            </button>
+            <button @click="activeTab = 'terminal'"
+                    :class="activeTab === 'terminal' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Terminal
+            </button>
             <button @click="activeTab = 'activity'"
                     :class="activeTab === 'activity' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity
+            </button>
+            <button data-tab="profiles" @click="activeTab = 'profiles'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/profiles/line', {target: '#profiles-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'profiles' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                Profiles
             </button>
         </nav>
     </div>
@@ -118,6 +155,36 @@
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.serial_number or 'N/A' }}</dd>
                     </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware Version</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">
+                            {{ info.firmware_version or 'N/A' }}
+                            {% if info.firmware_version and info.snmp_enabled %}
+                            <span class="text-xs text-slate-400 ml-1">(Detected)</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Software Version</dt>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">
+                            {{ info.software_version or 'N/A' }}
+                            {% if info.software_version and info.snmp_enabled %}
+                            <span class="text-xs text-slate-400 ml-1">(Detected)</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    {% if info.supported_pon_types %}
+                    <div class="sm:col-span-2">
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Supported PON Types</dt>
+                        <dd class="mt-1 flex flex-wrap gap-1.5">
+                            {% for pt in info.supported_pon_types.split(',') %}
+                            {% if pt.strip() %}
+                            <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">{{ pt.strip() | upper }}</span>
+                            {% endif %}
+                            {% endfor %}
+                        </dd>
+                    </div>
+                    {% endif %}
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Connectivity Checks</dt>
                         <dd class="mt-1 text-sm">
@@ -400,6 +467,15 @@
                             Test SNMP Connection
                         </button>
                     </form>
+                    {% if olt.netconf_enabled %}
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-netconf">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                            Test NETCONF Connection
+                        </button>
+                    </form>
+                    {% endif %}
                     <form method="POST" action="/admin/network/olts/{{ olt.id }}/sync-onts">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
@@ -407,6 +483,47 @@
                             Sync ONTs From OLT (SNMP)
                         </button>
                     </form>
+                </div>
+                {% endcall %}
+
+                {# Firmware Management #}
+                {% call card("Firmware", color="slate") %}
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Current Version</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ olt.firmware_version or 'Unknown' }}</p>
+                        </div>
+                        {% if olt.vendor %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ olt.vendor }}</span>
+                        {% endif %}
+                    </div>
+                    {% if olt.software_version %}
+                    <div>
+                        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Software Version</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ olt.software_version }}</p>
+                    </div>
+                    {% endif %}
+                    {% if available_olt_firmware %}
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/firmware-upgrade"
+                          class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                        {% include "components/forms/csrf_input.html" %}
+                        <select name="firmware_image_id" required
+                            class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select firmware...</option>
+                            {% for fw in available_olt_firmware %}
+                            <option value="{{ fw.id }}">{{ fw.vendor }} {{ fw.model or '' }} v{{ fw.version }}{% if fw.file_size_bytes %} ({{ (fw.file_size_bytes / 1048576) | round(1) }} MB){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" onclick="return confirm('WARNING: Firmware upgrade will reboot the OLT and disconnect ALL subscribers. Proceed?')"
+                            class="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                            Upgrade
+                        </button>
+                    </form>
+                    {% else %}
+                    <p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No firmware images available{% if olt.vendor %} for {{ olt.vendor }}{% endif %}.</p>
+                    {% endif %}
                 </div>
                 {% endcall %}
             </div>
@@ -601,6 +718,369 @@
         {% endcall %}
     </div>
 
+    {# ===================== AUTOFIND TAB ===================== #}
+    <div x-show="activeTab === 'autofind'" x-transition x-cloak>
+        {% call card("ONT Autofind", color="blue") %}
+        <div class="space-y-4">
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+                Scan the OLT for unregistered ONTs. Devices that are physically connected but not yet authorized will appear here.
+            </p>
+            <form method="POST" action="/admin/network/olts/{{ olt.id }}/autofind"
+                  hx-post="/admin/network/olts/{{ olt.id }}/autofind"
+                  hx-target="#autofind-results"
+                  hx-swap="innerHTML"
+                  hx-indicator="#autofind-spinner">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit"
+                        class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    Scan for Unregistered ONTs
+                </button>
+                <span id="autofind-spinner" class="htmx-indicator ml-3 text-sm text-slate-500">
+                    <svg class="inline h-4 w-4 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Scanning via SSH&hellip;
+                </span>
+            </form>
+            <div id="autofind-results">
+                {# HTMX will swap results here #}
+            </div>
+        </div>
+        {% endcall %}
+    </div>
+
+    {# ===================== TR-069 TAB ===================== #}
+    {% if olt.vendor and 'huawei' in olt.vendor|lower %}
+    <div x-show="activeTab === 'tr069'" x-transition x-cloak
+         x-data="{ showCreateModal: false, createLoading: false, rebindLoading: false }">
+        {% call card("TR-069 ACS Profile Management", color="blue") %}
+        <div class="space-y-4">
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+                Manage TR-069 server profiles on this OLT. Read existing profiles, create new ones pointing to your ACS server, and rebind ONTs to redirect their CWMP Inform traffic.
+            </p>
+            <div class="flex items-center gap-3">
+                <form method="POST" action="/admin/network/olts/{{ olt.id }}/tr069-profiles"
+                      hx-post="/admin/network/olts/{{ olt.id }}/tr069-profiles"
+                      hx-target="#tr069-results"
+                      hx-swap="innerHTML"
+                      hx-indicator="#tr069-spinner">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Read Profiles from OLT
+                    </button>
+                </form>
+                <button @click="showCreateModal = true"
+                        class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300 hover:-translate-y-0.5 transition-all">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Create Profile
+                </button>
+                <span id="tr069-spinner" class="htmx-indicator text-sm text-slate-500">
+                    <svg class="inline h-4 w-4 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Reading via SSH&hellip;
+                </span>
+            </div>
+            <div id="tr069-results">
+                {# HTMX will swap results here #}
+            </div>
+        </div>
+        {% endcall %}
+
+        {# Create Profile Modal #}
+        <div x-show="showCreateModal" x-transition.opacity class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showCreateModal = false">
+            <div @click.outside="showCreateModal = false" class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Create TR-069 Server Profile</h3>
+                    <button @click="showCreateModal = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <form @submit.prevent="
+                    createLoading = true;
+                    fetch('/admin/network/olts/{{ olt.id }}/tr069-profiles/create', {
+                        method: 'POST',
+                        body: new FormData($el),
+                    }).then(r => r.json()).then(data => {
+                        createLoading = false;
+                        if (data.ok) {
+                            showCreateModal = false;
+                            document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: 'success'}}));
+                        } else {
+                            document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: 'error'}}));
+                        }
+                    }).catch(() => { createLoading = false; });
+                ">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Profile Name</label>
+                            <input type="text" name="profile_name" required maxlength="64" pattern="[A-Za-z0-9_\-. ]+"
+                                   placeholder="e.g. DotMac-GenieACS"
+                                   class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">ACS URL</label>
+                            <input type="url" name="acs_url" required
+                                   value="{{ acs_prefill.cwmp_url or '' }}"
+                                   placeholder="http://oss.dotmac.ng:7547"
+                                   class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                                <input type="text" name="acs_username"
+                                       value="{{ acs_prefill.cwmp_username or '' }}"
+                                       placeholder="Optional"
+                                       class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                                <input type="password" name="acs_password"
+                                       placeholder="Optional"
+                                       class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Inform Interval (seconds)</label>
+                            <input type="number" name="inform_interval" value="300" min="60" max="86400"
+                                   class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                    <div class="mt-6 flex items-center justify-end gap-3">
+                        <button type="button" @click="showCreateModal = false"
+                                class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                            Cancel
+                        </button>
+                        <button type="submit" :disabled="createLoading"
+                                class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50">
+                            <svg x-show="createLoading" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            Create Profile
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ===================== CONFIGURATION TAB ===================== #}
+    <div x-show="activeTab === 'config'" x-transition x-cloak>
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {# VLANs on this OLT #}
+            {% call card("Service VLANs", color="blue") %}
+            {% if olt_vlans %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Tag</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Purpose</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">DHCP Snooping</th>
+                            <th class="px-3 py-2 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400"></th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for vlan in olt_vlans %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ vlan.tag }}</td>
+                            <td class="px-3 py-2 text-sm text-slate-900 dark:text-white">{{ vlan.name or '—' }}</td>
+                            <td class="px-3 py-2 text-sm">
+                                {% if vlan.purpose %}
+                                {% set purpose_colors = {'internet': 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200', 'management': 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200', 'tr069': 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200', 'iptv': 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200', 'voip': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'} %}
+                                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ purpose_colors.get(vlan.purpose.value, 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">{{ vlan.purpose.value | title }}</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2 text-sm">
+                                {% if vlan.dhcp_snooping %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">On</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">Off</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2 text-right">
+                                <form method="POST" action="/admin/network/olts/{{ olt.id }}/vlans/unassign" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="vlan_id" value="{{ vlan.id }}">
+                                    <button type="submit" class="text-xs text-rose-600 hover:text-rose-800 dark:text-rose-400 dark:hover:text-rose-300" title="Remove from OLT">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">No VLANs assigned to this OLT yet.</p>
+            {% endif %}
+            {% if available_vlans %}
+            <form method="POST" action="/admin/network/olts/{{ olt.id }}/vlans/assign" class="mt-4 flex items-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                {% include "components/forms/csrf_input.html" %}
+                <div class="flex-1">
+                    <label for="assign-vlan" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Assign VLAN</label>
+                    <select name="vlan_id" id="assign-vlan" required
+                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select a VLAN...</option>
+                        {% for v in available_vlans %}
+                        <option value="{{ v.id }}">{{ v.tag }} — {{ v.name or 'Unnamed' }}{% if v.purpose %} ({{ v.purpose.value }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Assign
+                </button>
+            </form>
+            {% endif %}
+            {% endcall %}
+
+            {# IP Pools on this OLT #}
+            {% call card("IP Pools", color="blue") %}
+            {% if olt_ip_pools %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">CIDR</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Gateway</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Version</th>
+                            <th class="px-3 py-2 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400"></th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for pool in olt_ip_pools %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-3 py-2 text-sm text-slate-900 dark:text-white">{{ pool.name }}</td>
+                            <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ pool.cidr }}</td>
+                            <td class="px-3 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ pool.gateway or '—' }}</td>
+                            <td class="px-3 py-2 text-sm">
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ pool.ip_version.value if pool.ip_version else 'ipv4' }}</span>
+                            </td>
+                            <td class="px-3 py-2 text-right">
+                                <form method="POST" action="/admin/network/olts/{{ olt.id }}/ip-pools/unassign" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="pool_id" value="{{ pool.id }}">
+                                    <button type="submit" class="text-xs text-rose-600 hover:text-rose-800 dark:text-rose-400 dark:hover:text-rose-300" title="Remove from OLT">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">No IP pools assigned to this OLT yet.</p>
+            {% endif %}
+            {% if available_ip_pools %}
+            <form method="POST" action="/admin/network/olts/{{ olt.id }}/ip-pools/assign" class="mt-4 flex items-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                {% include "components/forms/csrf_input.html" %}
+                <div class="flex-1">
+                    <label for="assign-pool" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Assign IP Pool</label>
+                    <select name="pool_id" id="assign-pool" required
+                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select a pool...</option>
+                        {% for p in available_ip_pools %}
+                        <option value="{{ p.id }}">{{ p.name }} — {{ p.cidr }}{% if p.gateway %} (gw: {{ p.gateway }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Assign
+                </button>
+            </form>
+            {% endif %}
+            {% endcall %}
+        </div>
+    </div>
+
+    {# ===================== TERMINAL TAB ===================== #}
+    <div x-show="activeTab === 'terminal'" x-transition x-cloak>
+        {% call card("CLI Terminal", color="blue") %}
+        <div class="space-y-4">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                <strong>Read-only mode.</strong> Only diagnostic commands are allowed: <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">display</code>,
+                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">show</code>,
+                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">ping</code>,
+                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">traceroute</code>.
+            </div>
+
+            <form hx-post="/admin/network/olts/{{ olt.id }}/cli"
+                  hx-target="#cli-output"
+                  hx-swap="innerHTML"
+                  hx-indicator="#cli-spinner"
+                  class="flex items-end gap-3">
+                {% include "components/forms/csrf_input.html" %}
+                <div class="flex-1">
+                    <label for="cli-command" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Command</label>
+                    <input type="text" name="command" id="cli-command" autocomplete="off" spellcheck="false"
+                        placeholder="display ont info 0 all"
+                        class="block w-full rounded-lg border border-slate-300 bg-slate-900 px-4 py-2.5 font-mono text-sm text-emerald-400 placeholder-slate-500 focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-950">
+                </div>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    Run
+                </button>
+                <span id="cli-spinner" class="htmx-indicator">
+                    <svg class="h-5 w-5 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                </span>
+            </form>
+
+            <div id="cli-output">
+                <pre class="text-sm text-slate-400 dark:text-slate-500">Enter a command above to execute on {{ olt.name }}.</pre>
+            </div>
+
+            <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Quick Commands</p>
+                <div class="flex flex-wrap gap-2">
+                    {% for qc in [
+                        'display version',
+                        'display ont info 0 all',
+                        'display interface brief',
+                        'display board 0',
+                        'display cpu',
+                        'display memory',
+                        'display alarm active all',
+                        'display ont optical-info 0 all',
+                    ] %}
+                    <button type="button"
+                        onclick="document.getElementById('cli-command').value = '{{ qc }}'; document.getElementById('cli-command').closest('form').dispatchEvent(new Event('submit', {bubbles: true}))"
+                        class="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-mono text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-blue-600 dark:hover:text-blue-400 transition-colors">
+                        {{ qc }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {% if olt.netconf_enabled %}
+            <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">NETCONF</p>
+                <div class="space-y-2">
+                    <form hx-post="/admin/network/olts/{{ olt.id }}/netconf-get-config"
+                          hx-target="#cli-output"
+                          hx-swap="innerHTML"
+                          hx-indicator="#cli-spinner">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-300 transition-colors">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                            NETCONF: Get Running Config
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endcall %}
+    </div>
+
     {# ===================== ACTIVITY TAB ===================== #}
     <div x-show="activeTab === 'activity'" x-transition x-cloak>
         {% call card("Recent Activity", color="slate") %}
@@ -664,6 +1144,30 @@
         <p class="text-sm text-slate-500 dark:text-slate-400">No config backups yet. Backups run automatically on a schedule.</p>
         {% endif %}
         {% endcall %}
+    </div>
+
+    {# ===================== PROFILES TAB ===================== #}
+    <div x-show="activeTab === 'profiles'" x-transition x-cloak>
+        <div id="profiles-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading OLT profiles...</span>
+            </div>
+        </div>
+        <div class="mt-4 flex gap-3">
+            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/line"
+                    hx-target="#profiles-content"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Line &amp; Service Profiles
+            </button>
+            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/tr069"
+                    hx-target="#profiles-content"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                TR-069 Profiles
+            </button>
+        </div>
     </div>
 </div>
 

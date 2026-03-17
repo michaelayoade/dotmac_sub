@@ -1,0 +1,125 @@
+{# HTMX partial: TR-069 ACS server profile results #}
+{% from "components/ui/macros.html" import data_table, table_head, empty_state, status_badge %}
+
+{% if not tr069_ok %}
+<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">
+    {{ tr069_message }}
+</div>
+{% elif tr069_profiles | length == 0 %}
+{{ empty_state("No TR-069 Profiles", "No TR-069 server profiles are configured on this OLT.") }}
+{% else %}
+
+{# Profiles Table #}
+<div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/30 dark:bg-blue-900/10 dark:text-blue-300 mb-4">
+    {{ tr069_message }}
+</div>
+
+<h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Server Profiles</h4>
+{% call data_table() %}
+    {{ table_head(["ID", "Name", "ACS URL", "Username", "Inform Interval", "Bindings"]) }}
+    <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+        {% for p in tr069_profiles %}
+        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+            <td class="px-6 py-3 whitespace-nowrap text-sm font-mono tabular-nums text-slate-900 dark:text-white">{{ p.profile_id }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">{{ p.name }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm font-mono text-slate-600 dark:text-slate-300">{{ p.acs_url or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ p.acs_username or '&mdash;' }}</td>
+            <td class="px-6 py-3 whitespace-nowrap text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ p.inform_interval or '&mdash;' }}s</td>
+            <td class="px-6 py-3 whitespace-nowrap">
+                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if p.binding_count > 0 %}bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                    {{ p.binding_count }}
+                </span>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+{% endcall %}
+
+{# ONT Binding Table — Rebind Form #}
+{% if tr069_onts | length > 0 %}
+<div class="mt-6" x-data="{ selectedOnts: [], rebindLoading: false, targetProfile: '' }">
+    <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">
+        ONTs on this OLT
+        <span class="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">({{ tr069_onts | length }} with known ONU index)</span>
+    </h4>
+    <div class="mb-3 flex items-center gap-3">
+        <select x-model="targetProfile" class="rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="">Select target profile&hellip;</option>
+            {% for p in tr069_profiles %}
+            <option value="{{ p.profile_id }}">{{ p.name }} (ID {{ p.profile_id }})</option>
+            {% endfor %}
+        </select>
+        <button @click="
+            if (!targetProfile) { alert('Select a target profile first'); return; }
+            if (selectedOnts.length === 0) { alert('Select at least one ONT'); return; }
+            if (!confirm('Rebind ' + selectedOnts.length + ' ONT(s) to profile ' + targetProfile + '? This will redirect their TR-069 traffic.')) return;
+            rebindLoading = true;
+            const fd = new FormData();
+            fd.append('target_profile_id', targetProfile);
+            selectedOnts.forEach(id => fd.append('ont_ids', id));
+            const csrfEl = document.querySelector('input[name=_csrf_token]');
+            if (csrfEl) fd.append(csrfEl.name, csrfEl.value);
+            fetch('/admin/network/olts/{{ olt_id }}/tr069-profiles/rebind', {
+                method: 'POST', body: fd,
+            }).then(r => r.json()).then(data => {
+                rebindLoading = false;
+                document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: data.ok ? 'success' : 'error'}}));
+                if (data.ok) selectedOnts = [];
+            }).catch(() => { rebindLoading = false; });
+        " :disabled="rebindLoading || selectedOnts.length === 0 || !targetProfile"
+           class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-amber-600 hover:to-orange-700 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg x-show="rebindLoading" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+            Rebind Selected (<span x-text="selectedOnts.length">0</span>)
+        </button>
+    </div>
+    {% call data_table() %}
+        <thead>
+            <tr class="bg-slate-50 dark:bg-slate-800/50">
+                <th class="px-3 py-2 text-left">
+                    <input type="checkbox" @change="selectedOnts = $event.target.checked ? {{ tr069_onts | map(attribute='id') | list | tojson }} : []"
+                           class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                </th>
+                <th class="px-6 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Serial Number</th>
+                <th class="px-6 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Board/Port</th>
+                <th class="px-6 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONU Index</th>
+                <th class="px-6 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
+                <th class="px-6 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Status</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+            {% for ont in tr069_onts %}
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                :class="selectedOnts.includes('{{ ont.id }}') ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''">
+                <td class="px-3 py-3 whitespace-nowrap">
+                    <input type="checkbox" value="{{ ont.id }}"
+                           :checked="selectedOnts.includes('{{ ont.id }}')"
+                           @change="$event.target.checked ? selectedOnts.push('{{ ont.id }}') : selectedOnts = selectedOnts.filter(x => x !== '{{ ont.id }}')"
+                           class="rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                </td>
+                <td class="px-6 py-3 whitespace-nowrap text-sm font-mono font-medium text-slate-900 dark:text-white">{{ ont.serial_number }}</td>
+                <td class="px-6 py-3 whitespace-nowrap text-sm font-mono text-slate-600 dark:text-slate-300">{{ ont.board }}/{{ ont.port }}</td>
+                <td class="px-6 py-3 whitespace-nowrap text-sm font-mono tabular-nums text-slate-600 dark:text-slate-300">{{ ont.onu_index }}</td>
+                <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ ont.name or ont.subscriber_name or '&mdash;' }}</td>
+                <td class="px-6 py-3 whitespace-nowrap">
+                    {% if ont.online == 'online' %}
+                    <span class="inline-flex items-center gap-1.5 text-xs font-medium">
+                        <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span class="text-emerald-700 dark:text-emerald-400">Online</span>
+                    </span>
+                    {% elif ont.online == 'offline' %}
+                    <span class="inline-flex items-center gap-1.5 text-xs font-medium">
+                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                        <span class="text-rose-700 dark:text-rose-400">Offline</span>
+                    </span>
+                    {% else %}
+                    <span class="text-xs text-slate-400">Unknown</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    {% endcall %}
+</div>
+{% endif %}
+
+{% endif %}
