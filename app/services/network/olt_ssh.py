@@ -179,7 +179,7 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
         transport.close()
         raise RuntimeError("SSH authentication failed")
     channel = transport.open_session(timeout=20)
-    channel.get_pty()
+    channel.get_pty(width=200)
     channel.invoke_shell()
     _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
     channel.send("screen-length 0 temporary\n")
@@ -1298,31 +1298,34 @@ def create_tr069_server_profile(
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
 
-        # Create the profile and set ACS URL
-        cmd = f'ont tr069-server-profile profile-name "{profile_name}" acs-url "{acs_url}"'
-        output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
+        # Huawei syntax: ont tr069-server-profile add profile-name "X" url "Y"
+        add_cmd = (
+            f'ont tr069-server-profile add profile-name'
+            f' "{profile_name}" url "{acs_url}"'
+        )
+        output = _run_huawei_cmd(channel, add_cmd, prompt=config_prompt)
 
         if "failure" in output.lower() or "error" in output.lower():
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             return False, f"OLT rejected: {output.strip()[-200:]}"
 
-        # Set credentials if provided
+        # Modify profile to set credentials and inform interval
         if username:
             _run_huawei_cmd(
                 channel,
-                f'ont tr069-server-profile profile-name "{profile_name}" acs-username "{username}"',
+                f'ont tr069-server-profile modify profile-name "{profile_name}" acs-username "{username}"',
                 prompt=config_prompt,
             )
         if password:
             _run_huawei_cmd(
                 channel,
-                f'ont tr069-server-profile profile-name "{profile_name}" acs-password "{password}"',
+                f'ont tr069-server-profile modify profile-name "{profile_name}" acs-password "{password}"',
                 prompt=config_prompt,
             )
         if inform_interval and inform_interval > 0:
             _run_huawei_cmd(
                 channel,
-                f'ont tr069-server-profile profile-name "{profile_name}" inform-interval {inform_interval}',
+                f'ont tr069-server-profile modify profile-name "{profile_name}" inform-interval {inform_interval}',
                 prompt=config_prompt,
             )
 
