@@ -192,6 +192,7 @@ def get_dispatcher() -> EventDispatcher:
 
 def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     """Initialize and register all event handlers."""
+    from app.services.events.handlers.crm_sync import CrmSyncHandler
     from app.services.events.handlers.enforcement import EnforcementHandler
     from app.services.events.handlers.integration_hook import IntegrationHookHandler
     from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -205,9 +206,10 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(NotificationHandler())
     dispatcher.register_handler(ProvisioningHandler())
     dispatcher.register_handler(EnforcementHandler())
+    dispatcher.register_handler(CrmSyncHandler())
 
     logger.info(
-        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement"
+        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, crm_sync"
     )
 
 

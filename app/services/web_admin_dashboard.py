@@ -1,7 +1,7 @@
 """Service helpers for admin dashboard routes."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -274,6 +274,33 @@ def dashboard(request: Request, db: Session):
     sidebar_stats = web_admin_service.get_sidebar_stats(db)
     current_user = web_admin_service.get_current_user(request)
 
+    # --- Who's Online (RADIUS active sessions) ---
+    try:
+        from app.models.radius_active_session import RadiusActiveSession
+
+        online_count = (
+            db.query(func.count(RadiusActiveSession.id)).scalar() or 0
+        )
+    except Exception:
+        online_count = 0
+
+    # --- Sync status ---
+    try:
+        from app.models.splynx_mapping import SplynxIdMapping
+
+        last_sync = db.query(func.max(SplynxIdMapping.created_at)).scalar()
+        total_mappings = db.query(func.count(SplynxIdMapping.id)).scalar() or 0
+        sync_status = {
+            "last_sync": last_sync,
+            "total_mappings": total_mappings,
+            "is_healthy": (
+                last_sync is not None
+                and (datetime.now(UTC) - last_sync).total_seconds() < 7200
+            ) if last_sync else False,
+        }
+    except Exception:
+        sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
+
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
         {
@@ -299,6 +326,8 @@ def dashboard(request: Request, db: Session):
             "sidebar_stats": sidebar_stats,
             "server_health": server_health,
             "server_health_status": server_health_status,
+            "online_count": online_count,
+            "sync_status": sync_status,
         },
     )
 

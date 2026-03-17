@@ -1,6 +1,7 @@
 """Tests for TR-069 service."""
 
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -21,14 +22,25 @@ from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.genieacs import GenieACSError
 
 
+def _acs_server_payload(**overrides) -> Tr069AcsServerCreate:
+    data: dict[str, Any] = {
+        "name": "GenieACS",
+        "cwmp_url": "https://acs.example.com/cwmp",
+        "cwmp_username": "acs-user",
+        "cwmp_password": "acs-pass",
+        "connection_request_username": "cr-user",
+        "connection_request_password": "cr-pass",
+        "base_url": "https://acs.example.com",
+    }
+    data.update(overrides)
+    return Tr069AcsServerCreate.model_validate(data)
+
+
 def test_create_acs_server(db_session):
     """Test creating an ACS server."""
     server = tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(
-            name="GenieACS",
-            base_url="https://acs.example.com",
-        ),
+        _acs_server_payload(),
     )
     assert server.name == "GenieACS"
     assert server.base_url == "https://acs.example.com"
@@ -38,7 +50,11 @@ def test_update_acs_server(db_session):
     """Test updating an ACS server."""
     server = tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(name="Original ACS", base_url="https://old.acs.com"),
+        _acs_server_payload(
+            name="Original ACS",
+            cwmp_url="https://old.acs.com/cwmp",
+            base_url="https://old.acs.com",
+        ),
     )
     updated = tr069_service.acs_servers.update(
         db_session,
@@ -53,11 +69,19 @@ def test_list_acs_servers(db_session):
     """Test listing ACS servers."""
     tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(name="ACS 1", base_url="https://acs1.com"),
+        _acs_server_payload(
+            name="ACS 1",
+            cwmp_url="https://acs1.com/cwmp",
+            base_url="https://acs1.com",
+        ),
     )
     tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(name="ACS 2", base_url="https://acs2.com"),
+        _acs_server_payload(
+            name="ACS 2",
+            cwmp_url="https://acs2.com/cwmp",
+            base_url="https://acs2.com",
+        ),
     )
 
     servers = tr069_service.acs_servers.list(
@@ -324,8 +348,9 @@ def test_get_acs_server(db_session):
     """Test getting an ACS server by ID."""
     server = tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(
+        _acs_server_payload(
             name="Get Test ACS",
+            cwmp_url="https://get.test.local/cwmp",
             base_url="https://get.test.local",
         ),
     )
@@ -339,8 +364,9 @@ def test_delete_acs_server(db_session):
     """Test soft deleting an ACS server."""
     server = tr069_service.acs_servers.create(
         db_session,
-        Tr069AcsServerCreate(
+        _acs_server_payload(
             name="To Delete ACS",
+            cwmp_url="https://delete.acs.local/cwmp",
             base_url="https://delete.acs.local",
         ),
     )

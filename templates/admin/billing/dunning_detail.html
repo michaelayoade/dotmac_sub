@@ -155,7 +155,7 @@
                     <div>
                         <a href="/admin/billing/accounts/{{ account.id }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
                             {% if account.subscriber and account.subscriber.person %}
-                                {{ account.subscriber.person.display_name or account.subscriber.person.first_name }}
+                                {{ account.display_name or account.first_name }}
                             {% else %}
                                 {{ account.account_number or (account.id | string | truncate(12, True, '')) }}
                             {% endif %}
@@ -178,11 +178,11 @@
                     </div>
                     {% if account.subscriber and account.subscriber.person %}
                     <div class="pt-2 border-t border-slate-200 dark:border-slate-700">
-                        {% if account.subscriber.person.email %}
-                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.subscriber.person.email }}</p>
+                        {% if account.email %}
+                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.email }}</p>
                         {% endif %}
-                        {% if account.subscriber.person.phone %}
-                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.subscriber.person.phone }}</p>
+                        {% if account.phone %}
+                        <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.phone }}</p>
                         {% endif %}
                     </div>
                     {% endif %}

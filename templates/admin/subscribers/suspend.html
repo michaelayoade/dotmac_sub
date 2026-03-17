@@ -11,7 +11,7 @@
                 <a href="/admin/subscribers" class="hover:text-primary-600">Subscribers</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <a href="/admin/subscribers/{{ subscriber.id }}" class="hover:text-primary-600">
-                    {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
+                    {% if subscriber.person %}{{ subscriber.first_name }} {{ subscriber.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
                 </a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">Suspend Service</span>
@@ -114,14 +114,14 @@
                             {% if subscriber.is_active %}bg-gradient-to-br from-primary-500 to-primary-600 text-white
                             {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
                             {% if subscriber.person %}
-                                {{ subscriber.person.first_name[0] }}{{ subscriber.person.last_name[0] if subscriber.person.last_name else '' }}
+                                {{ subscriber.first_name[0] }}{{ subscriber.last_name[0] if subscriber.last_name else '' }}
                             {% else %}
                                 {{ subscriber.organization.name[0:2] | upper }}
                             {% endif %}
                         </div>
                         <div>
                             <p class="font-medium text-slate-900 dark:text-white">
-                                {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
+                                {% if subscriber.person %}{{ subscriber.first_name }} {{ subscriber.last_name }}{% else %}{{ subscriber.organization.name }}{% endif %}
                             </p>
                             <p class="text-sm text-slate-500 dark:text-slate-400">{{ subscriber.subscriber_type | title }}</p>
                         </div>

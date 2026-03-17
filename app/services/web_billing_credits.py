@@ -15,10 +15,10 @@ def build_credits_list_data(
     db,
     *,
     page: int,
+    per_page: int = 50,
     status: str | None,
     customer_ref: str | None,
 ) -> dict[str, object]:
-    per_page = 50
     offset = (page - 1) * per_page
 
     account_ids = []

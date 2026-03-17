@@ -302,8 +302,42 @@ class CpeDevices(ListResponseMixin):
                 created += 1
 
         db.commit()
-        logger.info(f"GenieACS sync: created={created}, updated={updated}")
-        return {"created": created, "updated": updated, "total": len(devices)}
+
+        # Auto-link to ONTs by serial number
+        auto_linked = 0
+        try:
+            from app.models.network import OntUnit
+
+            unlinked_devices = (
+                db.query(Tr069CpeDevice)
+                .filter(
+                    Tr069CpeDevice.acs_server_id == acs_server_id,
+                    Tr069CpeDevice.is_active.is_(True),
+                )
+                .all()
+            )
+            for cpe_dev in unlinked_devices:
+                if not cpe_dev.serial_number:
+                    continue
+                # Link ONT's tr069_acs_server_id if it doesn't have one
+                ont = (
+                    db.query(OntUnit)
+                    .filter(OntUnit.serial_number == cpe_dev.serial_number)
+                    .filter(OntUnit.is_active.is_(True))
+                    .first()
+                )
+                if ont and not ont.tr069_acs_server_id:
+                    ont.tr069_acs_server_id = server.id
+                    auto_linked += 1
+            if auto_linked:
+                db.commit()
+                logger.info("Auto-linked %d ONTs to ACS server %s", auto_linked, server.name)
+        except Exception as e:
+            logger.warning("Auto-link ONTs after sync failed: %s", e)
+            db.rollback()
+
+        logger.info("GenieACS sync: created=%d, updated=%d, auto_linked=%d", created, updated, auto_linked)
+        return {"created": created, "updated": updated, "total": len(devices), "auto_linked": auto_linked}
 
 
 class Sessions(ListResponseMixin):
@@ -575,6 +609,82 @@ class Jobs(ListResponseMixin):
         db.commit()
         db.refresh(job)
         return job
+
+
+def receive_inform(
+    db: Session,
+    *,
+    serial_number: str | None,
+    device_id_raw: str | None,
+    event: str,
+) -> dict:
+    """Process a GenieACS inform webhook callback.
+
+    Looks up the CPE device by serial number, updates its last_inform_at
+    timestamp, and creates a session record.
+    """
+    from app.models.tr069 import Tr069Event
+
+    serial = (serial_number or "").strip()
+    device_id_str = (device_id_raw or "").strip()
+    event_str = (event or "periodic").strip().lower()
+
+    if not serial and device_id_str:
+        parts = device_id_str.split("-", 2)
+        if len(parts) == 3:
+            serial = parts[2]
+
+    if not serial:
+        return {"status": "ignored", "reason": "no serial number"}
+
+    from sqlalchemy import select
+
+    device = db.scalars(
+        select(Tr069CpeDevice)
+        .where(
+            Tr069CpeDevice.serial_number == serial,
+            Tr069CpeDevice.is_active.is_(True),
+        )
+        .limit(1)
+    ).first()
+
+    if not device:
+        logger.debug("Inform received for unknown serial: %s", serial)
+        return {"status": "ignored", "reason": "unknown device"}
+
+    now = datetime.now(UTC)
+    device.last_inform_at = now
+
+    event_map = {
+        "boot": Tr069Event.boot,
+        "bootstrap": Tr069Event.bootstrap,
+        "periodic": Tr069Event.periodic,
+        "value_change": Tr069Event.value_change,
+        "connection_request": Tr069Event.connection_request,
+        "transfer_complete": Tr069Event.transfer_complete,
+        "diagnostics_complete": Tr069Event.diagnostics_complete,
+    }
+    event_type = event_map.get(event_str, Tr069Event.periodic)
+
+    session = Tr069Session(
+        device_id=device.id,
+        event_type=event_type,
+        started_at=now,
+        ended_at=now,
+        inform_payload={
+            "serial_number": serial_number,
+            "device_id": device_id_raw,
+            "event": event,
+        },
+    )
+    db.add(session)
+    db.commit()
+
+    logger.info(
+        "Inform received: serial=%s event=%s device_id=%s",
+        serial, event_str, device.id,
+    )
+    return {"status": "ok", "device_id": str(device.id), "event": event_str}
 
 
 acs_servers = AcsServers()

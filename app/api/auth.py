@@ -20,6 +20,7 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
@@ -29,6 +30,7 @@ router = APIRouter()
     response_model=UserCredentialRead,
     status_code=status.HTTP_201_CREATED,
     tags=["user-credentials"],
+    dependencies=[Depends(require_permission("auth:credential:write"))],
 )
 def create_user_credential(payload: UserCredentialCreate, db: Session = Depends(get_db)):
     return auth_service.user_credentials.create(db, payload)
@@ -38,6 +40,7 @@ def create_user_credential(payload: UserCredentialCreate, db: Session = Depends(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
     tags=["user-credentials"],
+    dependencies=[Depends(require_permission("auth:credential:read"))],
 )
 def get_user_credential(credential_id: str, db: Session = Depends(get_db)):
     return auth_service.user_credentials.get(db, credential_id)
@@ -47,6 +50,7 @@ def get_user_credential(credential_id: str, db: Session = Depends(get_db)):
     "/user-credentials",
     response_model=ListResponse[UserCredentialRead],
     tags=["user-credentials"],
+    dependencies=[Depends(require_permission("auth:credential:read"))],
 )
 def list_user_credentials(
     subscriber_id: str | None = None,
@@ -67,6 +71,7 @@ def list_user_credentials(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
     tags=["user-credentials"],
+    dependencies=[Depends(require_permission("auth:credential:write"))],
 )
 def update_user_credential(
     credential_id: str, payload: UserCredentialUpdate, db: Session = Depends(get_db)
@@ -78,6 +83,7 @@ def update_user_credential(
     "/user-credentials/{credential_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["user-credentials"],
+    dependencies=[Depends(require_permission("auth:credential:write"))],
 )
 def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
     auth_service.user_credentials.delete(db, credential_id)

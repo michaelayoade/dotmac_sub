@@ -5,6 +5,10 @@ Revises: t1u2v3w4x5y6
 Create Date: 2026-02-25 14:00:00.000000
 """
 
+from __future__ import annotations
+
+from typing import Any, TypeAlias
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -103,7 +107,7 @@ def upgrade() -> None:
     inspector = sa.inspect(conn)
     existing_cols = {c["name"] for c in inspector.get_columns("ont_units")}
 
-    new_columns = [
+    new_columns: list[ColumnSpec] = [
         ("onu_type_id", sa.dialects.postgresql.UUID(as_uuid=True), {"nullable": True}),
         ("olt_device_id", sa.dialects.postgresql.UUID(as_uuid=True), {"nullable": True}),
         ("pon_type", postgresql.ENUM("gpon", "epon", name="pontype", create_type=False), {"nullable": True}),
@@ -200,3 +204,4 @@ def downgrade() -> None:
         "configmethod", "wanmode", "onumode", "onucapability", "gponchannel", "pontype",
     ]:
         postgresql.ENUM(name=enum_name).drop(op.get_bind(), checkfirst=True)
+ColumnSpec: TypeAlias = tuple[str, Any, dict[str, Any]]

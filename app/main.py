@@ -1,5 +1,6 @@
 import logging
 import secrets
+from contextlib import asynccontextmanager
 from threading import Lock
 from time import monotonic
 
@@ -46,6 +47,7 @@ from app.api.settings import router as settings_router
 from app.api.subscribers import router as subscriber_router
 from app.api.support import router as support_router
 from app.api.tables import router as tables_router
+from app.api.tr069_inform import router as tr069_inform_router
 from app.api.validation import router as validation_router
 from app.api.webhooks import router as webhooks_router
 from app.api.wireguard import public_router as wireguard_public_router
@@ -96,13 +98,64 @@ from app.web_domains import router as web_domains_router
 from app.web_home import router as web_home_router
 from app.websocket.router import router as ws_router
 
-app = FastAPI(title="dotmac_sm API")
 logger = logging.getLogger(__name__)
 
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
+
+
+def _seed_startup_settings() -> None:
+    try:
+        ensure_storage_bucket()
+    except Exception:
+        logger.exception("Failed to ensure storage bucket during startup")
+    db = SessionLocal()
+    try:
+        seed_auth_settings(db)
+        seed_auth_policy_settings(db)
+        seed_audit_settings(db)
+        seed_billing_settings(db)
+        seed_catalog_settings(db)
+        seed_imports_settings(db)
+        seed_gis_settings(db)
+        seed_usage_settings(db)
+        seed_usage_policy_settings(db)
+        seed_notification_settings(db)
+        seed_collections_settings(db)
+        seed_collections_policy_settings(db)
+        seed_geocoding_settings(db)
+        seed_radius_settings(db)
+        seed_radius_policy_settings(db)
+        seed_scheduler_settings(db)
+        seed_subscriber_settings(db)
+        seed_provisioning_settings(db)
+        seed_tr069_settings(db)
+        seed_network_policy_settings(db)
+        seed_network_settings(db)
+        seed_network_monitoring_settings(db)
+        seed_lifecycle_settings(db)
+        seed_comms_settings(db)
+        seed_wireguard_settings(db)
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _seed_startup_settings()
+    from app.websocket.manager import get_connection_manager
+
+    manager = get_connection_manager()
+    await manager.connect()
+    try:
+        yield
+    finally:
+        await manager.disconnect()
+
+
+app = FastAPI(title="dotmac_sm API", lifespan=lifespan)
 configure_logging()
 setup_otel(app)
 app.add_middleware(ObservabilityMiddleware)
@@ -411,6 +464,8 @@ _include_api_router(validation_router, dependencies=[Depends(require_user_auth)]
 _include_api_router(defaults_router, dependencies=[Depends(require_user_auth)])
 # WireGuard provisioning public endpoints - no auth required (token-based)
 _include_api_router(wireguard_public_router)
+# TR-069 inform callback - no auth required (called by GenieACS)
+_include_api_router(tr069_inform_router)
 app.include_router(web_home_router)
 app.include_router(web_domains_router)
 app.include_router(web_router)
@@ -430,53 +485,3 @@ def metrics():
     data = generate_latest()
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
-
-@app.on_event("startup")
-def _start_jobs():
-    try:
-        ensure_storage_bucket()
-    except Exception:
-        logger.exception("Failed to ensure storage bucket during startup")
-    db = SessionLocal()
-    try:
-        seed_auth_settings(db)
-        seed_auth_policy_settings(db)
-        seed_audit_settings(db)
-        seed_billing_settings(db)
-        seed_catalog_settings(db)
-        seed_imports_settings(db)
-        seed_gis_settings(db)
-        seed_usage_settings(db)
-        seed_usage_policy_settings(db)
-        seed_notification_settings(db)
-        seed_collections_settings(db)
-        seed_collections_policy_settings(db)
-        seed_geocoding_settings(db)
-        seed_radius_settings(db)
-        seed_radius_policy_settings(db)
-        seed_scheduler_settings(db)
-        seed_subscriber_settings(db)
-        seed_provisioning_settings(db)
-        seed_tr069_settings(db)
-        seed_network_policy_settings(db)
-        seed_network_settings(db)
-        seed_network_monitoring_settings(db)
-        seed_lifecycle_settings(db)
-        seed_comms_settings(db)
-        seed_wireguard_settings(db)
-    finally:
-        db.close()
-
-
-@app.on_event("startup")
-async def _start_websocket_manager():
-    from app.websocket.manager import get_connection_manager
-    manager = get_connection_manager()
-    await manager.connect()
-
-
-@app.on_event("shutdown")
-async def _stop_websocket_manager():
-    from app.websocket.manager import get_connection_manager
-    manager = get_connection_manager()
-    await manager.disconnect()

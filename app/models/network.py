@@ -35,6 +35,7 @@ class DeviceType(enum.Enum):
 class DeviceStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
+    maintenance = "maintenance"
     retired = "retired"
 
 
@@ -340,6 +341,9 @@ class Vlan(Base):
         nullable=True,
     )
     dhcp_snooping: Mapped[bool] = mapped_column(Boolean, default=False)
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL"), index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -351,6 +355,7 @@ class Vlan(Base):
 
     port_links = relationship("PortVlan", back_populates="vlan")
     region = relationship("RegionZone")
+    olt_device = relationship("OLTDevice", back_populates="vlans")
 
 
 class PortVlan(Base):
@@ -458,6 +463,9 @@ class IpPool(Base):
     dns_primary: Mapped[str | None] = mapped_column(String(64))
     dns_secondary: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL"), index=True
+    )
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -470,6 +478,7 @@ class IpPool(Base):
     blocks = relationship("IpBlock", back_populates="pool")
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
+    olt_device = relationship("OLTDevice", back_populates="ip_pools")
 
 
 class IpBlock(Base):
@@ -572,15 +581,27 @@ class OLTDevice(Base):
     vendor: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     serial_number: Mapped[str | None] = mapped_column(String(120))
+    firmware_version: Mapped[str | None] = mapped_column(String(120))
+    software_version: Mapped[str | None] = mapped_column(String(120))
     ssh_username: Mapped[str | None] = mapped_column(String(120))
     ssh_password: Mapped[str | None] = mapped_column(String(255))
     ssh_port: Mapped[int | None] = mapped_column(Integer, default=22)
+    snmp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    snmp_port: Mapped[int | None] = mapped_column(Integer, default=161)
+    snmp_version: Mapped[str | None] = mapped_column(String(10), default="v2c")
+    snmp_ro_community: Mapped[str | None] = mapped_column(String(255))
+    snmp_rw_community: Mapped[str | None] = mapped_column(String(255))
     netconf_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     netconf_port: Mapped[int | None] = mapped_column(Integer, default=830)
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
+    supported_pon_types: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[DeviceStatus] = mapped_column(
+        Enum(DeviceStatus, name="devicestatus", create_constraint=False),
+        default=DeviceStatus.active,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -595,6 +616,8 @@ class OLTDevice(Base):
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
     tr069_acs_server = relationship("Tr069AcsServer")
+    vlans = relationship("Vlan", back_populates="olt_device")
+    ip_pools = relationship("IpPool", back_populates="olt_device")
 
 
 class OltConfigBackupType(enum.Enum):
@@ -620,6 +643,7 @@ class OltConfigBackup(Base):
     )
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     file_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -1812,3 +1836,63 @@ class Tr069ParameterMap(Base):
 
     # Relationships
     capability = relationship("VendorModelCapability", back_populates="parameter_maps")
+
+
+class OltFirmwareImage(Base):
+    """Catalog of available OLT firmware images for SSH-based upgrades."""
+
+    __tablename__ = "olt_firmware_images"
+    __table_args__ = (
+        UniqueConstraint("vendor", "model", "version", name="uq_olt_firmware_vendor_model_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vendor: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(120))
+    version: Mapped[str] = mapped_column(String(120), nullable=False)
+    file_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    checksum: Mapped[str | None] = mapped_column(String(128))
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    release_notes: Mapped[str | None] = mapped_column(Text)
+    upgrade_method: Mapped[str | None] = mapped_column(String(60))  # sftp, tftp, ftp
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+
+class OntFirmwareImage(Base):
+    """Catalog of available ONT firmware images for TR-069 upgrades."""
+
+    __tablename__ = "ont_firmware_images"
+    __table_args__ = (
+        UniqueConstraint("vendor", "model", "version", name="uq_ont_firmware_vendor_model_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vendor: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(120))
+    version: Mapped[str] = mapped_column(String(120), nullable=False)
+    file_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    checksum: Mapped[str | None] = mapped_column(String(128))
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )

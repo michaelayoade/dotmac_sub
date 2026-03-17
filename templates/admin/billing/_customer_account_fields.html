@@ -29,7 +29,7 @@
 </div>
 
 <div hx-get="/admin/billing/customer-accounts"
-     hx-trigger="load, change from:input[name='customer_ref']"
+     hx-trigger="change from:input[name='customer_ref']"
      hx-include="closest form"
      hx-target="#customer-account-select"
      hx-swap="outerHTML">

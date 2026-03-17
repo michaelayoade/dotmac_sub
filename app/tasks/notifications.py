@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
@@ -12,6 +13,8 @@ from app.models.notification import (
 from app.services import email as email_service
 from app.services import sms as sms_service
 from app.services.integrations.connectors import whatsapp as whatsapp_service
+
+logger = logging.getLogger(__name__)
 
 # Timeout for stuck "sending" notifications (5 minutes)
 SENDING_TIMEOUT_MINUTES = 5

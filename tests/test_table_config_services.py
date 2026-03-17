@@ -172,8 +172,17 @@ def test_user_configuration_is_isolated_per_user(db_session):
     columns_a = TableConfigurationService.get_columns(db_session, user_a.id, "subscribers")
     columns_b = TableConfigurationService.get_columns(db_session, user_b.id, "subscribers")
 
+    subscriber_name_a = next(
+        column for column in columns_a if column.column_key == "subscriber_name"
+    )
+    subscriber_name_b = next(
+        column for column in columns_b if column.column_key == "subscriber_name"
+    )
     email_a = next(column for column in columns_a if column.column_key == "email")
     email_b = next(column for column in columns_b if column.column_key == "email")
 
+    assert subscriber_name_a.display_order == 0
+    assert subscriber_name_b.display_order != 0
     assert email_a.is_visible is False
-    assert email_b.is_visible is not False
+    assert email_a.display_order == 1
+    assert email_b.display_order != 1

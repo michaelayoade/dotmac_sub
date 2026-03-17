@@ -447,6 +447,28 @@ class CatalogOffer(Base):
     versions = relationship("OfferVersion", back_populates="offer")
     default_ont_profile = relationship("OntProvisioningProfile")
 
+    # Availability controls (Splynx tariffs_*_to_* junction tables)
+    reseller_availability = relationship(
+        "OfferResellerAvailability",
+        back_populates="offer",
+        cascade="all, delete-orphan",
+    )
+    location_availability = relationship(
+        "OfferLocationAvailability",
+        back_populates="offer",
+        cascade="all, delete-orphan",
+    )
+    category_availability = relationship(
+        "OfferCategoryAvailability",
+        back_populates="offer",
+        cascade="all, delete-orphan",
+    )
+    billing_mode_availability = relationship(
+        "OfferBillingModeAvailability",
+        back_populates="offer",
+        cascade="all, delete-orphan",
+    )
+
 
 class OfferVersion(Base):
     __tablename__ = "offer_versions"
@@ -665,6 +687,13 @@ class Subscription(Base):
     discount_type: Mapped[DiscountType | None] = mapped_column(
         Enum(DiscountType, values_callable=lambda x: [e.value for e in x]),
     )
+    discount_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    discount_end_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    discount_description: Mapped[str | None] = mapped_column(String(512), nullable=True)
     service_status_raw: Mapped[str | None] = mapped_column(String(40))
     login: Mapped[str | None] = mapped_column(String(120))
     ipv4_address: Mapped[str | None] = mapped_column(String(64))

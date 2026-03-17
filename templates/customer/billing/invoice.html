@@ -5,6 +5,14 @@
 {% block content %}
 {% set status = invoice.status | default('pending') %}
 {% set status_val = status.value if status is not string else status %}
+{% if request.query_params.get('pdf_notice') == 'generating' %}
+<div class="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+    <div class="flex items-center gap-2">
+        <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        Your PDF is being generated. Please refresh the page in a moment to download it.
+    </div>
+</div>
+{% endif %}
 <div class="space-y-6 stagger-children">
     <!-- Header with Breadcrumb -->
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

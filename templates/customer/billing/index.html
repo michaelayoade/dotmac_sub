@@ -6,11 +6,16 @@
 {% set stats = namespace(total=0, overdue=0, unpaid=0) %}
 {% for invoice in invoices %}
     {% set amount = invoice.total_amount or invoice.total or 0 %}
-    {% set status = invoice.status | default('pending') %}
-    {% set status_val = status.value if status is not string else status %}
+    {% set bal_due = invoice.balance_due if invoice.balance_due is defined and invoice.balance_due is not none else amount %}
+    {% set inv_status = invoice.status | default('pending') %}
+    {% set status_val = inv_status.value if inv_status is not string else inv_status %}
     {% set stats.total = stats.total + amount %}
-    {% if status_val in ['overdue'] %}{% set stats.overdue = stats.overdue + amount %}{% endif %}
-    {% if status_val not in ['paid', 'voided', 'cancelled'] %}{% set stats.unpaid = stats.unpaid + amount %}{% endif %}
+    {# Use balance_due for outstanding (reflects partial payments) #}
+    {% if status_val not in ['paid', 'voided', 'cancelled', 'void'] %}{% set stats.unpaid = stats.unpaid + (bal_due | float) %}{% endif %}
+    {# Overdue: explicit overdue status OR any unpaid invoice past due date #}
+    {% if status_val == 'overdue' or (status_val in ['issued', 'partially_paid'] and invoice.due_at and now and invoice.due_at < now) %}
+        {% set stats.overdue = stats.overdue + (bal_due | float) %}
+    {% endif %}
 {% endfor %}
 
 <div class="space-y-8">
@@ -236,23 +241,35 @@
             <p class="text-sm text-stone-500 dark:text-stone-400">
                 Page <span class="font-semibold text-stone-700 dark:text-stone-300">{{ page }}</span> of <span class="font-semibold text-stone-700 dark:text-stone-300">{{ total_pages }}</span>
             </p>
-            <div class="flex items-center gap-2">
-                {% if page > 1 %}
-                <a href="/portal/billing?page={{ page - 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                    </svg>
-                    Previous
-                </a>
-                {% endif %}
-                {% if page < total_pages %}
-                <a href="/portal/billing?page={{ page + 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                    Next
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                    </svg>
-                </a>
-                {% endif %}
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+                    <span>Show</span>
+                    <select onchange="window.location.href='/portal/billing?page=1&per_page=' + this.value + '{{ status_param }}'"
+                            class="rounded-lg border-0 bg-stone-100 py-1 pl-2 pr-7 text-sm text-stone-700 focus:ring-2 focus:ring-[var(--color-brand-500)] dark:bg-stone-700 dark:text-stone-300">
+                        {% for size in [10, 25, 50, 100] %}
+                        <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+                        {% endfor %}
+                    </select>
+                    <span>rows</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    {% if page > 1 %}
+                    <a href="/portal/billing?page={{ page - 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                        Previous
+                    </a>
+                    {% endif %}
+                    {% if page < total_pages %}
+                    <a href="/portal/billing?page={{ page + 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                        Next
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                    {% endif %}
+                </div>
             </div>
         </div>
         {% endif %}

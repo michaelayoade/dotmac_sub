@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.services import web_system_export_tool as export_service
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.exports.run_scheduled_export")

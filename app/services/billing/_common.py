@@ -34,7 +34,7 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.subscriber import Subscriber
-from app.services.common import get_by_id, round_money
+from app.services.common import get_by_id, round_money, to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def get_account_credit_balance(db: Session, account_id: str) -> Decimal:
         .scalar()
     ) or Decimal("0.00")
 
-    return round_money(Decimal(str(credit_total)) - Decimal(str(debit_total)))
+    return round_money(to_decimal(credit_total) - to_decimal(debit_total))
 
 def _validate_invoice_totals(data: dict):
     """Validate invoice monetary totals are consistent."""
@@ -171,9 +171,9 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
             .scalar()
         )
         if total_lines == 0:
-            subtotal = round_money(Decimal(str(invoice.subtotal or Decimal("0.00"))))
-            tax_total = round_money(Decimal(str(invoice.tax_total or Decimal("0.00"))))
-            total = round_money(Decimal(str(invoice.total or subtotal + tax_total)))
+            subtotal = round_money(to_decimal(invoice.subtotal))
+            tax_total = round_money(to_decimal(invoice.tax_total))
+            total = round_money(to_decimal(invoice.total, default=subtotal + tax_total))
             invoice.subtotal = subtotal
             invoice.tax_total = tax_total
             invoice.total = total
@@ -196,7 +196,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
             if line.tax_rate_id:
                 rate = tax_rates_map.get(line.tax_rate_id)
                 if rate:
-                    rate_percent = Decimal(str(rate.rate))
+                    rate_percent = to_decimal(rate.rate)
                     if line.tax_application == TaxApplication.inclusive:
                         # Legacy billing semantics: keep gross amount in
                         # subtotal and additionally track extracted tax.
@@ -230,17 +230,18 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
         .join(Payment, Payment.id == PaymentAllocation.payment_id)
         .filter(PaymentAllocation.invoice_id == invoice.id)
+        .filter(PaymentAllocation.is_active.is_(True))
         .filter(Payment.is_active.is_(True))
         .filter(Payment.status == PaymentStatus.succeeded)
         .scalar()
     )
-    paid_amount = round_money(Decimal(str(paid_amount)))
+    paid_amount = round_money(to_decimal(paid_amount))
     credit_amount = (
         db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
         .filter(CreditNoteApplication.invoice_id == invoice.id)
         .scalar()
     )
-    credit_amount = round_money(Decimal(str(credit_amount)))
+    credit_amount = round_money(to_decimal(credit_amount))
     invoice.balance_due = max(Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount))
     if invoice.balance_due <= 0:
         invoice.status = InvoiceStatus.paid
@@ -369,7 +370,7 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
             if line.tax_rate_id:
                 rate = tax_rates_map.get(line.tax_rate_id)
                 if rate:
-                    rate_percent = Decimal(str(rate.rate))
+                    rate_percent = to_decimal(rate.rate)
                     if line.tax_application == TaxApplication.inclusive:
                         # Inclusive: amount already contains tax — extract it
                         tax_amount = round_money(
@@ -398,15 +399,15 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
         credit_note.tax_total = tax_total
         credit_note.total = round_money(subtotal + tax_total)
     else:
-        credit_note.subtotal = round_money(Decimal(str(credit_note.subtotal)))
-        credit_note.tax_total = round_money(Decimal(str(credit_note.tax_total)))
-        credit_note.total = round_money(Decimal(str(credit_note.total)))
+        credit_note.subtotal = round_money(to_decimal(credit_note.subtotal))
+        credit_note.tax_total = round_money(to_decimal(credit_note.tax_total))
+        credit_note.total = round_money(to_decimal(credit_note.total))
     applied_total = (
         db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
         .filter(CreditNoteApplication.credit_note_id == credit_note.id)
         .scalar()
     )
-    applied_total = round_money(Decimal(str(applied_total)))
+    applied_total = round_money(to_decimal(applied_total))
     credit_note.applied_total = applied_total
     if applied_total > credit_note.total:
         raise HTTPException(status_code=400, detail="Applied total exceeds credit note total")

@@ -110,7 +110,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         offer = subscription.offer
         speed = "N/A"
         if offer and (offer.speed_download_mbps or offer.speed_upload_mbps):
-            speed = f"{offer.speed_download_mbps or '-'}/{offer.speed_upload_mbps or '-'} Kbps"
+            speed = f"{offer.speed_download_mbps or '-'}/{offer.speed_upload_mbps or '-'} Mbps"
         address = _format_address(subscription.service_address)
         recurring_prices = []
         if offer:

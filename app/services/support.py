@@ -219,6 +219,8 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
+        db.commit()
+        db.refresh(comment)
         return comment
 
     @staticmethod
@@ -237,6 +239,7 @@ class TicketComments:
             actor_id=actor_id,
             metadata={"comment_id": str(comment.id)},
         )
+        db.commit()
 
 
 class TicketSlaEvents:
@@ -270,6 +273,8 @@ class TicketSlaEvents:
             metadata_=payload.metadata_,
         )
         db.add(event)
+        db.commit()
+        db.refresh(event)
         return event
 
     @staticmethod
@@ -280,6 +285,8 @@ class TicketSlaEvents:
         _ensure_not_merged_source(ticket)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(event, key, value)
+        db.commit()
+        db.refresh(event)
         return event
 
     @staticmethod
@@ -289,6 +296,7 @@ class TicketSlaEvents:
             raise HTTPException(status_code=404, detail="Ticket not found")
         _ensure_not_merged_source(ticket)
         db.delete(event)
+        db.commit()
 
 
 class Tickets:
@@ -919,6 +927,27 @@ class Tickets:
         db.commit()
         db.refresh(link)
         return link
+
+    @staticmethod
+    def list_links(
+        db: Session,
+        ticket_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[TicketLink]:
+        ticket = Tickets.get(db, ticket_id)
+        return (
+            db.query(TicketLink)
+            .filter(
+                or_(
+                    TicketLink.from_ticket_id == ticket.id,
+                    TicketLink.to_ticket_id == ticket.id,
+                )
+            )
+            .order_by(TicketLink.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
     @staticmethod
     def merge(

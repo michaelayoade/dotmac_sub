@@ -17,6 +17,7 @@ from sqlalchemy import delete, func
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.services.metrics_store import get_metrics_store
 from app.services.settings_spec import resolve_value
@@ -158,17 +159,37 @@ def process_bandwidth_stream():
             except Exception as e:
                 logger.error("Failed to parse sample %s: %s", msg_id, e)
 
-        # Bulk insert samples
+        # Bulk insert samples — filter out orphaned subscription IDs first
+        # to prevent a single bad FK from failing the entire batch.
+        inserted = 0
         if samples:
-            db.bulk_save_objects(samples)
-            db.commit()
+            from sqlalchemy import select
 
-        # Acknowledge processed messages
+            valid_ids = set(
+                db.scalars(
+                    select(Subscription.id).where(
+                        Subscription.id.in_({s.subscription_id for s in samples})
+                    )
+                ).all()
+            )
+            valid_samples = [s for s in samples if s.subscription_id in valid_ids]
+            skipped = len(samples) - len(valid_samples)
+            if skipped:
+                logger.warning(
+                    "Skipped %d bandwidth samples with orphaned subscription_ids",
+                    skipped,
+                )
+            if valid_samples:
+                db.bulk_save_objects(valid_samples)
+                db.commit()
+                inserted = len(valid_samples)
+
+        # Acknowledge processed messages (including skipped ones — they can't be retried)
         if message_ids:
             r.xack(REDIS_STREAM, group_name, *message_ids)
 
-        logger.info("Processed %s bandwidth samples", len(samples))
-        return {"processed": len(samples)}
+        logger.info("Processed %s bandwidth samples (%s total messages)", inserted, len(message_ids))
+        return {"processed": inserted}
 
     except Exception as e:
         logger.error("Error processing bandwidth stream: %s", e)

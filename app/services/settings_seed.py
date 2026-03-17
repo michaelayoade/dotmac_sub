@@ -624,6 +624,39 @@ def seed_radius_settings(db: Session) -> None:
         value_text=refresh_raw,
         value_json=refresh_raw.lower() in {"1", "true", "yes", "on"},
     )
+    # PPPoE auto-generation settings (disabled by default for dual-run)
+    pppoe_enabled_raw = os.getenv("PPPOE_AUTO_GENERATE_ENABLED", "false")
+    radius_settings.ensure_by_key(
+        db,
+        key="pppoe_auto_generate_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=pppoe_enabled_raw,
+        value_json=pppoe_enabled_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="pppoe_username_prefix",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PPPOE_USERNAME_PREFIX", "1000"),
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="pppoe_username_padding",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PPPOE_USERNAME_PADDING", "5"),
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="pppoe_username_start",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PPPOE_USERNAME_START", "1"),
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="pppoe_default_password_length",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PPPOE_DEFAULT_PASSWORD_LENGTH", "12"),
+    )
 
 
 def seed_billing_settings(db: Session) -> None:

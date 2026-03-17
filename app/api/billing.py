@@ -940,6 +940,12 @@ def list_payment_events(
     tags=["payment-events"],
 )
 async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle Paystack payment webhook.
+
+    Uses ``async def`` (exception to the sync-handler rule) because
+    ``await request.body()`` is required to read the raw payload for
+    HMAC signature verification before any JSON parsing occurs.
+    """
     body = await request.body()
     signature = request.headers.get("X-Paystack-Signature", "")
     return api_billing_webhooks_service.process_paystack_webhook(
@@ -954,6 +960,12 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     tags=["payment-events"],
 )
 async def flutterwave_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle Flutterwave payment webhook.
+
+    Uses ``async def`` (exception to the sync-handler rule) because
+    ``await request.body()`` is required to read the raw payload for
+    hash signature verification before any JSON parsing occurs.
+    """
     body = await request.body()
     signature = request.headers.get("verif-hash", "")
     return api_billing_webhooks_service.process_flutterwave_webhook(

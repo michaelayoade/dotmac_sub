@@ -48,6 +48,7 @@ from app.services.audit_helpers import (
 )
 from app.services.auth_dependencies import require_permission
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
+from app.validators.forms import parse_datetime
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -67,15 +68,6 @@ def _ctx(request: Request, db: Session, active_page: str = "provisioning") -> di
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
 
 
 def _subscriber_label(subscriber: object) -> str:
@@ -803,8 +795,8 @@ def add_appointment(
     notes: str | None = Form(default=None),
     is_self_install: bool = Form(default=False),
 ) -> RedirectResponse:
-    start = _parse_datetime(scheduled_start)
-    end = _parse_datetime(scheduled_end)
+    start = parse_datetime(scheduled_start)
+    end = parse_datetime(scheduled_end)
     if not start or not end:
         return RedirectResponse(
             url=f"/admin/provisioning/orders/{order_id}", status_code=303

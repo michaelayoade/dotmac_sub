@@ -9,7 +9,7 @@
 
 {% block content %}
 <div class="space-y-6"
-     x-data="invoiceCalculator({{ invoice_config | tojson | safe }})"
+     x-data='invoiceCalculator({{ invoice_config | tojson | safe }})'
      x-init="$watch('lineItems', () => $dispatch('form-changed'))"
      @submit="handleSubmit($event)">
 

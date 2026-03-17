@@ -4,7 +4,7 @@
 
 {% block content %}
 {% set selected_ref = form.customer_ref if form is defined else (prefill_ref if prefill_ref is defined and prefill_ref else (('person:' ~ subscriber.person_id) if subscriber and subscriber.person_id else ('organization:' ~ subscriber.organization_id) if subscriber and subscriber.organization_id else '')) %}
-{% set selected_label = form.customer_search if form is defined else (prefill_label if prefill_label is defined and prefill_label else ((subscriber.person.first_name ~ ' ' ~ subscriber.person.last_name) if subscriber and subscriber.person else (subscriber.organization.name if subscriber and subscriber.organization else ''))) %}
+{% set selected_label = form.customer_search if form is defined else (prefill_label if prefill_label is defined and prefill_label else ((subscriber.first_name ~ ' ' ~ subscriber.last_name) if subscriber and subscriber.person else (subscriber.organization.name if subscriber and subscriber.organization else ''))) %}
 <div class="mx-auto max-w-2xl space-y-6" x-data="{ customerRef: '{{ selected_ref }}' }">
     <div>
         <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">

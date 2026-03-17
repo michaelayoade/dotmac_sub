@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.services import web_vpn_management as vpn_management_service
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.vpn.run_vpn_control_job")

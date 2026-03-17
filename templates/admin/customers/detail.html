@@ -566,7 +566,7 @@
                             <select name="account_id" class="block w-full rounded-xl border-0 bg-slate-100 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700">
                                 {% for account in accounts %}
                                 <option value="{{ account.id }}">
-                                    {% if account.account_number %}{{ account.account_number }}{% elif account.subscriber and account.subscriber.person %}{{ account.subscriber.person.first_name }} {{ account.subscriber.person.last_name }}{% elif account.subscriber and account.subscriber.organization %}{{ account.subscriber.organization.name }}{% else %}Account{% endif %}
+                                    {% if account.account_number %}{{ account.account_number }}{% elif account.subscriber and account.subscriber.person %}{{ account.subscriber.first_name }} {{ account.subscriber.last_name }}{% elif account.subscriber and account.subscriber.organization %}{{ account.subscriber.organization.name }}{% else %}Account{% endif %}
                                 </option>
                                 {% endfor %}
                             </select>
@@ -613,7 +613,7 @@
                                 </div>
                                 <div>
                                     <p class="text-sm font-semibold text-slate-900 dark:text-white">
-                                        {% if subscriber.person %}{{ subscriber.person.first_name }} {{ subscriber.person.last_name }}{% elif subscriber.organization %}{{ subscriber.organization.name }}{% else %}Subscriber{% endif %}
+                                        {% if subscriber.person %}{{ subscriber.first_name }} {{ subscriber.last_name }}{% elif subscriber.organization %}{{ subscriber.organization.name }}{% else %}Subscriber{% endif %}
                                     </p>
                                     {% set sub_type = subscriber.subscriber_type.value if subscriber.subscriber_type is not string and subscriber.subscriber_type else (subscriber.subscriber_type | default('unknown')) %}
                                     <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub_type | title }} subscriber</p>

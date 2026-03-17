@@ -1,7 +1,6 @@
 """Admin billing credit note routes."""
 
-from decimal import Decimal, InvalidOperation
-from uuid import UUID
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -15,32 +14,17 @@ from app.services import billing as billing_service
 from app.services import web_billing_credits as web_billing_credits_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.auth_dependencies import require_permission
+from app.validators.forms import parse_decimal, parse_uuid
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
-
-
-def _parse_uuid(value: str | None, field: str):
-    if not value:
-        raise ValueError(f"{field} is required")
-    return UUID(value)
-
-
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
-    if value is None or value == "":
-        if default is not None:
-            return default
-        raise ValueError(f"{field} is required")
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field} must be a valid number") from exc
 
 
 @router.get("/credits", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:credit_note:read"))])
 def billing_credits_list(
     request: Request,
     page: int = 1,
+    per_page: int = Query(50, ge=10, le=100),
     status: str | None = None,
     customer_ref: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -50,6 +34,7 @@ def billing_credits_list(
     state = web_billing_credits_service.build_credits_list_data(
         db,
         page=page,
+        per_page=per_page,
         status=status,
         customer_ref=customer_ref,
     )
@@ -110,9 +95,9 @@ def billing_credit_create(
     db: Session = Depends(get_db),
 ):
     try:
-        credit_amount = _parse_decimal(amount, "amount")
+        credit_amount = parse_decimal(amount, "amount")
         payload = CreditNoteCreate(
-            account_id=_parse_uuid(account_id, "account_id"),
+            account_id=parse_uuid(account_id, "account_id"),
             status=CreditNoteStatus.issued,
             currency=currency.strip().upper(),
             subtotal=credit_amount,

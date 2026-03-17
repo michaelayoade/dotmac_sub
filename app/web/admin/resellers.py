@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
-from app.models.subscriber import Reseller
 from app.schemas.subscriber import ResellerCreate, ResellerUpdate
 from app.services import rbac as rbac_service
 from app.services import subscriber as subscriber_service
@@ -49,11 +48,7 @@ def resellers_list(
     per_page: int = Query(25, ge=10, le=200),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    total = (
-        db.query(Reseller)
-        .filter(Reseller.is_active.is_(True))
-        .count()
-    )
+    total = subscriber_service.resellers.count(db=db, is_active=True)
     total_pages = max(1, (total + per_page - 1) // per_page)
     if page > total_pages:
         page = total_pages

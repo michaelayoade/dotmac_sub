@@ -423,4 +423,248 @@ class OntActions:
                 message=f"Factory reset failed: {e}",
             )
 
+    @staticmethod
+    def firmware_upgrade(
+        db: Session,
+        ont_id: str,
+        firmware_image_id: str,
+    ) -> ActionResult:
+        """Trigger firmware upgrade on ONT via TR-069 Download RPC.
+
+        Args:
+            db: Database session.
+            ont_id: OntUnit ID.
+            firmware_image_id: OntFirmwareImage ID.
+
+        Returns:
+            ActionResult with success/failure info.
+        """
+        from app.models.network import OntFirmwareImage
+
+        ont = db.get(OntUnit, ont_id)
+        if not ont:
+            return ActionResult(success=False, message="ONT not found.")
+
+        firmware = db.get(OntFirmwareImage, firmware_image_id)
+        if not firmware:
+            return ActionResult(success=False, message="Firmware image not found.")
+        if not firmware.is_active:
+            return ActionResult(success=False, message="Firmware image is not active.")
+
+        resolved, reason = OntActions._resolve_or_error(db, ont)
+        if not resolved:
+            return ActionResult(
+                success=False,
+                message=reason or "No GenieACS server configured for this ONT.",
+            )
+
+        client, device_id = resolved
+        try:
+            result = client.download(
+                device_id,
+                file_type="1 Firmware Upgrade Image",
+                file_url=firmware.file_url,
+                filename=firmware.filename,
+            )
+            logger.info(
+                "Firmware upgrade triggered for ONT %s → %s v%s",
+                ont.serial_number,
+                firmware.vendor,
+                firmware.version,
+            )
+            return ActionResult(
+                success=True,
+                message=(
+                    f"Firmware upgrade to v{firmware.version} initiated for "
+                    f"{ont.serial_number}. The ONT will download and reboot."
+                ),
+                data=result,
+            )
+        except GenieACSError as e:
+            logger.error(
+                "Firmware upgrade failed for ONT %s: %s", ont.serial_number, e
+            )
+            return ActionResult(
+                success=False,
+                message=f"Firmware upgrade failed: {e}",
+            )
+
+
+    @staticmethod
+    def set_pppoe_credentials(
+        db: Session, ont_id: str, username: str, password: str
+    ) -> ActionResult:
+        """Push PPPoE username and password to ONT via TR-069 SetParameterValues.
+
+        Args:
+            db: Database session.
+            ont_id: OntUnit ID.
+            username: PPPoE username.
+            password: PPPoE password.
+
+        Returns:
+            ActionResult with success/failure info.
+        """
+        if not username:
+            return ActionResult(success=False, message="PPPoE username is required.")
+        if not password:
+            return ActionResult(success=False, message="PPPoE password is required.")
+
+        ont = db.get(OntUnit, ont_id)
+        if not ont:
+            return ActionResult(success=False, message="ONT not found.")
+
+        resolved, reason = OntActions._resolve_or_error(db, ont)
+        if not resolved:
+            return ActionResult(
+                success=False,
+                message=reason or "No GenieACS server configured for this ONT.",
+            )
+
+        client, device_id = resolved
+        # Dual-path: TR-181 (Device) and TR-098 (InternetGatewayDevice)
+        params = {
+            "Device.PPP.Interface.1.Username": username,
+            "Device.PPP.Interface.1.Password": password,
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username": username,
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Password": password,
+        }
+        try:
+            result = client.set_parameter_values(device_id, params)
+            # Update observed PPPoE username on the ONT record
+            ont.pppoe_username = username
+            db.flush()
+            logger.info(
+                "PPPoE credentials set on ONT %s (user: %s)",
+                ont.serial_number, username,
+            )
+            return ActionResult(
+                success=True,
+                message=f"PPPoE credentials pushed to {ont.serial_number}.",
+                data=result,
+            )
+        except GenieACSError as e:
+            logger.error(
+                "Set PPPoE credentials failed for ONT %s: %s", ont.serial_number, e
+            )
+            return ActionResult(
+                success=False, message=f"Failed to set PPPoE credentials: {e}"
+            )
+
+    @staticmethod
+    def run_ping_diagnostic(
+        db: Session, ont_id: str, host: str, count: int = 4
+    ) -> ActionResult:
+        """Run IP ping diagnostic from the ONT via TR-069.
+
+        Uses the TR-069 IPPingDiagnostics object to trigger a ping test
+        from the ONT itself to a target host.
+
+        Args:
+            db: Database session.
+            ont_id: OntUnit ID.
+            host: Target hostname or IP to ping.
+            count: Number of ping repetitions (default 4).
+
+        Returns:
+            ActionResult with diagnostic results.
+        """
+        if not host or not host.strip():
+            return ActionResult(success=False, message="Ping target host is required.")
+
+        ont = db.get(OntUnit, ont_id)
+        if not ont:
+            return ActionResult(success=False, message="ONT not found.")
+
+        resolved, reason = OntActions._resolve_or_error(db, ont)
+        if not resolved:
+            return ActionResult(
+                success=False,
+                message=reason or "No GenieACS server configured for this ONT.",
+            )
+
+        client, device_id = resolved
+        count = max(1, min(count, 20))  # Clamp 1-20
+        params = {
+            "Device.IP.Diagnostics.IPPing.Host": host.strip(),
+            "Device.IP.Diagnostics.IPPing.NumberOfRepetitions": str(count),
+            "Device.IP.Diagnostics.IPPing.DiagnosticsState": "Requested",
+            "InternetGatewayDevice.IPPingDiagnostics.Host": host.strip(),
+            "InternetGatewayDevice.IPPingDiagnostics.NumberOfRepetitions": str(count),
+            "InternetGatewayDevice.IPPingDiagnostics.DiagnosticsState": "Requested",
+        }
+        try:
+            result = client.set_parameter_values(device_id, params)
+            logger.info(
+                "Ping diagnostic started on ONT %s → %s (%d pings)",
+                ont.serial_number, host.strip(), count,
+            )
+            return ActionResult(
+                success=True,
+                message=f"Ping diagnostic started on {ont.serial_number} → {host.strip()} ({count} pings). Results will appear after the next device inform.",
+                data=result,
+            )
+        except GenieACSError as e:
+            logger.error(
+                "Ping diagnostic failed for ONT %s: %s", ont.serial_number, e
+            )
+            return ActionResult(
+                success=False, message=f"Failed to start ping diagnostic: {e}"
+            )
+
+    @staticmethod
+    def run_traceroute_diagnostic(
+        db: Session, ont_id: str, host: str
+    ) -> ActionResult:
+        """Run traceroute diagnostic from the ONT via TR-069.
+
+        Args:
+            db: Database session.
+            ont_id: OntUnit ID.
+            host: Target hostname or IP to trace.
+
+        Returns:
+            ActionResult with diagnostic results.
+        """
+        if not host or not host.strip():
+            return ActionResult(success=False, message="Traceroute target host is required.")
+
+        ont = db.get(OntUnit, ont_id)
+        if not ont:
+            return ActionResult(success=False, message="ONT not found.")
+
+        resolved, reason = OntActions._resolve_or_error(db, ont)
+        if not resolved:
+            return ActionResult(
+                success=False,
+                message=reason or "No GenieACS server configured for this ONT.",
+            )
+
+        client, device_id = resolved
+        params = {
+            "Device.IP.Diagnostics.TraceRoute.Host": host.strip(),
+            "Device.IP.Diagnostics.TraceRoute.DiagnosticsState": "Requested",
+            "InternetGatewayDevice.TraceRouteDiagnostics.Host": host.strip(),
+            "InternetGatewayDevice.TraceRouteDiagnostics.DiagnosticsState": "Requested",
+        }
+        try:
+            result = client.set_parameter_values(device_id, params)
+            logger.info(
+                "Traceroute diagnostic started on ONT %s → %s",
+                ont.serial_number, host.strip(),
+            )
+            return ActionResult(
+                success=True,
+                message=f"Traceroute started on {ont.serial_number} → {host.strip()}. Results will appear after the next device inform.",
+                data=result,
+            )
+        except GenieACSError as e:
+            logger.error(
+                "Traceroute diagnostic failed for ONT %s: %s", ont.serial_number, e
+            )
+            return ActionResult(
+                success=False, message=f"Failed to start traceroute: {e}"
+            )
+
+
 ont_actions = OntActions()

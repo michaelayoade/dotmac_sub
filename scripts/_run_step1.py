@@ -2,6 +2,7 @@
 
 from app.db import SessionLocal
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 
 
 def main() -> None:
@@ -40,7 +41,9 @@ def main() -> None:
     for stmt, label in zip(statements, labels):
         print(label)
         result = db.execute(text(stmt))
-        print(f"  -> rows affected: {result.rowcount:,}\n")
+        cursor_result = result if isinstance(result, CursorResult) else None
+        rowcount = cursor_result.rowcount if cursor_result is not None else 0
+        print(f"  -> rows affected: {rowcount:,}\n")
 
     db.commit()
     print("Step 1 committed successfully.")

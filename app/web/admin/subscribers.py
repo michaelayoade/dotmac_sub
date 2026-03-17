@@ -555,6 +555,72 @@ def subscriber_detail(
     )
 
 
+@router.get("/{subscriber_id}/communications", response_class=HTMLResponse)
+def subscriber_communications(
+    request: Request,
+    subscriber_id: UUID,
+    limit: int = 25,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """HTMX partial: communication history for a subscriber."""
+    from app.services import web_subscriber_details as web_sub_details_service
+
+    logs = web_sub_details_service.list_communication_logs(
+        db, str(subscriber_id), limit=limit, offset=offset
+    )
+    rows_html = []
+    for log in logs:
+        channel_badge = {
+            "email": '<span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Email</span>',
+            "sms": '<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">SMS</span>',
+            "in_app": '<span class="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">In-App</span>',
+            "whatsapp": '<span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-300">WhatsApp</span>',
+        }.get(log.channel.value, log.channel.value)
+
+        status_badge = {
+            "sent": '<span class="text-emerald-600 dark:text-emerald-400">Sent</span>',
+            "delivered": '<span class="text-emerald-600 dark:text-emerald-400">Delivered</span>',
+            "pending": '<span class="text-amber-600 dark:text-amber-400">Pending</span>',
+            "failed": '<span class="text-rose-600 dark:text-rose-400">Failed</span>',
+            "bounced": '<span class="text-rose-600 dark:text-rose-400">Bounced</span>',
+        }.get(log.status.value, log.status.value)
+
+        date_str = log.sent_at.strftime("%b %d, %Y %H:%M") if log.sent_at else (log.created_at.strftime("%b %d, %Y %H:%M") if log.created_at else "")
+        subject = (log.subject or log.body or "")[:60]
+        recipient = (log.recipient or "")[:40]
+
+        rows_html.append(
+            f'<tr class="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">'
+            f'<td class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{date_str}</td>'
+            f'<td class="px-4 py-3">{channel_badge}</td>'
+            f'<td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 truncate max-w-xs">{recipient}</td>'
+            f'<td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 truncate max-w-sm">{subject}</td>'
+            f'<td class="px-4 py-3">{status_badge}</td>'
+            f'</tr>'
+        )
+
+    if not rows_html:
+        return HTMLResponse(
+            '<div class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">'
+            '<p>No communications found for this subscriber.</p></div>'
+        )
+
+    table = (
+        '<table class="w-full text-left">'
+        '<thead><tr class="border-b border-slate-200 dark:border-slate-600">'
+        '<th class="px-4 py-2 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</th>'
+        '<th class="px-4 py-2 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Channel</th>'
+        '<th class="px-4 py-2 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Recipient</th>'
+        '<th class="px-4 py-2 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Subject / Body</th>'
+        '<th class="px-4 py-2 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>'
+        '</tr></thead><tbody>'
+        + "".join(rows_html)
+        + '</tbody></table>'
+    )
+    return HTMLResponse(table)
+
+
 @router.post(
     "/{subscriber_id}/impersonate",
     response_class=HTMLResponse,

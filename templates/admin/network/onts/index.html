@@ -170,10 +170,52 @@
                     </div>
                 </div>
             </div>
+
+            {# Bulk Action Bar #}
+            <div x-data="{ selected: [], bulkAction: '' }" id="bulk-container">
+                <div x-show="selected.length > 0" x-transition
+                     class="flex items-center gap-3 border-b border-blue-200 bg-blue-50 px-6 py-3 dark:border-blue-800 dark:bg-blue-900/20">
+                    <span class="text-sm font-medium text-blue-700 dark:text-blue-300" x-text="selected.length + ' selected'"></span>
+                    <select x-model="bulkAction"
+                        class="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:ring-blue-500 dark:border-blue-600 dark:bg-slate-800 dark:text-slate-300">
+                        <option value="">Choose action...</option>
+                        <option value="reboot">Reboot</option>
+                        <option value="refresh">Refresh Status</option>
+                        <option value="factory_reset">Factory Reset</option>
+                    </select>
+                    <form id="bulk-form"
+                          hx-post="/admin/network/onts/bulk-action"
+                          hx-target="#bulk-result"
+                          hx-swap="innerHTML"
+                          hx-indicator="#bulk-spinner"
+                          class="inline">
+                        {{ csrf_token_field | safe }}
+                        <template x-for="id in selected" :key="id">
+                            <input type="hidden" name="ont_ids" :value="id">
+                        </template>
+                        <input type="hidden" name="action" :value="bulkAction">
+                        <button type="submit" :disabled="!bulkAction"
+                            x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault()"
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                            Execute
+                        </button>
+                        <span id="bulk-spinner" class="htmx-indicator ml-2">
+                            <svg class="inline h-4 w-4 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </span>
+                    </form>
+                    <button @click="selected = []" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">Clear</button>
+                </div>
+                <div id="bulk-result" class="px-6"></div>
+
             <div class="overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
                         <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
+                            <th scope="col" class="w-10 px-3 py-3">
+                                <input type="checkbox" @change="selected = $event.target.checked ? [...document.querySelectorAll('.ont-checkbox')].map(el => el.value) : []"
+                                    class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            </th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
@@ -188,6 +230,11 @@
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
                         <tr class="group transition-all hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/30 dark:hover:from-blue-900/10 dark:hover:to-indigo-900/5">
+                            <td class="w-10 px-3 py-4">
+                                <input type="checkbox" class="ont-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    value="{{ ont.id }}"
+                                    @change="$event.target.checked ? selected.push('{{ ont.id }}') : (selected = selected.filter(id => id !== '{{ ont.id }}'))">
+                            </td>
                             <td class="px-6 py-4">
                                 <div class="flex items-center gap-3">
                                     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25">
@@ -291,6 +338,7 @@
             </div>
             {% endif %}
         </div>
+            </div>{# /bulk-container #}
     </div>
 
     {# ═══════════════ Diagnostics View ═══════════════ #}

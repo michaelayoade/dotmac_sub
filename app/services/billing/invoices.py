@@ -4,6 +4,7 @@ import logging
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import (
@@ -258,7 +259,7 @@ class Invoices(ListResponseMixin):
             invoice.balance_due = Decimal("0.00")
             invoice.status = InvoiceStatus.void
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(invoice)
@@ -335,7 +336,7 @@ class Invoices(ListResponseMixin):
             for invoice in affected_invoices:
                 _recalculate_invoice_totals(db, invoice)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         return updated
@@ -414,7 +415,7 @@ class InvoiceLines(ListResponseMixin):
             db.flush()
             _recalculate_invoice_totals(db, invoice)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(line)
@@ -472,7 +473,7 @@ class InvoiceLines(ListResponseMixin):
                 db.flush()
                 _recalculate_invoice_totals(db, invoice)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(line)

@@ -12,6 +12,20 @@ class Response:
     def raise_for_status(self) -> None: ...
 
 
+class RequestException(Exception): ...
+
+
+def get(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = ...,
+    auth: Any = ...,
+    params: Any = ...,
+    verify: bool | None = ...,
+    timeout: float | int | None = ...,
+) -> Response: ...
+
+
 def post(
     url: str,
     *,

@@ -212,7 +212,7 @@
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">
                                     {% if invoice.account.subscriber.person %}
-                                        {{ invoice.account.subscriber.person.first_name }} {{ invoice.account.subscriber.person.last_name }}
+                                        {{ invoice.account.first_name }} {{ invoice.account.last_name }}
                                     {% elif invoice.account.subscriber.organization %}
                                         {{ invoice.account.subscriber.organization.name }}
                                     {% else %}

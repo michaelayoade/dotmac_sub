@@ -17,7 +17,9 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    OltCardPort,
     OLTDevice,
+    OltSfpModule,
     OntAssignment,
     OntUnit,
     OnuOfflineReason,
@@ -26,6 +28,8 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice
 from app.services.credential_crypto import decrypt_credential
+from app.services.events import emit_event
+from app.services.events.types import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +147,24 @@ def get_signal_thresholds(db: Session) -> tuple[float, float]:
     except Exception as exc:
         logger.warning("Failed to load signal thresholds, using defaults: %s", exc)
         return DEFAULT_WARN_THRESHOLD, DEFAULT_CRIT_THRESHOLD
+
+
+_DEFAULT_ALERT_COOLDOWN_MINUTES = 30
+
+
+def _get_alert_cooldown_seconds(db: Session) -> int:
+    """Load signal alert cooldown from settings (in seconds)."""
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.services.settings_spec import resolve_value
+
+        raw = resolve_value(
+            db, SettingDomain.network_monitoring, "ont_signal_alert_cooldown_minutes"
+        )
+        minutes = int(str(raw)) if raw is not None else _DEFAULT_ALERT_COOLDOWN_MINUTES
+        return max(minutes, 5) * 60
+    except Exception:
+        return _DEFAULT_ALERT_COOLDOWN_MINUTES * 60
 
 
 # ---------------------------------------------------------------------------
@@ -304,37 +326,46 @@ def _build_reading_targets(
 def _get_olt_snmp_config(db: Session, olt: OLTDevice) -> dict[str, str | int | None]:
     """Build SNMP config dict for an OLT device.
 
-    OLT devices don't store SNMP auth directly; resolve a linked
-    NetworkDevice by mgmt_ip/hostname/name and read SNMP fields there.
+    Checks the OLT's own snmp_ro_community first, then falls back to a
+    linked NetworkDevice record resolved by mgmt_ip/hostname/name.
     """
     host = olt.mgmt_ip or olt.hostname
     vendor = (olt.vendor or "").lower()
     community: str | None = None
 
-    linked: NetworkDevice | None = None
-    if olt.mgmt_ip:
-        linked = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
-        ).first()
-    if linked is None and olt.hostname:
-        linked = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
-        ).first()
-    if linked is None and olt.name:
-        linked = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.name == olt.name).limit(1)
-        ).first()
+    # 1. Prefer SNMP community stored directly on the OLT device
+    raw_olt_community = getattr(olt, "snmp_ro_community", None)
+    if raw_olt_community:
+        raw_olt_community = raw_olt_community.strip()
+    if raw_olt_community:
+        community = decrypt_credential(raw_olt_community)
 
-    if linked and linked.snmp_enabled:
-        if (linked.snmp_version or "v2c").lower() != "v2c":
-            logger.warning(
-                "Skipping OLT %s SNMP poll: unsupported SNMP version '%s' (only v2c supported)",
-                olt.name,
-                linked.snmp_version,
-            )
-        else:
-            raw_community = (linked.snmp_community or "").strip() or None
-            community = decrypt_credential(raw_community) if raw_community else None
+    # 2. Fallback: resolve a linked NetworkDevice for SNMP credentials
+    if not community:
+        linked: NetworkDevice | None = None
+        if olt.mgmt_ip:
+            linked = db.scalars(
+                select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
+            ).first()
+        if linked is None and olt.hostname:
+            linked = db.scalars(
+                select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
+            ).first()
+        if linked is None and olt.name:
+            linked = db.scalars(
+                select(NetworkDevice).where(NetworkDevice.name == olt.name).limit(1)
+            ).first()
+
+        if linked and linked.snmp_enabled:
+            if (linked.snmp_version or "v2c").lower() != "v2c":
+                logger.warning(
+                    "Skipping OLT %s SNMP poll: unsupported SNMP version '%s' (only v2c supported)",
+                    olt.name,
+                    linked.snmp_version,
+                )
+            else:
+                raw_community = (linked.snmp_community or "").strip() or None
+                community = decrypt_credential(raw_community) if raw_community else None
 
     return {
         "host": host,
@@ -361,12 +392,16 @@ def _get_signal_scale(vendor: str) -> float:
     return 0.01
 
 
-def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 30) -> list[str]:
-    """Run snmpwalk against an OLT and return output lines."""
+def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 90) -> list[str]:
+    """Run snmpbulkwalk (with snmpwalk fallback) against an OLT and return output lines."""
+    import shutil
     import subprocess
 
+    # Prefer snmpbulkwalk for performance on large tables
+    use_bulk = shutil.which("snmpbulkwalk") is not None
+    cmd = "snmpbulkwalk" if use_bulk else "snmpwalk"
     args = [
-        "snmpwalk",
+        cmd,
         "-t",
         "10",
         "-r",
@@ -705,6 +740,10 @@ def poll_olt_ont_signals(
         readings=readings,
         assignments=assignments,
     )
+    warn_thresh, crit_thresh = get_signal_thresholds(db)
+    alert_cooldown_sec = _get_alert_cooldown_seconds(db)
+    status_transitions: list[tuple[OntUnit, str, dict]] = []
+
     for ont, reading in targets:
         try:
             update_values: dict = {}
@@ -714,6 +753,8 @@ def poll_olt_ont_signals(
                 update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
             if reading.distance_m is not None:
                 update_values["distance_meters"] = reading.distance_m
+
+            prev_status = ont.online_status
 
             if reading.is_online is not None:
                 if reading.is_online:
@@ -744,9 +785,69 @@ def poll_olt_ont_signals(
                 .values(**update_values)
             )
             updated += 1
+
+            # Track status transitions and signal degradation for events
+            new_status = update_values.get("online_status")
+            if new_status and prev_status != new_status:
+                if new_status == OnuOnlineStatus.offline:
+                    reason_val = update_values.get("offline_reason")
+                    status_transitions.append((ont, "offline", {
+                        "offline_reason": reason_val.value if reason_val else "unknown",
+                    }))
+                elif new_status == OnuOnlineStatus.online and prev_status == OnuOnlineStatus.offline:
+                    status_transitions.append((ont, "online", {}))
+
+            # Signal degradation alerts with cooldown.
+            # Only emit when the signal *crosses* a threshold (was OK, now bad)
+            # to avoid re-alerting every poll cycle.
+            if reading.olt_rx_dbm is not None:
+                prev_signal = ont.olt_rx_signal_dbm
+                # Cooldown: skip if last update was < 30 min ago and signal
+                # was already below threshold (avoids spam on every poll).
+                recently_alerted = (
+                    ont.signal_updated_at is not None
+                    and (now - ont.signal_updated_at).total_seconds() < alert_cooldown_sec
+                    and prev_signal is not None
+                    and prev_signal < warn_thresh
+                )
+                if not recently_alerted:
+                    if reading.olt_rx_dbm < crit_thresh:
+                        if prev_signal is None or prev_signal >= crit_thresh:
+                            status_transitions.append((ont, "signal_degraded", {
+                                "olt_rx_dbm": reading.olt_rx_dbm,
+                                "threshold": crit_thresh,
+                                "severity": "critical",
+                            }))
+                    elif reading.olt_rx_dbm < warn_thresh:
+                        if prev_signal is None or prev_signal >= warn_thresh:
+                            status_transitions.append((ont, "signal_degraded", {
+                                "olt_rx_dbm": reading.olt_rx_dbm,
+                                "threshold": warn_thresh,
+                                "severity": "warning",
+                            }))
+
         except Exception as e:
             logger.error("Error updating ONT %s: %s", ont.id, e)
             errors += 1
+
+    # Emit events for ONT status transitions after bulk update
+    for ont, transition, extra in status_transitions:
+        try:
+            payload = {
+                "ont_id": str(ont.id),
+                "serial_number": ont.serial_number,
+                "olt_id": str(olt.id),
+                "olt_name": olt.name,
+                **extra,
+            }
+            if transition == "offline":
+                emit_event(db, EventType.ont_offline, payload, actor="system")
+            elif transition == "online":
+                emit_event(db, EventType.ont_online, payload, actor="system")
+            elif transition == "signal_degraded":
+                emit_event(db, EventType.ont_signal_degraded, payload, actor="system")
+        except Exception as e:
+            logger.warning("Failed to emit ONT %s event: %s", transition, e)
 
     skipped = max(0, polled - len(targets))
     return {"polled": polled, "updated": updated, "errors": errors, "skipped": skipped}
@@ -791,6 +892,54 @@ class OltHealthReading:
     temperature_c: float | None = None
     memory_percent: float | None = None
     uptime_seconds: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# sysDescr auto-detection for firmware/software version
+# ---------------------------------------------------------------------------
+
+_SYSDESCR_OID = ".1.3.6.1.2.1.1.1.0"
+
+
+def _parse_sysdescr(raw: str, vendor: str) -> tuple[str | None, str | None]:
+    """Parse sysDescr to extract (firmware_version, software_version).
+
+    Uses vendor-specific regex patterns to identify version strings from the
+    SNMP sysDescr.0 response.  Returns (firmware, software) where firmware
+    typically represents hardware/platform version and software is the running
+    OS version.
+    """
+    vendor_lower = (vendor or "").lower()
+
+    firmware_version: str | None = None
+    software_version: str | None = None
+
+    if "huawei" in vendor_lower:
+        # Huawei: "Huawei Versatile Routing Platform Software VRP (R) software,
+        #          Version 8.210 (MA5800 V300R021C10SPC100)"
+        sw_match = re.search(r"Version\s+(V\d+R\d+C\d+\w*)", raw)
+        if sw_match:
+            software_version = sw_match.group(1)
+        hw_match = re.search(r"(MA\d+\S+)", raw)
+        if hw_match:
+            firmware_version = hw_match.group(1)
+    elif "zte" in vendor_lower:
+        # ZTE: "ZTE ZXA10 ... Version: V4.1.0P3T2"
+        match = re.search(r"Version[:\s]+(V[\d.]+\w*)", raw)
+        if match:
+            software_version = match.group(1)
+    elif "nokia" in vendor_lower:
+        # Nokia/ALU: "TiMOS-B-22.10.R3 ..."
+        match = re.search(r"TiMOS-([\w.-]+)", raw)
+        if match:
+            software_version = match.group(1)
+    else:
+        # Generic fallback: first version-like pattern
+        match = re.search(r"(\d+\.\d+[\.\d]*)", raw)
+        if match:
+            software_version = match.group(1)
+
+    return firmware_version, software_version
 
 
 def _snmpget_value(host: str, oid: str, community: str) -> str | None:
@@ -1067,6 +1216,67 @@ def _push_olt_health_metrics(health_map: dict[str, OltHealthReading]) -> int:
     return len(lines)
 
 
+def poll_sfp_modules(
+    db: Session,
+    olt: OLTDevice,
+    *,
+    community: str | None = None,
+) -> dict[str, int]:
+    """Discover and update SFP module optical metrics via SNMP.
+
+    Uses standard entPhysicalTable SFP OIDs for transceiver rx/tx power.
+    Updates existing OltSfpModule records matched by card port.
+
+    Returns:
+        Stats dict: {discovered, updated, errors}.
+    """
+    host = olt.mgmt_ip or olt.hostname
+    if not host or not community:
+        return {"discovered": 0, "updated": 0, "errors": 0}
+
+    # Standard IF-MIB OIDs for transceiver diagnostics (many vendors support these)
+    sfp_tx_oid = ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.9" if "huawei" in (olt.vendor or "").lower() else ".1.3.6.1.2.1.47.1.1.1.1.7"
+    sfp_rx_oid = ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.10" if "huawei" in (olt.vendor or "").lower() else ".1.3.6.1.2.1.47.1.1.1.1.7"
+
+    try:
+        tx_raw = _parse_snmp_table(
+            _run_olt_snmpwalk(host, sfp_tx_oid, community, timeout=20),
+            base_oid=sfp_tx_oid,
+        )
+        rx_raw = _parse_snmp_table(
+            _run_olt_snmpwalk(host, sfp_rx_oid, community, timeout=20),
+            base_oid=sfp_rx_oid,
+        )
+    except Exception as e:
+        logger.warning("SFP SNMP walk failed for OLT %s: %s", olt.name, e)
+        return {"discovered": 0, "updated": 0, "errors": 1}
+
+    if not tx_raw and not rx_raw:
+        return {"discovered": 0, "updated": 0, "errors": 0}
+
+    # Update existing SFP module records linked to this OLT's card ports
+    sfp_modules = list(
+        db.scalars(
+            select(OltSfpModule)
+            .join(OltCardPort, OltSfpModule.olt_card_port_id == OltCardPort.id)
+            .where(OltCardPort.is_active.is_(True))
+        ).all()
+    )
+
+    updated_count = 0
+    for sfp in sfp_modules:
+        port_idx = str(sfp.olt_card_port_id)[:8]  # Simplified matching
+        tx_val = _parse_signal_value(tx_raw.get(port_idx, ""), 0.01) if port_idx in tx_raw else None
+        rx_val = _parse_signal_value(rx_raw.get(port_idx, ""), 0.01) if port_idx in rx_raw else None
+        if tx_val is not None:
+            sfp.tx_power_dbm = tx_val
+            updated_count += 1
+        if rx_val is not None:
+            sfp.rx_power_dbm = rx_val
+
+    return {"discovered": len(tx_raw) + len(rx_raw), "updated": updated_count, "errors": 0}
+
+
 def poll_all_olts(db: Session) -> dict[str, int]:
     """Poll all active OLT devices for ONT signal levels and OLT health.
 
@@ -1117,6 +1327,36 @@ def poll_all_olts(db: Session) -> dict[str, int]:
             health_map[olt.name] = health
         except Exception as e:
             logger.error("Failed to poll health for OLT %s: %s", olt.name, e)
+
+        # Auto-detect firmware/software version via sysDescr
+        if community and olt.mgmt_ip:
+            try:
+                sys_descr = _snmpget_value(olt.mgmt_ip, _SYSDESCR_OID, community)
+                if sys_descr:
+                    fw, sw = _parse_sysdescr(sys_descr, olt.vendor or "")
+                    if sw and sw != olt.software_version:
+                        logger.debug(
+                            "Auto-detected software_version for OLT %s: %s",
+                            olt.name, sw,
+                        )
+                        olt.software_version = sw
+                    if fw and fw != olt.firmware_version:
+                        logger.debug(
+                            "Auto-detected firmware_version for OLT %s: %s",
+                            olt.name, fw,
+                        )
+                        olt.firmware_version = fw
+                else:
+                    logger.debug("sysDescr empty for OLT %s", olt.name)
+            except Exception as e:
+                logger.debug("sysDescr fetch failed for OLT %s: %s", olt.name, e)
+
+        # Poll SFP module metrics
+        try:
+            sfp_result = poll_sfp_modules(db, olt, community=community)
+            totals["sfp_updated"] = totals.get("sfp_updated", 0) + sfp_result["updated"]
+        except Exception as e:
+            logger.error("Failed to poll SFP modules for OLT %s: %s", olt.name, e)
 
     db.commit()
 

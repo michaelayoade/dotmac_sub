@@ -50,6 +50,7 @@ def _log_bulk_audit_events(
 def billing_dunning(
     request: Request,
     page: int = 1,
+    per_page: int = Query(50, ge=10, le=100),
     status: str | None = None,
     customer_ref: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -57,6 +58,7 @@ def billing_dunning(
     state = web_billing_dunning_service.build_listing_data(
         db,
         page=page,
+        per_page=per_page,
         status=status,
         customer_ref=customer_ref,
     )

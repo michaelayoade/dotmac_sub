@@ -61,6 +61,7 @@ from app.services.common import (
     apply_pagination,
     get_by_id,
     round_money,
+    to_decimal,
     validate_enum,
 )
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
@@ -318,7 +319,7 @@ def _create_payment_ledger_entry(
         payment_id=payment.id,
         entry_type=LedgerEntryType.credit,
         source=LedgerSource.payment,
-        amount=round_money(Decimal(str(amount))),
+        amount=round_money(to_decimal(amount)),
         currency=payment.currency or "NGN",
         memo=memo,
     )
@@ -374,7 +375,7 @@ class Payments(ListResponseMixin):
         Returns:
             List of created allocations
         """
-        remaining = round_money(Decimal(str(payment.amount or Decimal("0.00"))))
+        remaining = round_money(to_decimal(payment.amount))
         if remaining <= 0:
             return []
         invoices = (
@@ -394,7 +395,7 @@ class Payments(ListResponseMixin):
         for invoice in invoices:
             if invoice.currency != payment.currency:
                 continue
-            amount = min(remaining, round_money(Decimal(str(invoice.balance_due))))
+            amount = min(remaining, round_money(to_decimal(invoice.balance_due)))
             if amount <= 0:
                 continue
 
@@ -407,7 +408,7 @@ class Payments(ListResponseMixin):
             )
             if existing_allocation:
                 # Allocation already exists - use its amount and skip creating
-                remaining = round_money(remaining - round_money(Decimal(str(existing_allocation.amount))))
+                remaining = round_money(remaining - round_money(to_decimal(existing_allocation.amount)))
                 allocations.append(existing_allocation)
                 continue
 
@@ -449,7 +450,7 @@ class Payments(ListResponseMixin):
             List of created allocations
         """
         created = []
-        remaining = round_money(Decimal(str(payment.amount or Decimal("0.00"))))
+        remaining = round_money(to_decimal(payment.amount))
         for allocation in allocations:
             if allocation.amount > remaining:
                 raise HTTPException(
@@ -863,7 +864,8 @@ class PaymentAllocations(ListResponseMixin):
             LedgerEntry.invoice_id == allocation.invoice_id,
             LedgerEntry.source == LedgerSource.payment,
         ).update({"is_active": False})
-        db.delete(allocation)
+        # Soft-delete the allocation to preserve the audit trail
+        allocation.is_active = False
         if invoice:
             db.flush()
             _recalculate_invoice_totals(db, invoice)

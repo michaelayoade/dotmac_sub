@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -90,6 +90,25 @@ class LedgerSource(enum.Enum):
     other = "other"
 
 
+class LedgerCategory(enum.Enum):
+    """What the ledger entry is for (financial reporting category)."""
+    internet_service = "internet_service"
+    custom_service = "custom_service"
+    voice_service = "voice_service"
+    bundle_service = "bundle_service"
+    installation_fee = "installation_fee"
+    equipment_rental = "equipment_rental"
+    equipment_purchase = "equipment_purchase"
+    late_payment_fee = "late_payment_fee"
+    reconnection_fee = "reconnection_fee"
+    deposit = "deposit"
+    discount = "discount"
+    tax = "tax"
+    overage = "overage"
+    top_up = "top_up"
+    other = "other"
+
+
 class TaxApplication(enum.Enum):
     exclusive = "exclusive"
     inclusive = "inclusive"
@@ -152,6 +171,7 @@ class Invoice(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     splynx_invoice_id: Mapped[int | None] = mapped_column(Integer)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -279,7 +299,7 @@ class CreditNoteLine(Base):
     tax_application: Mapped[TaxApplication] = mapped_column(
         Enum(TaxApplication), default=TaxApplication.exclusive
     )
-    metadata_: Mapped[str | None] = mapped_column("metadata", Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -345,7 +365,7 @@ class InvoiceLine(Base):
     tax_application: Mapped[TaxApplication] = mapped_column(
         Enum(TaxApplication), default=TaxApplication.exclusive
     )
-    metadata_: Mapped[str | None] = mapped_column("metadata", Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -506,6 +526,7 @@ class PaymentAllocation(Base):
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     memo: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -534,6 +555,10 @@ class LedgerEntry(Base):
         Enum(LedgerEntryType), nullable=False
     )
     source: Mapped[LedgerSource] = mapped_column(Enum(LedgerSource))
+    category: Mapped[LedgerCategory | None] = mapped_column(
+        Enum(LedgerCategory, name="ledgercategory", create_constraint=False),
+        nullable=True,
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     memo: Mapped[str | None] = mapped_column(Text)

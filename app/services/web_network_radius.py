@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import cast
+from typing import Any, cast
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import ConnectionType, NasVendor
 from app.models.radius import RadiusServer
+from app.models.radius_active_session import RadiusActiveSession
+from app.models.radius_error import RadiusAuthError, RadiusAuthErrorType
 from app.schemas.catalog import (
     RadiusAttributeCreate,
     RadiusProfileCreate,
@@ -214,6 +217,68 @@ def radius_page_data(db) -> dict[str, object]:
         "profiles": profiles,
         "servers": servers,
         "clients": clients,
+    }
+
+
+def active_sessions_page_data(
+    db: Session,
+    *,
+    search: str = "",
+    nas_filter: str = "",
+) -> dict[str, object]:
+    stmt = (
+        select(RadiusActiveSession)
+        .options(
+            joinedload(RadiusActiveSession.subscriber),
+            joinedload(RadiusActiveSession.nas_device),
+        )
+        .order_by(RadiusActiveSession.session_start.desc())
+    )
+    if search:
+        pattern = f"%{search}%"
+        stmt = stmt.where(
+            RadiusActiveSession.username.ilike(pattern)
+            | RadiusActiveSession.framed_ip_address.ilike(pattern)
+        )
+    if nas_filter:
+        stmt = stmt.where(RadiusActiveSession.nas_device_id == nas_filter)
+
+    return {
+        "sessions": db.scalars(stmt.limit(500)).unique().all(),
+        "total_online": db.scalar(select(func.count(RadiusActiveSession.id))) or 0,
+        "search": search,
+        "nas_filter": nas_filter,
+    }
+
+
+def radius_auth_errors_page_data(
+    db: Session,
+    *,
+    error_type: str = "",
+    page: int = 1,
+) -> dict[str, Any]:
+    per_page = 50
+    stmt = select(RadiusAuthError).order_by(RadiusAuthError.occurred_at.desc())
+    if error_type:
+        try:
+            stmt = stmt.where(RadiusAuthError.error_type == RadiusAuthErrorType(error_type))
+        except ValueError:
+            pass
+
+    total = db.scalar(select(func.count(RadiusAuthError.id))) or 0
+    type_counts = db.execute(
+        select(RadiusAuthError.error_type, func.count(RadiusAuthError.id))
+        .group_by(RadiusAuthError.error_type)
+    ).all()
+
+    return {
+        "errors": db.scalars(stmt.limit(per_page).offset((page - 1) * per_page)).all(),
+        "total": total,
+        "type_counts": type_counts,
+        "error_types": [e.value for e in RadiusAuthErrorType],
+        "selected_error_type": error_type,
+        "page": page,
+        "total_pages": (total + per_page - 1) // per_page if total > 0 else 1,
     }
 
 

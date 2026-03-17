@@ -130,42 +130,77 @@ def customer_login_submit(
                 account_id = subscriber.id
 
         if not authenticated_locally:
-            radius_auth.authenticate(db=db, username=normalized_username, password=password)
+            # Try RADIUS server authentication first
+            radius_authenticated = False
+            try:
+                radius_auth.authenticate(db=db, username=normalized_username, password=password)
+                radius_authenticated = True
+            except Exception:
+                logger.debug(
+                    "RADIUS auth failed for %s, trying access credential",
+                    normalized_username,
+                )
 
-            radius_user = (
-                db.query(RadiusUser)
-                .filter(RadiusUser.username == normalized_username)
-                .filter(RadiusUser.is_active.is_(True))
-                .first()
-            )
+            if radius_authenticated:
+                radius_user = (
+                    db.query(RadiusUser)
+                    .filter(RadiusUser.username == normalized_username)
+                    .filter(RadiusUser.is_active.is_(True))
+                    .first()
+                )
 
-            if radius_user:
-                account_id = radius_user.subscriber_id
-                subscription_id = radius_user.subscription_id
-                subscriber_id = radius_user.subscriber_id
-                if radius_user.subscription_id and not subscriber_id:
-                    from app.models.catalog import Subscription
-                    subscription = db.get(Subscription, radius_user.subscription_id)
-                    if subscription and subscription.subscriber_id:
-                        subscriber_id = subscription.subscriber_id
-                if account_id and not subscriber_id:
-                    account = db.get(Subscriber, account_id)
-                    if account:
-                        subscriber_id = account.id
+                if radius_user:
+                    account_id = radius_user.subscriber_id
+                    subscription_id = radius_user.subscription_id
+                    subscriber_id = radius_user.subscriber_id
+                    if radius_user.subscription_id and not subscriber_id:
+                        from app.models.catalog import Subscription
+                        subscription = db.get(Subscription, radius_user.subscription_id)
+                        if subscription and subscription.subscriber_id:
+                            subscriber_id = subscription.subscriber_id
+                    if account_id and not subscriber_id:
+                        account = db.get(Subscriber, account_id)
+                        if account:
+                            subscriber_id = account.id
+                else:
+                    credential = (
+                        db.query(AccessCredential)
+                        .filter(AccessCredential.username == normalized_username)
+                        .filter(AccessCredential.is_active.is_(True))
+                        .first()
+                    )
+                    if credential:
+                        account_id = credential.subscriber_id
+                        subscriber_id = credential.subscriber_id
+                    if account_id and not subscriber_id:
+                        account = db.get(Subscriber, account_id)
+                        if account:
+                            subscriber_id = account.id
             else:
+                # Fallback: authenticate directly against PPPoE/access credentials.
+                # This allows portal login even when the RADIUS server is unreachable
+                # or the password format isn't compatible with RADIUS (e.g. migrated hashes).
                 credential = (
                     db.query(AccessCredential)
                     .filter(AccessCredential.username == normalized_username)
                     .filter(AccessCredential.is_active.is_(True))
                     .first()
                 )
-                if credential:
-                    account_id = credential.subscriber_id
-                    subscriber_id = credential.subscriber_id
-                if account_id and not subscriber_id:
-                    account = db.get(Subscriber, account_id)
-                    if account:
-                        subscriber_id = account.id
+                if credential and credential.secret_hash:
+                    from app.services.credential_crypto import decrypt_credential
+
+                    stored_password = decrypt_credential(credential.secret_hash)
+                    if stored_password and stored_password == password:
+                        account_id = credential.subscriber_id
+                        subscriber_id = credential.subscriber_id
+                        logger.info(
+                            "Portal login via access credential for %s",
+                            normalized_username,
+                        )
+                    else:
+                        raise ValueError("Invalid username or password")
+                else:
+                    raise ValueError("Invalid username or password")
 
         if not account_id or not subscriber_id:
             raise ValueError("Customer account not found. Please contact support.")

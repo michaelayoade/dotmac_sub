@@ -54,7 +54,7 @@
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select an account</option>
                             {% for account in accounts or [] %}
-                                {% set account_label = account.subscriber.person.first_name ~ ' ' ~ account.subscriber.person.last_name if account.subscriber and account.subscriber.person else (account.subscriber.organization.name if account.subscriber and account.subscriber.organization else 'Account') %}
+                                {% set account_label = account.subscriber.first_name ~ ' ' ~ account.subscriber.last_name if account.subscriber and account.subscriber.person else (account.subscriber.organization.name if account.subscriber and account.subscriber.organization else 'Account') %}
                                 {% if account.account_number %}{% set account_label = account_label ~ ' (' ~ account.account_number ~ ')' %}{% endif %}
                                 <option value="{{ account.id }}" {% if subscription.account_id == account.id|string %}selected{% endif %}>{{ account_label }}</option>
                             {% endfor %}

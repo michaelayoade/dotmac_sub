@@ -77,7 +77,7 @@ class EnforcementHandler:
             disconnect_subscription_sessions(db, str(subscription_id), reason=reason)
             apply_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Failed to disconnect sessions for subscription %s: %s",
                 subscription_id,
                 exc,
@@ -149,7 +149,7 @@ class EnforcementHandler:
             if refresh_enabled:
                 disconnect_account_sessions(db, str(account_id), reason="throttle")
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Failed to disconnect sessions for account %s: %s",
                 account_id,
                 exc,
@@ -166,10 +166,21 @@ class EnforcementHandler:
             action = "throttle"
         if action == "none":
             return
+
+        # Resolve offer_id and rule_id from payload for state tracking
+        offer_id = event.payload.get("offer_id")
+        rule_id = event.payload.get("rule_id")
+        cap_resets_at_raw = event.payload.get("cap_resets_at")
+
         if action == "block":
             try:
                 disconnect_subscription_sessions(db, str(subscription_id), reason="fup_block")
                 apply_subscription_address_list_block(db, str(subscription_id))
+                self._persist_fup_state(
+                    db, str(subscription_id), offer_id, rule_id,
+                    action_status="blocked", cap_resets_at=cap_resets_at_raw,
+                    notes="FUP block applied",
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to apply FUP block for subscription %s: %s",
@@ -196,6 +207,11 @@ class EnforcementHandler:
                     subscription_id=subscription.id,
                     account_id=subscription.subscriber_id,
                 )
+                self._persist_fup_state(
+                    db, str(subscription_id), offer_id, rule_id,
+                    action_status="blocked", cap_resets_at=cap_resets_at_raw,
+                    notes="FUP suspension applied",
+                )
             return
         throttle_profile_id = settings_spec.resolve_value(
             db, SettingDomain.usage, "fup_throttle_radius_profile_id"
@@ -214,9 +230,75 @@ class EnforcementHandler:
                 refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
                 if refresh_enabled:
                     disconnect_account_sessions(db, str(account_id), reason="fup_throttle")
+                self._persist_fup_state(
+                    db, str(subscription_id), offer_id, rule_id,
+                    action_status="throttled",
+                    throttle_profile_id=str(throttle_profile_id),
+                    cap_resets_at=cap_resets_at_raw,
+                    notes="FUP throttle applied",
+                )
         except Exception as exc:
             logger.warning(
                 "Failed to apply FUP throttle for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+    def _persist_fup_state(
+        self,
+        db: Session,
+        subscription_id: str,
+        offer_id: str | None,
+        rule_id: str | None,
+        *,
+        action_status: str,
+        throttle_profile_id: str | None = None,
+        cap_resets_at: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Persist FUP enforcement state for restart resilience."""
+        if not offer_id:
+            # Try to resolve from subscription
+            subscription = db.get(Subscription, subscription_id)
+            if subscription:
+                offer_id = str(subscription.offer_id) if subscription.offer_id else None
+        if not offer_id:
+            logger.warning(
+                "Cannot persist FUP state: no offer_id for subscription %s",
+                subscription_id,
+            )
+            return
+        try:
+            from app.models.fup_state import FupActionStatus
+            from app.services.fup_state import fup_state
+
+            status_map = {
+                "none": FupActionStatus.none,
+                "throttled": FupActionStatus.throttled,
+                "blocked": FupActionStatus.blocked,
+                "notified": FupActionStatus.notified,
+            }
+            parsed_resets_at = None
+            if cap_resets_at:
+                from datetime import datetime
+                try:
+                    parsed_resets_at = datetime.fromisoformat(cap_resets_at)
+                except (ValueError, TypeError):
+                    pass
+
+            fup_state.apply_action(
+                db,
+                subscription_id,
+                offer_id=offer_id,
+                rule_id=rule_id,
+                action_status=status_map.get(action_status, FupActionStatus.none),
+                throttle_profile_id=throttle_profile_id,
+                cap_resets_at=parsed_resets_at,
+                notes=notes,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist FUP state for subscription %s: %s",
                 subscription_id,
                 exc,
             )

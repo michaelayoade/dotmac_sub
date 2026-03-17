@@ -114,6 +114,7 @@ class VlanBase(BaseModel):
     description: str | None = None
     purpose: str | None = None
     dhcp_snooping: bool = False
+    olt_device_id: UUID | None = None
     is_active: bool = True
 
 
@@ -128,6 +129,7 @@ class VlanUpdate(BaseModel):
     description: str | None = None
     purpose: str | None = None
     dhcp_snooping: bool | None = None
+    olt_device_id: UUID | None = None
     is_active: bool | None = None
 
 
@@ -239,6 +241,7 @@ class IpPoolBase(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool = True
+    olt_device_id: UUID | None = None
     notes: str | None = None
 
 
@@ -254,6 +257,7 @@ class IpPoolUpdate(BaseModel):
     dns_primary: str | None = Field(default=None, max_length=64)
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
+    olt_device_id: UUID | None = None
     notes: str | None = None
 
 
@@ -350,13 +354,22 @@ class OLTDeviceBase(BaseModel):
     vendor: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     serial_number: str | None = Field(default=None, max_length=120)
+    firmware_version: str | None = Field(default=None, max_length=120)
+    software_version: str | None = Field(default=None, max_length=120)
     ssh_username: str | None = Field(default=None, max_length=120)
     ssh_password: str | None = Field(default=None, max_length=255)
     ssh_port: int | None = None
+    snmp_enabled: bool = False
+    snmp_port: int | None = None
+    snmp_version: str | None = Field(default="v2c", max_length=10)
+    snmp_ro_community: str | None = Field(default=None, max_length=255)
+    snmp_rw_community: str | None = Field(default=None, max_length=255)
     netconf_enabled: bool = False
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
+    supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
+    status: str | None = "active"
     is_active: bool = True
 
 
@@ -371,13 +384,22 @@ class OLTDeviceUpdate(BaseModel):
     vendor: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     serial_number: str | None = Field(default=None, max_length=120)
+    firmware_version: str | None = Field(default=None, max_length=120)
+    software_version: str | None = Field(default=None, max_length=120)
     ssh_username: str | None = Field(default=None, max_length=120)
     ssh_password: str | None = Field(default=None, max_length=255)
     ssh_port: int | None = None
+    snmp_enabled: bool | None = None
+    snmp_port: int | None = None
+    snmp_version: str | None = Field(default=None, max_length=10)
+    snmp_ro_community: str | None = Field(default=None, max_length=255)
+    snmp_rw_community: str | None = Field(default=None, max_length=255)
     netconf_enabled: bool | None = None
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
+    supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
+    status: str | None = None
     is_active: bool | None = None
 
 

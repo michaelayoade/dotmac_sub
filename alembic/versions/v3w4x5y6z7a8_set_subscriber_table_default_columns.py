@@ -23,7 +23,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _table_shape() -> sa.Table:
+def _table_shape() -> sa.TableClause:
     return sa.table(
         "table_column_default_config",
         sa.column("id", postgresql.UUID(as_uuid=True)),
@@ -101,4 +101,3 @@ def downgrade() -> None:
             "DELETE FROM table_column_default_config WHERE table_key = :table_key"
         ).bindparams(table_key="subscribers")
     )
-

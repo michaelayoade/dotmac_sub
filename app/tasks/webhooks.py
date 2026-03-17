@@ -14,6 +14,7 @@ import httpx
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,8 @@ def deliver_webhook(self, delivery_id: str):
 
         # Add signature if secret is configured
         if endpoint.secret:
-            signature = _compute_signature(payload_json, endpoint.secret)
+            plaintext_secret = decrypt_credential(endpoint.secret) or endpoint.secret
+            signature = _compute_signature(payload_json, plaintext_secret)
             headers["X-Webhook-Signature-256"] = f"sha256={signature}"
 
         # Update attempt timestamp only - count is incremented on failure

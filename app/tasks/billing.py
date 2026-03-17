@@ -14,11 +14,12 @@ def run_invoice_cycle() -> dict[str, int]:
     try:
         result = billing_automation_service.run_invoice_cycle(session)
         processed = result.get("subscriptions_billed", 0)
-        errors = 0
+        errors = result.get("errors", 0)
         logger.info(
-            "Billing invoice cycle completed: %d billed, %d invoices created",
+            "Billing invoice cycle completed: %d billed, %d invoices created, %d errors",
             processed,
             result.get("invoices_created", 0),
+            errors,
         )
         return {"processed": processed, "errors": errors}
     except Exception as e:

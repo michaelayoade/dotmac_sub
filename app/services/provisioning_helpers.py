@@ -195,6 +195,26 @@ def _ensure_ip_assignment_for_version(
         .filter(IPAssignment.is_active.is_(True))
         .first()
     )
+    # If no active assignment, check for an inactive one (e.g. from suspension)
+    # and reactivate it to preserve IP stability across suspend/resume cycles.
+    if not assignment:
+        inactive_assignment = (
+            db.query(IPAssignment)
+            .filter(IPAssignment.subscription_id == subscription.id)
+            .filter(IPAssignment.ip_version == ip_version)
+            .filter(IPAssignment.is_active.is_(False))
+            .order_by(IPAssignment.updated_at.desc())
+            .first()
+        )
+        if inactive_assignment:
+            inactive_assignment.is_active = True
+            assignment = inactive_assignment
+            logger.info(
+                "Reactivated existing IP assignment %s for subscription %s",
+                assignment.id,
+                subscription.id,
+            )
+
     version_key = ip_version.value
     override_address_id = context.get(f"{version_key}_address_id")
     override_address_value = context.get(f"{version_key}_address")

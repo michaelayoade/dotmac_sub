@@ -23,15 +23,35 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
     limit = min(limit, _MAX_SEARCH_LIMIT)
     escaped = _escape_like(term)
     like_term = f"%{escaped}%"
+
+    # Split query into words for multi-word name matching
+    # e.g. "Dotmac Karu" matches first_name~Dotmac AND last_name~Karu
+    words = term.split()
+    conditions = [
+        Subscriber.first_name.ilike(like_term),
+        Subscriber.last_name.ilike(like_term),
+        Subscriber.email.ilike(like_term),
+        Subscriber.account_number.ilike(like_term),
+        Subscriber.subscriber_number.ilike(like_term),
+    ]
+    if len(words) >= 2:
+        # Also match first word against first_name + second against last_name
+        first_like = f"%{_escape_like(words[0])}%"
+        rest_like = f"%{_escape_like(' '.join(words[1:]))}%"
+        from sqlalchemy import and_
+
+        conditions.append(
+            and_(
+                Subscriber.first_name.ilike(first_like),
+                Subscriber.last_name.ilike(rest_like),
+            )
+        )
+
     people = (
         db.query(Subscriber)
         .filter(
             Subscriber.is_active.is_(True),
-            or_(
-                Subscriber.first_name.ilike(like_term),
-                Subscriber.last_name.ilike(like_term),
-                Subscriber.email.ilike(like_term),
-            ),
+            or_(*conditions),
         )
         .order_by(Subscriber.last_name, Subscriber.first_name)
         .limit(limit)

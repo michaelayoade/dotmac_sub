@@ -165,6 +165,57 @@
                 </div>
             </div>
 
+            <!-- Availability Controls -->
+            {% if reseller_availability or location_availability or category_availability or billing_mode_availability %}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Availability Controls</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    {% if reseller_availability %}
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Resellers ({{ reseller_availability|length }})</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            {% for ra in reseller_availability %}
+                            <span class="inline-flex items-center rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">{{ ra.reseller.name if ra.reseller else 'Unknown' }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if location_availability %}
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Locations ({{ location_availability|length }})</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            {% for la in location_availability %}
+                            <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">{{ la.pop_site.name if la.pop_site else 'Unknown' }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if category_availability %}
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Subscriber Categories</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            {% for ca in category_availability %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">{{ ca.subscriber_category.value | replace('_', ' ') | title }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if billing_mode_availability %}
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Billing Modes</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            {% for ba in billing_mode_availability %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">{{ ba.billing_mode.value | title }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Subscriptions -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -178,7 +229,7 @@
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">
                                     {% if sub.account and sub.account.subscriber and sub.account.subscriber.person %}
-                                        {{ sub.account.subscriber.person.first_name }} {{ sub.account.subscriber.person.last_name }}
+                                        {{ sub.account.first_name }} {{ sub.account.last_name }}
                                     {% elif sub.account and sub.account.subscriber and sub.account.subscriber.organization %}
                                         {{ sub.account.subscriber.organization.name }}
                                     {% else %}

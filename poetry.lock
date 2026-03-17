@@ -3207,6 +3207,22 @@ files = [
 windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
+name = "pymysql"
+version = "1.1.2"
+description = "Pure Python MySQL Driver"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "pymysql-1.1.2-py3-none-any.whl", hash = "sha256:e6b1d89711dd51f8f74b1631fe08f039e7d76cf67a42a323d3178f0f25762ed9"},
+    {file = "pymysql-1.1.2.tar.gz", hash = "sha256:4961d3e165614ae65014e361811a724e2044ad3ea3739de9903ae7c21f539f03"},
+]
+
+[package.extras]
+ed25519 = ["PyNaCl (>=1.4.0)"]
+rsa = ["cryptography"]
+
+[[package]]
 name = "pynacl"
 version = "1.6.2"
 description = "Python binding to the Networking and Cryptography (NaCl) library"
@@ -3876,6 +3892,26 @@ anyio = "*"
 fastapi = "*"
 starlette = "*"
 uvicorn = "*"
+
+[[package]]
+name = "sshtunnel"
+version = "0.4.0"
+description = "Pure python SSH tunnels"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "sshtunnel-0.4.0-py2.py3-none-any.whl", hash = "sha256:98e54c26f726ab8bd42b47a3a21fca5c3e60f58956f0f70de2fb8ab0046d0606"},
+    {file = "sshtunnel-0.4.0.tar.gz", hash = "sha256:e7cb0ea774db81bf91844db22de72a40aae8f7b0f9bb9ba0f666d474ef6bf9fc"},
+]
+
+[package.dependencies]
+paramiko = ">=2.7.2"
+
+[package.extras]
+build-sphinx = ["sphinx", "sphinxcontrib-napoleon"]
+dev = ["check-manifest"]
+test = ["tox (>=1.8.1)"]
 
 [[package]]
 name = "starlette"
@@ -4594,4 +4630,4 @@ test = ["pytest"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "30ecd9635242f268b7a76eafbce1f9438a1eeb490b0fb802ec36176cd7d8ec61"
+content-hash = "505465d960fa1e060e9906b0255eda0bdc34624e0c821a4ddd28be0cfaba1324"

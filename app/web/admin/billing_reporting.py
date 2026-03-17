@@ -1,6 +1,5 @@
 """Admin billing reporting/config routes."""
 
-from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -15,20 +14,10 @@ from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
 from app.services.auth_dependencies import require_permission
+from app.validators.forms import parse_decimal
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
-
-
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
-    if value is None or value == "":
-        if default is not None:
-            return default
-        raise ValueError(f"{field} is required")
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field} must be a valid number") from exc
 
 
 @router.get("/tax-rates", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:tax:read"))])
@@ -61,7 +50,7 @@ def billing_tax_rate_create(
     try:
         payload = TaxRateCreate(
             name=name.strip(),
-            rate=_parse_decimal(rate, "rate"),
+            rate=parse_decimal(rate, "rate"),
             code=code.strip() if code else None,
             description=description.strip() if description else None,
         )

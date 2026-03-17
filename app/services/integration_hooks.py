@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import shlex
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -421,8 +422,7 @@ def _execute_cli_hook(*, hook: IntegrationHook, payload: dict[str, Any]) -> tupl
     if not command:
         raise ValueError("CLI hook command is empty")
     result = subprocess.run(
-        command,
-        shell=True,
+        shlex.split(command),
         capture_output=True,
         text=True,
         timeout=20,

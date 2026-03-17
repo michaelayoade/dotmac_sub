@@ -14,11 +14,11 @@ def build_listing_data(
     db,
     *,
     page: int,
+    per_page: int = 50,
     status: str | None,
     customer_ref: str | None,
 ) -> dict[str, object]:
     """Build paginated listing data and status counts for dunning page."""
-    per_page = 50
     offset = (page - 1) * per_page
 
     account_ids = []

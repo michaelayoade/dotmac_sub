@@ -459,3 +459,45 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
     )
     return RedirectResponse("/admin/network/radius", status_code=303)
 
+
+
+# --- Active Sessions (Who's Online) ---
+
+@router.get("/sessions", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def active_sessions_page(
+    request: Request,
+    search: str = "",
+    nas_filter: str = "",
+    db: Session = Depends(get_db),
+):
+    """Who's Online — live RADIUS active sessions."""
+    context = _base_context(request, db, active_page="radius")
+    context.update(
+        web_network_radius_service.active_sessions_page_data(
+            db,
+            search=search,
+            nas_filter=nas_filter,
+        )
+    )
+    return templates.TemplateResponse("admin/network/sessions.html", context)
+
+
+# --- RADIUS Auth Errors ---
+
+@router.get("/radius-errors", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def radius_auth_errors_page(
+    request: Request,
+    error_type: str = "",
+    page: int = 1,
+    db: Session = Depends(get_db),
+):
+    """RADIUS authentication error log."""
+    context = _base_context(request, db, active_page="radius")
+    context.update(
+        web_network_radius_service.radius_auth_errors_page_data(
+            db,
+            error_type=error_type,
+            page=page,
+        )
+    )
+    return templates.TemplateResponse("admin/network/radius_errors.html", context)

@@ -41,6 +41,7 @@ from app.services.customer_portal_flows import (
     submit_payment_arrangement,
     verify_and_record_payment,
 )
+from app.services.customer_portal_notifications import get_notifications_page
 from app.services.customer_portal_session import (
     _CUSTOMER_SESSION_PREFIX,
     _CUSTOMER_SESSIONS,
@@ -104,6 +105,7 @@ __all__ = [
     "get_arrangement_error_context",
     "get_payment_arrangement_detail",
     "get_invoice_detail",
+    "get_notifications_page",
     "_resolve_payment_provider",
     "get_payment_page",
     "verify_and_record_payment",

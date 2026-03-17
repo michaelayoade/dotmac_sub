@@ -7,8 +7,9 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from starlette.datastructures import UploadFile
+from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.web.auth.dependencies import AuthenticationRequired
 
@@ -104,6 +105,7 @@ def _friendly_redirect_error_message(error_value: str, status_code: int) -> str:
 
 def _template_response(request: Request, status_code: int, message: str):
     return templates.TemplateResponse(
+        request,
         f"errors/{status_code}.html",
         {
             "request": request,
@@ -114,31 +116,70 @@ def _template_response(request: Request, status_code: int, message: str):
     )
 
 
-def register_error_handlers(app) -> None:
-    @app.middleware("http")
-    async def redirect_error_template_middleware(request: Request, call_next):
-        response = await call_next(request)
+class RedirectErrorTemplateMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        captured: list[Message] = []
+
+        async def send_wrapper(asgi_message: Message) -> None:
+            captured.append(dict(asgi_message))
+
+        await self.app(scope, receive, send_wrapper)
+
+        start_message = next(
+            (message for message in captured if message["type"] == "http.response.start"),
+            None,
+        )
+        if start_message is None:
+            return
+
+        headers = MutableHeaders(scope=start_message)
         if request.headers.get("HX-Request", "").lower() == "true":
-            return response
-        if response.status_code not in {301, 302, 303, 307, 308}:
-            return response
-        location = response.headers.get("location")
-        if not location or "error=" not in location:
-            return response
+            for asgi_message in captured:
+                await send(asgi_message)
+            return
+
+        status_code = start_message["status"]
+        location = headers.get("location")
+        if status_code not in {301, 302, 303, 307, 308} or not location or "error=" not in location:
+            for asgi_message in captured:
+                await send(asgi_message)
+            return
 
         parsed = urlparse(location)
         params = parse_qs(parsed.query or "")
         raw = params.get("error", [None])[0]
         if raw is None:
-            return response
+            for asgi_message in captured:
+                await send(asgi_message)
+            return
 
         raw_message = unquote_plus(str(raw)).strip()
         token = raw_message.lower().replace(" ", "_")
-        status_code = _REDIRECT_ERROR_TOKEN_TO_STATUS.get(token)
-        if status_code is None:
-            return response
-        message = _friendly_redirect_error_message(raw_message, status_code)
-        return _template_response(request, status_code=status_code, message=message)
+        mapped_status = _REDIRECT_ERROR_TOKEN_TO_STATUS.get(token)
+        if mapped_status is None:
+            for asgi_message in captured:
+                await send(asgi_message)
+            return
+
+        friendly_message = _friendly_redirect_error_message(raw_message, mapped_status)
+        response = _template_response(
+            request,
+            status_code=mapped_status,
+            message=friendly_message,
+        )
+        await response(scope, receive, send)
+
+
+def register_error_handlers(app) -> None:
+    app.add_middleware(RedirectErrorTemplateMiddleware)
 
     @app.exception_handler(AuthenticationRequired)
     async def auth_required_handler(request: Request, exc: AuthenticationRequired):

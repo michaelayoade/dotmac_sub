@@ -120,23 +120,35 @@
         <p class="text-sm text-stone-500 dark:text-stone-400">
             Page <span class="font-semibold text-stone-700 dark:text-stone-300">{{ page }}</span> of <span class="font-semibold text-stone-700 dark:text-stone-300">{{ total_pages }}</span>
         </p>
-        <div class="flex items-center gap-2">
-            {% if page > 1 %}
-            <a href="/portal/services?page={{ page - 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                </svg>
-                Previous
-            </a>
-            {% endif %}
-            {% if page < total_pages %}
-            <a href="/portal/services?page={{ page + 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
-                Next
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                </svg>
-            </a>
-            {% endif %}
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+                <span>Show</span>
+                <select onchange="window.location.href='/portal/services?page=1&per_page=' + this.value + '{{ status_param }}'"
+                        class="rounded-lg border-0 bg-stone-100 py-1 pl-2 pr-7 text-sm text-stone-700 focus:ring-2 focus:ring-[var(--color-brand-500)] dark:bg-stone-700 dark:text-stone-300">
+                    {% for size in [10, 25, 50, 100] %}
+                    <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+                    {% endfor %}
+                </select>
+                <span>rows</span>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/portal/services?page={{ page - 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                    </svg>
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="/portal/services?page={{ page + 1 }}&per_page={{ per_page }}{{ status_param }}" class="inline-flex items-center gap-1 rounded-xl border-2 border-stone-200 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-all hover:border-stone-300 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300">
+                    Next
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </a>
+                {% endif %}
+            </div>
         </div>
     </div>
     {% endif %}

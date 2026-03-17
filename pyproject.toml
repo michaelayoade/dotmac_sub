@@ -39,6 +39,8 @@ weasyprint = "61.2"
 aiosmtpd = "1.4.6"
 sse-starlette = "^1.6.0"
 boto3 = "^1.40.0"
+pymysql = "^1.1.2"
+sshtunnel = "^0.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "8.2.2"
@@ -121,6 +123,7 @@ module = [
     "app.services.integrations.accounting_sync",
     "app.services.integrations.connectors.whatsapp",
     "app.services.nas",
+    "app.services.nas_pkg.web_builders",
     "app.services.network.ont_tr069",
     "app.services.reseller_portal",
     "app.services.snmp_discovery",
@@ -166,6 +169,29 @@ module = [
     "app.websocket.manager",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "scripts.migration",
+    "scripts.migration.*",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.catalog.add_ons",
+    "app.services.catalog.credentials",
+    "app.services.catalog.offers",
+    "app.services.catalog.profiles",
+    "app.services.catalog.radius",
+    "app.services.gis",
+    "app.services.network.cpe",
+    "app.services.network.fiber_services",
+    "app.services.network.ip",
+    "app.services.network.olt",
+    "app.services.network.splitters",
+]
+disable_error_code = ["override"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "alembic", "scripts"]

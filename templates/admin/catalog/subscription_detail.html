@@ -231,7 +231,7 @@
                         {% if subscription.account and subscription.account.subscriber %}
                         <a href="/admin/subscribers/{{ subscription.account.subscriber.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
                             {% if subscription.account.subscriber.person %}
-                                {{ subscription.account.subscriber.person.first_name }} {{ subscription.account.subscriber.person.last_name }}
+                                {{ subscription.account.first_name }} {{ subscription.account.last_name }}
                             {% elif subscription.account.subscriber.organization %}
                                 {{ subscription.account.subscriber.organization.name }}
                             {% else %}

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.webhook import WebhookEndpoint
 from app.services.common import coerce_uuid
+from app.services.credential_crypto import encrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def create_webhook_endpoint(
     endpoint = WebhookEndpoint(
         name=name,
         url=url,
-        secret=endpoint_secret,
+        secret=encrypt_credential(endpoint_secret),
         is_active=is_active,
     )
     db.add(endpoint)
@@ -79,7 +80,7 @@ def update_webhook_endpoint(
     endpoint.name = name
     endpoint.url = url
     if secret:
-        endpoint.secret = secret
+        endpoint.secret = encrypt_credential(secret)
     endpoint.is_active = is_active
     db.commit()
     return endpoint

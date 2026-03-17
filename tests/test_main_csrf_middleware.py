@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from starlette.requests import Request
 from starlette.responses import Response
@@ -28,8 +31,13 @@ def _build_request(*, path: str = "/admin/billing") -> Request:
     return Request(scope, receive)
 
 
-@pytest.mark.asyncio
-async def test_csrf_middleware_reraises_no_response_when_request_is_still_connected(monkeypatch):
+def _run_async(awaitable):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, awaitable)
+        return future.result()
+
+
+def test_csrf_middleware_returns_204_when_no_response_and_request_still_connected(monkeypatch, caplog):
     request = _build_request()
 
     async def _connected() -> bool:
@@ -40,12 +48,13 @@ async def test_csrf_middleware_reraises_no_response_when_request_is_still_connec
     async def call_next(_request: Request) -> Response:
         raise RuntimeError("No response returned.")
 
-    with pytest.raises(RuntimeError, match="No response returned."):
-        await csrf_middleware(request, call_next)
+    response = _run_async(csrf_middleware(request, call_next))
+
+    assert response.status_code == 204
+    assert "reload_or_shutdown" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):
+def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):
     request = _build_request()
 
     async def _disconnected() -> bool:
@@ -56,6 +65,6 @@ async def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):
     async def call_next(_request: Request) -> Response:
         raise RuntimeError("No response returned.")
 
-    response = await csrf_middleware(request, call_next)
+    response = _run_async(csrf_middleware(request, call_next))
 
     assert response.status_code == 204

@@ -9,7 +9,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -17,7 +16,6 @@ from app.models.subscriber import Subscriber
 from app.models.support import (
     Ticket,
     TicketChannel,
-    TicketLink,
     TicketPriority,
     TicketStatus,
 )
@@ -366,13 +364,7 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
     comments = support_service.ticket_comments.list(db, str(ticket.id), limit=500, offset=0)
     sla_events = support_service.ticket_sla_events.list(db, str(ticket.id), limit=200, offset=0)
-    links = (
-        db.query(TicketLink)
-        .filter(or_(TicketLink.from_ticket_id == ticket.id, TicketLink.to_ticket_id == ticket.id))
-        .order_by(TicketLink.created_at.desc())
-        .limit(100)
-        .all()
-    )
+    links = support_service.tickets.list_links(db, str(ticket.id), limit=100)
 
     from app.services.audit_helpers import build_audit_activities
 

@@ -272,10 +272,7 @@ def update_comment(
     comment = support_service.ticket_comments.get(db, str(comment_id))
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
-    support_service.ticket_comments.update(db, comment=comment, payload=payload, actor_id=_actor_id(auth), request=None)
-    db.commit()
-    db.refresh(comment)
-    return comment
+    return support_service.ticket_comments.update(db, comment=comment, payload=payload, actor_id=_actor_id(auth), request=None)
 
 
 @router.delete(
@@ -288,7 +285,6 @@ def delete_comment(ticket_id: UUID, comment_id: UUID, auth=Depends(require_user_
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
     support_service.ticket_comments.delete(db, comment=comment, actor_id=_actor_id(auth), request=None)
-    db.commit()
 
 
 @router.post(
@@ -298,10 +294,7 @@ def delete_comment(ticket_id: UUID, comment_id: UUID, auth=Depends(require_user_
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def create_sla_event(payload: TicketSlaEventCreate, db: Session = Depends(get_db)):
-    event = support_service.ticket_sla_events.create(db, payload)
-    db.commit()
-    db.refresh(event)
-    return event
+    return support_service.ticket_sla_events.create(db, payload)
 
 
 @router.get(
@@ -335,10 +328,7 @@ def list_sla_events(
 )
 def update_sla_event(event_id: UUID, payload: TicketSlaEventUpdate, db: Session = Depends(get_db)):
     event = support_service.ticket_sla_events.get(db, str(event_id))
-    support_service.ticket_sla_events.update(db, event, payload)
-    db.commit()
-    db.refresh(event)
-    return event
+    return support_service.ticket_sla_events.update(db, event, payload)
 
 
 @router.delete(
@@ -349,4 +339,3 @@ def update_sla_event(event_id: UUID, payload: TicketSlaEventUpdate, db: Session 
 def delete_sla_event(event_id: UUID, db: Session = Depends(get_db)):
     event = support_service.ticket_sla_events.get(db, str(event_id))
     support_service.ticket_sla_events.delete(db, event)
-    db.commit()

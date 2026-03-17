@@ -20,6 +20,10 @@ from app.models.network_monitoring import (
     NetworkDevice,
 )
 from app.services import network as network_service
+from app.services.web_network_core_devices_inventory import (
+    _network_device_is_olt_candidate,
+    resolve_olt_device_for_network_device,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -655,6 +659,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "serial_number": monitoring_device.serial_number
         if monitoring_device and monitoring_device.serial_number
         else olt.serial_number,
+        "firmware_version": olt.firmware_version,
+        "software_version": olt.software_version,
+        "supported_pon_types": getattr(olt, "supported_pon_types", None),
         "status": monitoring_device.status.value if monitoring_device and monitoring_device.status else ("active" if olt.is_active else "inactive"),
         "last_ping_at": monitoring_device.last_ping_at if monitoring_device else None,
         "last_snmp_at": monitoring_device.last_snmp_at if monitoring_device else None,
@@ -1050,6 +1057,40 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         .all()
     )
 
+    # VLANs and IP pools scoped to this OLT
+    from app.models.network import IpPool, Vlan
+
+    olt_vlans = list(
+        db.scalars(
+            select(Vlan)
+            .where(Vlan.olt_device_id == olt.id)
+            .order_by(Vlan.tag.asc())
+        ).all()
+    )
+    olt_ip_pools = list(
+        db.scalars(
+            select(IpPool)
+            .where(IpPool.olt_device_id == olt.id)
+            .order_by(IpPool.name.asc())
+        ).all()
+    )
+    available_vlans = list(
+        db.scalars(
+            select(Vlan)
+            .where(Vlan.olt_device_id.is_(None))
+            .where(Vlan.is_active.is_(True))
+            .order_by(Vlan.tag.asc())
+        ).all()
+    )
+    available_ip_pools = list(
+        db.scalars(
+            select(IpPool)
+            .where(IpPool.olt_device_id.is_(None))
+            .where(IpPool.is_active.is_(True))
+            .order_by(IpPool.name.asc())
+        ).all()
+    )
+
     return {
         "olt": olt,
         "pon_ports": pon_ports,
@@ -1074,6 +1115,10 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "live_board_others": live_board_others,
         "pon_port_table_rows": pon_port_table_rows,
         "config_backups": config_backups,
+        "olt_vlans": olt_vlans,
+        "olt_ip_pools": olt_ip_pools,
+        "available_vlans": available_vlans,
+        "available_ip_pools": available_ip_pools,
     }
 
 
@@ -1384,7 +1429,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     subscription, signal classification, and network location.
     """
     try:
-        ont = network_service.ont_units.get(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
     except Exception:
         return None
 
@@ -1504,6 +1549,21 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     available_profiles = ont_provisioning_profiles.list(db, is_active=True, limit=50)
 
+    # Available firmware images matching this ONT's vendor
+    from app.models.network import OntFirmwareImage
+
+    ont_vendor = str(getattr(ont, "vendor", "") or "").strip()
+    firmware_stmt = (
+        select(OntFirmwareImage)
+        .where(OntFirmwareImage.is_active.is_(True))
+        .order_by(OntFirmwareImage.vendor, OntFirmwareImage.version.desc())
+    )
+    if ont_vendor:
+        firmware_stmt = firmware_stmt.where(
+            OntFirmwareImage.vendor.ilike(f"%{ont_vendor}%")
+        )
+    available_firmware = list(db.scalars(firmware_stmt.limit(20)).all())
+
     return {
         "ont": ont,
         "assignment": assignment,
@@ -1513,6 +1573,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "subscriber_info": subscriber_info,
         "provisioning_info": provisioning_info,
         "available_profiles": available_profiles,
+        "available_firmware": available_firmware,
     }
 
 
@@ -1551,9 +1612,31 @@ def consolidated_page_data(
     """Return consolidated network-devices page payload."""
     term = (search or "").strip().lower()
 
-    core_devices = db.scalars(
-        select(NetworkDevice).order_by(NetworkDevice.name).limit(200)
-    ).all()
+    all_monitoring_devices = list(db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all())
+    promoted_olts = [
+        resolve_olt_device_for_network_device(db, device)
+        for device in all_monitoring_devices
+        if device.is_active and _network_device_is_olt_candidate(device)
+    ]
+    promoted_olt_keys = {
+        (
+            str(getattr(device, "mgmt_ip", "") or "").strip(),
+            str(getattr(device, "hostname", "") or "").strip(),
+            str(getattr(device, "name", "") or "").strip(),
+        )
+        for device in all_monitoring_devices
+        if device.is_active and _network_device_is_olt_candidate(device)
+    }
+    core_devices = [
+        device
+        for device in all_monitoring_devices
+        if (
+            str(getattr(device, "mgmt_ip", "") or "").strip(),
+            str(getattr(device, "hostname", "") or "").strip(),
+            str(getattr(device, "name", "") or "").strip(),
+        )
+        not in promoted_olt_keys
+    ][:200]
     core_roles = {
         "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
         "distribution": len(
@@ -1566,7 +1649,7 @@ def consolidated_page_data(
         "edge": len([d for d in core_devices if d.role and d.role.value == "edge"]),
     }
 
-    olts = network_service.olt_devices.list(
+    raw_olts = network_service.olt_devices.list(
         db=db,
         is_active=None,
         order_by="name",
@@ -1574,7 +1657,11 @@ def consolidated_page_data(
         limit=100,
         offset=0,
     )
-    monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
+    olts_by_id = {str(olt.id): olt for olt in raw_olts}
+    for olt in promoted_olts:
+        olts_by_id[str(olt.id)] = olt
+    olts = sorted(olts_by_id.values(), key=lambda olt: str(getattr(olt, "name", "") or "").lower())
+    monitoring_devices = all_monitoring_devices
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
     by_name = {d.name: d for d in monitoring_devices if d.name}
@@ -1638,12 +1725,13 @@ def consolidated_page_data(
         resolved_count = db_count if db_count > 0 else _snmp_pon_count(olt)
         olt_stats[str(olt.id)] = {"pon_ports": resolved_count}
 
+    ont_limit = 5000 if term else 500
     active_onts = network_service.ont_units.list(
         db=db,
         is_active=True,
         order_by="serial_number",
         order_dir="asc",
-        limit=500,
+        limit=ont_limit,
         offset=0,
     )
     inactive_onts = network_service.ont_units.list(
@@ -1651,7 +1739,7 @@ def consolidated_page_data(
         is_active=False,
         order_by="serial_number",
         order_dir="asc",
-        limit=500,
+        limit=ont_limit,
         offset=0,
     )
     onts = active_onts + inactive_onts

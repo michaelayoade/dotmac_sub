@@ -1,7 +1,5 @@
 """Admin billing management web routes."""
 
-from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID
 
@@ -19,6 +17,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -38,32 +37,6 @@ def _placeholder_context(request: Request, db: Session, title: str, active_page:
         "empty_title": f"No {title.lower()} yet",
         "empty_message": "Billing configuration will appear once it is enabled.",
     }
-
-
-def _parse_uuid(value: str | None, field: str):
-    if not value:
-        raise ValueError(f"{field} is required")
-    return UUID(value)
-
-
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
-    if value is None or value == "":
-        if default is not None:
-            return default
-        raise ValueError(f"{field} is required")
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field} must be a valid number") from exc
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
 
 
 @router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:read"))])
@@ -316,9 +289,9 @@ def invoice_create(
             line_items_json=line_items_json,
             issue_immediately=issue_immediately,
             send_notification=send_notification,
-            parse_uuid=_parse_uuid,
-            parse_datetime=_parse_datetime,
-            parse_decimal=_parse_decimal,
+            parse_uuid=parse_uuid,
+            parse_datetime=parse_datetime,
+            parse_decimal=parse_decimal,
         )
     except Exception as exc:
         state = web_billing_invoice_forms_service.new_form_state(
@@ -413,8 +386,8 @@ def invoice_update(
             memo=memo,
             proforma_invoice=proforma_invoice,
             line_items_json=line_items_json,
-            parse_uuid=_parse_uuid,
-            parse_datetime=_parse_datetime,
+            parse_uuid=parse_uuid,
+            parse_datetime=parse_datetime,
         )
         from app.web.admin import get_current_user
         current_user = get_current_user(request)

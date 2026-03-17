@@ -575,6 +575,36 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
 
+        # ONT discovery (SNMP walk → upsert OntUnit rows)
+        ont_discovery_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "ont_discovery_interval_minutes",
+            15,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_discovery",
+            task_name="app.tasks.ont_discovery.discover_all_olt_onts",
+            enabled=True,
+            interval_seconds=max(ont_discovery_minutes * 60, 120),
+        )
+
+        # OLT config backup (SSH-based running config retrieval)
+        olt_backup_hours = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "olt_backup_interval_hours",
+            24,
+        )
+        _sync_scheduled_task(
+            session,
+            name="olt_config_backup",
+            task_name="app.tasks.olt_config_backup.backup_all_olts",
+            enabled=True,
+            interval_seconds=max(olt_backup_hours * 3600, 3600),
+        )
+
         # SLA breach detection - runs every 30 minutes
         sla_breach_enabled = _effective_bool(
             session,

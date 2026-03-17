@@ -69,6 +69,7 @@ def reseller_accounts(
     db: Session,
     page: int,
     per_page: int,
+    search: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
@@ -80,6 +81,7 @@ def reseller_accounts(
         reseller_id=str(context["reseller"].id),
         limit=per_page,
         offset=offset,
+        search=search,
     )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
@@ -91,6 +93,7 @@ def reseller_accounts(
             "accounts": accounts,
             "page": page,
             "per_page": per_page,
+            "search": search or "",
         },
     )
 
@@ -121,6 +124,186 @@ def reseller_account_view(
         max_age=customer_portal.get_session_max_age(db),
     )
     return response
+
+
+def reseller_account_detail(
+    request: Request,
+    db: Session,
+    account_id: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    detail = reseller_portal.get_account_detail(
+        db,
+        reseller_id=str(context["reseller"].id),
+        account_id=account_id,
+    )
+    if not detail:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "reseller/accounts/detail.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "account": detail,
+        },
+    )
+
+
+def reseller_account_invoices(
+    request: Request,
+    db: Session,
+    account_id: str,
+    page: int,
+    per_page: int,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    offset = (page - 1) * per_page
+    invoices = reseller_portal.list_account_invoices(
+        db,
+        reseller_id=str(context["reseller"].id),
+        account_id=account_id,
+        limit=per_page,
+        offset=offset,
+    )
+    if invoices is None:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "reseller/accounts/invoices.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "invoices": invoices,
+            "account_id": account_id,
+            "page": page,
+            "per_page": per_page,
+        },
+    )
+
+
+def reseller_invoice_detail(
+    request: Request,
+    db: Session,
+    account_id: str,
+    invoice_id: str,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    invoice = reseller_portal.get_invoice_detail(
+        db,
+        reseller_id=str(context["reseller"].id),
+        account_id=account_id,
+        invoice_id=invoice_id,
+    )
+    if not invoice:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "reseller/accounts/invoice_detail.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "invoice": invoice,
+            "account_id": account_id,
+        },
+    )
+
+
+def reseller_revenue_report(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    summary = reseller_portal.get_revenue_summary(
+        db, reseller_id=str(context["reseller"].id)
+    )
+
+    return templates.TemplateResponse(
+        "reseller/reports/revenue.html",
+        {
+            "request": request,
+            "active_page": "reports",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "summary": summary,
+        },
+    )
+
+
+def reseller_profile(request: Request, db: Session):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    return templates.TemplateResponse(
+        "reseller/profile/index.html",
+        {
+            "request": request,
+            "active_page": "profile",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+        },
+    )
+
+
+def reseller_profile_update(
+    request: Request,
+    db: Session,
+    contact_email: str | None,
+    contact_phone: str | None,
+    notes: str | None,
+):
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    reseller = context["reseller"]
+    if contact_email is not None:
+        reseller.contact_email = contact_email.strip() or None
+    if contact_phone is not None:
+        reseller.contact_phone = contact_phone.strip() or None
+    if notes is not None:
+        reseller.notes = notes.strip() or None
+    db.commit()
+    db.refresh(reseller)
+
+    return templates.TemplateResponse(
+        "reseller/profile/index.html",
+        {
+            "request": request,
+            "active_page": "profile",
+            "current_user": context["current_user"],
+            "reseller": reseller,
+            "success": "Profile updated successfully.",
+        },
+    )
 
 
 def reseller_fiber_map(request: Request, db: Session):

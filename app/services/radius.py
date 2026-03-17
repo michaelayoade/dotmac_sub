@@ -77,6 +77,15 @@ def _external_password_row(
             credential.username,
         )
         return None
+    # Detect base64-encoded hashes from migration (no prefix, not crypt-style).
+    # These cannot be used as Cleartext-Password — they will cause auth failures.
+    if len(secret_hash) >= 20 and secret_hash.endswith("="):
+        logger.warning(
+            "Skipping external RADIUS password sync for %s: "
+            "opaque hash detected (likely migration artifact, not cleartext)",
+            credential.username,
+        )
+        return None
     return (default_attribute, default_op, secret_hash)
 
 
@@ -673,7 +682,7 @@ def _external_sync_nas(
                 text(f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"),  # noqa: S608
                 {
                     "ip": client_ip,
-                    "name": device.name,
+                    "name": (device.name or "")[:32],
                     "type": device.vendor.value if hasattr(device.vendor, "value") else "other",
                     "secret": secret,
                     "desc": device.description,

@@ -181,6 +181,24 @@ def round_money(value: Decimal | int | float | str) -> Decimal:
     """
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+def to_decimal(value: Decimal | int | float | str | None, default: Decimal = Decimal("0.00")) -> Decimal:
+    """Safely convert a value to Decimal.
+
+    Handles None and various numeric types that come back from SQLAlchemy
+    aggregate queries (which may return int, float, or Decimal).
+
+    Args:
+        value: Value to convert.
+        default: Returned when value is None.
+
+    Returns:
+        Decimal representation of value.
+    """
+    if value is None:
+        return default
+    return Decimal(str(value))
+
+
 def validate_positive_decimal(value: Decimal | None, label: str) -> Decimal | None:
     """Validate that a decimal value is positive.
 

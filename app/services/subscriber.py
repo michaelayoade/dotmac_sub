@@ -143,6 +143,15 @@ class Resellers(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def count(db: Session, is_active: bool | None) -> int:
+        query = db.query(func.count(Reseller.id))
+        if is_active is None:
+            query = query.filter(Reseller.is_active.is_(True))
+        else:
+            query = query.filter(Reseller.is_active == is_active)
+        return query.scalar() or 0
+
+    @staticmethod
     def update(db: Session, reseller_id: str, payload: ResellerUpdate):
         reseller = db.get(Reseller, reseller_id)
         if not reseller:

@@ -26,6 +26,12 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.offer_availability import (
+    OfferBillingModeAvailability,
+    OfferCategoryAvailability,
+    OfferLocationAvailability,
+    OfferResellerAvailability,
+)
 from app.models.domain_settings import SettingDomain
 from app.schemas.catalog import (
     CatalogOfferCreate,
@@ -98,6 +104,35 @@ def normalize_offer_description(
     if cleaned:
         lines.append(cleaned)
     return "\n".join(lines).strip() or None
+
+
+def get_offer_availability(
+    db: Session,
+    offer_id: str,
+) -> dict[str, object]:
+    """Load availability records for the offer detail page."""
+    return {
+        "reseller_availability": (
+            db.query(OfferResellerAvailability)
+            .filter(OfferResellerAvailability.offer_id == offer_id)
+            .all()
+        ),
+        "location_availability": (
+            db.query(OfferLocationAvailability)
+            .filter(OfferLocationAvailability.offer_id == offer_id)
+            .all()
+        ),
+        "category_availability": (
+            db.query(OfferCategoryAvailability)
+            .filter(OfferCategoryAvailability.offer_id == offer_id)
+            .all()
+        ),
+        "billing_mode_availability": (
+            db.query(OfferBillingModeAvailability)
+            .filter(OfferBillingModeAvailability.offer_id == offer_id)
+            .all()
+        ),
+    }
 
 
 def default_offer_form() -> dict[str, object]:

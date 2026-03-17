@@ -217,6 +217,7 @@ class NetworkDevice(Base):
     snmp_port: Mapped[int | None] = mapped_column(Integer)
     snmp_version: Mapped[str | None] = mapped_column(String(10))
     snmp_community: Mapped[str | None] = mapped_column(String(255))
+    snmp_rw_community: Mapped[str | None] = mapped_column(String(255))
     snmp_username: Mapped[str | None] = mapped_column(String(120))
     snmp_auth_protocol: Mapped[str | None] = mapped_column(String(16))
     snmp_auth_secret: Mapped[str | None] = mapped_column(String(255))

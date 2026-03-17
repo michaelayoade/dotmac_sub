@@ -35,6 +35,9 @@ def upgrade() -> None:
     for index_name, table_name, column_name in INDEXES:
         if not inspector.has_table(table_name):
             continue
+        col_names = {c["name"] for c in inspector.get_columns(table_name)}
+        if column_name not in col_names:
+            continue
         existing = [idx["name"] for idx in inspector.get_indexes(table_name)]
         if index_name not in existing:
             op.create_index(index_name, table_name, [column_name])

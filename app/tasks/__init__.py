@@ -17,7 +17,13 @@ from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
-from app.tasks.nas import cleanup_nas_backups
+from app.tasks.mrr import snapshot_mrr
+from app.tasks.nas import (
+    check_nas_health,
+    cleanup_nas_backups,
+    run_scheduled_backups,
+    update_subscriber_counts,
+)
 from app.tasks.network_monitoring import (
     refresh_core_device_ping,
     refresh_core_device_snmp,
@@ -26,11 +32,24 @@ from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_polling import poll_all_olt_signals
+from app.tasks.ont_discovery import discover_all_olt_onts
 from app.tasks.ont_provisioning import auto_link_profiles, detect_profile_drift
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
+from app.tasks.tr069 import (
+    check_device_health as tr069_check_device_health,
+)
+from app.tasks.tr069 import (
+    cleanup_tr069_records,
+)
+from app.tasks.tr069 import (
+    execute_pending_jobs as tr069_execute_pending_jobs,
+)
+from app.tasks.tr069 import (
+    sync_all_acs_devices as tr069_sync_all_acs_devices,
+)
 from app.tasks.usage import import_radius_accounting, run_usage_rating
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
@@ -82,6 +101,7 @@ __all__ = [
     "trim_bandwidth_stream",
     "backup_all_olts",
     "poll_all_olt_signals",
+    "discover_all_olt_onts",
     "run_bulk_activation_job",
     "run_service_migration_job",
     "discover_snmp_interfaces",
@@ -96,4 +116,12 @@ __all__ = [
     "deliver_notification_queue",
     "detect_profile_drift",
     "auto_link_profiles",
+    "snapshot_mrr",
+    "tr069_sync_all_acs_devices",
+    "tr069_execute_pending_jobs",
+    "tr069_check_device_health",
+    "cleanup_tr069_records",
+    "run_scheduled_backups",
+    "update_subscriber_counts",
+    "check_nas_health",
 ]

@@ -187,6 +187,7 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
         "subscriptions": subscriptions,
         "activities": build_audit_activities(db, "catalog_offer", str(offer_id), limit=10),
     })
+    context.update(web_catalog_offers_service.get_offer_availability(db, str(offer.id)))
     return templates.TemplateResponse("admin/catalog/offer_detail.html", context)
 
 
@@ -579,7 +580,7 @@ def catalog_subscription_update(
 
     try:
         actor_id = _get_actor_id(request)
-        web_catalog_subscriptions_service.update_subscription_with_audit(
+        updated = web_catalog_subscriptions_service.update_subscription_with_audit(
             db,
             subscription_id,
             payload_data,
@@ -587,6 +588,13 @@ def catalog_subscription_update(
             request,
             actor_id,
         )
+        # Redirect to subscriber detail (services tab) for better context
+        subscriber_id = getattr(updated, "subscriber_id", None)
+        if subscriber_id:
+            return RedirectResponse(
+                f"/admin/subscribers/{subscriber_id}?tab=services",
+                status_code=303,
+            )
         return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
     except ValidationError as exc:
         db.rollback()

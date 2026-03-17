@@ -1,6 +1,5 @@
 """Admin billing invoice action/detail routes."""
 
-from decimal import Decimal, InvalidOperation
 from time import sleep
 from uuid import UUID
 
@@ -20,26 +19,10 @@ from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.services.file_storage import build_content_disposition
 from app.services.object_storage import ObjectNotFoundError
+from app.validators.forms import parse_decimal, parse_uuid
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
-
-
-def _parse_uuid(value: str | None, field: str):
-    if not value:
-        raise ValueError(f"{field} is required")
-    return UUID(value)
-
-
-def _parse_decimal(value: str | None, field: str, default: Decimal | None = None) -> Decimal:
-    if value is None or value == "":
-        if default is not None:
-            return default
-        raise ValueError(f"{field} is required")
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field} must be a valid number") from exc
 
 
 def _invoice_pdf_response(
@@ -145,8 +128,8 @@ def invoice_line_create(
             quantity=quantity,
             unit_price=unit_price,
             tax_rate_id=tax_rate_id,
-            parse_uuid=_parse_uuid,
-            parse_decimal=_parse_decimal,
+            parse_uuid=parse_uuid,
+            parse_decimal=parse_decimal,
         )
     except Exception as exc:
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -183,7 +166,7 @@ def invoice_apply_credit(
             db,
             invoice_id=str(invoice_id),
             credit_note_id=credit_note_id,
-            amount=_parse_decimal(amount, "amount") if amount else None,
+            amount=parse_decimal(amount, "amount") if amount else None,
             memo=memo.strip() if memo else None,
         )
         from app.web.admin import get_current_user

@@ -240,6 +240,9 @@ class Subscriber(Base):
     prepaid_low_balance_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     prepaid_deactivation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Cached MRR (updated by nightly snapshot task)
+    mrr_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+
     # === Common Fields ===
     notes: Mapped[str | None] = mapped_column(Text)
     splynx_customer_id: Mapped[int | None] = mapped_column(Integer)

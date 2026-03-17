@@ -150,6 +150,36 @@ class TR069Summary:
     error: str | None = None
 
 
+def _resolve_param_paths_from_capability(
+    db: Session | None,
+    vendor: str | None,
+    model: str | None,
+    canonical_name: str,
+) -> list[str] | None:
+    """Resolve parameter paths from VendorModelCapability registry.
+
+    Returns device-specific TR-069 paths if a matching capability exists,
+    or None to fall back to hardcoded paths.
+    """
+    if not db or not vendor or not model:
+        return None
+    try:
+        from app.services.network.vendor_capabilities import (
+            tr069_parameter_maps,
+            vendor_capabilities,
+        )
+
+        capability = vendor_capabilities.resolve_capability(db, vendor, model)
+        if not capability:
+            return None
+        path = tr069_parameter_maps.resolve_path(db, str(capability.id), canonical_name)
+        if path:
+            return [path]
+    except Exception:
+        pass
+    return None
+
+
 def _extract_first(
     client: GenieACSClient,
     device: dict[str, Any],
@@ -167,12 +197,24 @@ def _extract_group(
     client: GenieACSClient,
     device: dict[str, Any],
     group_name: str,
+    *,
+    db: Session | None = None,
+    vendor: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
-    """Extract all parameters in a named group."""
+    """Extract all parameters in a named group.
+
+    If db/vendor/model are provided, attempts to resolve paths from the
+    VendorModelCapability registry first, falling back to hardcoded PARAM_GROUPS.
+    """
     group = PARAM_GROUPS.get(group_name, {})
     result: dict[str, Any] = {}
     for label, paths in group.items():
-        result[label] = _extract_first(client, device, paths)
+        # Try vendor-specific paths from parameter map
+        canonical = f"{group_name}.{label.lower().replace(' ', '_')}"
+        custom_paths = _resolve_param_paths_from_capability(db, vendor, model, canonical)
+        effective_paths = custom_paths if custom_paths else paths
+        result[label] = _extract_first(client, device, effective_paths)
     return result
 
 
@@ -254,11 +296,14 @@ class OntTR069:
             logger.error("TR-069 fetch failed for ONT %s: %s", ont.serial_number, e)
             return TR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
+        ont_vendor = getattr(ont, "vendor", None)
+        ont_model = getattr(ont, "model", None)
+
         summary = TR069Summary(available=True, ont_id=str(ont.id))
-        summary.system = _extract_group(client, device, "system")
-        summary.wan = _extract_group(client, device, "wan")
-        summary.lan = _extract_group(client, device, "lan")
-        summary.wireless = _extract_group(client, device, "wireless")
+        summary.system = _extract_group(client, device, "system", db=db, vendor=ont_vendor, model=ont_model)
+        summary.wan = _extract_group(client, device, "wan", db=db, vendor=ont_vendor, model=ont_model)
+        summary.lan = _extract_group(client, device, "lan", db=db, vendor=ont_vendor, model=ont_model)
+        summary.wireless = _extract_group(client, device, "wireless", db=db, vendor=ont_vendor, model=ont_model)
 
         # Ethernet ports
         for base_path in [_ETH_PORT_PATHS_IGD, _ETH_PORT_PATHS_DEV]:

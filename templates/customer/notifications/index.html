@@ -1,0 +1,77 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Notifications - My Account{% endblock %}
+
+{% block content %}
+<div class="space-y-6 stagger-children">
+    <!-- Header -->
+    <div>
+        <h1 class="text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Notifications</h1>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+            {% if total > 0 %}{{ total }} notification{{ 's' if total != 1 else '' }}{% else %}No notifications yet{% endif %}
+        </p>
+    </div>
+
+    <!-- Notifications List -->
+    <div class="space-y-3">
+        {% for notification in notifications %}
+        <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-sm backdrop-blur-sm transition-all duration-200 hover:shadow-md dark:border-stone-700/60 dark:bg-stone-800/80">
+            <div class="flex items-start gap-4 p-5">
+                <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl
+                    {% if notification.channel == 'email' %}bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400
+                    {% elif notification.channel == 'sms' %}bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400
+                    {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                    {% if notification.channel == 'email' %}
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    {% elif notification.channel == 'sms' %}
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+                    {% else %}
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                    {% endif %}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs font-semibold uppercase tracking-wider
+                            {% if notification.status.value == 'sent' %}text-emerald-600 dark:text-emerald-400
+                            {% elif notification.status.value == 'failed' %}text-red-600 dark:text-red-400
+                            {% else %}text-stone-500 dark:text-stone-400{% endif %}">
+                            {{ notification.entity_type | replace('_', ' ') | title }}
+                        </span>
+                        <span class="text-xs text-stone-400 dark:text-stone-500">{{ notification.created_at.strftime('%b %d, %Y %H:%M') if notification.created_at else '' }}</span>
+                    </div>
+                    <p class="text-sm text-stone-700 dark:text-stone-300">{{ notification.message }}</p>
+                    <p class="mt-1 text-xs text-stone-400 dark:text-stone-500">via {{ notification.channel }}</p>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+            <div class="flex flex-col items-center justify-center py-16 text-center">
+                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-stone-100 to-stone-200 dark:from-stone-700 dark:to-stone-600">
+                    <svg class="h-8 w-8 text-stone-400 dark:text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-stone-900 dark:text-white" style="font-family: var(--font-display);">No notifications yet</h3>
+                <p class="mt-1 max-w-sm text-sm text-stone-500 dark:text-stone-400">You'll see notifications about your account, invoices, and services here.</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if total > per_page %}
+    <div class="flex items-center justify-between">
+        <p class="text-sm text-stone-500 dark:text-stone-400">
+            Showing {{ ((page - 1) * per_page) + 1 }}–{{ [page * per_page, total] | min }} of {{ total }}
+        </p>
+        <div class="flex gap-2">
+            {% if page > 1 %}
+            <a href="/portal/notifications?page={{ page - 1 }}&per_page={{ per_page }}" class="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700">Previous</a>
+            {% endif %}
+            {% if page * per_page < total %}
+            <a href="/portal/notifications?page={{ page + 1 }}&per_page={{ per_page }}" class="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700">Next</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

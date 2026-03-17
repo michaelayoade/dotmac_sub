@@ -15,17 +15,34 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import SessionLocal, get_db
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
+from app.models.support import TicketChannel, TicketPriority
 from app.services import customer_portal
 from app.services import support as support_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.audit_helpers import build_audit_activities
 from app.services.bandwidth import bandwidth_samples
+from app.services.common import coerce_uuid
 from app.services.metrics_store import get_metrics_store
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
+
+logger = __import__("logging").getLogger(__name__)
+
+
+def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
+    """Emit a customer portal event (non-blocking)."""
+    try:
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        event_type = getattr(EventType, event_name, None)
+        if event_type:
+            emit_event(db, event_type, payload, actor="customer")
+    except Exception as e:
+        logger.warning("Failed to emit customer event %s: %s", event_name, e)
 
 
 def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
@@ -154,13 +171,65 @@ def customer_support(
 
 
 @router.get("/support/new", response_class=HTMLResponse)
-def customer_support_new_redirect() -> Response:
-    return RedirectResponse(url="/portal/support", status_code=303)
+def customer_support_new(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/support/new", status_code=303)
+    return templates.TemplateResponse(
+        "customer/support/new.html",
+        {
+            "request": request,
+            "customer": customer,
+            "active_page": "support",
+            "priorities": [p.value for p in TicketPriority],
+        },
+    )
 
 
 @router.post("/support/new", response_class=HTMLResponse)
-def customer_support_create_redirect() -> Response:
-    return RedirectResponse(url="/portal/support", status_code=303)
+def customer_support_create(
+    request: Request,
+    title: str = Form(...),
+    description: str = Form(""),
+    priority: str = Form("normal"),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    from app.schemas.support import TicketCreate
+
+    account_id, _ = customer_portal.resolve_customer_account(customer, db)
+    subscriber_uuid = coerce_uuid(account_id or customer.get("session", {}).get("subscriber_id"))
+    account_uuid = coerce_uuid(account_id)
+
+    try:
+        ticket_priority = TicketPriority(priority)
+    except ValueError:
+        ticket_priority = TicketPriority.normal
+
+    payload = TicketCreate(
+        subscriber_id=subscriber_uuid,
+        customer_account_id=account_uuid,
+        title=title,
+        description=description or None,
+        priority=ticket_priority,
+        channel=TicketChannel.web,
+    )
+    ticket = support_service.tickets.create(
+        db,
+        payload,
+        actor_id=str(subscriber_uuid) if subscriber_uuid else None,
+        request=request,
+    )
+    _emit_customer_event(db, "customer_ticket_created", {
+        "ticket_id": str(ticket.id),
+        "subscriber_id": str(subscriber_uuid) if subscriber_uuid else "",
+    })
+    return RedirectResponse(url=f"/portal/support/{ticket.number or ticket.id}", status_code=303)
 
 
 @router.get("/support/{ticket_lookup}", response_class=HTMLResponse)
@@ -190,7 +259,26 @@ def customer_support_detail(request: Request, ticket_lookup: str, db: Session = 
 
 
 @router.post("/support/{ticket_lookup}/comment", response_class=HTMLResponse)
-def customer_support_comment_redirect(ticket_lookup: str) -> Response:
+def customer_support_add_comment(
+    request: Request,
+    ticket_lookup: str,
+    body: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    ticket = _customer_allowed_ticket(db, customer, ticket_lookup)
+    from app.schemas.support import TicketCommentCreate
+
+    account_id, _ = customer_portal.resolve_customer_account(customer, db)
+    actor_id = str(account_id) if account_id else None
+    support_service.ticket_comments.create(
+        db,
+        ticket=ticket,
+        payload=TicketCommentCreate(body=body, is_internal=False),
+        actor_id=actor_id,
+    )
     return RedirectResponse(url=f"/portal/support/{ticket_lookup}", status_code=303)
 
 
@@ -213,6 +301,8 @@ def customer_billing(
         db, customer, status=status, page=page, per_page=per_page
     )
 
+    from datetime import UTC, datetime
+
     return templates.TemplateResponse(
         "customer/billing/index.html",
         {
@@ -220,6 +310,7 @@ def customer_billing(
             "customer": customer,
             **billing_data,
             "active_page": "billing",
+            "now": datetime.now(UTC),
         },
     )
 
@@ -259,6 +350,76 @@ def customer_invoice_detail(
             **detail,
             "active_page": "billing",
         },
+    )
+
+
+@router.get("/billing/invoices/{invoice_id}/pdf", response_class=HTMLResponse)
+def customer_invoice_pdf(
+    request: Request,
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download invoice PDF — triggers generation if needed."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    # Verify access
+    detail = customer_portal.get_invoice_detail(db, customer, str(invoice_id))
+    if not detail:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Invoice not found"},
+            status_code=404,
+        )
+
+    from app.models.billing import Invoice
+    from app.services import billing_invoice_pdf as billing_invoice_pdf_service
+    from app.services.file_storage import build_content_disposition
+
+    invoice = db.get(Invoice, invoice_id)
+    if not invoice:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Invoice not found"},
+            status_code=404,
+        )
+
+    # Check for existing completed export
+    latest_export = billing_invoice_pdf_service.get_latest_export(db, str(invoice_id))
+    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
+
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
+        try:
+            from starlette.responses import StreamingResponse
+
+            if latest_export is None:
+                raise ValueError("Missing invoice export")
+            stream = billing_invoice_pdf_service.stream_export(db, latest_export)
+            headers = {
+                "Content-Disposition": build_content_disposition(
+                    billing_invoice_pdf_service.download_filename(invoice)
+                ),
+            }
+            if stream.content_length is not None:
+                headers["Content-Length"] = str(stream.content_length)
+            return StreamingResponse(
+                stream.chunks,
+                media_type=stream.content_type or "application/pdf",
+                headers=headers,
+            )
+        except Exception:
+            pass
+
+    # Queue generation if not ready
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id")
+    billing_invoice_pdf_service.queue_export(
+        db, str(invoice_id), requested_by_id=subscriber_id,
+    )
+    # Redirect back with notice
+    return RedirectResponse(
+        url=f"/portal/billing/invoices/{invoice_id}?pdf_notice=generating",
+        status_code=303,
     )
 
 
@@ -746,6 +907,34 @@ def customer_service_order_detail(
     )
 
 
+@router.get("/notifications", response_class=HTMLResponse)
+def customer_notifications(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=5, le=100),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Customer notification inbox."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/notifications", status_code=303)
+
+    return templates.TemplateResponse(
+        "customer/notifications/index.html",
+        {
+            "request": request,
+            "customer": customer,
+            **customer_portal.get_notifications_page(
+                db,
+                customer,
+                page=page,
+                per_page=per_page,
+            ),
+            "active_page": "notifications",
+        },
+    )
+
+
 @router.get("/profile", response_class=HTMLResponse)
 def customer_profile(
     request: Request,
@@ -797,6 +986,80 @@ def customer_update_profile(
             "customer": customer,
             "success": "Profile updated successfully",
             "active_page": "profile",
+        },
+    )
+
+
+# =============================================================================
+# Password Change
+# =============================================================================
+
+
+@router.get("/profile/password", response_class=HTMLResponse)
+def customer_change_password_form(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Password change form."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/profile/password", status_code=303)
+    return templates.TemplateResponse(
+        "customer/profile/password.html",
+        {"request": request, "customer": customer, "active_page": "profile"},
+    )
+
+
+@router.post("/profile/password", response_class=HTMLResponse)
+def customer_change_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Process password change."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    error = None
+    if new_password != confirm_password:
+        error = "New passwords do not match."
+    elif len(new_password) < 8:
+        error = "Password must be at least 8 characters."
+    else:
+        from fastapi import HTTPException as _HTTPException
+
+        from app.services.auth_flow import change_password
+
+        subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id")
+        if subscriber_id:
+            try:
+                change_password(db, str(subscriber_id), current_password, new_password)
+                db.commit()
+                _emit_customer_event(db, "customer_password_changed", {
+                    "subscriber_id": str(subscriber_id),
+                })
+                return templates.TemplateResponse(
+                    "customer/profile/password.html",
+                    {
+                        "request": request,
+                        "customer": customer,
+                        "active_page": "profile",
+                        "success": "Password changed successfully.",
+                    },
+                )
+            except _HTTPException as exc:
+                error = exc.detail
+
+    return templates.TemplateResponse(
+        "customer/profile/password.html",
+        {
+            "request": request,
+            "customer": customer,
+            "active_page": "profile",
+            "error": error,
         },
     )
 

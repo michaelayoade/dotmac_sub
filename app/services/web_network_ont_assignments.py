@@ -27,15 +27,9 @@ def assignment_form_dependencies(db: Session) -> dict[str, object]:
             limit=500,
             offset=0,
         ),
-        "accounts": subscriber_service.accounts.list(
-            db=db,
-            subscriber_id=None,
-            reseller_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
-        ),
+        # Accounts are now fetched via HTMX typeahead search instead
+        # of loading all 500 into a static <select> dropdown.
+        "accounts": [],
         "subscriptions": catalog_service.subscriptions.list(
             db=db,
             subscriber_id=None,

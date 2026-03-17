@@ -325,8 +325,8 @@ class TestGeocodeAddress:
         assert result == data
         assert "latitude" not in result
 
-    def test_returns_data_when_provider_not_nominatim(self, db_session):
-        """Test returns data unchanged if provider is not nominatim."""
+    def test_raises_when_google_provider_missing_api_key(self, db_session):
+        """Test google provider requires an API key."""
         db_session.add(DomainSetting(
             domain=SettingDomain.geocoding,
             key="provider",
@@ -336,8 +336,11 @@ class TestGeocodeAddress:
         db_session.commit()
 
         data = {"address_line1": "123 Main St"}
-        result = geocoding.geocode_address(db_session, data)
-        assert result == data
+        with pytest.raises(HTTPException) as exc_info:
+            geocoding.geocode_address(db_session, data)
+
+        assert exc_info.value.status_code == 400
+        assert "Google geocoding key is not configured" in exc_info.value.detail
 
     def test_returns_data_when_no_address(self, db_session):
         """Test returns data unchanged if no address to geocode."""
@@ -418,8 +421,8 @@ class TestGeocodePreview:
         result = geocoding.geocode_preview(db_session, data)
         assert result == []
 
-    def test_returns_empty_when_provider_not_nominatim(self, db_session):
-        """Test returns empty list when provider is not nominatim."""
+    def test_raises_when_mapbox_provider_missing_api_key(self, db_session):
+        """Test mapbox provider requires an API key."""
         db_session.add(DomainSetting(
             domain=SettingDomain.geocoding,
             key="provider",
@@ -429,8 +432,11 @@ class TestGeocodePreview:
         db_session.commit()
 
         data = {"address_line1": "123 Main St"}
-        result = geocoding.geocode_preview(db_session, data)
-        assert result == []
+        with pytest.raises(HTTPException) as exc_info:
+            geocoding.geocode_preview(db_session, data)
+
+        assert exc_info.value.status_code == 400
+        assert "Mapbox geocoding token is not configured" in exc_info.value.detail
 
     def test_raises_exception_when_no_address(self, db_session):
         """Test raises HTTPException when no address provided."""

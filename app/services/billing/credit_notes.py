@@ -1,9 +1,9 @@
 """Credit note management services."""
 
 import logging
-from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import (
@@ -39,6 +39,7 @@ from app.services.common import (
     coerce_uuid,
     get_by_id,
     round_money,
+    to_decimal,
     validate_enum,
 )
 from app.services.response import ListResponseMixin
@@ -213,7 +214,7 @@ class CreditNotes(ListResponseMixin):
         if invoice.balance_due <= 0:
             raise HTTPException(status_code=400, detail="Invoice has no balance due")
         amount = payload.amount or min(remaining, invoice.balance_due)
-        amount = round_money(Decimal(str(amount)))
+        amount = round_money(to_decimal(amount))
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
         if amount > remaining:
@@ -242,7 +243,7 @@ class CreditNotes(ListResponseMixin):
             _recalculate_invoice_totals(db, invoice)
             _recalculate_credit_note_totals(db, credit_note)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(application)
@@ -268,7 +269,7 @@ class CreditNoteLines(ListResponseMixin):
             db.flush()
             _recalculate_credit_note_totals(db, credit_note)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(line)
@@ -328,7 +329,7 @@ class CreditNoteLines(ListResponseMixin):
                 db.flush()
                 _recalculate_credit_note_totals(db, credit_note)
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
             raise
         db.refresh(line)

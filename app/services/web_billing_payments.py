@@ -90,25 +90,7 @@ def normalize_import_rows(rows: list[dict], handler: str | None) -> list[dict]:
     return normalized
 
 
-def _parse_uuid(value: str | None, field: str) -> UUID:
-    """Parse a string to UUID, raising ValueError if missing or invalid."""
-    if not value:
-        raise ValueError(f"{field} is required")
-    return UUID(value)
-
-
-def _parse_decimal(
-    value: str | None, field: str, default: Decimal | None = None
-) -> Decimal:
-    """Parse a string to Decimal, raising ValueError if invalid."""
-    if value is None or value == "":
-        if default is not None:
-            return default
-        raise ValueError(f"{field} is required")
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field} must be a valid number") from exc
+from app.validators.forms import parse_decimal, parse_uuid
 
 
 def payment_primary_invoice_id(payment: Payment | None) -> str | None:
@@ -840,9 +822,9 @@ def process_payment_create(
     resolved_account_id = account_id or (str(resolved_invoice.account_id) if resolved_invoice else None)
     if not resolved_account_id:
         raise ValueError("account_id is required")
-    parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
+    parsed_account_id = parse_uuid(resolved_account_id, "account_id")
     effective_currency = resolved_invoice.currency if resolved_invoice and resolved_invoice.currency else currency
-    parsed_amount = _parse_decimal(amount, "amount")
+    parsed_amount = parse_decimal(amount, "amount")
     payload = build_create_payload(
         account_id=parsed_account_id,
         collection_account_id=collection_account_id,
@@ -888,14 +870,14 @@ def process_payment_update(
         resolved_account_id = str(before.account_id) if before else None
     if not resolved_account_id:
         raise ValueError("account_id is required")
-    parsed_account_id = _parse_uuid(resolved_account_id, "account_id")
+    parsed_account_id = parse_uuid(resolved_account_id, "account_id")
     effective_currency = resolved_invoice.currency if resolved_invoice and resolved_invoice.currency else currency
     requested_invoice_id = str(resolved_invoice.id) if resolved_invoice else None
     invoice_changed = requested_invoice_id and requested_invoice_id != current_invoice_id
     payload = build_update_payload(
         account_id=parsed_account_id,
         payment_method_id=resolve_payment_method_id(db, parsed_account_id, payment_method_id),
-        amount=_parse_decimal(amount, "amount"),
+        amount=parse_decimal(amount, "amount"),
         currency=effective_currency,
         status=status,
         memo=memo,

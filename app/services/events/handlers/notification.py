@@ -39,6 +39,11 @@ EVENT_TYPE_TO_TEMPLATE = {
     # Provisioning events
     EventType.provisioning_completed: "provisioning_completed",
     EventType.provisioning_failed: "provisioning_failed",
+    # Network / OLT events
+    EventType.ont_offline: "ont_offline",
+    EventType.ont_online: "ont_online",
+    EventType.ont_signal_degraded: "ont_signal_degraded",
+    EventType.ont_discovered: "ont_discovered",
 }
 
 
@@ -69,8 +74,8 @@ class NotificationHandler:
         )
 
         if not template:
-            logger.debug(
-                f"No active notification template for code {template_code}"
+            logger.warning(
+                "No active notification template for code %s", template_code
             )
             return
 

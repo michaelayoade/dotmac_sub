@@ -96,6 +96,48 @@
                             placeholder="SN123456789"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
+
+                    <div>
+                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                        {% set current_status = (olt.status if olt else 'active') %}
+                        <select name="status" id="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="active" {% if current_status == 'active' %}selected{% endif %}>Active</option>
+                            <option value="inactive" {% if current_status == 'inactive' %}selected{% endif %}>Inactive</option>
+                            <option value="maintenance" {% if current_status == 'maintenance' %}selected{% endif %}>Maintenance</option>
+                            <option value="retired" {% if current_status == 'retired' %}selected{% endif %}>Retired</option>
+                        </select>
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Supported PON Types</label>
+                        {% set pon_list = (olt.supported_pon_types or '')|string %}
+                        <div class="flex flex-wrap gap-4">
+                            {% for pt in ['gpon', 'epon', 'xgpon1', 'xgpon2', 'xgspon'] %}
+                            <label class="flex items-center gap-2">
+                                <input type="checkbox" name="supported_pon_types" value="{{ pt }}"
+                                    {% if pt in pon_list %}checked{% endif %}
+                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                                <span class="text-sm text-slate-700 dark:text-slate-300">{{ pt | upper }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    {% if olt and (olt.firmware_version or olt.software_version) %}
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Firmware Version</label>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.firmware_version or 'N/A' }}
+                            <span class="text-xs text-slate-400 ml-1">(Auto-detected)</span>
+                        </p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Software Version</label>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.software_version or 'N/A' }}
+                            <span class="text-xs text-slate-400 ml-1">(Auto-detected)</span>
+                        </p>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -183,10 +225,17 @@
                         </div>
 
                         <div id="snmp-v2-fields" class="contents">
-                            <div class="sm:col-span-2">
-                                <label for="snmp_community" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Community (v2c)</label>
+                            <div>
+                                <label for="snmp_community" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Read-Only Community (v2c)</label>
                                 <input type="text" name="snmp_community" id="snmp_community" maxlength="255"
                                     value="{{ olt.snmp_community if olt else '' }}"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                            </div>
+                            <div>
+                                <label for="snmp_rw_community" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Read-Write Community</label>
+                                <input type="password" name="snmp_rw_community" id="snmp_rw_community" maxlength="255"
+                                    value=""
+                                    placeholder="{{ 'Saved. Enter new value to replace.' if olt and olt.snmp_rw_community else 'Optional — for SNMP SET operations' }}"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
                             </div>
                         </div>

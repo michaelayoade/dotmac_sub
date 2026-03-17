@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from passlib.context import CryptContext
+from passlib.hash import sha512_crypt
 
 from app.models.catalog import (
     AccessCredential,
@@ -146,7 +147,7 @@ def test_external_password_row_keeps_crypt_password_for_legacy_sha512_crypt():
     credential = AccessCredential(
         subscriber_id="00000000-0000-0000-0000-000000000001",
         username="10005030",
-        secret_hash=SERVICE_PASSWORD_CONTEXT.hash("secret123", scheme="sha512_crypt"),
+        secret_hash=sha512_crypt.hash("secret123"),
         is_active=True,
     )
 

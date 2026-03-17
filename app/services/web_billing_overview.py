@@ -9,13 +9,12 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Reseller, Subscriber
 from app.services import billing as billing_service
 from app.services import web_billing_customers as web_billing_customers_service
-from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
@@ -58,40 +57,29 @@ def build_overview_data(
     result["selected_partner_id"] = (partner_id or "").strip() or None
     result["selected_location"] = (location or "").strip() or None
 
-    invoices = billing_service.invoices.list(
-        db=db,
-        account_id=None,
-        status=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=2000,
-        offset=0,
-    )
-    partner_options: dict[str, str] = {}
-    location_options: set[str] = set()
-    for invoice in invoices:
-        account = getattr(invoice, "account", None)
-        if not account:
-            continue
-        reseller = getattr(account, "reseller", None)
-        reseller_id = getattr(account, "reseller_id", None)
-        if reseller_id:
-            label = getattr(reseller, "name", None) or f"Partner {str(reseller_id)[:8]}"
-            partner_options[str(reseller_id)] = str(label)
-        region_value = (
-            getattr(account, "region", None)
-            or getattr(account, "billing_region", None)
-            or getattr(account, "city", None)
-        )
-        if region_value:
-            location_options.add(str(region_value))
+    from app.models.network_monitoring import PopSite
+    from app.models.subscriber import Reseller
 
+    # Partner options from Reseller table (efficient, not from invoice scan)
+    partner_rows = (
+        db.query(Reseller)
+        .filter(Reseller.is_active.is_(True))
+        .order_by(Reseller.name)
+        .all()
+    )
     result["partner_options"] = [
-        {"id": key, "name": value}
-        for key, value in sorted(partner_options.items(), key=lambda item: item[1].lower())
+        {"id": str(r.id), "name": r.name}
+        for r in partner_rows
     ]
-    result["location_options"] = sorted(location_options)
+
+    # Location options from PopSite table (not subscriber address fields)
+    pop_sites = (
+        db.query(PopSite)
+        .filter(PopSite.is_active.is_(True))
+        .order_by(PopSite.name)
+        .all()
+    )
+    result["location_options"] = [p.name for p in pop_sites if p.name]
     return result
 
 
@@ -201,15 +189,53 @@ def build_invoices_list_data(
             .all()
         )
         total = filtered_query.count()
-        filtered_for_summary = (
-            _apply_filters(db.query(Invoice), include_status=True)
-            .order_by(Invoice.created_at.desc())
-            .all()
+        # Efficient status summary using GROUP BY instead of loading all rows
+        status_summary_query = (
+            _apply_filters(db.query(
+                Invoice.status,
+                func.count(Invoice.id),
+                func.coalesce(func.sum(Invoice.total), 0),
+                func.coalesce(func.sum(Invoice.balance_due), 0),
+            ), include_status=True)
+            .group_by(Invoice.status)
         )
+        status_rows = status_summary_query.all()
+
+        summary: dict[str, dict[str, float | int]] = {
+            key: {"count": 0, "amount": 0.0}
+            for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
+        }
+        due_total = 0.0
+        received_total = 0.0
+        all_count = 0
+        all_amount = 0.0
+        for status_val, cnt, amount, due in status_rows:
+            key = status_val.value if isinstance(status_val, InvoiceStatus) else str(status_val)
+            if key not in summary:
+                summary[key] = {"count": 0, "amount": 0.0}
+            summary[key]["count"] = cnt
+            summary[key]["amount"] = float(amount)
+            due_total += float(due)
+            received_total += max(float(amount) - float(due), 0.0)
+            all_count += cnt
+            all_amount += float(amount)
+        summary["all"] = {
+            "count": all_count,
+            "amount": all_amount,
+            "due_total": due_total,
+            "received_total": received_total,
+        }
+        status_totals = summary
+
+        # For proforma summary, only count proforma invoices
+        proforma_count = (
+            _apply_filters(db.query(func.count(Invoice.id)), include_status=True)
+            .filter(Invoice.is_proforma.is_(True))
+            .scalar()
+        ) or 0
+        proforma_summary = {"count": proforma_count}
 
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-    status_totals = _build_status_totals(filtered_for_summary)
-    proforma_summary = web_billing_invoices_service.build_proforma_summary(filtered_for_summary)
     partner_options = [
         {"id": str(item.id), "name": item.name}
         for item in db.query(Reseller)
@@ -387,24 +413,23 @@ def build_ar_aging_data(
         )
     }
 
-    partner_options: dict[str, str] = {}
-    location_options: set[str] = set()
-    for invoice in period_filtered_invoices:
-        account = getattr(invoice, "account", None) or accounts_by_id.get(invoice.account_id)
-        if account is None:
-            continue
-        reseller = getattr(account, "reseller", None)
-        reseller_id = getattr(account, "reseller_id", None)
-        if reseller_id:
-            label = getattr(reseller, "name", None) or f"Partner {str(reseller_id)[:8]}"
-            partner_options[str(reseller_id)] = str(label)
-        region_value = (
-            getattr(account, "region", None)
-            or getattr(account, "billing_region", None)
-            or getattr(account, "city", None)
-        )
-        if region_value:
-            location_options.add(str(region_value))
+    from app.models.network_monitoring import PopSite
+    from app.models.subscriber import Reseller as ResellerModel
+
+    partner_rows = (
+        db.query(ResellerModel)
+        .filter(ResellerModel.is_active.is_(True))
+        .order_by(ResellerModel.name)
+        .all()
+    )
+    partner_options = {str(r.id): r.name for r in partner_rows}
+    pop_sites = (
+        db.query(PopSite)
+        .filter(PopSite.is_active.is_(True))
+        .order_by(PopSite.name)
+        .all()
+    )
+    location_options = {p.name for p in pop_sites if p.name}
 
     filtered_invoices = []
     for invoice in period_filtered_invoices:

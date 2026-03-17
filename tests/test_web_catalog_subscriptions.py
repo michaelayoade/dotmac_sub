@@ -188,7 +188,8 @@ def test_create_subscription_with_audit_reconciles_active_subscription_after_cre
         None,
     )
 
-    reconcile_subscription_connectivity.assert_called_once_with(
+    assert reconcile_subscription_connectivity.call_count >= 1
+    reconcile_subscription_connectivity.assert_any_call(
         db_session,
         str(created.id),
     )

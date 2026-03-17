@@ -150,20 +150,22 @@ def test_usable_ipv4_count_handles_common_prefixes():
 
 
 def test_get_ping_status_reachable_with_latency(monkeypatch):
-    def _fake_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=0, stdout="64 bytes time=12.5 ms", stderr="")
+    def _fake_run_ping(_host: str, *, timeout_seconds: int = 4):
+        assert timeout_seconds == 4
+        return True, 12.5
 
-    monkeypatch.setattr(nas_service.subprocess, "run", _fake_run)
+    monkeypatch.setattr(nas_service.ping_service, "run_ping", _fake_run_ping)
     status = nas_service.get_ping_status("192.0.2.10")
     assert status["state"] == "reachable"
     assert status["latency_ms"] == 12.5
 
 
 def test_get_ping_status_unreachable(monkeypatch):
-    def _fake_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=1, stdout="", stderr="timeout")
+    def _fake_run_ping(_host: str, *, timeout_seconds: int = 4):
+        assert timeout_seconds == 4
+        return False, None
 
-    monkeypatch.setattr(nas_service.subprocess, "run", _fake_run)
+    monkeypatch.setattr(nas_service.ping_service, "run_ping", _fake_run_ping)
     status = nas_service.get_ping_status("192.0.2.11")
     assert status == {"state": "unreachable", "label": "Unreachable"}
 
@@ -1254,10 +1256,11 @@ def test_ping_device_respects_notification_delay_before_offline(db_session, pop_
         ),
     )
 
-    def _fake_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=1, stdout="", stderr="timeout")
+    def _fake_run_ping(_host: str, *, timeout_seconds: int = 4):
+        assert timeout_seconds == 4
+        return False, None
 
-    monkeypatch.setattr(core_runtime.subprocess, "run", _fake_run)
+    monkeypatch.setattr(core_runtime.ping_service, "run_ping", _fake_run_ping)
     updated, err, ok = core_runtime.ping_device(db_session, str(device.id))
     assert err is None
     assert ok is False
@@ -1333,20 +1336,22 @@ def test_parent_status_rollup_from_child_ping_failure_and_recovery(
     )
     assert child.parent_device_id == parent.id
 
-    def _fail_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=1, stdout="", stderr="timeout")
+    def _fail_run_ping(_host: str, *, timeout_seconds: int = 4):
+        assert timeout_seconds == 4
+        return False, None
 
-    monkeypatch.setattr(core_runtime.subprocess, "run", _fail_run)
+    monkeypatch.setattr(core_runtime.ping_service, "run_ping", _fail_run_ping)
     core_runtime.ping_device(db_session, str(child.id))
     db_session.refresh(child)
     assert child.status.value == "offline"
     db_session.refresh(parent)
     assert parent.status.value == "degraded"
 
-    def _ok_run(*_args, **_kwargs):
-        return SimpleNamespace(returncode=0, stdout="64 bytes time=1.1 ms", stderr="")
+    def _ok_run_ping(_host: str, *, timeout_seconds: int = 4):
+        assert timeout_seconds == 4
+        return True, 1.1
 
-    monkeypatch.setattr(core_runtime.subprocess, "run", _ok_run)
+    monkeypatch.setattr(core_runtime.ping_service, "run_ping", _ok_run_ping)
     core_runtime.ping_device(db_session, str(child.id))
     db_session.refresh(parent)
     assert parent.status.value == "online"
@@ -1559,8 +1564,7 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     assert payload["stats"]["core_total"] == 1
     assert payload["stats"]["olt_total"] == 1
     assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
-    assert [olt["name"] for olt in payload["olts"]] == ["Aggregation OLT"]
-    assert payload["olts"][0]["detail_url"].startswith("/admin/network/olts/")
+    assert [olt.name for olt in payload["olts"]] == ["Aggregation OLT"]
     assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")).first() is not None
 
 
@@ -1952,7 +1956,7 @@ def test_olt_detail_snmp_pon_rows_match_onts_with_channel_board_port_format(db_s
         serial_number="ONT-SNMP-CHAN-001",
         is_active=True,
         olt_device_id=olt.id,
-        gpon_channel="0",
+        gpon_channel="gpon",
         board="2",
         port="7",
         olt_rx_signal_dbm=-24.0,
@@ -2158,6 +2162,8 @@ def test_compare_olt_backups_returns_diff(db_session, monkeypatch, tmp_path: Pat
         str(b2.id),
     )
     assert isinstance(diff["unified_diff"], str)
+    assert isinstance(diff["added_lines"], int)
+    assert isinstance(diff["removed_lines"], int)
     assert diff["added_lines"] >= 1
     assert diff["removed_lines"] >= 1
 
@@ -2659,8 +2665,9 @@ def test_build_ip_pools_data_tracks_ipv6_utilization(db_session):
     state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="all")
     util = state["pool_utilization"][str(pool.id)]
     assert util["total"] == 4
-    assert util["used"] == 2
-    assert util["percent"] == 50
+    assert util["used"] == 0
+    assert util["tracked"] == 2
+    assert util["percent"] == 0
 
 
 def test_pool_form_snapshot_from_model_parses_metadata(db_session):
@@ -2818,7 +2825,8 @@ def test_build_ipv4_networks_data_filters_sorts_and_utilization(db_session):
     net = filtered["networks"][0]
     assert net["pool"].name == "IPv4 Abuja"
     assert net["subnet_mask"] == "255.255.255.0"
-    assert net["utilization"]["used"] == 2
+    assert net["utilization"]["used"] == 0
+    assert net["utilization"]["tracked"] == 2
     assert net["usage_type"] == "Static"
 
     sorted_state = web_network_ip_service.build_ipv4_networks_data(

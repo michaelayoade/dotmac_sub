@@ -48,27 +48,33 @@
                         {% endif %}
                     </div>
 
-                    <div>
-                        <label for="account_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Account <span class="text-red-500">*</span></label>
-                        <select name="account_id" id="account_id" required
-                            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="" {% if not form or not form.account_id %}selected{% endif %}>Select an account</option>
-                            {% for account in accounts %}
-                                {% if account.subscriber and account.subscriber.person %}
-                                    {% set account_label = account.subscriber.person.first_name ~ ' ' ~ account.subscriber.person.last_name %}
-                                {% elif account.subscriber and account.subscriber.organization %}
-                                    {% set account_label = account.subscriber.organization.name %}
-                                {% else %}
-                                    {% set account_label = account.id %}
-                                {% endif %}
-                            <option value="{{ account.id }}" {% if form and form.account_id == account.id|string %}selected{% endif %}>
-                                {{ account_label }}{% if account.account_number %} ({{ account.account_number }}){% endif %}
-                            </option>
-                            {% endfor %}
-                        </select>
-                        {% if not accounts %}
-                        <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No subscriber accounts found.</p>
-                        {% endif %}
+                    <div x-data='{"query": "{{ (form.account_label or "") | e }}", "accountId": "{{ (form.account_id or "") | e }}", "results": [], "open": false, "loading": false}'>
+                        <label for="account_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Account <span class="text-red-500">*</span></label>
+                        <input type="hidden" name="account_id" :value="accountId" required>
+                        <div class="relative mt-1">
+                            <input type="text" id="account_search" autocomplete="off"
+                                x-model="query"
+                                @input.debounce.300ms="if(query.length >= 2) { loading=true; fetch('/api/v1/search/customers?q='+encodeURIComponent(query)+'&limit=10').then(r=>r.json()).then(d=>{results=d.items;open=results.length>0;loading=false}).catch(()=>{loading=false}) } else { results=[]; open=false }"
+                                @focus="if(results.length) open=true"
+                                @click.outside="open=false"
+                                placeholder="Search by name, email, or account number..."
+                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <div x-show="loading" class="absolute right-3 top-2.5">
+                                <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                            </div>
+                            <div x-show="open" x-cloak
+                                class="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-600 dark:bg-slate-700 max-h-48 overflow-y-auto">
+                                <template x-for="item in results" :key="item.id">
+                                    <button type="button"
+                                        @click="accountId=item.id; query=item.label; open=false; results=[]"
+                                        class="flex w-full items-center px-3 py-2 text-sm text-slate-700 hover:bg-primary-50 dark:text-slate-200 dark:hover:bg-slate-600"
+                                        x-text="item.label">
+                                    </button>
+                                </template>
+                                <div x-show="!results.length && !loading" class="px-3 py-2 text-sm text-slate-500">No results found</div>
+                            </div>
+                        </div>
+                        <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Type at least 2 characters to search by name, email, or account number.</p>
                     </div>
 
                     <div>
@@ -78,7 +84,7 @@
                             <option value="" {% if not form or not form.subscription_id %}selected{% endif %}>Select a subscription</option>
                             {% for subscription in subscriptions %}
                                 {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
-                                    {% set sub_label = subscription.account.subscriber.person.first_name ~ ' ' ~ subscription.account.subscriber.person.last_name %}
+                                    {% set sub_label = subscription.account.first_name ~ ' ' ~ subscription.account.last_name %}
                                 {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.organization %}
                                     {% set sub_label = subscription.account.subscriber.organization.name %}
                                 {% else %}

@@ -767,44 +767,56 @@
    PAGINATION
    Table pagination with HTMX support
    ============================================ #}
-{% macro pagination(page, total_pages, total, per_page, base_url, hx_target="#data-table", color="amber") %}
+{% macro pagination(page, total_pages, total, per_page, base_url, hx_target="#data-table", color="amber", extra_params="") %}
 {% if total_pages > 1 %}
 <div class="border-t border-slate-200/60 bg-gradient-to-r from-slate-50 to-slate-100/50 px-5 py-4 dark:border-slate-700/60 dark:from-slate-800/80 dark:to-slate-800/50">
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col items-center justify-between gap-3 sm:flex-row">
         <p class="text-sm text-slate-500 dark:text-slate-400">
             Showing <span class="font-semibold text-slate-700 dark:text-slate-300">{{ (page - 1) * per_page + 1 }}</span> to
             <span class="font-semibold text-slate-700 dark:text-slate-300">{{ [page * per_page, total] | min }}</span> of
             <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
         </p>
-        <nav class="flex items-center gap-1">
-            {% if page > 1 %}
-            <button hx-get="{{ base_url }}?page={{ page - 1 }}"
-                    hx-target="{{ hx_target }}"
-                    class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-            </button>
-            {% endif %}
-            {% for p in range(1, total_pages + 1) %}
-                {% if p == page %}
-                <span class="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-{{ color }}-500/25">{{ p }}</span>
-                {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
-                <button hx-get="{{ base_url }}?page={{ p }}"
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <span>Show</span>
+                <select onchange="window.location.href='{{ base_url }}?page=1&per_page=' + this.value + '{{ extra_params }}'"
+                        class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-{{ color }}-500 dark:bg-slate-700 dark:text-slate-300">
+                    {% for size in [10, 25, 50, 100] %}
+                    <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
+                    {% endfor %}
+                </select>
+                <span>rows</span>
+            </div>
+            <nav class="flex items-center gap-1">
+                {% if page > 1 %}
+                <button hx-get="{{ base_url }}?page={{ page - 1 }}&per_page={{ per_page }}{{ extra_params }}"
                         hx-target="{{ hx_target }}"
-                        class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
-                    {{ p }}
+                        class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                 </button>
-                {% elif p == page - 2 or p == page + 2 %}
-                <span class="px-1 text-slate-400">...</span>
                 {% endif %}
-            {% endfor %}
-            {% if page < total_pages %}
-            <button hx-get="{{ base_url }}?page={{ page + 1 }}"
-                    hx-target="{{ hx_target }}"
-                    class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </button>
-            {% endif %}
-        </nav>
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <span class="inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-{{ color }}-500/25">{{ p }}</span>
+                    {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
+                    <button hx-get="{{ base_url }}?page={{ p }}&per_page={{ per_page }}{{ extra_params }}"
+                            hx-target="{{ hx_target }}"
+                            class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                        {{ p }}
+                    </button>
+                    {% elif p == page - 2 or p == page + 2 %}
+                    <span class="px-1 text-slate-400">...</span>
+                    {% endif %}
+                {% endfor %}
+                {% if page < total_pages %}
+                <button hx-get="{{ base_url }}?page={{ page + 1 }}&per_page={{ per_page }}{{ extra_params }}"
+                        hx-target="{{ hx_target }}"
+                        class="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600 dark:hover:text-slate-200">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </button>
+                {% endif %}
+            </nav>
+        </div>
     </div>
 </div>
 {% endif %}

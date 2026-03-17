@@ -352,6 +352,7 @@ def notification_template_preview(
     )
     rendered_body = template_renderer.render_template_text(template.body, variables)
     return templates.TemplateResponse(
+        request,
         "admin/notifications/_template_preview.html",
         {
             "request": request,

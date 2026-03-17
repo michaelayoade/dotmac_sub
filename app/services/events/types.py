@@ -36,6 +36,7 @@ class EventType(enum.Enum):
     subscription_downgraded = "subscription.downgraded"
     subscription_expiring = "subscription.expiring"
     subscription_expired = "subscription.expired"
+    subscription_deleted = "subscription.deleted"
 
     # Billing - Invoice events (4)
     invoice_created = "invoice.created"
@@ -74,6 +75,18 @@ class EventType(enum.Enum):
     session_started = "session.started"
     session_ended = "session.ended"
 
+    # OLT events (3)
+    olt_created = "olt.created"
+    olt_updated = "olt.updated"
+    olt_deleted = "olt.deleted"
+
+    # ONT events (5)
+    ont_discovered = "ont.discovered"
+    ont_online = "ont.online"
+    ont_offline = "ont.offline"
+    ont_signal_degraded = "ont.signal_degraded"
+    ont_provisioned = "ont.provisioned"
+
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"
@@ -82,6 +95,32 @@ class EventType(enum.Enum):
 
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"
+
+    # Customer portal events (4)
+    customer_login = "customer.login"
+    customer_logout = "customer.logout"
+    customer_ticket_created = "customer.ticket_created"
+    customer_password_changed = "customer.password_changed"
+
+    # Reseller events (3)
+    reseller_login = "reseller.login"
+    reseller_logout = "reseller.logout"
+    reseller_impersonated = "reseller.impersonated"
+
+    # NAS events (7)
+    nas_device_created = "nas_device.created"
+    nas_device_updated = "nas_device.updated"
+    nas_device_deleted = "nas_device.deleted"
+    nas_backup_completed = "nas_backup.completed"
+    nas_backup_failed = "nas_backup.failed"
+    nas_provisioning_completed = "nas_provisioning.completed"
+    nas_provisioning_failed = "nas_provisioning.failed"
+
+    # TR-069 events (4)
+    tr069_job_completed = "tr069_job.completed"
+    tr069_job_failed = "tr069_job.failed"
+    tr069_device_discovered = "tr069_device.discovered"
+    tr069_device_stale = "tr069_device.stale"
 
     # Custom event type for extensibility
     custom = "custom"

@@ -189,7 +189,8 @@ def db_session(engine):
         yield session
     finally:
         session.close()
-        transaction.rollback()
+        if transaction.is_active:
+            transaction.rollback()
         connection.close()
 
 
@@ -345,6 +346,11 @@ def acs_server(db_session):
         db_session,
         Tr069AcsServerCreate(
             name="Test ACS",
+            cwmp_url="https://acs.test.local/cwmp",
+            cwmp_username="acs-user",
+            cwmp_password="acs-pass",
+            connection_request_username="cr-user",
+            connection_request_password="cr-pass",
             base_url="https://acs.test.local",
         ),
     )

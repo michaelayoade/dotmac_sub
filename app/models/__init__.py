@@ -22,6 +22,7 @@ from app.models.billing import (  # noqa: F401
     InvoicePdfExport,
     InvoicePdfExportStatus,
     InvoiceStatus,
+    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -95,6 +96,12 @@ from app.models.comms import (  # noqa: F401
     CustomerNotificationStatus,
     Survey,
 )
+from app.models.communication_log import (  # noqa: F401
+    CommunicationChannel,
+    CommunicationDirection,
+    CommunicationLog,
+    CommunicationStatus,
+)
 from app.models.connector import (  # noqa: F401
     ConnectorAuthType,
     ConnectorConfig,
@@ -126,6 +133,7 @@ from app.models.fup import (  # noqa: F401
     FupPolicy,
     FupRule,
 )
+from app.models.fup_state import FupActionStatus, FupState  # noqa: F401
 from app.models.gis import (  # noqa: F401
     GeoArea,
     GeoAreaType,
@@ -165,6 +173,7 @@ from app.models.lifecycle import (  # noqa: F401
     LifecycleEventType,
     SubscriptionLifecycleEvent,
 )
+from app.models.mrr_snapshot import MrrSnapshot  # noqa: F401
 from app.models.network import (  # noqa: F401
     ConfigMethod,
     CPEDevice,
@@ -280,12 +289,24 @@ from app.models.notification import (  # noqa: F401
     OnCallRotationMember,
 )
 from app.models.oauth_token import OAuthToken  # noqa: F401
+from app.models.offer_availability import (  # noqa: F401
+    OfferBillingModeAvailability,
+    OfferCategoryAvailability,
+    OfferLocationAvailability,
+    OfferResellerAvailability,
+)
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
     PaymentArrangement,
     PaymentArrangementInstallment,
     PaymentFrequency,
+)
+from app.models.portal_message import (  # noqa: F401
+    PortalMessage,
+    PortalMessageStatus,
+    PortalMessageType,
+    PortalOnboardingState,
 )
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
@@ -324,6 +345,11 @@ from app.models.radius import (  # noqa: F401
     RadiusSyncStatus,
     RadiusUser,
 )
+from app.models.radius_active_session import RadiusActiveSession  # noqa: F401
+from app.models.radius_error import (  # noqa: F401
+    RadiusAuthError,
+    RadiusAuthErrorType,
+)
 from app.models.rbac import (  # noqa: F401
     Permission,
     Role,
@@ -349,6 +375,10 @@ from app.models.splynx_archive import (  # noqa: F401
     SplynxArchivedQuoteItem,
     SplynxArchivedTicket,
     SplynxArchivedTicketMessage,
+)
+from app.models.splynx_mapping import (  # noqa: F401
+    SplynxEntityType,
+    SplynxIdMapping,
 )
 from app.models.stored_file import StoredFile  # noqa: F401
 from app.models.subscriber import (  # noqa: F401

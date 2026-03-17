@@ -419,11 +419,22 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         db.rollback()
         notifications = []
 
-    monthly_bill = (
-        sum(float(getattr(sub, "price", 0) or 0) for sub in subscriptions)
-        if subscriptions
-        else 0
-    )
+    monthly_bill = 0.0
+    if subscriptions:
+        for sub in subscriptions:
+            # Try unit_price override first, then fall back to offer's recurring price
+            if sub.unit_price:
+                monthly_bill += float(sub.unit_price)
+            elif sub.offer and hasattr(sub.offer, "prices") and sub.offer.prices:
+                from app.models.catalog import PriceType
+
+                recurring = [
+                    p
+                    for p in sub.offer.prices
+                    if p.price_type == PriceType.recurring and p.is_active
+                ]
+                if recurring:
+                    monthly_bill += float(recurring[0].amount)
     stats = {
         "monthly_bill": monthly_bill,
         "balance_due": float(balance_due),
@@ -654,7 +665,57 @@ def build_subscriber_timeline(db: Session, subscriber_id):
                 ),
             }
         )
-    return timeline
+    # Also include domain events from event_store (lifecycle events like
+    # subscription.suspended, subscription.upgraded, etc.)
+    try:
+        from app.models.event_store import EventStore
+
+        domain_events = (
+            db.query(EventStore)
+            .filter(EventStore.account_id == subscriber_id)
+            .order_by(EventStore.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        for event in domain_events:
+            event_type = getattr(event, "event_type", "") or ""
+            payload = getattr(event, "payload", {}) or {}
+            title = event_type.replace(".", " ").replace("_", " ").title()
+            detail_parts = []
+            if payload.get("offer_name"):
+                detail_parts.append(payload["offer_name"])
+            if payload.get("direction"):
+                detail_parts.append(f"({payload['direction']})")
+            if payload.get("from_status") and payload.get("to_status"):
+                detail_parts.append(f"{payload['from_status']} → {payload['to_status']}")
+            if payload.get("new_offer_name") and payload.get("previous_offer_name"):
+                detail_parts.append(
+                    f"{payload['previous_offer_name']} → {payload['new_offer_name']}"
+                )
+            detail = " · ".join(detail_parts) if detail_parts else "System"
+            timeline.append(
+                {
+                    "id": str(event.id),
+                    "type": "event",
+                    "title": title,
+                    "detail": detail,
+                    "is_comment": False,
+                    "is_todo": False,
+                    "is_completed": False,
+                    "attachments": [],
+                    "time": (
+                        event.created_at.strftime("%b %d, %Y %H:%M")
+                        if event.created_at
+                        else "Just now"
+                    ),
+                }
+            )
+    except Exception:
+        logger.debug("Could not load domain events for timeline", exc_info=True)
+
+    # Sort combined timeline by time (newest first) and limit
+    timeline.sort(key=lambda e: e.get("time", ""), reverse=True)
+    return timeline[:30]
 
 
 def build_subscriber_detail_page_context(db: Session, subscriber_id):
@@ -710,9 +771,13 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         db.rollback()
         subscriber_user_access = {"error": str(exc)}
 
+    # Enrich with reseller, last_online, credentials, communication stats
+    enrichment = _build_subscriber_enrichment(db, subscriber)
+
     return {
         "subscriber": subscriber,
         **detail_snapshot,
+        **enrichment,
         "billing_config": _build_billing_config(subscriber, detail_snapshot.get("stats") or {}),
         "subscriber_user_access": subscriber_user_access,
         "timeline": timeline,
@@ -720,6 +785,90 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         "subscription_statuses": [s.value for s in SubscriptionStatus],
         "contract_terms": [t.value for t in ContractTerm],
     }
+
+
+def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
+    """Build enrichment data: reseller, last_online, credentials, comms."""
+    from app.models.catalog import AccessCredential, NasDevice, Subscription
+    from app.models.subscriber import Reseller
+
+    metadata = dict(getattr(subscriber, "metadata_", None) or {})
+    enrichment: dict = {}
+
+    # Reseller name
+    if subscriber.reseller_id:
+        reseller = db.get(Reseller, subscriber.reseller_id)
+        enrichment["reseller_name"] = reseller.name if reseller else None
+    else:
+        enrichment["reseller_name"] = None
+
+    # Last online from metadata (backfilled from Splynx API)
+    enrichment["last_online"] = metadata.get("splynx_last_online") or metadata.get("last_online")
+
+    # Billing email
+    enrichment["billing_email"] = metadata.get("billing_email") or metadata.get("splynx_billing_email")
+
+    # GPS coordinates
+    gps_raw = metadata.get("splynx_gps") or metadata.get("gps")
+    enrichment["gps_coordinates"] = gps_raw
+
+    # Splynx location
+    enrichment["splynx_location_id"] = metadata.get("splynx_location_id")
+
+    # RADIUS credentials per subscription
+    credentials = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber.id,
+            AccessCredential.is_active.is_(True),
+        )
+        .all()
+    )
+    enrichment["access_credentials"] = credentials
+
+    # NAS device names for active subscriptions
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .all()
+    )
+    nas_names: dict = {}
+    for sub in subscriptions:
+        if sub.provisioning_nas_device_id:
+            nas = db.get(NasDevice, sub.provisioning_nas_device_id)
+            if nas:
+                nas_names[str(sub.id)] = nas.name
+    enrichment["nas_device_names"] = nas_names
+
+    # Communication log counts
+    try:
+        from sqlalchemy import func
+
+        from app.models.communication_log import CommunicationChannel, CommunicationLog
+
+        email_count = (
+            db.query(func.count(CommunicationLog.id))
+            .filter(
+                CommunicationLog.subscriber_id == subscriber.id,
+                CommunicationLog.channel == CommunicationChannel.email,
+            )
+            .scalar()
+        ) or 0
+        sms_count = (
+            db.query(func.count(CommunicationLog.id))
+            .filter(
+                CommunicationLog.subscriber_id == subscriber.id,
+                CommunicationLog.channel == CommunicationChannel.sms,
+            )
+            .scalar()
+        ) or 0
+        enrichment["comms_email_count"] = email_count
+        enrichment["comms_sms_count"] = sms_count
+    except Exception:
+        enrichment["comms_email_count"] = 0
+        enrichment["comms_sms_count"] = 0
+
+    return enrichment
 
 
 def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
@@ -756,3 +905,23 @@ def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
         "next_block_at": next_block_at,
         "next_block_label": next_block_label,
     }
+
+
+def list_communication_logs(
+    db: Session,
+    subscriber_id: str,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+) -> list:
+    """Return communication logs for a subscriber, newest first."""
+    from app.models.communication_log import CommunicationLog
+
+    return (
+        db.query(CommunicationLog)
+        .filter(CommunicationLog.subscriber_id == subscriber_id)
+        .order_by(CommunicationLog.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )

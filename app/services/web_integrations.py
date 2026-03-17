@@ -22,15 +22,9 @@ from app.services import integration as integration_service
 from app.services import webhook as webhook_service
 from app.services.common import validate_enum
 from app.services.integrations import registry as integration_registry
+from app.validators.forms import parse_uuid
 
 logger = logging.getLogger(__name__)
-
-def _parse_uuid(value: str | None, field: str, required: bool = True) -> UUID | None:
-    if not value:
-        if required:
-            raise ValueError(f"{field} is required")
-        return None
-    return UUID(value)
 
 
 def _parse_json(value: str | None, field: str) -> dict | None:
@@ -405,7 +399,7 @@ def _connector_registration_meta(connector) -> dict[str, object]:
 def _connector_health(db: Session, connector_id: str) -> tuple[str, dict[str, int]]:
     endpoints = (
         db.query(WebhookEndpoint)
-        .filter(WebhookEndpoint.connector_config_id == _parse_uuid(connector_id, "connector_id"))
+        .filter(WebhookEndpoint.connector_config_id == parse_uuid(connector_id, "connector_id"))
         .all()
     )
     endpoint_ids = [endpoint.id for endpoint in endpoints]
@@ -473,7 +467,7 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
         connector_id = endpoint_map.get(str(delivery.endpoint_id))
         if not connector_id:
             continue
-        if connector_ids and _parse_uuid(connector_id, "connector_id") not in connector_ids:
+        if connector_ids and parse_uuid(connector_id, "connector_id") not in connector_ids:
             continue
         activities.append(
             {
@@ -686,7 +680,7 @@ def create_target(
     payload = IntegrationTargetCreate(
         name=name.strip(),
         target_type=validate_enum(target_type, IntegrationTargetType, "target_type"),
-        connector_config_id=_parse_uuid(
+        connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
         notes=notes.strip() if notes else None,
@@ -757,7 +751,7 @@ def create_job(
     if schedule_type == "interval" and not interval_value:
         raise ValueError("interval_minutes is required for interval schedules")
     payload = IntegrationJobCreate(
-        target_id=cast(UUID, _parse_uuid(target_id, "target_id")),
+        target_id=cast(UUID, parse_uuid(target_id, "target_id")),
         name=name.strip(),
         job_type=validate_enum(job_type, IntegrationJobType, "job_type"),
         schedule_type=validate_enum(schedule_type, IntegrationScheduleType, "schedule_type"),
@@ -825,7 +819,7 @@ def create_webhook_endpoint(
     payload = WebhookEndpointCreate(
         name=name.strip(),
         url=url.strip(),
-        connector_config_id=_parse_uuid(
+        connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
         secret=secret.strip() if secret else None,
@@ -957,7 +951,7 @@ def create_provider(
     payload = PaymentProviderCreate(
         name=name.strip(),
         provider_type=validate_enum(provider_type, PaymentProviderType, "provider_type"),
-        connector_config_id=_parse_uuid(
+        connector_config_id=parse_uuid(
             connector_config_id, "connector_config_id", required=False
         ),
         webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,

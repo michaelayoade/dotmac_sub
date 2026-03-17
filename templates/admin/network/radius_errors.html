@@ -1,0 +1,119 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background %}
+
+{% block title %}RADIUS Auth Errors - Admin{% endblock %}
+
+{% block page_header %}
+{{ ambient_background("blue", "indigo") }}
+<div class="relative z-30 mb-6 animate-fade-in-up">
+    <div class="flex items-center gap-3 mb-1">
+        <a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-sm">Dashboard</a>
+        <span class="text-slate-400">/</span>
+        <a href="/admin/network/radius" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 text-sm">RADIUS</a>
+        <span class="text-slate-400">/</span>
+        <span class="text-slate-900 dark:text-white text-sm font-medium">Auth Errors</span>
+    </div>
+    <div class="flex items-start justify-between">
+        <div class="flex items-center gap-4">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 shadow-lg shadow-rose-500/25">
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display tracking-tight">RADIUS Auth Errors</h1>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Authentication failures and rejected requests</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Error Type Stats -->
+    {% if type_counts %}
+    <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {% for error_type, count in type_counts %}
+        <div class="rounded-xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ error_type.value | replace('_', ' ') | title }}</p>
+            <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ count }}</p>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Filters -->
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="get" class="flex gap-3">
+            <select name="error_type" class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Error Types</option>
+                {% for et in error_types %}
+                <option value="{{ et }}" {% if selected_error_type == et %}selected{% endif %}>{{ et | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Filter</button>
+            {% if selected_error_type %}<a href="/admin/network/radius-errors" class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm dark:border-slate-600 dark:text-slate-300">Clear</a>{% endif %}
+        </form>
+    </div>
+
+    <!-- Errors Table -->
+    <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="border-b border-slate-200 dark:border-slate-700">
+                        <th class="px-4 py-3 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Timestamp</th>
+                        <th class="px-4 py-3 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Username</th>
+                        <th class="px-4 py-3 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">NAS IP</th>
+                        <th class="px-4 py-3 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Error Type</th>
+                        <th class="px-4 py-3 text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Reply Message</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for error in errors %}
+                    {% set type_colors = {
+                        'reject': 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300',
+                        'timeout': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+                        'invalid_credentials': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+                        'disabled_account': 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300',
+                        'nas_mismatch': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+                        'policy_violation': 'bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300',
+                    } %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ error.occurred_at.strftime('%b %d %H:%M:%S') if error.occurred_at else '—' }}</td>
+                        <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ error.username }}</td>
+                        <td class="px-4 py-3 font-mono text-sm text-slate-700 dark:text-slate-300">{{ error.nas_ip_address or '—' }}</td>
+                        <td class="px-4 py-3">
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ type_colors.get(error.error_type.value, 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300') }}">
+                                {{ error.error_type.value | replace('_', ' ') | title }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 max-w-xs truncate">{{ error.reply_message or error.detail or '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                            <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            <p class="font-medium">No authentication errors</p>
+                            <p class="mt-1 text-xs">Errors will appear here when RADIUS authentication fails</p>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if total > 0 %}
+        <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+            <span class="text-xs text-slate-500 dark:text-slate-400">Showing {{ errors|length }} of {{ total }} errors</span>
+            <div class="flex gap-2">
+                {% if page > 1 %}
+                <a href="?page={{ page - 1 }}{% if selected_error_type %}&error_type={{ selected_error_type }}{% endif %}" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs dark:border-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Prev</a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="?page={{ page + 1 }}{% if selected_error_type %}&error_type={{ selected_error_type }}{% endif %}" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs dark:border-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

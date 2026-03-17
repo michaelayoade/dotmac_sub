@@ -126,9 +126,9 @@ def _generate_proration_if_enabled(
         generate_prorated_invoice(db, subscription)
     except Exception as exc:
         # Log but don't fail the activation
-        import logging
-        logging.getLogger(__name__).warning(
-            f"Failed to generate prorated invoice for subscription {subscription.id}: {exc}"
+        logger.warning(
+            "Failed to generate prorated invoice for subscription %s: %s",
+            subscription.id, exc,
         )
 
 def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
@@ -144,9 +144,29 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
         for subscription in active_subscriptions:
             reconcile_subscription_connectivity(db, str(subscription.id))
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(
-            f"Failed to reconcile RADIUS state for subscriber {subscriber_id}: {exc}"
+        logger.warning(
+            "Failed to reconcile RADIUS state for subscriber %s: %s",
+            subscriber_id, exc,
+        )
+
+def _auto_generate_pppoe_if_enabled(
+    db: Session, subscription: Subscription,
+) -> None:
+    """Auto-generate PPPoE credentials for newly activated subscriptions."""
+    try:
+        from app.services.pppoe_credentials import auto_generate_pppoe_credential
+
+        profile_id = subscription.radius_profile_id
+        auto_generate_pppoe_credential(
+            db,
+            str(subscription.subscriber_id),
+            radius_profile_id=str(profile_id) if profile_id else None,
+        )
+    except Exception as exc:
+        logger.warning(
+            "PPPoE auto-generation failed for subscription %s: %s",
+            subscription.id,
+            exc,
         )
 
 def _resolve_offer_radius_profile_id(
@@ -246,6 +266,9 @@ def _emit_subscription_status_event(
             # Generate prorated invoice for new activations
             _generate_proration_if_enabled(db, subscription, from_status)
 
+        # Auto-generate PPPoE credential if enabled and none exists
+        _auto_generate_pppoe_if_enabled(db, subscription)
+
         # Sync credentials to RADIUS immediately on activation/resume
         _sync_credentials_to_radius(db, subscription.subscriber_id)
 
@@ -273,6 +296,87 @@ def _emit_subscription_status_event(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
+
+def _emit_offer_change_event(
+    db: Session,
+    subscription: Subscription,
+    previous_offer_id: str,
+) -> None:
+    """Emit upgrade or downgrade event when the offer changes on an active subscription.
+
+    Determines direction by comparing recurring price of old vs new offer.
+    Also triggers RADIUS credential sync so speed changes take effect.
+    """
+    from app.models.catalog import OfferPrice, PriceType
+
+    old_price_row = (
+        db.query(OfferPrice.amount)
+        .filter(
+            OfferPrice.offer_id == previous_offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .first()
+    )
+    new_price_row = (
+        db.query(OfferPrice.amount)
+        .filter(
+            OfferPrice.offer_id == str(subscription.offer_id),
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .first()
+    )
+    old_price = old_price_row[0] if old_price_row else 0
+    new_price = new_price_row[0] if new_price_row else 0
+    is_upgrade = new_price > old_price
+
+    old_offer = db.get(CatalogOffer, previous_offer_id)
+    new_offer = subscription.offer
+
+    payload = {
+        "subscription_id": str(subscription.id),
+        "previous_offer_id": previous_offer_id,
+        "previous_offer_name": old_offer.name if old_offer else None,
+        "new_offer_id": str(subscription.offer_id),
+        "new_offer_name": new_offer.name if new_offer else None,
+        "direction": "upgrade" if is_upgrade else "downgrade",
+    }
+
+    event_type = (
+        EventType.subscription_upgraded
+        if is_upgrade
+        else EventType.subscription_downgraded
+    )
+    emit_event(
+        db,
+        event_type,
+        payload,
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+    )
+    logger.info(
+        "Subscription %s %s: %s -> %s",
+        subscription.id,
+        "upgraded" if is_upgrade else "downgraded",
+        old_offer.name if old_offer else previous_offer_id,
+        new_offer.name if new_offer else subscription.offer_id,
+    )
+
+    # Sync RADIUS credentials so the new speed profile takes effect
+    _sync_credentials_to_radius(db, subscription.subscriber_id)
+    try:
+        from app.services.enforcement import update_subscription_sessions
+
+        update_subscription_sessions(
+            db, str(subscription.id), reason="plan_change"
+        )
+    except Exception:
+        logger.warning(
+            "Failed to update sessions after plan change for %s",
+            subscription.id,
+        )
+
 
 def _create_service_order_for_subscription(db: Session, subscription: Subscription):
     """Create a service order for a new subscription that needs provisioning."""
@@ -391,7 +495,7 @@ class Subscriptions(ListResponseMixin):
             account_id=subscription.subscriber_id,
         )
 
-        # If created as active, also emit activation event
+        # If created as active, also emit activation event and generate credentials
         if subscription.status == SubscriptionStatus.active:
             emit_event(
                 db,
@@ -405,6 +509,8 @@ class Subscriptions(ListResponseMixin):
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
             )
+            _auto_generate_pppoe_if_enabled(db, subscription)
+            _sync_credentials_to_radius(db, subscription.subscriber_id)
 
         # SQLite drops tzinfo even when DateTime(timezone=True), and emit_event()
         # commits may expire the instance. Normalize to UTC right before returning
@@ -531,11 +637,21 @@ class Subscriptions(ListResponseMixin):
             # subscription start time if it was previously unset.
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
-        if status == SubscriptionStatus.active and start_at and "next_billing_at" not in data:
+        if status == SubscriptionStatus.active and start_at:
             cycle = _resolve_billing_cycle(
                 db, offer_id, str(offer_version_id) if offer_version_id else None
             )
-            data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
+            existing_next = data.get("next_billing_at") or next_billing_at
+            now = datetime.now(UTC)
+            # Recompute next_billing_at when:
+            # 1. Not provided in form data, OR
+            # 2. Resuming from suspension, OR
+            # 3. The existing value is more than 60 days in the past (stale migration data)
+            stale = existing_next and (now - existing_next).days > 60
+            resuming = previous_status == SubscriptionStatus.suspended
+            if "next_billing_at" not in data or resuming or stale:
+                billing_anchor = now if (resuming or stale) else start_at
+                data["next_billing_at"] = _compute_next_billing_at(billing_anchor, cycle)
         if start_at and "end_at" not in data:
             term = data.get("contract_term", subscription.contract_term)
             end_at = _compute_contract_end_at(start_at, term)
@@ -576,6 +692,14 @@ class Subscriptions(ListResponseMixin):
             except Exception:
                 pass
 
+        # Emit upgrade/downgrade events when offer changes on an active subscription
+        if (
+            previous_offer_id
+            and str(previous_offer_id) != str(subscription.offer_id)
+            and subscription.status == SubscriptionStatus.active
+        ):
+            _emit_offer_change_event(db, subscription, str(previous_offer_id))
+
         return subscription
 
     @staticmethod
@@ -583,8 +707,19 @@ class Subscriptions(ListResponseMixin):
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+        subscriber_id = subscription.subscriber_id
+        offer_id = subscription.offer_id
         db.delete(subscription)
         db.commit()
+        emit_event(
+            db,
+            EventType.subscription_deleted,
+            {
+                "subscription_id": str(subscription_id),
+                "subscriber_id": str(subscriber_id) if subscriber_id else None,
+                "offer_id": str(offer_id) if offer_id else None,
+            },
+        )
 
     @staticmethod
     def expire_subscriptions(

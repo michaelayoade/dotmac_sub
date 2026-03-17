@@ -11,7 +11,15 @@ from sqlalchemy.orm import Session, selectinload
 import app.services.auth_flow as auth_flow_service
 from app.models.auth import Session as AuthSession
 from app.models.auth import SessionStatus
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
+)
+from app.models.catalog import CatalogOffer, Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
 from app.services import catalog as catalog_service
@@ -21,6 +29,20 @@ from app.services.session_store import delete_session, load_session, store_sessi
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_reseller_event(db: Session, event_name: str, payload: dict) -> None:
+    """Emit a reseller event to the event system (non-blocking)."""
+    try:
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        event_type = getattr(EventType, event_name, None)
+        if event_type:
+            emit_event(db, event_type, payload, actor="reseller")
+    except Exception as e:
+        logger.warning("Failed to emit reseller event %s: %s", event_name, e)
+
 
 SESSION_COOKIE_NAME = "reseller_session"
 # Default values for fallback
@@ -145,8 +167,14 @@ def _get_session(session_token: str) -> dict | None:
     return session
 
 
-def invalidate_session(session_token: str) -> None:
+def invalidate_session(session_token: str, db: Session | None = None) -> None:
+    # Read raw session without going through _get_session (which calls invalidate on expiry)
+    session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
+    if db and session:
+        _emit_reseller_event(db, "reseller_logout", {
+            "reseller_id": session.get("reseller_id", ""),
+        })
 
 
 def login(db: Session, username: str, password: str, request: Request, remember: bool) -> dict:
@@ -200,6 +228,10 @@ def _session_from_access_token(
         remember=remember,
         db=db,
     )
+    _emit_reseller_event(db, "reseller_login", {
+        "reseller_id": str(reseller_user.reseller_id),
+        "subscriber_id": str(subscriber.id),
+    })
     return {"session_token": session_token, "reseller_id": str(reseller_user.reseller_id)}
 
 
@@ -294,11 +326,23 @@ def list_accounts(
     reseller_id: str,
     limit: int,
     offset: int,
+    search: str | None = None,
 ) -> list[dict]:
-    accounts = (
+    query = (
         db.query(Subscriber)
         .options(selectinload(Subscriber.organization))
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+    )
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            (Subscriber.first_name.ilike(pattern))
+            | (Subscriber.last_name.ilike(pattern))
+            | (Subscriber.email.ilike(pattern))
+            | (Subscriber.account_number.ilike(pattern))
+        )
+    accounts = (
+        query
         .order_by(Subscriber.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -400,6 +444,247 @@ def get_dashboard_summary(
     }
 
 
+def get_account_detail(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+) -> dict | None:
+    """Get detailed subscriber info with subscriptions, scoped by reseller.
+
+    Returns dict with subscriber details and active subscriptions,
+    or None if account not found or not owned by reseller.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+        return None
+
+    # Fetch subscriptions with offer details
+    subscriptions = (
+        db.query(Subscription)
+        .outerjoin(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
+        .filter(Subscription.subscriber_id == account.id)
+        .order_by(Subscription.created_at.desc())
+        .all()
+    )
+
+    sub_list = []
+    for sub in subscriptions:
+        offer = db.get(CatalogOffer, sub.offer_id) if sub.offer_id else None
+        sub_list.append({
+            "id": str(sub.id),
+            "offer_name": offer.name if offer else "N/A",
+            "status": sub.status.value if sub.status else "unknown",
+            "start_date": sub.start_at,
+            "end_date": getattr(sub, "end_at", None),
+            "created_at": sub.created_at,
+        })
+
+    # Invoice summary
+    open_statuses = {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
+    open_balance = (
+        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == account.id, Invoice.status.in_(open_statuses))
+        .scalar()
+    ) or 0
+
+    return {
+        "id": str(account.id),
+        "account_number": account.account_number,
+        "subscriber_name": _subscriber_label(account),
+        "first_name": account.first_name,
+        "last_name": account.last_name,
+        "email": account.email,
+        "phone": account.phone,
+        "status": account.status.value if account.status else "active",
+        "address_line1": getattr(account, "address_line1", None),
+        "address_line2": getattr(account, "address_line2", None),
+        "city": getattr(account, "city", None),
+        "region": getattr(account, "region", None),
+        "created_at": account.created_at,
+        "subscriptions": sub_list,
+        "open_balance": open_balance,
+    }
+
+
+def list_account_invoices(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    limit: int = 25,
+    offset: int = 0,
+) -> list[dict] | None:
+    """List invoices for a reseller's subscriber account.
+
+    Returns list of invoice dicts, or None if account not owned by reseller.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+        return None
+
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == account.id)
+        .order_by(Invoice.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+
+    results = []
+    for inv in invoices:
+        results.append({
+            "id": str(inv.id),
+            "invoice_number": getattr(inv, "invoice_number", None),
+            "status": inv.status.value if inv.status else "draft",
+            "total_amount": getattr(inv, "total", 0),
+            "balance_due": inv.balance_due or 0,
+            "issued_at": getattr(inv, "issued_at", None),
+            "due_date": getattr(inv, "due_at", None),
+            "created_at": inv.created_at,
+        })
+    return results
+
+
+def get_invoice_detail(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    invoice_id: str,
+) -> dict | None:
+    """Get invoice detail with line items and payments, scoped by reseller.
+
+    Returns dict with invoice data, or None if not found/not authorized.
+    """
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+        return None
+
+    invoice = db.get(Invoice, coerce_uuid(invoice_id))
+    if not invoice or str(invoice.account_id) != str(account.id):
+        return None
+
+    # Line items
+    line_items = (
+        db.query(InvoiceLine)
+        .filter(InvoiceLine.invoice_id == invoice.id)
+        .order_by(InvoiceLine.created_at.asc())
+        .all()
+    )
+    items = []
+    for item in line_items:
+        items.append({
+            "description": getattr(item, "description", ""),
+            "quantity": getattr(item, "quantity", 1),
+            "unit_price": getattr(item, "unit_price", 0),
+            "amount": getattr(item, "amount", 0),
+        })
+
+    # Payments via allocations
+    allocations = (
+        db.query(PaymentAllocation)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .all()
+    )
+    payment_list = []
+    for alloc in allocations:
+        pmt = db.get(Payment, alloc.payment_id) if alloc.payment_id else None
+        if pmt:
+            payment_list.append({
+                "id": str(pmt.id),
+                "amount": alloc.amount,
+                "status": pmt.status.value if pmt.status else "pending",
+                "paid_at": pmt.paid_at,
+                "method": getattr(pmt, "label", None),
+            })
+
+    return {
+        "id": str(invoice.id),
+        "invoice_number": getattr(invoice, "invoice_number", None),
+        "status": invoice.status.value if invoice.status else "draft",
+        "total_amount": getattr(invoice, "total", 0),
+        "balance_due": invoice.balance_due or 0,
+        "issued_at": getattr(invoice, "issued_at", None),
+        "due_date": getattr(invoice, "due_at", None),
+        "created_at": invoice.created_at,
+        "line_items": items,
+        "payments": payment_list,
+        "subscriber_name": _subscriber_label(account),
+        "account_id": str(account.id),
+    }
+
+
+def get_revenue_summary(
+    db: Session,
+    reseller_id: str,
+) -> dict:
+    """Get monthly revenue summary for a reseller's accounts.
+
+    Aggregates invoice amounts by month and status for the last 12 months.
+    """
+    from sqlalchemy import extract
+
+    reseller_uuid = coerce_uuid(reseller_id)
+
+    # Total revenue (all paid invoices)
+    total_paid = (
+        db.query(func.coalesce(func.sum(Invoice.total), 0))
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .scalar()
+    ) or 0
+
+    # Outstanding balance
+    open_statuses = {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
+    total_outstanding = (
+        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(Invoice.status.in_(open_statuses))
+        .scalar()
+    ) or 0
+
+    # Monthly breakdown (last 12 months)
+    monthly_rows = (
+        db.query(
+            extract("year", Invoice.created_at).label("year"),
+            extract("month", Invoice.created_at).label("month"),
+            func.coalesce(func.sum(Invoice.total), 0).label("total"),
+            func.count(Invoice.id).label("count"),
+        )
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(Invoice.status == InvoiceStatus.paid)
+        .group_by("year", "month")
+        .order_by(extract("year", Invoice.created_at).desc(), extract("month", Invoice.created_at).desc())
+        .limit(12)
+        .all()
+    )
+
+    monthly = []
+    for row in reversed(monthly_rows):
+        monthly.append({
+            "year": int(row.year),
+            "month": int(row.month),
+            "total": float(row.total),
+            "count": int(row.count),
+        })
+
+    # Account count
+    account_count = (
+        db.query(func.count(Subscriber.id))
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .scalar()
+    ) or 0
+
+    return {
+        "total_paid": total_paid,
+        "total_outstanding": total_outstanding,
+        "account_count": account_count,
+        "monthly": monthly,
+    }
+
+
 def create_customer_imsubscriberation_session(
     db: Session,
     reseller_id: str,
@@ -444,6 +729,10 @@ def create_customer_imsubscriberation_session(
         subscription_id=selected_subscription_id,
         return_to=return_to,
     )
+    _emit_reseller_event(db, "reseller_impersonated", {
+        "reseller_id": reseller_id,
+        "account_id": account_id,
+    })
     return session_token
 
 

@@ -1,12 +1,34 @@
 # Project State
 
-*Last updated: 2026-03-14*
+*Last updated: 2026-03-15*
 
 This file tracks in-progress work, current priorities, and known issues to provide continuity across development sessions.
 
 ---
 
-## In-Progress Features (Uncommitted)
+## Recent Architecture Fixes (Committed 2026-03-15, commit 3c065dc)
+
+Gap analysis identified 42 issues across 5 areas. Fixed 13 of 14 tasks:
+- **4 async routes → sync** in provisioning.py
+- **21 db.commit() moved** from routes to services (system, subscribers, support, wireguard, customer)
+- **Bulk tariff change** — savepoint isolation for partial failure safety
+- **158 service files** — added missing loggers
+- **8 FK indexes** added via migration (subscriptions, invoices, payments, etc.)
+- **4 task files** — added return stats dicts and loggers
+- **3 wireguard tasks** — added error handling
+- **Dead BaseCRUDService** removed (237 lines)
+- **17 f-string logging** calls converted to %s format
+- **Credential encryption** — warning log when key not configured
+
+### Remaining from gap analysis (not yet done):
+- Add `back_populates` to ~30 asymmetric relationships (auth, usage, gis, catalog models)
+- Defensive `db.rollback()` in route except blocks → should move to services (21 instances)
+- Rate limiting on login/password-reset endpoints
+- Pre-existing test failures (21 FAILED + 13 ERROR, all in tr069/networking/geocoding)
+
+---
+
+## Committed Features (Since 2026-03-14)
 
 ### 1. Support Ticket Module — NEW MODULE
 **Status:** Code complete, needs lint fixes and testing

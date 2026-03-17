@@ -39,13 +39,15 @@ class CRUDManager(ListResponseMixin, Generic[TModel]):
         return dict(payload)
 
     @classmethod
-    def _get_or_404(cls, db, entity_id: str):
+    def _get_or_404(cls, db, entity_id: str, *, include_inactive: bool = False):
         model = cls._require_model()
         entity = db.get(model, entity_id)
         if not entity:
             raise HTTPException(status_code=404, detail=cls.not_found_detail)
-        # Treat soft-deleted rows as not found for get/update/delete.
-        if cls.soft_delete_field:
+        # Treat soft-deleted rows as not found for get/update/delete,
+        # unless the caller explicitly requests inactive rows (e.g. for
+        # viewing newly-created ONTs that haven't been assigned yet).
+        if cls.soft_delete_field and not include_inactive:
             try:
                 if getattr(entity, cls.soft_delete_field) == cls.soft_delete_value:
                     raise HTTPException(status_code=404, detail=cls.not_found_detail)
@@ -66,6 +68,11 @@ class CRUDManager(ListResponseMixin, Generic[TModel]):
     @classmethod
     def get(cls, db, entity_id: str):
         return cls._get_or_404(db, entity_id)
+
+    @classmethod
+    def get_including_inactive(cls, db, entity_id: str):
+        """Like get(), but returns entities even if soft-deleted / inactive."""
+        return cls._get_or_404(db, entity_id, include_inactive=True)
 
     @classmethod
     def update(cls, db, entity_id: str, payload):

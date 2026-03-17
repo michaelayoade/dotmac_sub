@@ -38,6 +38,8 @@ from app.schemas.network import (
 )
 from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
@@ -74,16 +76,41 @@ class OLTDevices(CRUDManager[OLTDevice]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
+    def create(cls, db: Session, payload) -> OLTDevice:
+        device = super().create(db, payload)
+        emit_event(
+            db,
+            EventType.olt_created,
+            {"olt_id": str(device.id), "name": device.name},
+            actor="system",
+        )
+        return device
+
+    @classmethod
     def get(cls, db: Session, device_id: str) -> OLTDevice:
         return super().get(db, device_id)
 
     @classmethod
     def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate) -> OLTDevice:
-        return super().update(db, device_id, payload)
+        device = super().update(db, device_id, payload)
+        emit_event(
+            db,
+            EventType.olt_updated,
+            {"olt_id": str(device.id), "name": device.name},
+            actor="system",
+        )
+        return device
 
     @classmethod
     def delete(cls, db: Session, device_id: str) -> None:
-        return super().delete(db, device_id)
+        device = cls.get(db, device_id)
+        emit_event(
+            db,
+            EventType.olt_deleted,
+            {"olt_id": str(device.id), "name": device.name},
+            actor="system",
+        )
+        super().delete(db, device_id)
 
 
 class PonPorts(CRUDManager[PonPort]):
