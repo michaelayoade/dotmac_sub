@@ -1065,21 +1065,32 @@ def bind_tr069_server_profile(
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
         if "failure" in output.lower() or "error" in output.lower():
+            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             logger.warning(
                 "TR-069 profile bind failed for ONT %d on OLT %s: %s",
                 ont_id, olt.name, output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
+        # Reset the ONT to force an immediate bootstrap inform to the new ACS.
+        # The OLT prompts "Are you sure? (y/n)" — send 'y' to confirm.
+        reset_out = _run_huawei_cmd(
+            channel, f"ont reset {port_num} {ont_id}", prompt=r"[#)]\s*$|y/n"
+        )
+        if "y/n" in reset_out:
+            channel.send("y\n")
+            _read_until_prompt(channel, config_prompt, timeout_sec=8)
+
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
         logger.info(
-            "Bound TR-069 profile %d to ONT %d on OLT %s",
+            "Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)",
             profile_id, ont_id, olt.name,
         )
-        return True, f"TR-069 profile {profile_id} bound to ONT {ont_id}"
+        return True, f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)"
     except Exception as exc:
         logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}"
@@ -1237,11 +1248,11 @@ def get_tr069_server_profiles(
             detail = _parse_tr069_profile_detail(detail_output)
             profiles.append(Tr069ServerProfile(
                 profile_id=entry.profile_id,
-                name=entry.name,
-                acs_url=detail.get("acs url", detail.get("acs-url", "")),
-                acs_username=detail.get("acs username", detail.get("acs-username", "")),
+                name=detail.get("profile-name", entry.name),
+                acs_url=detail.get("url", detail.get("acs url", detail.get("acs-url", ""))),
+                acs_username=detail.get("user name", detail.get("acs username", "")),
                 inform_interval=int(detail.get("inform interval", "0") or "0"),
-                binding_count=int(detail.get("bindnumber", detail.get("bindnum", detail.get("bindnumber", "0"))) or "0"),
+                binding_count=int(detail.get("binding times", detail.get("bindnumber", "0")) or "0"),
             ))
 
         return True, f"Found {len(profiles)} TR-069 server profile(s)", profiles
