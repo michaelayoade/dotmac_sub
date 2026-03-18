@@ -79,13 +79,19 @@ def build_cache_page_state(
             }
         )
 
-    accounts = db.scalars(
-        select(Subscriber)
-        .join(Invoice, Invoice.account_id == Subscriber.id)
+    account_ids = db.scalars(
+        select(Invoice.account_id)
         .where(Invoice.is_active.is_(True))
         .distinct()
         .limit(300)
     ).all()
+    accounts = []
+    if account_ids:
+        accounts = db.scalars(
+            select(Subscriber)
+            .where(Subscriber.id.in_(account_ids))
+            .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc(), Subscriber.email.asc())
+        ).all()
 
     return {
         "stats": {

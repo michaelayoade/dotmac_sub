@@ -6,14 +6,14 @@ import logging
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.services import customer_portal, reseller_portal
+from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
 
-templates = Jinja2Templates(directory="templates")
+templates = get_reseller_templates()
 
 
 def _require_reseller_context(request: Request, db: Session):

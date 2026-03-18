@@ -1,0 +1,120 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Installation Details - Customer Portal{% endblock %}
+
+{% block content %}
+{% set appt_status = appointment.status.value if appointment.status and appointment.status.value is defined else (appointment.status or '') %}
+{% set so_status = service_order.status.value if service_order.status and service_order.status.value is defined else (service_order.status or '') %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
+            <a href="/portal/installations" class="hover:text-[var(--color-brand-600)]">Installations</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span class="text-stone-900 dark:text-white">Appointment Details</span>
+        </nav>
+        <div class="flex flex-wrap items-center gap-3">
+            <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">
+                Installation Appointment
+            </h1>
+            <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
+                {% if appt_status == 'completed' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                {% elif appt_status == 'confirmed' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                {% elif appt_status == 'proposed' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
+                {% elif appt_status == 'no_show' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                {% elif appt_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
+                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                {{ appt_status | replace('_', ' ') | capitalize if appt_status else 'Unknown' }}
+            </span>
+            {% if appointment.is_self_install %}
+            <span class="inline-flex items-center rounded-lg bg-violet-100 px-3 py-1.5 text-xs font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">Self-install</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Date</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
+                {{ appointment.scheduled_start.strftime('%b %d, %Y') if appointment.scheduled_start else 'TBD' }}
+            </p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Time Window</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
+                {% if appointment.scheduled_start and appointment.scheduled_end %}
+                {{ appointment.scheduled_start.strftime('%I:%M %p') }} &ndash; {{ appointment.scheduled_end.strftime('%I:%M %p') }}
+                {% elif appointment.scheduled_start %}
+                {{ appointment.scheduled_start.strftime('%I:%M %p') }}
+                {% else %}
+                TBD
+                {% endif %}
+            </p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Technician</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">{{ appointment.technician or 'To be assigned' }}</p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Service Order</p>
+            <a href="/portal/service-orders/{{ service_order.id }}" class="mt-2 block text-sm font-semibold text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">
+                View Order
+            </a>
+        </div>
+    </div>
+
+    {% if appointment.notes %}
+    <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Notes</h2>
+        <p class="mt-2 text-sm text-stone-600 dark:text-stone-300 whitespace-pre-line">{{ appointment.notes }}</p>
+    </div>
+    {% endif %}
+
+    <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Linked Service Order</h2>
+        <div class="mt-4 rounded-xl bg-stone-50 p-4 dark:bg-stone-700/40">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm font-medium text-stone-600 dark:text-stone-300">
+                        {% set so_type = service_order.order_type.value if service_order.order_type and service_order.order_type.value is defined else (service_order.order_type or '') %}
+                        {{ so_type | replace('_', ' ') | capitalize if so_type else 'Service Order' }}
+                    </p>
+                    <p class="mt-0.5 text-xs font-mono text-stone-500 dark:text-stone-400">#{{ service_order.id }}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                        {% if so_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                        {% elif so_status == 'provisioning' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                        {% elif so_status == 'submitted' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
+                        {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                        {{ so_status | capitalize if so_status else 'Unknown' }}
+                    </span>
+                    <a href="/portal/service-orders/{{ service_order.id }}" class="text-sm font-medium text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">
+                        View details
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if appt_status == 'confirmed' or appt_status == 'proposed' %}
+    <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-900/50 dark:bg-amber-900/10">
+        <div class="flex items-start gap-3">
+            <svg class="h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+            <div>
+                <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Preparation tips</h3>
+                <ul class="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-400">
+                    <li>Ensure someone over 18 is present at the installation address.</li>
+                    <li>Clear access to where the fiber cable enters the building.</li>
+                    <li>Have a power outlet available near the planned router location.</li>
+                    <li>If you need to reschedule, please contact support.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

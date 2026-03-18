@@ -11,7 +11,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                     </svg>
                 </div>
-                <span class="text-xl font-bold text-slate-900 dark:text-white">Dotmac</span>
+                <span class="text-xl font-bold text-slate-900 dark:text-white">{{ portal_name or 'Dotmac' }}</span>
             </a>
             <!-- Dark mode toggle -->
             <button x-on:click="$store.darkMode.toggle()"
@@ -38,7 +38,7 @@
     <!-- Footer -->
     <footer class="py-6 px-4">
         <div class="mx-auto max-w-md text-center">
-            <p class="text-sm text-slate-500 dark:text-slate-400">&copy; 2025 Dotmac. All rights reserved.</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">&copy; 2025 {{ portal_name or 'Dotmac' }}. All rights reserved.</p>
         </div>
     </footer>
 </div>

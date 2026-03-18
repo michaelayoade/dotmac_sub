@@ -1,0 +1,164 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Service Order - Customer Portal{% endblock %}
+
+{% block content %}
+{% set so_status = service_order.status.value if service_order.status and service_order.status.value is defined else (service_order.status or '') %}
+{% set so_type = service_order.order_type.value if service_order.order_type and service_order.order_type.value is defined else (service_order.order_type or '') %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
+            <a href="/portal/service-orders" class="hover:text-[var(--color-brand-600)]">Service Orders</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span class="text-stone-900 dark:text-white">Order Details</span>
+        </nav>
+        <div class="flex flex-wrap items-center gap-3">
+            <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">
+                Service Order
+            </h1>
+            <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
+                {% if so_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                {% elif so_status == 'provisioning' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                {% elif so_status == 'scheduled' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400
+                {% elif so_status == 'submitted' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
+                {% elif so_status == 'failed' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                {% elif so_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
+                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                {% if so_status == 'provisioning' %}
+                <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                {% elif so_status == 'active' %}
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                {% endif %}
+                {{ so_status | capitalize if so_status else 'Unknown' }}
+            </span>
+        </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Order ID</p>
+            <p class="mt-2 text-sm font-mono font-semibold text-stone-900 dark:text-white break-all">{{ service_order.id }}</p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Type</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">{{ so_type | replace('_', ' ') | capitalize if so_type else '—' }}</p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Created</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
+                {{ service_order.created_at.strftime('%b %d, %Y') if service_order.created_at else '—' }}
+            </p>
+        </div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Updated</p>
+            <p class="mt-2 text-xl font-semibold text-stone-900 dark:text-white">
+                {{ service_order.updated_at.strftime('%b %d, %Y') if service_order.updated_at else '—' }}
+            </p>
+        </div>
+    </div>
+
+    {% if service_order.notes %}
+    <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Notes</h2>
+        <p class="mt-2 text-sm text-stone-600 dark:text-stone-300 whitespace-pre-line">{{ service_order.notes }}</p>
+    </div>
+    {% endif %}
+
+    <div class="rounded-2xl border border-stone-200 bg-white shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Appointments</h2>
+            <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">Installation and service visit schedule.</p>
+        </div>
+        {% if appointments %}
+        <div class="divide-y divide-stone-200 dark:divide-stone-700">
+            {% for appt in appointments %}
+            {% set appt_status = appt.status.value if appt.status and appt.status.value is defined else (appt.status or '') %}
+            <div class="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm font-semibold text-stone-900 dark:text-white">
+                        {{ appt.scheduled_start.strftime('%b %d, %Y at %I:%M %p') if appt.scheduled_start else 'TBD' }}
+                        {% if appt.scheduled_end %}&ndash; {{ appt.scheduled_end.strftime('%I:%M %p') }}{% endif %}
+                    </p>
+                    {% if appt.technician %}
+                    <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">Technician: {{ appt.technician }}</p>
+                    {% endif %}
+                    {% if appt.notes %}
+                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">{{ appt.notes }}</p>
+                    {% endif %}
+                    {% if appt.is_self_install %}
+                    <span class="mt-1 inline-flex items-center rounded-md bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-400">Self-install</span>
+                    {% endif %}
+                </div>
+                <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                    {% if appt_status == 'completed' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                    {% elif appt_status == 'confirmed' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                    {% elif appt_status == 'proposed' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
+                    {% elif appt_status == 'no_show' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                    {% elif appt_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
+                    {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                    {{ appt_status | replace('_', ' ') | capitalize if appt_status else 'Unknown' }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-6 py-8 text-center">
+            <p class="text-sm text-stone-500 dark:text-stone-400">No appointments scheduled for this order.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if provisioning_tasks %}
+    <div class="rounded-2xl border border-stone-200 bg-white shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Provisioning Progress</h2>
+            <p class="mt-0.5 text-sm text-stone-500 dark:text-stone-400">Technical steps being completed for your service.</p>
+        </div>
+        <div class="divide-y divide-stone-200 dark:divide-stone-700">
+            {% for task in provisioning_tasks %}
+            {% set task_status = task.status.value if task.status and task.status.value is defined else (task.status or '') %}
+            <div class="flex items-center gap-4 px-6 py-4">
+                <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full
+                    {% if task_status == 'completed' %}bg-emerald-100 dark:bg-emerald-900/30
+                    {% elif task_status == 'in_progress' %}bg-blue-100 dark:bg-blue-900/30
+                    {% elif task_status == 'failed' %}bg-red-100 dark:bg-red-900/30
+                    {% else %}bg-stone-100 dark:bg-stone-700{% endif %}">
+                    {% if task_status == 'completed' %}
+                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                    </svg>
+                    {% elif task_status == 'in_progress' %}
+                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    {% elif task_status == 'failed' %}
+                    <svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                    </svg>
+                    {% else %}
+                    <span class="h-2 w-2 rounded-full bg-stone-400"></span>
+                    {% endif %}
+                </div>
+                <div class="flex-1">
+                    <p class="text-sm font-medium text-stone-900 dark:text-white">{{ task.name if task.name else ('Task #' ~ loop.index) }}</p>
+                    {% if task.notes %}
+                    <p class="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{{ task.notes }}</p>
+                    {% endif %}
+                </div>
+                <span class="text-xs font-medium
+                    {% if task_status == 'completed' %}text-emerald-600 dark:text-emerald-400
+                    {% elif task_status == 'in_progress' %}text-blue-600 dark:text-blue-400
+                    {% elif task_status == 'failed' %}text-red-600 dark:text-red-400
+                    {% else %}text-stone-500 dark:text-stone-400{% endif %}">
+                    {{ task_status | replace('_', ' ') | capitalize if task_status else 'Pending' }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

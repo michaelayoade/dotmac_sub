@@ -64,6 +64,12 @@ def customer_stop_impersonation_get(request: Request, next: str | None = Query(d
     )
 
 
+@router.get("/support-info", response_class=HTMLResponse)
+def customer_support_info(request: Request, db: Session = Depends(get_db)):
+    """Public support contact page (no authentication required)."""
+    return web_customer_auth_service.customer_support_info(request, db)
+
+
 @router.get("/session", response_class=HTMLResponse)
 def customer_session_info(request: Request, db: Session = Depends(get_db)):
     """Get current session info (for HTMX polling)."""

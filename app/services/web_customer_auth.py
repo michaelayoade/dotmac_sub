@@ -259,6 +259,22 @@ def customer_login_submit(
         )
 
 
+def customer_support_info(request: Request, db: Session) -> Response:
+    """Render public support contact page (no auth required)."""
+    from app.services.web_system_company_info import get_company_info
+
+    info = get_company_info(db)
+    return templates.TemplateResponse(
+        "customer/auth/support_info.html",
+        {
+            "request": request,
+            "company_name": info.get("company_name") or "",
+            "company_email": info.get("company_email") or "",
+            "company_phone": info.get("company_phone") or "",
+        },
+    )
+
+
 def customer_logout(request: Request):
     session_token = request.cookies.get(customer_portal.SESSION_COOKIE_NAME)
     if session_token:

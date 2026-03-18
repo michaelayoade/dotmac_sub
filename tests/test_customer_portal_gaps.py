@@ -50,25 +50,32 @@ class TestCustomerRouteRegistration:
                 break
         assert found, "POST /portal/support/new route not found"
 
-    def test_password_change_get_route_exists(self) -> None:
+    def test_password_change_get_route_removed(self) -> None:
+        """Password change route must not exist — credentials are shared with PPPoE."""
         from app.web.customer.routes import router
 
-        found = False
         for route in router.routes:
             if getattr(route, "path", "") == "/portal/profile/password" and "GET" in getattr(route, "methods", set()):
-                found = True
-                break
-        assert found, "GET /portal/profile/password route not found"
+                raise AssertionError("GET /portal/profile/password must not exist (PPPoE credential safety)")
 
-    def test_password_change_post_route_exists(self) -> None:
+    def test_password_change_post_route_removed(self) -> None:
+        """Password change route must not exist — credentials are shared with PPPoE."""
         from app.web.customer.routes import router
 
-        found = False
         for route in router.routes:
             if getattr(route, "path", "") == "/portal/profile/password" and "POST" in getattr(route, "methods", set()):
+                raise AssertionError("POST /portal/profile/password must not exist (PPPoE credential safety)")
+
+    def test_support_info_route_exists(self) -> None:
+        """Public support contact page must be accessible without auth."""
+        from app.web.customer.auth import router as auth_router
+
+        found = False
+        for route in auth_router.routes:
+            if getattr(route, "path", "") == "/portal/auth/support-info" and "GET" in getattr(route, "methods", set()):
                 found = True
                 break
-        assert found, "POST /portal/profile/password route not found"
+        assert found, "GET /portal/auth/support-info route not found"
 
     def test_support_comment_post_route_exists(self) -> None:
         from app.web.customer.routes import router

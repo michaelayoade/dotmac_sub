@@ -159,18 +159,26 @@ class TestVlanChainValidation:
 class TestHuaweiCommandGenerator:
     """Test CLI command generation from provisioning specs."""
 
-    def _make_context(self, **kwargs) -> OntProvisioningContext:
-        defaults = {
-            "frame": 0,
-            "slot": 2,
-            "port": 1,
-            "ont_id": 5,
-            "olt_name": "Test OLT",
-            "subscriber_code": "100014919",
-            "subscriber_name": "Demo User",
-        }
-        defaults.update(kwargs)
-        return OntProvisioningContext(**defaults)
+    def _make_context(
+        self,
+        *,
+        frame: int = 0,
+        slot: int = 2,
+        port: int = 1,
+        ont_id: int = 5,
+        olt_name: str = "Test OLT",
+        subscriber_code: str = "100014919",
+        subscriber_name: str = "Demo User",
+    ) -> OntProvisioningContext:
+        return OntProvisioningContext(
+            frame=frame,
+            slot=slot,
+            port=port,
+            ont_id=ont_id,
+            olt_name=olt_name,
+            subscriber_code=subscriber_code,
+            subscriber_name=subscriber_name,
+        )
 
     def test_service_port_commands_generated(self) -> None:
         ctx = self._make_context()

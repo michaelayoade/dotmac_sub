@@ -1051,7 +1051,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
 @router.get("/onts/{ont_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1097,7 +1097,7 @@ def ont_detail(
 @router.get("/onts/{ont_id}/assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_assign_new(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1120,7 +1120,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
     from sqlalchemy.exc import IntegrityError
 
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1176,7 +1176,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
     from app.schemas.network import OntUnitUpdate
 
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1229,7 +1229,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
     try:
         before_snapshot = model_to_dict(ont)
         ont = network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-        after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
         after_snapshot = model_to_dict(after)
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata_payload = {"changes": changes} if changes else None
@@ -1273,7 +1273,7 @@ def ont_onu_mode_modal(
 ) -> HTMLResponse:
     """Serve ONU mode configuration modal partial."""
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
@@ -1316,13 +1316,13 @@ def ont_onu_mode_update(
     )
 
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     after_snapshot = model_to_dict(after)
     changes = diff_dicts(before_snapshot, after_snapshot)
 
@@ -1351,7 +1351,7 @@ def ont_mgmt_ip_modal(
 ) -> HTMLResponse:
     """Serve management/VoIP IP modal partial."""
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
@@ -1388,13 +1388,13 @@ def ont_mgmt_ip_update(
     )
 
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
     before_snapshot = model_to_dict(ont)
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    after = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     after_snapshot = model_to_dict(after)
     changes = diff_dicts(before_snapshot, after_snapshot)
 

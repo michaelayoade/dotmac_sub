@@ -1,0 +1,121 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Service Orders - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Service Orders</h1>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Track the progress of your service requests.</p>
+        </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+        <a href="/portal/service-orders"
+           class="rounded-lg px-3 py-1.5 text-sm font-medium transition
+               {% if not status %}bg-[var(--color-brand-600)] text-white{% else %}bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600{% endif %}">
+            All
+        </a>
+        {% for s in ['submitted', 'scheduled', 'provisioning', 'active', 'failed', 'canceled'] %}
+        <a href="/portal/service-orders?status={{ s }}"
+           class="rounded-lg px-3 py-1.5 text-sm font-medium transition
+               {% if status == s %}bg-[var(--color-brand-600)] text-white{% else %}bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600{% endif %}">
+            {{ s | capitalize }}
+        </a>
+        {% endfor %}
+    </div>
+
+    {% if service_orders %}
+    <div class="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-stone-200 dark:divide-stone-700">
+                <thead class="bg-stone-50 dark:bg-stone-700/50">
+                    <tr>
+                        <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Order</th>
+                        <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Type</th>
+                        <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Status</th>
+                        <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Created</th>
+                        <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-200 dark:divide-stone-700">
+                    {% for order in service_orders %}
+                    {% set so_status = order.status.value if order.status and order.status.value is defined else (order.status or '') %}
+                    {% set so_type = order.order_type.value if order.order_type and order.order_type.value is defined else (order.order_type or '') %}
+                    <tr class="hover:bg-stone-50 dark:hover:bg-stone-700/50 transition">
+                        <td class="px-5 py-4">
+                            <a href="/portal/service-orders/{{ order.id }}" class="text-sm font-semibold text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">
+                                #{{ order.id | string | truncate(8, True, '') }}
+                            </a>
+                        </td>
+                        <td class="px-5 py-4 text-sm text-stone-700 dark:text-stone-300">
+                            {{ so_type | replace('_', ' ') | capitalize if so_type else '—' }}
+                        </td>
+                        <td class="px-5 py-4">
+                            <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
+                                {% if so_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                                {% elif so_status == 'provisioning' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
+                                {% elif so_status == 'scheduled' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400
+                                {% elif so_status == 'submitted' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
+                                {% elif so_status == 'failed' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                {% elif so_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
+                                {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
+                                {% if so_status == 'active' %}
+                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                {% elif so_status == 'provisioning' %}
+                                <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                {% endif %}
+                                {{ so_status | capitalize if so_status else 'Unknown' }}
+                            </span>
+                        </td>
+                        <td class="px-5 py-4 text-sm text-stone-500 dark:text-stone-400">
+                            {{ order.created_at.strftime('%b %d, %Y') if order.created_at else '—' }}
+                        </td>
+                        <td class="px-5 py-4 text-right">
+                            <a href="/portal/service-orders/{{ order.id }}" class="text-sm font-medium text-[var(--color-brand-600)] hover:underline dark:text-[var(--color-brand-400)]">
+                                View
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if total_pages > 1 %}
+        <div class="flex items-center justify-between border-t border-stone-200 bg-stone-50 px-5 py-3 dark:border-stone-700 dark:bg-stone-700/30">
+            <p class="text-sm text-stone-500 dark:text-stone-400">
+                {{ total }} order{{ 's' if total != 1 else '' }}
+            </p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/portal/service-orders?page={{ page - 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm font-medium text-stone-600 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                    Previous
+                </a>
+                {% endif %}
+                <span class="text-sm text-stone-500 dark:text-stone-400">Page {{ page }} of {{ total_pages }}</span>
+                {% if page < total_pages %}
+                <a href="/portal/service-orders?page={{ page + 1 }}{% if status %}&status={{ status }}{% endif %}"
+                   class="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm font-medium text-stone-600 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">
+                    Next
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="rounded-2xl border border-stone-200 bg-white p-12 text-center shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-100 dark:bg-stone-700">
+            <svg class="h-8 w-8 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+        </div>
+        <h3 class="mt-4 text-base font-semibold text-stone-900 dark:text-white">No service orders</h3>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">You don't have any service orders yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

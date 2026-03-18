@@ -1429,7 +1429,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     subscription, signal classification, and network location.
     """
     try:
-        ont = network_service.ont_units.get_including_inactive(db=db, unit_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except Exception:
         return None
 

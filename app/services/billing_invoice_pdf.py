@@ -5,8 +5,12 @@ Queues invoice PDF exports, tracks status in DB, and renders PDF artifacts.
 
 from __future__ import annotations
 
+import base64
 import html
+import inspect
+import io
 import logging
+import mimetypes
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -19,9 +23,15 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
+from app.models.domain_settings import SettingDomain
+from app.models.stored_file import StoredFile
+from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import branding_storage as branding_storage_service
 from app.services import domain_settings as domain_settings_service
+from app.services import settings_spec
+from app.services import web_system_company_info as company_info_service
 from app.services.file_storage import file_uploads
 from app.services.object_storage import (
     ObjectNotFoundError,
@@ -31,7 +41,15 @@ from app.services.object_storage import (
 
 STALE_EXPORT_SECONDS = 20
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
+INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 3, 18, 9, 0, tzinfo=UTC)
 logger = logging.getLogger(__name__)
+
+
+def _normalize_requested_by_id(db: Session, requested_by_id: str | None) -> str | None:
+    candidate = str(requested_by_id or "").strip()
+    if not candidate:
+        return None
+    return candidate if db.get(Subscriber, candidate) else None
 
 
 def _safe_invoice_number(invoice: Invoice) -> str:
@@ -65,7 +83,108 @@ def _format_date(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d")
 
 
-def _render_invoice_html(invoice: Invoice) -> str:
+def _company_lines(company_info: dict[str, str]) -> list[str]:
+    lines = [
+        (company_info.get("company_name") or "").strip(),
+        (company_info.get("company_address_street1") or "").strip(),
+        (company_info.get("company_address_street2") or "").strip(),
+    ]
+    city_line = " ".join(
+        part for part in [
+            (company_info.get("company_address_city") or "").strip(),
+            (company_info.get("company_address_zip") or "").strip(),
+        ] if part
+    ).strip()
+    country = (company_info.get("company_address_country") or "").strip()
+    if city_line:
+        lines.append(city_line)
+    if country:
+        lines.append(country)
+    email = (company_info.get("company_email") or "").strip()
+    phone = (company_info.get("company_phone") or "").strip()
+    if email:
+        lines.append(email)
+    if phone:
+        lines.append(phone)
+    return [line for line in lines if line]
+
+
+def _logo_src(db: Session) -> str | None:
+    raw_logo = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+    logo_value = str(raw_logo or "").strip()
+    if not logo_value:
+        return None
+    if logo_value.startswith("data:"):
+        return logo_value
+    if logo_value.startswith("/branding/assets/"):
+        file_id = branding_storage_service.file_id_from_branding_url(logo_value)
+        if not file_id:
+            return None
+        record = db.get(StoredFile, file_id)
+        if not record or record.is_deleted:
+            return None
+        stream = file_uploads.stream_file(record)
+        content = b"".join(stream.chunks)
+        mime = record.content_type or "image/png"
+        return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+    if logo_value.startswith("/static/"):
+        path = Path(logo_value.lstrip("/"))
+        if path.exists():
+            mime = mimetypes.guess_type(str(path))[0] or "image/png"
+            return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+        return None
+    return logo_value
+
+
+def _decode_logo_image(db: Session):
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+
+    logo_src = _logo_src(db)
+    if not logo_src:
+        return None
+    if not logo_src.startswith("data:"):
+        return None
+    _, _, encoded = logo_src.partition(",")
+    if not encoded:
+        return None
+    try:
+        image_bytes = base64.b64decode(encoded)
+        image = Image.open(io.BytesIO(image_bytes))
+        image.load()
+        return image.convert("RGBA")
+    except Exception:
+        return None
+
+
+def _ensure_weasyprint_pydyf_compat() -> None:
+    try:
+        import pydyf
+    except Exception:
+        return
+
+    signature = inspect.signature(pydyf.PDF.__init__)
+    if len(signature.parameters) != 1:
+        return
+    if getattr(pydyf.PDF, "_dotmac_weasyprint_compat", False):
+        return
+
+    original_pdf = pydyf.PDF
+
+    class CompatPDF(original_pdf):
+        _dotmac_weasyprint_compat = True
+
+        def __init__(self, version=None, identifier=None):
+            super().__init__()
+            self.version = version or b"1.7"
+            self.identifier = identifier
+
+    pydyf.PDF = CompatPDF
+
+
+def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
     rows = "".join(
         (
@@ -85,6 +204,21 @@ def _render_invoice_html(invoice: Invoice) -> str:
     account_email = html.escape((getattr(invoice.account, "email", None) or "").strip() or "N/A")
     invoice_number = html.escape(invoice.invoice_number or str(invoice.id))
     memo = html.escape((invoice.memo or "").strip() or "-")
+    status = html.escape(invoice.status.value.replace("_", " ").title() if invoice.status else "Draft")
+    logo_src = _logo_src(db)
+    company_info = company_info_service.get_company_info(db)
+    company_name = html.escape((company_info.get("company_name") or "").strip() or "Your Company")
+    company_block = "<br>".join(html.escape(line) for line in _company_lines(company_info))
+    accent_invoice_id = invoice.invoice_number or str(invoice.id)
+    tax_label = "Tax"
+    vat_number = html.escape((company_info.get("company_vat_number") or "").strip())
+    if vat_number:
+        tax_label = f"Tax / VAT ({vat_number})"
+    logo_markup = (
+        f'<img src="{html.escape(logo_src)}" alt="{company_name} logo" class="logo">'
+        if logo_src
+        else f'<div class="logo-fallback">{company_name[:1].upper()}</div>'
+    )
 
     return f"""
 <!doctype html>
@@ -93,64 +227,148 @@ def _render_invoice_html(invoice: Invoice) -> str:
 <meta charset=\"utf-8\">
 <title>Invoice {invoice_number}</title>
 <style>
-  @page {{ size: A4; margin: 18mm; }}
-  body {{ font-family: DejaVu Sans, Arial, sans-serif; color: #0f172a; font-size: 12px; }}
-  .top {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }}
-  .h1 {{ font-size: 22px; font-weight: 700; margin: 0; }}
-  .muted {{ color: #475569; }}
-  .box {{ border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; margin-bottom: 12px; }}
-  table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
-  th, td {{ border-bottom: 1px solid #e2e8f0; padding: 8px 6px; text-align: left; }}
-  th {{ background: #f8fafc; font-size: 11px; text-transform: uppercase; color: #334155; }}
+  @page {{ size: A4; margin: 14mm; }}
+  :root {{
+    --green-900: #166534;
+    --green-800: #15803d;
+    --green-700: #16a34a;
+    --green-100: #dcfce7;
+    --green-50: #f0fdf4;
+    --red-700: #b91c1c;
+    --red-100: #fee2e2;
+    --slate-900: #0f172a;
+    --slate-700: #334155;
+    --slate-500: #64748b;
+    --slate-300: #cbd5e1;
+    --slate-200: #e2e8f0;
+    --white: #ffffff;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: DejaVu Sans, Arial, sans-serif; color: var(--slate-900); font-size: 12px; margin: 0; background: var(--white); }}
+  .page {{ border: 1px solid var(--slate-200); border-radius: 18px; overflow: hidden; }}
+  .hero {{
+    background: linear-gradient(135deg, var(--green-900), var(--green-700));
+    color: var(--white);
+    padding: 22px 24px 18px;
+  }}
+  .hero-top {{ display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }}
+  .brand {{ display: flex; gap: 14px; align-items: center; max-width: 58%; }}
+  .logo {{ max-height: 52px; max-width: 150px; display: block; object-fit: contain; background: var(--white); border-radius: 12px; padding: 6px 10px; }}
+  .logo-fallback {{ width: 54px; height: 54px; border-radius: 14px; background: rgba(255,255,255,0.16); color: var(--white); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; }}
+  .company-name {{ margin: 0 0 6px; font-size: 24px; font-weight: 700; }}
+  .company-copy {{ margin: 0; font-size: 10.5px; line-height: 1.6; opacity: 0.95; }}
+  .invoice-panel {{ min-width: 220px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.22); border-radius: 16px; padding: 14px 16px; }}
+  .eyebrow {{ margin: 0 0 4px; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.82; }}
+  .invoice-title {{ margin: 0; font-size: 28px; font-weight: 800; }}
+  .invoice-meta {{ margin-top: 8px; font-size: 11px; line-height: 1.7; }}
+  .status-pill {{ display: inline-block; margin-top: 10px; border-radius: 999px; background: rgba(255,255,255,0.16); padding: 4px 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }}
+  .body {{ padding: 22px 24px 24px; background: linear-gradient(180deg, var(--green-50), var(--white) 32%); }}
+  .summary-grid {{ display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 14px; margin-bottom: 18px; }}
+  .card {{ background: var(--white); border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; }}
+  .card-title {{ margin: 0 0 8px; color: var(--green-900); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }}
+  .card-copy {{ margin: 0; color: var(--slate-700); line-height: 1.7; }}
+  .highlight-card {{ border-color: var(--green-700); background: linear-gradient(180deg, var(--white), var(--green-50)); }}
+  .highlight-value {{ margin: 0; font-size: 22px; font-weight: 800; color: var(--green-900); }}
+  .alert-card {{ border-color: var(--red-100); }}
+  .alert-card .card-title {{ color: var(--red-700); }}
+  .table-shell {{ border: 1px solid var(--slate-200); border-radius: 16px; overflow: hidden; background: var(--white); }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  thead th {{
+    background: var(--green-900);
+    color: var(--white);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 11px 12px;
+    text-align: left;
+  }}
+  tbody td {{ padding: 12px; border-bottom: 1px solid var(--slate-200); vertical-align: top; }}
+  tbody tr:nth-child(even) td {{ background: #fafefb; }}
   .num {{ text-align: right; white-space: nowrap; }}
-  .totals {{ margin-top: 10px; width: 45%; margin-left: auto; }}
-  .totals td {{ border: none; padding: 4px 0; }}
-  .total {{ font-size: 14px; font-weight: 700; }}
+  .totals-wrap {{ display: flex; justify-content: flex-end; margin-top: 16px; }}
+  .totals-card {{ width: 320px; border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; background: var(--white); }}
+  .totals-card table td {{ border: none; padding: 5px 0; }}
+  .totals-card .grand-total td {{ color: var(--green-900); font-size: 15px; font-weight: 800; padding-top: 10px; border-top: 1px solid var(--slate-200); }}
+  .memo {{ margin-top: 18px; border-left: 4px solid var(--red-700); background: #fff8f8; border-radius: 0 14px 14px 0; padding: 14px 16px; }}
+  .memo strong {{ color: var(--red-700); }}
+  .footer {{ margin-top: 18px; color: var(--slate-500); font-size: 10px; display: flex; justify-content: space-between; gap: 16px; }}
 </style>
 </head>
 <body>
-  <div class=\"top\">
-    <div>
-      <p class=\"h1\">Invoice</p>
-      <p class=\"muted\">Invoice #: {invoice_number}</p>
-      <p class=\"muted\">Status: {html.escape(invoice.status.value if invoice.status else 'draft')}</p>
+  <div class=\"page\">
+    <div class=\"hero\">
+      <div class=\"hero-top\">
+        <div class=\"brand\">
+          {logo_markup}
+          <div>
+            <p class=\"company-name\">{company_name}</p>
+            <p class=\"company-copy\">{company_block or company_name}</p>
+          </div>
+        </div>
+        <div class=\"invoice-panel\">
+          <p class=\"eyebrow\">Invoice</p>
+          <p class=\"invoice-title\">#{html.escape(str(accent_invoice_id))}</p>
+          <div class=\"invoice-meta\">
+            <div>Issued: {_format_date(invoice.issued_at)}</div>
+            <div>Due: {_format_date(invoice.due_at)}</div>
+            <div>Currency: {html.escape(invoice.currency or 'NGN')}</div>
+          </div>
+          <div class=\"status-pill\">{status}</div>
+        </div>
+      </div>
     </div>
-    <div class=\"muted\" style=\"text-align:right\">
-      <div>Issued: {_format_date(invoice.issued_at)}</div>
-      <div>Due: {_format_date(invoice.due_at)}</div>
-      <div>Currency: {html.escape(invoice.currency or 'NGN')}</div>
+
+    <div class=\"body\">
+      <div class=\"summary-grid\">
+        <div class=\"card\">
+          <p class=\"card-title\">Billed To</p>
+          <p class=\"card-copy\">{account_name}<br>{account_email}</p>
+        </div>
+        <div class=\"card highlight-card\">
+          <p class=\"card-title\">Balance Due</p>
+          <p class=\"highlight-value\">N{_money(invoice.balance_due)}</p>
+        </div>
+        <div class=\"card alert-card\">
+          <p class=\"card-title\">Reference</p>
+          <p class=\"card-copy\">Invoice {invoice_number}</p>
+        </div>
+      </div>
+
+      <div class=\"table-shell\">
+        <table>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th class=\"num\">Qty</th>
+              <th class=\"num\">Unit Price</th>
+              <th class=\"num\">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows}
+          </tbody>
+        </table>
+      </div>
+
+      <div class=\"totals-wrap\">
+        <div class=\"totals-card\">
+          <table>
+            <tr><td>Subtotal</td><td class=\"num\">N{_money(invoice.subtotal)}</td></tr>
+            <tr><td>{tax_label}</td><td class=\"num\">N{_money(invoice.tax_total)}</td></tr>
+            <tr class=\"grand-total\"><td>Total</td><td class=\"num\">N{_money(invoice.total)}</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class=\"memo\">
+        <strong>Memo:</strong> {memo}
+      </div>
+
+      <div class=\"footer\">
+        <div>Prepared by {company_name}</div>
+        <div>Thank you for your business.</div>
+      </div>
     </div>
-  </div>
-
-  <div class=\"box\">
-    <strong>Billed To</strong><br>
-    {account_name}<br>
-    {account_email}
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th class=\"num\">Qty</th>
-        <th class=\"num\">Unit Price</th>
-        <th class=\"num\">Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      {rows}
-    </tbody>
-  </table>
-
-  <table class=\"totals\">
-    <tr><td>Subtotal</td><td class=\"num\">N{_money(invoice.subtotal)}</td></tr>
-    <tr><td>Tax</td><td class=\"num\">N{_money(invoice.tax_total)}</td></tr>
-    <tr class=\"total\"><td>Total</td><td class=\"num\">N{_money(invoice.total)}</td></tr>
-    <tr><td>Balance Due</td><td class=\"num\">N{_money(invoice.balance_due)}</td></tr>
-  </table>
-
-  <div style=\"margin-top: 16px\" class=\"muted\">
-    <strong>Memo:</strong> {memo}
   </div>
 </body>
 </html>
@@ -239,6 +457,145 @@ def _render_invoice_text_lines(invoice: Invoice) -> list[str]:
     return out
 
 
+def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return _build_simple_pdf(_render_invoice_text_lines(invoice))
+
+    def _font(size: int, bold: bool = False):
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        ]
+        for path in candidates:
+            if Path(path).exists():
+                return ImageFont.truetype(path, size=size)
+        return ImageFont.load_default()
+
+    width, height = 1240, 1754
+    margin_x = 72
+    page = Image.new("RGB", (width, height), "#ffffff")
+    draw = ImageDraw.Draw(page)
+
+    green_900 = "#166534"
+    green_700 = "#16a34a"
+    green_50 = "#f0fdf4"
+    red_700 = "#b91c1c"
+    slate_900 = "#0f172a"
+    slate_700 = "#334155"
+    slate_500 = "#64748b"
+    slate_200 = "#e2e8f0"
+
+    title_font = _font(42, bold=True)
+    heading_font = _font(28, bold=True)
+    body_font = _font(22)
+    small_font = _font(18)
+    label_font = _font(18, bold=True)
+    value_font = _font(24, bold=True)
+
+    draw.rounded_rectangle((36, 36, width - 36, height - 36), radius=28, outline=slate_200, width=2, fill="#ffffff")
+    draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
+    draw.rectangle((36, 220, width - 36, 350), fill=green_700)
+
+    company_info = company_info_service.get_company_info(db)
+    company_name = (company_info.get("company_name") or "").strip() or "Your Company"
+    company_lines = _company_lines(company_info) or [company_name]
+    logo_image = _decode_logo_image(db)
+    if logo_image is not None:
+        logo = logo_image.copy()
+        logo.thumbnail((220, 100))
+        logo_bg = Image.new("RGBA", (logo.width + 28, logo.height + 20), (255, 255, 255, 255))
+        page.paste(logo_bg.convert("RGB"), (margin_x - 10, 78))
+        page.paste(logo, (margin_x + 4, 88), logo)
+        company_x = margin_x + logo_bg.width + 26
+    else:
+        draw.rounded_rectangle((margin_x, 78, margin_x + 88, 166), radius=22, fill="#ffffff")
+        draw.text((margin_x + 28, 96), company_name[:1].upper(), font=title_font, fill=green_900)
+        company_x = margin_x + 118
+
+    draw.text((company_x, 84), company_name, font=title_font, fill="#ffffff")
+    line_y = 138
+    for line in company_lines[:5]:
+        draw.text((company_x, line_y), line, font=small_font, fill="#f8fafc")
+        line_y += 26
+
+    panel_x = width - 380
+    draw.rounded_rectangle((panel_x, 82, width - 84, 252), radius=22, fill="#ffffff")
+    invoice_number = invoice.invoice_number or str(invoice.id)
+    draw.text((panel_x + 28, 106), "INVOICE", font=label_font, fill=green_900)
+    draw.text((panel_x + 28, 138), f"#{invoice_number}", font=heading_font, fill=slate_900)
+    draw.text((panel_x + 28, 188), f"Issued: {_format_date(invoice.issued_at)}", font=small_font, fill=slate_700)
+    draw.text((panel_x + 28, 214), f"Due: {_format_date(invoice.due_at)}", font=small_font, fill=slate_700)
+
+    y = 390
+    card_height = 138
+    card_gap = 22
+    card_width = (width - (margin_x * 2) - card_gap * 2) // 3
+    cards = [
+        ("Billed To", _display_account_name(invoice), getattr(invoice.account, "email", None) or "N/A", "#ffffff", slate_900),
+        ("Balance Due", f"N{_money(invoice.balance_due)}", f"Currency: {invoice.currency or 'NGN'}", green_50, green_900),
+        ("Reference", f"Invoice {invoice_number}", invoice.status.value.replace("_", " ").title() if invoice.status else "Draft", "#fff5f5", red_700),
+    ]
+    for index, (title, line1, line2, fill, accent) in enumerate(cards):
+        left = margin_x + index * (card_width + card_gap)
+        draw.rounded_rectangle((left, y, left + card_width, y + card_height), radius=20, fill=fill, outline=slate_200)
+        draw.text((left + 20, y + 18), title.upper(), font=label_font, fill=accent)
+        draw.text((left + 20, y + 54), line1, font=value_font if index == 1 else body_font, fill=slate_900 if index != 1 else green_900)
+        draw.text((left + 20, y + 94), line2, font=small_font, fill=slate_700)
+
+    table_top = 572
+    table_left = margin_x
+    table_right = width - margin_x
+    draw.rounded_rectangle((table_left, table_top, table_right, table_top + 560), radius=22, fill="#ffffff", outline=slate_200)
+    draw.rounded_rectangle((table_left, table_top, table_right, table_top + 66), radius=22, fill=green_900)
+    columns = [table_left + 24, table_left + 650, table_left + 800, table_left + 980]
+    headers = ["Description", "Qty", "Unit Price", "Amount"]
+    for header, col in zip(headers, columns):
+        draw.text((col, table_top + 20), header.upper(), font=label_font, fill="#ffffff")
+
+    line_items = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
+    if not line_items:
+        line_items = [type("FallbackLine", (), {"description": "No line items", "quantity": "", "unit_price": "", "amount": ""})()]
+    row_y = table_top + 86
+    row_height = 64
+    for index, line in enumerate(line_items[:7]):
+        if index % 2 == 1:
+            draw.rounded_rectangle((table_left + 6, row_y - 8, table_right - 6, row_y + row_height - 10), radius=12, fill=green_50)
+        draw.text((columns[0], row_y), str(line.description or "Line item"), font=body_font, fill=slate_900)
+        draw.text((columns[1], row_y), str(line.quantity or ""), font=body_font, fill=slate_700)
+        draw.text((columns[2], row_y), f"N{_money(getattr(line, 'unit_price', None))}" if getattr(line, "unit_price", None) != "" else "", font=body_font, fill=slate_700)
+        draw.text((columns[3], row_y), f"N{_money(getattr(line, 'amount', None))}" if getattr(line, "amount", None) != "" else "", font=body_font, fill=slate_900)
+        row_y += row_height
+
+    totals_left = width - 430
+    totals_top = 1180
+    draw.rounded_rectangle((totals_left, totals_top, width - margin_x, totals_top + 172), radius=20, fill="#ffffff", outline=slate_200)
+    totals = [
+        ("Subtotal", f"N{_money(invoice.subtotal)}"),
+        ("Tax", f"N{_money(invoice.tax_total)}"),
+        ("Total", f"N{_money(invoice.total)}"),
+    ]
+    for index, (label, value) in enumerate(totals):
+        ty = totals_top + 22 + (index * 44)
+        draw.text((totals_left + 22, ty), label, font=body_font, fill=slate_700 if label != "Total" else green_900)
+        draw.text((totals_left + 210, ty), value, font=value_font if label == "Total" else body_font, fill=green_900 if label == "Total" else slate_900)
+
+    memo_top = 1388
+    draw.rounded_rectangle((margin_x, memo_top, width - margin_x, memo_top + 150), radius=18, fill="#fff5f5", outline="#fecaca")
+    draw.rectangle((margin_x, memo_top, margin_x + 12, memo_top + 150), fill=red_700)
+    draw.text((margin_x + 28, memo_top + 20), "MEMO", font=label_font, fill=red_700)
+    draw.text((margin_x + 28, memo_top + 58), (invoice.memo or "").strip() or "-", font=body_font, fill=slate_900)
+
+    footer_y = 1612
+    draw.text((margin_x, footer_y), f"Prepared by {company_name}", font=small_font, fill=slate_500)
+    draw.text((width - 360, footer_y), "Thank you for your business.", font=small_font, fill=slate_500)
+
+    output = io.BytesIO()
+    page.save(output, format="PDF", resolution=144.0)
+    return output.getvalue()
+
+
 def get_latest_export(db: Session, invoice_id: str) -> InvoicePdfExport | None:
     stmt = (
         select(InvoicePdfExport)
@@ -253,6 +610,8 @@ def _is_export_fresh(invoice: Invoice, export: InvoicePdfExport) -> bool:
     if export.status != InvoicePdfExportStatus.completed:
         return False
     if not export.completed_at:
+        return False
+    if export.completed_at < INVOICE_PDF_TEMPLATE_REFRESHED_AT:
         return False
     invoice_updated = invoice.updated_at or invoice.created_at
     if invoice_updated and export.completed_at < invoice_updated:
@@ -275,6 +634,7 @@ def queue_export(
     *,
     force_new: bool = False,
 ) -> InvoicePdfExport:
+    requested_by_id = _normalize_requested_by_id(db, requested_by_id)
     latest = get_latest_export(db, invoice_id)
     invoice = db.get(Invoice, invoice_id)
 
@@ -314,6 +674,41 @@ def queue_export(
     db.commit()
     db.refresh(export)
     return export
+
+
+def generate_export_now(
+    db: Session,
+    *,
+    invoice_id: str,
+    requested_by_id: str | None = None,
+    force_new: bool = False,
+) -> InvoicePdfExport:
+    requested_by_id = _normalize_requested_by_id(db, requested_by_id)
+    invoice = db.get(Invoice, invoice_id)
+    latest = get_latest_export(db, invoice_id)
+
+    if (
+        not force_new
+        and latest
+        and invoice
+        and latest.status == InvoicePdfExportStatus.completed
+        and is_export_cache_valid(db, invoice, latest)
+    ):
+        return latest
+
+    export = InvoicePdfExport(
+        invoice_id=invoice_id,
+        status=InvoicePdfExportStatus.queued,
+        requested_by_id=requested_by_id,
+    )
+    db.add(export)
+    db.commit()
+    db.refresh(export)
+
+    process_export(str(export.id))
+    db.expire_all()
+    refreshed = db.get(InvoicePdfExport, export.id)
+    return refreshed or export
 
 
 def _get_cache_metrics(db: Session) -> dict[str, int]:
@@ -525,19 +920,20 @@ def _invoice_org_id(invoice: Invoice):
     return getattr(account, "organization_id", None) if account else None
 
 
-def _build_pdf_bytes(invoice: Invoice) -> bytes:
-    html_content = _render_invoice_html(invoice)
+def _build_pdf_bytes(db: Session, invoice: Invoice) -> bytes:
+    html_content = _render_invoice_html(invoice, db)
     try:
+        _ensure_weasyprint_pydyf_compat()
         from weasyprint import HTML
 
         return HTML(string=html_content).write_pdf()
     except Exception as exc:
         logger.warning(
-            "WeasyPrint export failed for invoice %s; using simple PDF fallback: %s",
+            "WeasyPrint export failed for invoice %s; using branded PDF fallback: %s",
             invoice.id,
             exc,
         )
-        return _build_simple_pdf(_render_invoice_text_lines(invoice))
+        return _build_branded_fallback_pdf(db, invoice)
 
 
 def _stream_local_file(path: Path) -> StreamResult:
@@ -602,7 +998,7 @@ def process_export(export_id: str) -> dict[str, Any]:
         if existing_record:
             file_uploads.soft_delete(db=db, file=existing_record, hard_delete_object=True)
 
-        pdf_bytes = _build_pdf_bytes(invoice)
+        pdf_bytes = _build_pdf_bytes(db, invoice)
         uploaded = file_uploads.upload(
             db=db,
             domain="generated_docs",

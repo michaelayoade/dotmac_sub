@@ -1,6 +1,4 @@
 """Admin billing invoice action/detail routes."""
-
-from time import sleep
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -229,46 +227,22 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
-    export = billing_invoice_pdf_service.queue_export(
+    export = billing_invoice_pdf_service.generate_export_now(
         db,
         invoice_id=str(invoice_id),
         requested_by_id=str(actor_id) if actor_id else None,
         force_new=False,
     )
 
-    for _ in range(5):
-        db.expire_all()
-        latest_export = billing_invoice_pdf_service.get_latest_export(
-            db,
-            invoice_id=str(invoice_id),
-        )
-        latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-        if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
-            response = _invoice_pdf_response(db, latest_export, invoice)
-            if response is not None:
-                return response
-        sleep(0.4)
-
-    try:
-        billing_invoice_pdf_service.process_export(str(export.id))
-    except Exception:
-        pass
-
     db.expire_all()
-    latest_export = billing_invoice_pdf_service.get_latest_export(
-        db,
-        invoice_id=str(invoice_id),
-    )
-    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
-    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
-        response = _invoice_pdf_response(db, latest_export, invoice)
+    export = db.get(type(export), export.id) if export else None
+    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, export):
+        response = _invoice_pdf_response(db, export, invoice)
         if response is not None:
             return response
 
     notice = "queued"
     status_value = export.status.value
-    if latest_export and latest_export.status:
-        status_value = latest_export.status.value
     if status_value == "processing":
         notice = "processing"
     elif status_value == "failed":
@@ -292,7 +266,7 @@ def invoice_pdf_download(request: Request, invoice_id: UUID, db: Session = Depen
             "admin/errors/404.html",
             {"request": request, "message": "Invoice not found"},
             status_code=404,
-        )
+    )
 
     db.expire_all()
     latest_export = billing_invoice_pdf_service.get_latest_export(
@@ -306,11 +280,7 @@ def invoice_pdf_download(request: Request, invoice_id: UUID, db: Session = Depen
         if response is not None:
             return response
     billing_invoice_pdf_service.record_cache_miss(db)
-
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice_id}?pdf_notice=not_ready",
-        status_code=303,
-    )
+    return invoice_pdf(request=request, invoice_id=invoice_id, db=db)
 
 
 @router.post(

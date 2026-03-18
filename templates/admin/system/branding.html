@@ -1,0 +1,155 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, animation_styles %}
+
+{% block title %}Branding - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "gray") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Branding",
+        subtitle="Configure sidebar logos and favicon without the legacy settings wrapper",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l-4-4m4 4l4-4"/></svg>',
+        color="slate",
+        color2="gray"
+    ) %}{% endcall %}
+
+    {% if errors %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+        {% for error in errors %}
+        <p>{{ error }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/admin/system/settings/branding" enctype="multipart/form-data" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800 space-y-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Branding</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure light logo, dark mode logo, and favicon. File upload overrides URL in each section.</p>
+                </div>
+                <span class="text-xs font-medium uppercase tracking-wide text-slate-400">Branding</span>
+            </div>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Main Logo</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for sidebar logo in light mode, and also dark mode if Dark Mode Logo is not set.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Main Logo URL</label>
+                        <input type="text" name="main_logo_url"
+                               value="{{ branding_main_logo_url or '' }}"
+                               placeholder="https://example.com/logo.png"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Main Logo File</label>
+                        <input type="file" name="main_logo_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_main_logo" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Main Logo
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Dark Mode Logo</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used only in dark mode. If empty, Main Logo is used in dark mode too.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Dark Mode Logo URL</label>
+                        <input type="text" name="dark_logo_url"
+                               value="{{ branding_dark_logo_url or '' }}"
+                               placeholder="https://example.com/logo-dark.png"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Dark Mode Logo File</label>
+                        <input type="file" name="dark_logo_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_dark_logo" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Dark Mode Logo
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Favicon</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for browser tab icon.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Favicon URL</label>
+                        <input type="text" name="favicon_url"
+                               value="{{ branding_favicon_url or '' }}"
+                               placeholder="https://example.com/favicon.ico"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Favicon File</label>
+                        <input type="file" name="favicon_file" accept=".ico,.png,.jpg,.jpeg,.gif,.webp,.svg,image/*"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" name="remove_favicon" value="true"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            Clear Favicon
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Sidebar Preview</p>
+                <div class="flex items-center gap-4">
+                    <div>
+                        <p class="mb-1 text-xs text-slate-500 dark:text-slate-400">Light</p>
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white">
+                            {% if branding_main_logo_url %}
+                            <img src="{{ branding_main_logo_url }}" alt="Main logo preview" class="h-5 w-5 object-contain">
+                            {% else %}
+                            <svg class="h-5 w-5 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div>
+                        <p class="mb-1 text-xs text-slate-500 dark:text-slate-400">Dark</p>
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-600 bg-slate-900">
+                            {% if branding_dark_logo_url %}
+                            <img src="{{ branding_dark_logo_url }}" alt="Dark logo preview" class="h-5 w-5 object-contain">
+                            {% elif branding_main_logo_url %}
+                            <img src="{{ branding_main_logo_url }}" alt="Dark logo preview (fallback)" class="h-5 w-5 object-contain">
+                            {% else %}
+                            <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+            <a href="/admin/system/settings-hub" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Back to Settings Hub</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Branding</button>
+        </div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

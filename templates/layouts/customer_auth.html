@@ -12,7 +12,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
                     </div>
-                    <span class="text-xl font-bold text-slate-900 dark:text-white">Dotmac</span>
+                    <span class="text-xl font-bold text-slate-900 dark:text-white">{{ portal_name or 'Dotmac' }}</span>
                 </a>
 
                 <!-- Dark mode toggle -->
@@ -42,7 +42,7 @@
     <footer class="py-6">
         <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div class="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-500 dark:text-slate-400">
-                <p>&copy; 2025 Dotmac. All rights reserved.</p>
+                <p>&copy; 2025 {{ portal_name or 'Dotmac' }}. All rights reserved.</p>
                 <div class="flex items-center gap-6">
                     <a href="/contact" class="hover:text-slate-700 dark:hover:text-slate-200 transition-colors">Contact</a>
                     <a href="/privacy" class="hover:text-slate-700 dark:hover:text-slate-200 transition-colors">Privacy</a>

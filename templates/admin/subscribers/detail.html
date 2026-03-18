@@ -849,7 +849,7 @@
         </div>
 
         <template x-if="activeTab === 'information'">
-        <div>
+        <div class="grid gap-6">
         {% set ns = namespace(comments=[], activities=[]) %}
         {% for event in timeline %}
             {% if event.is_comment or event.is_todo %}

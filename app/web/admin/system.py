@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
+from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import (
@@ -2061,6 +2062,11 @@ def settings_overview(
     db: Session = Depends(get_db),
 ):
     """System settings management."""
+    if domain == web_system_settings_views_service.BRANDING_DOMAIN:
+        return RedirectResponse(url="/admin/system/branding", status_code=303)
+    if domain == "notification":
+        return RedirectResponse(url="/admin/system/email", status_code=303)
+
     settings_context = web_system_settings_views_service.build_settings_context(db, domain)
     context = web_system_settings_views_service.build_settings_page_context(
         request,
@@ -2087,6 +2093,14 @@ def settings_update(
         domain_value=domain_value,
         form=form,
     )
+    if domain_value == "notification":
+        if not errors:
+            return RedirectResponse(url="/admin/system/email?saved=1", status_code=303)
+        return templates.TemplateResponse(
+            "admin/system/email.html",
+            _smtp_page_context(request, db, {"errors": errors}),
+            status_code=400,
+        )
     context = web_system_settings_views_service.build_settings_page_context(
         request,
         db,
@@ -2165,7 +2179,7 @@ def settings_branding_update(
                 file_data=file_bytes,
                 content_type=incoming_file.content_type,
                 filename=incoming_file.filename,
-                uploaded_by=(get_admin_current_user(request) or {}).get("subscriber_id"),
+                uploaded_by=_resolve_uploaded_by_subscriber_id(),
             )
             next_value = branding_storage_service.branding_url_for_file(file_record.id)
         else:
@@ -2184,6 +2198,27 @@ def settings_branding_update(
             is_active=True,
         )
         settings_spec.DOMAIN_SETTINGS_SERVICE[domain].upsert_by_key(db, key, payload)
+
+    def _resolve_uploaded_by_subscriber_id() -> str | None:
+        current_user = get_admin_current_user(request) or {}
+        candidate = str(current_user.get("subscriber_id") or "").strip()
+        if not candidate:
+            return None
+        return candidate if db.get(Subscriber, candidate) else None
+
+    def _branding_context(extra: dict | None = None) -> dict:
+        settings_context = web_system_settings_views_service.build_settings_context(
+            db, web_system_settings_views_service.BRANDING_DOMAIN
+        )
+        return _config_context(
+            request,
+            db,
+            {
+                "active_page": "system-branding",
+                **settings_context,
+                **(extra or {}),
+            },
+        )
 
     try:
         assets = [
@@ -2238,16 +2273,31 @@ def settings_branding_update(
                 upload = file_upload_service.get_branding_upload()
                 upload.delete_by_url(current_value, "/static/branding/")
 
-        return RedirectResponse(url="/admin/system/settings?domain=branding", status_code=303)
+        return RedirectResponse(url="/admin/system/branding", status_code=303)
     except Exception as exc:
-        settings_context = web_system_settings_views_service.build_settings_context(db, "branding")
-        context = web_system_settings_views_service.build_settings_page_context(
-            request,
-            db,
-            settings_context=settings_context,
-            extra={"errors": [str(exc)]},
+        db.rollback()
+        return templates.TemplateResponse(
+            "admin/system/branding.html",
+            _branding_context({"errors": [str(exc)]}),
+            status_code=400,
         )
-        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
+
+
+def _smtp_page_context(
+    request: Request,
+    db: Session,
+    extra: dict | None = None,
+) -> dict:
+    settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+    return _config_context(
+        request,
+        db,
+        {
+            "active_page": "system-email",
+            **settings_context,
+            **(extra or {}),
+        },
+    )
 
 
 @router.post(
@@ -2287,18 +2337,16 @@ def settings_smtp_sender_upsert(
         if web_system_common_service.form_bool(is_default):
             email_service.set_default_smtp_sender_key(db, normalized_key)
         return RedirectResponse(
-            url="/admin/system/settings?domain=notification#smtp-senders",
+            url="/admin/system/email#smtp-senders",
             status_code=303,
         )
     except Exception as exc:
-        settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
-        context = web_system_settings_views_service.build_settings_page_context(
-            request,
-            db,
-            settings_context=settings_context,
-            extra={"errors": [str(exc)]},
+        db.rollback()
+        return templates.TemplateResponse(
+            "admin/system/email.html",
+            _smtp_page_context(request, db, {"errors": [str(exc)]}),
+            status_code=400,
         )
-        return templates.TemplateResponse("admin/system/settings.html", context, status_code=400)
 
 
 @router.post(
@@ -2311,7 +2359,7 @@ def settings_smtp_sender_set_default(
     db: Session = Depends(get_db),
 ):
     email_service.set_default_smtp_sender_key(db, sender_key)
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(url="/admin/system/email#smtp-senders", status_code=303)
 
 
 @router.post(
@@ -2329,7 +2377,7 @@ def settings_smtp_sender_delete(sender_key: str, db: Session = Depends(get_db)):
             email_service.set_default_smtp_sender_key(db, str(remaining[0].get("sender_key", "default")))
         else:
             email_service.set_default_smtp_sender_key(db, "default")
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(url="/admin/system/email#smtp-senders", status_code=303)
 
 
 @router.post(
@@ -2346,20 +2394,20 @@ def settings_smtp_sender_test(
     config = email_service.get_smtp_config(db, sender_key=normalized)
     ok, error = email_service.test_smtp_connection(config, db=db)
     message = "SMTP connection successful." if ok else (error or "SMTP test failed.")
-    settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
-    context = web_system_settings_views_service.build_settings_page_context(
-        request,
-        db,
-        settings_context=settings_context,
-        extra={
-            "smtp_test_result": {
-                "sender_key": normalized,
-                "ok": ok,
-                "message": message,
-            }
-        },
+    return templates.TemplateResponse(
+        "admin/system/email.html",
+        _smtp_page_context(
+            request,
+            db,
+            extra={
+                "smtp_test_result": {
+                    "sender_key": normalized,
+                    "ok": ok,
+                    "message": message,
+                }
+            },
+        ),
     )
-    return templates.TemplateResponse("admin/system/settings.html", context)
 
 
 @router.post(
@@ -2375,7 +2423,7 @@ def settings_smtp_sender_activities(
         field_name = f"activity_{activity_key}"
         sender = form.get(field_name)
         email_service.upsert_smtp_activity_mapping(db, activity_key, sender)
-    return RedirectResponse(url="/admin/system/settings?domain=notification#smtp-senders", status_code=303)
+    return RedirectResponse(url="/admin/system/email#smtp-senders", status_code=303)
 
 
 @router.post(
@@ -2873,6 +2921,25 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/settings_hub.html", _config_context(request, db, {"active_page": "settings-hub", **data}))
 
 
+@router.get("/branding", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+def branding_page(request: Request, db: Session = Depends(get_db)):
+    data = web_system_settings_views_service.build_settings_context(
+        db, web_system_settings_views_service.BRANDING_DOMAIN
+    )
+    return templates.TemplateResponse(
+        "admin/system/branding.html",
+        _config_context(request, db, {"active_page": "system-branding", **data}),
+    )
+
+
+@router.get("/email", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+def email_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/system/email.html",
+        _smtp_page_context(request, db, {"saved": request.query_params.get("saved") == "1"}),
+    )
+
+
 # --- Company Info ---
 @router.get("/company-info", response_class=HTMLResponse)
 def company_info_page(request: Request, db: Session = Depends(get_db)):
@@ -2992,15 +3059,12 @@ def config_preferences_save(request: Request, db: Session = Depends(get_db)):
 # --- 8.9 Email / SMTP ---
 @router.get("/config/email", response_class=HTMLResponse)
 def config_email_page(request: Request, db: Session = Depends(get_db)):
-    data = web_system_config_service.get_email_config_context(db)
-    return templates.TemplateResponse("admin/system/config/email.html", _config_context(request, db, {"active_page": "config-email", **data}))
+    return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
 @router.post("/config/email", response_class=HTMLResponse)
 def config_email_save(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    web_system_config_service.save_email_config(db, form)
-    return RedirectResponse(url="/admin/system/config/email", status_code=303)
+    return RedirectResponse(url="/admin/system/email", status_code=303)
 
 
 # --- 8.7 Subscriber Settings ---

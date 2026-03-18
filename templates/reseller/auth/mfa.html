@@ -1,6 +1,6 @@
 {% extends "layouts/auth.html" %}
 
-{% block title %}Reseller Verification - DotMac Subs{% endblock %}
+{% block title %}Reseller Verification - {{ portal_name or 'DotMac Subs' }}{% endblock %}
 
 {% block content %}
 <div class="rounded-2xl bg-white p-8 shadow-xl dark:bg-slate-800">
@@ -31,6 +31,7 @@
           x-on:htmx:before-request="loading = true"
           x-on:htmx:after-request="loading = false"
           class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
 
         <div>
             <label for="code" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">

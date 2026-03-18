@@ -21,9 +21,10 @@ SETTINGS_CATEGORIES: list[dict] = [
         "description": "Core system configuration and security",
         "links": [
             {"name": "Preferences & Security", "url": "/admin/system/config/preferences", "description": "Landing page, 2FA, portal title"},
+            {"name": "Branding & Assets", "url": "/admin/system/branding", "description": "Sidebar logos, dark logo, favicon"},
             {"name": "Company Information", "url": "/admin/system/company-info", "description": "Company name, address, bank details"},
             {"name": "Data Retention", "url": "/admin/system/config/data-retention", "description": "Log rotation and data cleanup policies"},
-            {"name": "Email / SMTP", "url": "/admin/system/config/email", "description": "Outbound email transport settings"},
+            {"name": "Email / SMTP", "url": "/admin/system/email", "description": "Outbound email transport settings"},
             {"name": "Users & Roles", "url": "/admin/system/users", "description": "Admin accounts, roles, permissions"},
             {"name": "API Keys", "url": "/admin/system/api-keys", "description": "Manage API access tokens"},
             {"name": "Webhooks", "url": "/admin/system/webhooks", "description": "Event delivery endpoints"},
@@ -69,7 +70,7 @@ SETTINGS_CATEGORIES: list[dict] = [
         "links": [
             {"name": "Notification Templates", "url": "/admin/system/config/templates", "description": "Email and SMS templates with variables"},
             {"name": "Billing Notifications", "url": "/admin/system/config/billing-notifications", "description": "Prepaid and recurring notification waves"},
-            {"name": "Email / SMTP", "url": "/admin/system/config/email", "description": "SMTP transport and rate limits"},
+            {"name": "Email / SMTP", "url": "/admin/system/email", "description": "SMTP transport and rate limits"},
         ],
     },
     {

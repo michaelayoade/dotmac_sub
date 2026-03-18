@@ -1,4 +1,4 @@
-"""Shared branding context for customer portal templates."""
+"""Shared branding context for reseller portal templates."""
 
 import logging
 
@@ -10,15 +10,15 @@ from app.db import SessionLocal
 logger = logging.getLogger(__name__)
 
 
-def customer_branding_context(_request: Request) -> dict[str, object]:
-    """Build branding context (favicon, sidebar stats, portal name) for customer portal templates."""
+def reseller_branding_context(_request: Request) -> dict[str, object]:
+    """Build branding context (favicon, portal name) for reseller portal templates."""
     db = SessionLocal()
     try:
         from app.services import web_admin as web_admin_service
 
         stats = web_admin_service.get_sidebar_stats(db)
     except Exception:
-        logger.debug("Failed to load sidebar stats for branding context")
+        logger.debug("Failed to load sidebar stats for reseller branding context")
         stats = {}
 
     portal_name = ""
@@ -28,7 +28,7 @@ def customer_branding_context(_request: Request) -> dict[str, object]:
         info = get_company_info(db)
         portal_name = info.get("company_name") or ""
     except Exception:
-        logger.debug("Failed to load company name for portal branding")
+        logger.debug("Failed to load company name for reseller branding")
     finally:
         db.close()
 
@@ -40,9 +40,9 @@ def customer_branding_context(_request: Request) -> dict[str, object]:
     }
 
 
-def get_customer_templates() -> Jinja2Templates:
-    """Return Jinja2Templates configured with customer branding context."""
+def get_reseller_templates() -> Jinja2Templates:
+    """Return Jinja2Templates configured with reseller branding context."""
     return Jinja2Templates(
         directory="templates",
-        context_processors=[customer_branding_context],
+        context_processors=[reseller_branding_context],
     )

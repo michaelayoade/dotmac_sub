@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, timedelta, datetime
 from decimal import Decimal
 
 from sqlalchemy.orm import sessionmaker
 
 from app.models.billing import InvoicePdfExport, InvoicePdfExportStatus
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.stored_file import StoredFile
+from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as pdf_service
@@ -54,7 +57,7 @@ def test_process_export_uploads_invoice_pdf_to_s3_metadata(
         bind=db_session.get_bind(), autoflush=False, autocommit=False
     )
     monkeypatch.setattr(pdf_service, "SessionLocal", SessionLocal)
-    monkeypatch.setattr(pdf_service, "_build_pdf_bytes", lambda _invoice: b"%PDF-1.4 bytes")
+    monkeypatch.setattr(pdf_service, "_build_pdf_bytes", lambda _db, _invoice: b"%PDF-1.4 bytes")
 
     invoice = _invoice(db_session, subscriber_account)
     export = InvoicePdfExport(
@@ -125,3 +128,102 @@ def test_export_file_exists_and_stream_export_uses_s3(
     assert pdf_service.export_file_exists(db_session, export) is True
     stream = pdf_service.stream_export(db_session, export)
     assert b"".join(stream.chunks) == b"%PDF-1.4 body"
+
+
+def test_queue_export_ignores_non_subscriber_requested_by_id(db_session, subscriber_account, monkeypatch):
+    invoice = _invoice(db_session, subscriber_account)
+
+    monkeypatch.setattr(
+        "app.tasks.invoice_pdf.generate_invoice_pdf_export.delay",
+        lambda _export_id: type("AsyncResult", (), {"id": "task-123"})(),
+    )
+
+    export = pdf_service.queue_export(
+        db_session,
+        invoice_id=str(invoice.id),
+        requested_by_id="87bdb5e4-d626-4541-9aff-25b04b0423a4",
+    )
+
+    assert export.requested_by_id is None
+
+
+def test_render_invoice_html_includes_branding_and_company_info(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.comms,
+                key="sidebar_logo_url",
+                value_text="data:image/png;base64,ZmFrZS1sb2dv",
+                value_type=SettingValueType.string,
+            ),
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="company_name",
+                value_text="Dotmac Green ISP",
+                value_type=SettingValueType.string,
+            ),
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="company_email",
+                value_text="billing@dotmac.ng",
+                value_type=SettingValueType.string,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+
+    assert "Dotmac Green ISP" in html
+    assert "data:image/png;base64,ZmFrZS1sb2dv" in html
+    assert "--green-900" in html
+    assert "--red-700" in html
+
+
+def test_completed_export_before_template_refresh_is_stale(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+    export = InvoicePdfExport(
+        invoice_id=invoice.id,
+        status=InvoicePdfExportStatus.completed,
+        requested_by_id=subscriber_account.id,
+        completed_at=pdf_service.INVOICE_PDF_TEMPLATE_REFRESHED_AT - timedelta(minutes=1),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    assert pdf_service._is_export_fresh(invoice, export) is False
+
+
+def test_generate_export_now_uses_current_renderer(db_session, subscriber_account, monkeypatch):
+    fake_storage = _FakeStorage()
+    monkeypatch.setattr(file_uploads, "storage", fake_storage)
+    SessionLocal = sessionmaker(
+        bind=db_session.get_bind(), autoflush=False, autocommit=False
+    )
+    monkeypatch.setattr(pdf_service, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(
+        pdf_service,
+        "_build_pdf_bytes",
+        lambda _db, _invoice: b"%PDF-1.4 branded-current",
+    )
+
+    invoice = _invoice(db_session, subscriber_account)
+    export = pdf_service.generate_export_now(
+        db_session,
+        invoice_id=str(invoice.id),
+        requested_by_id=str(subscriber_account.id),
+    )
+
+    assert export.status == InvoicePdfExportStatus.completed
+    assert export.file_path in fake_storage.objects
+    assert fake_storage.objects[export.file_path] == b"%PDF-1.4 branded-current"
+
+
+def test_build_pdf_bytes_with_weasyprint_pydyf_compat(db_session, subscriber_account):
+    invoice = _invoice(db_session, subscriber_account)
+
+    pdf_bytes = pdf_service._build_pdf_bytes(db_session, invoice)
+
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert len(pdf_bytes) > 1500

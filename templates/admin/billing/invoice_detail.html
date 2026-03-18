@@ -208,7 +208,7 @@
                 </div>
 
                 {% if pdf_status == 'completed' and pdf_export and pdf_export.file_path %}
-                <a href="/admin/billing/invoices/{{ invoice.id }}/pdf/download" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
+                <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:-translate-y-0.5">
                     Download PDF
                 </a>
                 <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/pdf/regenerate" class="mt-2">
