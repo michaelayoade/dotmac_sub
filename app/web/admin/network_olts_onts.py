@@ -1,5 +1,6 @@
 """Admin network OLT/ONT web routes."""
 
+import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -62,6 +63,26 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _service_ports_partial_response(
+    request: Request,
+    db: Session,
+    ont_id: str,
+    *,
+    toast_message: str | None = None,
+    toast_type: str = "success",
+) -> HTMLResponse:
+    context = web_network_service_ports_service.list_context(db, ont_id)
+    response = templates.TemplateResponse(
+        "admin/network/onts/_service_ports_tab.html",
+        {"request": request, **context},
+    )
+    if toast_message:
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": toast_message, "type": toast_type}}
+        )
+    return response
 
 
 
@@ -1892,52 +1913,84 @@ def ont_service_ports(
     )
 
 
-@router.post("/onts/{ont_id}/service-ports/create", dependencies=[Depends(require_permission("network:write"))])
+@router.post("/onts/{ont_id}/service-ports/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def ont_service_port_create(
     request: Request,
     ont_id: str,
     vlan_id: int = Form(...),
     gem_index: int = Form(default=1),
+    user_vlan: str = Form(default=""),
+    tag_transform: str = Form(default="translate"),
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> HTMLResponse:
     """Create a single service-port on the OLT for this ONT."""
-    ok, msg = web_network_service_ports_service.handle_create(db, ont_id, vlan_id, gem_index)
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    resolved_user_vlan: int | str | None = None
+    raw_user_vlan = user_vlan.strip()
+    if raw_user_vlan:
+        if raw_user_vlan == "untagged":
+            resolved_user_vlan = "untagged"
+        else:
+            try:
+                resolved_user_vlan = int(raw_user_vlan)
+            except ValueError:
+                return _service_ports_partial_response(
+                    request,
+                    db,
+                    ont_id,
+                    toast_message="User VLAN must be a number or 'untagged'",
+                    toast_type="error",
+                )
+
+    ok, msg = web_network_service_ports_service.handle_create(
+        db,
+        ont_id,
+        vlan_id,
+        gem_index,
+        user_vlan=resolved_user_vlan,
+        tag_transform=tag_transform,
+    )
+    return _service_ports_partial_response(
+        request,
+        db,
+        ont_id,
+        toast_message=msg,
+        toast_type="success" if ok else "error",
     )
 
 
-@router.post("/onts/{ont_id}/service-ports/{index}/delete", dependencies=[Depends(require_permission("network:write"))])
+@router.post("/onts/{ont_id}/service-ports/{index}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def ont_service_port_delete(
     request: Request,
     ont_id: str,
     index: int,
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> HTMLResponse:
     """Delete a service-port from the OLT by index."""
     ok, msg = web_network_service_ports_service.handle_delete(db, ont_id, index)
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    return _service_ports_partial_response(
+        request,
+        db,
+        ont_id,
+        toast_message=msg,
+        toast_type="success" if ok else "error",
     )
 
 
-@router.post("/onts/{ont_id}/service-ports/clone", dependencies=[Depends(require_permission("network:write"))])
+@router.post("/onts/{ont_id}/service-ports/clone", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def ont_service_port_clone(
     request: Request,
     ont_id: str,
     ref_ont_id: str = Form(...),
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> HTMLResponse:
     """Clone service-ports from a reference ONT."""
     ok, msg = web_network_service_ports_service.handle_clone(db, ont_id, ref_ont_id)
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={"HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'},
+    return _service_ports_partial_response(
+        request,
+        db,
+        ont_id,
+        toast_message=msg,
+        toast_type="success" if ok else "error",
     )
 
 
@@ -2116,10 +2169,21 @@ def ont_provision_status(
 
     result = AsyncResult(task_id)
     if result.ready():
+        status = "failed" if result.failed() else "complete"
+        result_payload = (
+            result.result
+            if isinstance(result.result, dict)
+            else {
+                "success": False,
+                "message": str(result.result),
+                "steps": [],
+            }
+        )
         return JSONResponse(
             content={
-                "status": "complete",
-                "result": result.result if isinstance(result.result, dict) else {"message": str(result.result)},
+                "status": status,
+                "state": result.state,
+                "result": result_payload,
             }
         )
     return JSONResponse(

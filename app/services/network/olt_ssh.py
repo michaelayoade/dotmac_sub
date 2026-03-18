@@ -14,6 +14,7 @@ from paramiko.transport import Transport
 logger = logging.getLogger(__name__)
 
 from app.models.network import OLTDevice
+from app.services.network.olt_command_gen import build_service_port_command
 from app.services.credential_crypto import decrypt_credential
 
 
@@ -265,7 +266,7 @@ def authorize_ont(
     olt: OLTDevice,
     fsp: str,
     serial_number: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, int | None]:
     """SSH into OLT and register an ONT via sn-auth on the given port.
 
     Args:
@@ -278,18 +279,18 @@ def authorize_ont(
     """
     ok, err = _validate_fsp(fsp)
     if not ok:
-        return False, err
+        return False, err, None
     ok, err = _validate_serial(serial_number)
     if not ok:
-        return False, err
+        return False, err, None
 
     try:
         transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
+        return False, f"Connection failed: {exc}", None
     except Exception as exc:
         logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
+        return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
         # Enter enable mode
@@ -327,31 +328,37 @@ def authorize_ont(
         _read_until_prompt(channel, config_prompt, timeout_sec=3)
 
         # Check for success indicators
+        ont_id_match = re.search(r"ont-?id\D+(\d+)", output, flags=re.IGNORECASE)
+        ont_id = int(ont_id_match.group(1)) if ont_id_match else None
+
         if "success" in output.lower() or "ont-id" in output.lower():
             logger.info(
                 "Authorized ONT %s on OLT %s port %s",
                 serial_number, olt.name, fsp,
             )
-            return True, f"ONT {serial_number} authorized on port {fsp}"
+            message = f"ONT {serial_number} authorized on port {fsp}"
+            if ont_id is not None:
+                message += f" (ONT-ID {ont_id})"
+            return True, message, ont_id
         if "failure" in output.lower() or "error" in output.lower():
             logger.warning(
                 "Failed to authorize ONT %s on OLT %s: %s",
                 serial_number, olt.name, output.strip(),
             )
-            return False, f"OLT rejected command: {output.strip()[-200:]}"
+            return False, f"OLT rejected command: {output.strip()[-200:]}", None
 
         # Ambiguous — return output for inspection
         logger.info(
             "ONT authorize command sent for %s on OLT %s, output: %s",
             serial_number, olt.name, output.strip(),
         )
-        return True, f"Command sent for {serial_number} on port {fsp}"
+        return True, f"Command sent for {serial_number} on port {fsp}", ont_id
     except Exception as exc:
         logger.error(
             "Error authorizing ONT %s on OLT %s: %s",
             serial_number, olt.name, exc,
         )
-        return False, f"Error: {exc}"
+        return False, f"Error: {exc}", None
     finally:
         transport.close()
 
@@ -515,10 +522,23 @@ def create_service_ports(
         created = 0
         errors = 0
         for sp in reference_ports:
-            cmd = (
-                f"service-port vlan {sp.vlan_id} gpon {fsp} ont {ont_id} "
-                f"gemport {sp.gem_index} multi-service user-vlan {sp.vlan_id} "
-                f"tag-transform translate"
+            user_vlan: int | str | None = None
+            if str(getattr(sp, "flow_para", "") or "").isdigit():
+                user_vlan = int(str(sp.flow_para))
+            elif getattr(sp, "flow_para", None) in {"untagged", "transparent"}:
+                user_vlan = str(sp.flow_para)
+
+            tag_transform = getattr(sp, "tag_transform", None) or "translate"
+            if user_vlan == "untagged" and tag_transform == "translate":
+                tag_transform = "default"
+
+            cmd = build_service_port_command(
+                fsp=fsp,
+                ont_id=ont_id,
+                gem_index=sp.gem_index,
+                vlan_id=sp.vlan_id,
+                user_vlan=user_vlan,
+                tag_transform=tag_transform,
             )
             output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
             if "failure" in output.lower() or "error" in output.lower():
@@ -765,6 +785,9 @@ def create_single_service_port(
     ont_id: int,
     gem_index: int,
     vlan_id: int,
+    *,
+    user_vlan: int | str | None = None,
+    tag_transform: str = "translate",
 ) -> tuple[bool, str]:
     """Create a single service-port on an OLT.
 
@@ -798,9 +821,14 @@ def create_single_service_port(
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
 
         cmd = (
-            f"service-port vlan {vlan_id} gpon {fsp} ont {ont_id} "
-            f"gemport {gem_index} multi-service user-vlan {vlan_id} "
-            f"tag-transform translate"
+            build_service_port_command(
+                fsp=fsp,
+                ont_id=ont_id,
+                gem_index=gem_index,
+                vlan_id=vlan_id,
+                user_vlan=user_vlan,
+                tag_transform=tag_transform,
+            )
         )
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
@@ -1081,7 +1109,16 @@ def bind_tr069_server_profile(
         )
         if "y/n" in reset_out:
             channel.send("y\n")
-            _read_until_prompt(channel, config_prompt, timeout_sec=8)
+            reset_out += _read_until_prompt(channel, config_prompt, timeout_sec=8)
+
+        if "failure" in reset_out.lower() or "error" in reset_out.lower():
+            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            logger.warning(
+                "TR-069 profile bound but ONT reset failed for ONT %d on OLT %s: %s",
+                ont_id, olt.name, reset_out.strip()[-150:],
+            )
+            return False, f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}"
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)

@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
-from app.services.network.olt_ssh import (
-    create_service_ports,
+from app.services.network.olt_ssh import create_service_ports
+from app.services.network.olt_ssh_service_ports import (
     create_single_service_port,
     delete_service_port,
     get_service_ports_for_ont,
@@ -67,6 +68,51 @@ def _resolve_ont_olt_context(
     return ont, olt, fsp, ont_id_on_olt
 
 
+def _reference_ont_options(
+    db: Session,
+    *,
+    target_ont_id: str,
+    olt_id: str,
+) -> list[dict[str, str]]:
+    """Return selectable reference ONTs on the same OLT."""
+    assignments = db.scalars(
+        select(OntAssignment)
+        .where(
+            OntAssignment.active.is_(True),
+            OntAssignment.pon_port_id.is_not(None),
+            OntAssignment.ont_unit_id != target_ont_id,
+        )
+    ).all()
+
+    options: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for assignment in assignments:
+        ont = db.get(OntUnit, str(assignment.ont_unit_id))
+        if not ont:
+            continue
+
+        pon_port = db.get(PonPort, str(assignment.pon_port_id))
+        if not pon_port or str(pon_port.olt_id) != olt_id:
+            continue
+
+        external_id = (ont.external_id or "").strip()
+        if not external_id.isdigit():
+            continue
+
+        option_id = str(ont.id)
+        if option_id in seen:
+            continue
+        seen.add(option_id)
+
+        port_label = pon_port.name or f"{ont.board or '?'} / {ont.port or '?'}"
+        serial = ont.serial_number or "Unknown serial"
+        label = f"{serial} | ONT-ID {external_id} | {port_label}"
+        options.append({"id": option_id, "label": label})
+
+    options.sort(key=lambda item: item["label"].lower())
+    return options
+
+
 def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     """Build context for service-ports tab on ONT detail page.
 
@@ -86,6 +132,7 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
         "olt_ont_id": olt_ont_id,
         "service_ports": [],
         "vlan_chain": None,
+        "reference_onts": [],
         "error": None,
     }
 
@@ -108,6 +155,11 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
         return context
 
     context["service_ports"] = ports
+    context["reference_onts"] = _reference_ont_options(
+        db,
+        target_ont_id=ont_id,
+        olt_id=str(olt.id),
+    )
 
     # Run VLAN chain validation
     port_dicts = [{"vlan_id": p.vlan_id} for p in ports]
@@ -115,8 +167,6 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     context["vlan_chain"] = chain_result
 
     # Get available VLANs for create form
-    from sqlalchemy import select
-
     from app.models.network import Vlan
 
     vlans = db.scalars(select(Vlan).order_by(Vlan.tag)).all()
@@ -130,6 +180,9 @@ def handle_create(
     ont_id: str,
     vlan_id: int,
     gem_index: int,
+    *,
+    user_vlan: int | str | None = None,
+    tag_transform: str = "translate",
 ) -> tuple[bool, str]:
     """Create a single service-port on the OLT for this ONT.
 
@@ -146,7 +199,19 @@ def handle_create(
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
 
-    return create_single_service_port(olt, fsp, olt_ont_id, gem_index, vlan_id)
+    allowed_transforms = {"translate", "transparent", "default"}
+    if tag_transform not in allowed_transforms:
+        return False, "Invalid tag-transform value"
+
+    return create_single_service_port(
+        olt,
+        fsp,
+        olt_ont_id,
+        gem_index,
+        vlan_id,
+        user_vlan=user_vlan,
+        tag_transform=tag_transform,
+    )
 
 
 def handle_delete(

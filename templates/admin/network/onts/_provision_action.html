@@ -1,26 +1,13 @@
 {# HTMX partial: One-click provisioning UI for ONT detail page #}
 
-<div class="space-y-6" x-data="{ taskId: null, polling: false, result: null, dryRun: true }">
+<div class="space-y-6" x-data="ontProvisioningWidget('{{ ont.id }}')">
     {# Profile Selection & Controls #}
     <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">End-to-End Provisioning</h3>
         <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">
             Select a provisioning profile and execute the full sequence: service-ports, management IP, TR-069 binding, and PPPoE credentials.
         </p>
-        <form @submit.prevent="
-            const fd = new FormData($el);
-            fd.set('dry_run', dryRun ? 'true' : 'false');
-            fetch('/admin/network/onts/{{ ont.id }}/provision', { method: 'POST', body: fd })
-                .then(r => r.json())
-                .then(data => {
-                    if (data.task_id) {
-                        taskId = data.task_id;
-                        polling = true;
-                        result = null;
-                        pollStatus();
-                    }
-                });
-        " class="space-y-4">
+        <form @submit.prevent="submitProvision($el)" class="space-y-4">
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Provisioning Profile</label>
@@ -110,24 +97,75 @@
 </div>
 
 <script>
-function pollStatus() {
-    const el = document.querySelector('[x-data]');
-    if (!el || !el.__x) return;
-    const data = el.__x.$data;
-    if (!data.taskId || !data.polling) return;
+function ontProvisioningWidget(ontId) {
+    return {
+        taskId: null,
+        polling: false,
+        result: null,
+        dryRun: true,
 
-    fetch(`/admin/network/onts/{{ ont.id }}/provision-status?task_id=${data.taskId}`)
-        .then(r => r.json())
-        .then(resp => {
-            if (resp.status === 'complete') {
-                data.result = resp.result;
-                data.polling = false;
-            } else {
-                setTimeout(pollStatus, 3000);
+        async submitProvision(formEl) {
+            const fd = new FormData(formEl);
+            fd.set('dry_run', this.dryRun ? 'true' : 'false');
+
+            try {
+                const response = await fetch(`/admin/network/onts/${ontId}/provision`, {
+                    method: 'POST',
+                    body: fd,
+                });
+                const data = await response.json();
+
+                if (!data.task_id) {
+                    this.result = {
+                        success: false,
+                        message: data.message || 'Provisioning task could not be started',
+                        steps: [],
+                    };
+                    this.polling = false;
+                    return;
+                }
+
+                this.taskId = data.task_id;
+                this.polling = true;
+                this.result = null;
+                this.pollStatus();
+            } catch (_error) {
+                this.result = {
+                    success: false,
+                    message: 'Failed to start provisioning task',
+                    steps: [],
+                };
+                this.polling = false;
             }
-        })
-        .catch(() => {
-            data.polling = false;
-        });
+        },
+
+        async pollStatus() {
+            if (!this.taskId || !this.polling) {
+                return;
+            }
+
+            try {
+                const response = await fetch(
+                    `/admin/network/onts/${ontId}/provision-status?task_id=${this.taskId}`
+                );
+                const payload = await response.json();
+
+                if (payload.status === 'complete' || payload.status === 'failed') {
+                    this.result = payload.result;
+                    this.polling = false;
+                    return;
+                }
+
+                window.setTimeout(() => this.pollStatus(), 3000);
+            } catch (_error) {
+                this.result = {
+                    success: false,
+                    message: 'Provisioning status polling failed',
+                    steps: [],
+                };
+                this.polling = false;
+            }
+        },
+    };
 }
 </script>

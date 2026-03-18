@@ -431,13 +431,18 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
         "Device.ManagementServer.URL": server.cwmp_url,
         "Device.ManagementServer.PeriodicInformEnable": "true",
         "Device.ManagementServer.PeriodicInformInterval": "3600",
+        "InternetGatewayDevice.ManagementServer.URL": server.cwmp_url,
+        "InternetGatewayDevice.ManagementServer.PeriodicInformEnable": "true",
+        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": "3600",
     }
     if server.cwmp_username:
         acs_params["Device.ManagementServer.Username"] = server.cwmp_username
+        acs_params["InternetGatewayDevice.ManagementServer.Username"] = server.cwmp_username
     if server.cwmp_password:
         password = decrypt_credential(server.cwmp_password)
         if password:
             acs_params["Device.ManagementServer.Password"] = password
+            acs_params["InternetGatewayDevice.ManagementServer.Password"] = password
 
     for ont in onts:
         stats["attempted"] += 1
@@ -834,12 +839,20 @@ def authorize_autofind_ont(
         return False, "OLT not found"
 
     # Step 1: Authorize the ONT
-    ok, msg = olt_ssh_service.authorize_ont(olt, fsp, serial_number)
+    ok, msg, ont_id = olt_ssh_service.authorize_ont(olt, fsp, serial_number)
     if not ok:
         return False, msg
+    if ont_id is None:
+        logger.warning(
+            "Could not determine ONT-ID for authorized serial %s on %s %s",
+            serial_number,
+            olt.name,
+            fsp,
+        )
+        return True, f"{msg}. Warning: ONT-ID could not be determined, so service-port provisioning was skipped"
 
     # Step 2: Provision service-ports using neighbor-learning
-    sp_ok, sp_msg = provision_ont_service_ports(db, olt_id, fsp)
+    sp_ok, sp_msg = provision_ont_service_ports(db, olt_id, fsp, ont_id)
     if sp_ok:
         return True, f"{msg}. {sp_msg}"
     # Authorization succeeded even if service-port provisioning failed
@@ -848,13 +861,13 @@ def authorize_autofind_ont(
 
 
 def provision_ont_service_ports(
-    db: Session, olt_id: str, fsp: str
+    db: Session, olt_id: str, fsp: str, ont_id: int
 ) -> tuple[bool, str]:
     """Provision service-ports for the most recently authorized ONT on a port.
 
     Uses the neighbor-learning pattern: inspects existing service-ports on the
     same PON port, finds the VLAN/GEM pattern from a reference ONT, and
-    replicates it for the newest ONT-ID.
+    replicates it for the explicitly authorized ONT-ID.
     """
     olt = get_olt_or_none(db, olt_id)
     if not olt:
@@ -871,20 +884,16 @@ def provision_ont_service_ports(
     if not ont_counts:
         return False, "No existing service-ports to learn from"
 
-    # The newest ONT-ID is likely the one we just authorized (highest ID)
-    all_ont_ids = sorted(ont_counts.keys())
-    new_ont_id = all_ont_ids[-1]  # Highest ONT-ID
-
-    # Check if new ONT already has service-ports
-    new_ont_ports = [e for e in entries if e.ont_id == new_ont_id]
+    # Check if target ONT already has service-ports
+    new_ont_ports = [e for e in entries if e.ont_id == ont_id]
     if new_ont_ports:
-        return True, f"ONT {new_ont_id} already has {len(new_ont_ports)} service-port(s)"
+        return True, f"ONT {ont_id} already has {len(new_ont_ports)} service-port(s)"
 
-    # Find a reference ONT (pick one with service-ports that's not the new one)
+    # Find a reference ONT (pick one with service-ports that's not the target)
     reference_ont_id = None
-    for ont_id, count in ont_counts.most_common():
-        if ont_id != new_ont_id:
-            reference_ont_id = ont_id
+    for candidate_ont_id, count in ont_counts.most_common():
+        if candidate_ont_id != ont_id:
+            reference_ont_id = candidate_ont_id
             break
     if reference_ont_id is None:
         return False, "No reference ONT found to learn service-port pattern from"
@@ -892,10 +901,10 @@ def provision_ont_service_ports(
     reference_ports = [e for e in entries if e.ont_id == reference_ont_id]
     logger.info(
         "Learning service-port pattern from ONT %d (%d ports) for new ONT %d on %s",
-        reference_ont_id, len(reference_ports), new_ont_id, fsp,
+        reference_ont_id, len(reference_ports), ont_id, fsp,
     )
 
-    return olt_ssh_service.create_service_ports(olt, fsp, new_ont_id, reference_ports)
+    return olt_ssh_service.create_service_ports(olt, fsp, ont_id, reference_ports)
 
 
 def test_olt_netconf_connection(
