@@ -963,6 +963,15 @@ class OntUnit(Base):
     )
     last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # TR-069 data model root (detected from GenieACS device record)
+    tr069_data_model: Mapped[str | None] = mapped_column(
+        String(40), doc="'Device' (TR-181) or 'InternetGatewayDevice' (TR-098)"
+    )
+
+    # Sync tracking — which external source last modified this ONT, and when
+    last_sync_source: Mapped[str | None] = mapped_column(String(40))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1637,6 +1646,25 @@ class OntProvisioningProfile(Base):
     wifi_security_mode: Mapped[str | None] = mapped_column(String(40))
     wifi_channel: Mapped[str | None] = mapped_column(String(10))
     wifi_band: Mapped[str | None] = mapped_column(String(20))
+
+    # OLT-level provisioning knobs
+    internet_config_ip_index: Mapped[int | None] = mapped_column(
+        Integer, default=0, doc="ip-index for ont internet-config command (activates TCP stack)"
+    )
+    wan_config_profile_id: Mapped[int | None] = mapped_column(
+        Integer, default=0, doc="profile-id for ont wan-config command (sets route+NAT mode)"
+    )
+    pppoe_omci_vlan: Mapped[int | None] = mapped_column(
+        Integer, doc="VLAN for PPPoE-over-OMCI (OLT-side, not TR-069); null = skip OMCI PPPoE"
+    )
+
+    # Connection request credentials (pushed after TR-069 bootstrap)
+    cr_username: Mapped[str | None] = mapped_column(
+        String(120), doc="Connection request username for on-demand ACS management"
+    )
+    cr_password: Mapped[str | None] = mapped_column(
+        String(120), doc="Connection request password (encrypted at rest)"
+    )
 
     # VoIP
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

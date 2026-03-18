@@ -32,8 +32,13 @@ from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_polling import poll_all_olt_signals
+from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_discovery import discover_all_olt_onts
-from app.tasks.ont_provisioning import auto_link_profiles, detect_profile_drift
+from app.tasks.ont_provisioning import (
+    auto_link_profiles,
+    detect_profile_drift,
+    provision_ont_async,
+)
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
@@ -124,4 +129,6 @@ __all__ = [
     "run_scheduled_backups",
     "update_subscriber_counts",
     "check_nas_health",
+    "execute_ont_bulk_action",
+    "provision_ont_async",
 ]

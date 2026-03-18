@@ -410,6 +410,13 @@
                 </div>
                 {% endcall %}
 
+                {# Vendor Capabilities #}
+                {% if capabilities %}
+                {% call card("Capabilities", color="indigo") %}
+                {% include "admin/network/onts/_capabilities_badges.html" %}
+                {% endcall %}
+                {% endif %}
+
                 {# Remote Actions (TR-069 / GenieACS) #}
                 {% call card("Remote Actions", color="blue") %}
                 <div x-data="{ showResetConfirm: false }" class="space-y-3">
@@ -470,6 +477,9 @@
                     </div>
                 </div>
                 {% endcall %}
+
+                {# WiFi, PPPoE, LAN Ports, Diagnostics, Connection Request #}
+                {% include "admin/network/onts/_actions_panel.html" %}
 
                 {# -- Provisioning Profile Card -- #}
                 {% call card("Provisioning Profile", color="blue") %}
@@ -705,6 +715,28 @@
             </dl>
             {% endcall %}
             {% endif %}
+
+            {# LAN Hosts (lazy-loaded via HTMX) #}
+            <div id="lan-hosts-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-400">Loading LAN hosts...</span>
+                </div>
+            </div>
+
+            {# Ethernet Ports (lazy-loaded via HTMX) #}
+            <div id="ethernet-ports-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/ethernet-ports"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-400">Loading Ethernet ports...</span>
+                </div>
+            </div>
         </div>
     </div>
 

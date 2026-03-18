@@ -74,9 +74,21 @@ from app.services.network.ont_actions import (
     OntActions,
     ont_actions,
 )
+from app.services.network.ont_features import (
+    OntFeatureService,
+    ont_features,
+)
+from app.services.network.ont_read import (
+    OntReadFacade,
+    ont_read,
+)
 from app.services.network.ont_tr069 import (
     OntTR069,
     ont_tr069,
+)
+from app.services.network.ont_write import (
+    OntWriteService,
+    ont_write,
 )
 from app.services.network.onu_types import (
     OnuTypes,
@@ -185,4 +197,13 @@ __all__ = [
     # Zone services
     "NetworkZones",
     "network_zones",
+    # ONT read facade
+    "OntReadFacade",
+    "ont_read",
+    # ONT write service
+    "OntWriteService",
+    "ont_write",
+    # ONT feature service
+    "OntFeatureService",
+    "ont_features",
 ]

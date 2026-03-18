@@ -4,24 +4,123 @@
 {% block content %}
 {{ ambient_background("indigo", "violet") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Customer Portal", subtitle="Portal branding, menu visibility, field permissions, and statistics display", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="indigo", color2="violet") %}{% endcall %}
+    {% call page_header(title="Customer Portal", subtitle="Domain routing, portal branding, menu visibility, and customer-facing settings", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="indigo", color2="violet") %}{% endcall %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
-        {% call card("Customer Portal", color="indigo") %}
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Language</label><input type="text" name="portal_language" value="{{ portal_settings.portal_language or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Field</label><input type="text" name="portal_auth_field" value="{{ portal_settings.portal_auth_field or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password Reset</label><input type="text" name="portal_password_reset" value="{{ portal_settings.portal_password_reset or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Help URL</label><input type="text" name="portal_help_url" value="{{ portal_settings.portal_help_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Payment Due</label><input type="text" name="show_payment_due" value="{{ portal_settings.show_payment_due or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Bandwidth Usage</label><input type="text" name="show_bandwidth_usage" value="{{ portal_settings.show_bandwidth_usage or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show FUP Rules</label><input type="text" name="show_fup_rules" value="{{ portal_settings.show_fup_rules or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Session Stats</label><input type="text" name="show_session_stats" value="{{ portal_settings.show_session_stats or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Google Play App ID</label><input type="text" name="mobile_app_google_play_id" value="{{ portal_settings.mobile_app_google_play_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">App Store App ID</label><input type="text" name="mobile_app_appstore_id" value="{{ portal_settings.mobile_app_appstore_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+
+        {# ── Domain Routing ───────────────────────────────────────────── #}
+        {% call card("Domain Routing", color="indigo") %}
+        <div class="mb-4 rounded-lg border border-indigo-200 bg-indigo-50/50 px-4 py-3 text-sm text-indigo-700 dark:border-indigo-800/50 dark:bg-indigo-900/20 dark:text-indigo-300">
+            <p class="font-medium mb-1">Portal domain configuration</p>
+            <p class="text-xs text-indigo-600 dark:text-indigo-400">Map custom domains to each portal. Visitors to the selfcare domain will be redirected to the customer login page automatically. Admin and reseller paths are blocked on the selfcare domain by nginx.</p>
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Selfcare Domain</label>
+                <input type="text" name="selfcare_domain" value="{{ portal_settings.selfcare_domain or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="selfcare.dotmac.io">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Customer self-service portal domain. Root (/) redirects to /portal/.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Root Redirect</label>
+                <select name="selfcare_redirect_root" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="/portal/" {% if (portal_settings.selfcare_redirect_root or '/portal/') == '/portal/' %}selected{% endif %}>/portal/ (Dashboard)</option>
+                    <option value="/portal/auth/login" {% if portal_settings.selfcare_redirect_root == '/portal/auth/login' %}selected{% endif %}>/portal/auth/login (Login page)</option>
+                </select>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Where the selfcare domain root (/) redirects to.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Admin Domain</label>
+                <input type="text" name="admin_domain" value="{{ portal_settings.admin_domain or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="oss.dotmac.ng">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Admin portal domain (existing).</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reseller Domain</label>
+                <input type="text" name="reseller_domain" value="{{ portal_settings.reseller_domain or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="reseller.dotmac.io">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Reseller portal domain (optional, future).</p>
+            </div>
         </div>
         {% endcall %}
-        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 transition">Save Configuration</button></div>
+
+        {# ── Portal Behaviour ─────────────────────────────────────────── #}
+        {% call card("Portal Behaviour", color="indigo") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Language</label>
+                <input type="text" name="portal_language" value="{{ portal_settings.portal_language or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="en">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auth Field</label>
+                <input type="text" name="portal_auth_field" value="{{ portal_settings.portal_auth_field or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="email">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Login identifier: email, phone, or subscriber_code.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password Reset</label>
+                <input type="text" name="portal_password_reset" value="{{ portal_settings.portal_password_reset or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="enabled">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Help URL</label>
+                <input type="url" name="portal_help_url" value="{{ portal_settings.portal_help_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://help.example.com">
+            </div>
+        </div>
+        {% endcall %}
+
+        {# ── Display Options ──────────────────────────────────────────── #}
+        {% call card("Display Options", color="indigo") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Payment Due</label>
+                <select name="show_payment_due" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if portal_settings.show_payment_due == 'true' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if portal_settings.show_payment_due == 'false' %}selected{% endif %}>No</option>
+                    <option value="" {% if not portal_settings.show_payment_due %}selected{% endif %}>Default</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Bandwidth Usage</label>
+                <select name="show_bandwidth_usage" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if portal_settings.show_bandwidth_usage == 'true' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if portal_settings.show_bandwidth_usage == 'false' %}selected{% endif %}>No</option>
+                    <option value="" {% if not portal_settings.show_bandwidth_usage %}selected{% endif %}>Default</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show FUP Rules</label>
+                <select name="show_fup_rules" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if portal_settings.show_fup_rules == 'true' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if portal_settings.show_fup_rules == 'false' %}selected{% endif %}>No</option>
+                    <option value="" {% if not portal_settings.show_fup_rules %}selected{% endif %}>Default</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Session Stats</label>
+                <select name="show_session_stats" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if portal_settings.show_session_stats == 'true' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if portal_settings.show_session_stats == 'false' %}selected{% endif %}>No</option>
+                    <option value="" {% if not portal_settings.show_session_stats %}selected{% endif %}>Default</option>
+                </select>
+            </div>
+        </div>
+        {% endcall %}
+
+        {# ── Mobile Apps ──────────────────────────────────────────────── #}
+        {% call card("Mobile Apps", color="indigo") %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Google Play App ID</label>
+                <input type="text" name="mobile_app_google_play_id" value="{{ portal_settings.mobile_app_google_play_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="com.example.myapp">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">App Store App ID</label>
+                <input type="text" name="mobile_app_appstore_id" value="{{ portal_settings.mobile_app_appstore_id or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="id123456789">
+            </div>
+        </div>
+        {% endcall %}
+
+        <div class="flex justify-end">
+            <button type="submit" class="rounded-lg bg-gradient-to-r from-indigo-500 to-violet-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:from-indigo-600 hover:to-violet-700 hover:-translate-y-0.5 transition-all">
+                Save Configuration
+            </button>
+        </div>
     </form>
 </div>
 {{ animation_styles() }}

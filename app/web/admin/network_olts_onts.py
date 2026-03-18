@@ -1864,6 +1864,60 @@ def ont_traceroute_diagnostic(
     )
 
 
+@router.post("/onts/{ont_id}/connection-request", dependencies=[Depends(require_permission("network:write"))])
+def ont_connection_request(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Send a TR-069 connection request to an ONT for on-demand management."""
+    from app.services.network.ont_action_network import send_connection_request
+
+    result = send_connection_request(db, ont_id)
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=200 if result.success else 502,
+        headers=headers,
+    )
+
+
+@router.get("/onts/{ont_id}/lan-hosts", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ont_lan_hosts(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: LAN hosts connected to an ONT."""
+    from app.services.network.ont_read import ont_read
+
+    lan_hosts = ont_read.get_lan_hosts(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context["lan_hosts"] = lan_hosts
+    return templates.TemplateResponse(
+        "admin/network/onts/_lan_hosts_partial.html", context
+    )
+
+
+@router.get("/onts/{ont_id}/ethernet-ports", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def ont_ethernet_ports(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: Ethernet port status for an ONT."""
+    from app.services.network.ont_read import ont_read
+
+    ethernet_ports = ont_read.get_ethernet_ports(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context["ethernet_ports"] = ethernet_ports
+    return templates.TemplateResponse(
+        "admin/network/onts/_ethernet_ports_partial.html", context
+    )
+
+
 @router.get("/onts/{ont_id}/tr069", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def ont_tr069_detail(
     request: Request, ont_id: str, db: Session = Depends(get_db)

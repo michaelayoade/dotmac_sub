@@ -155,6 +155,12 @@ def save_subscriber_config(db: Session, data: Mapping[str, Any]) -> None:
 # 8.8 Customer Portal Configuration
 # ---------------------------------------------------------------------------
 PORTAL_KEYS = [
+    # Domain routing
+    "selfcare_domain",
+    "selfcare_redirect_root",
+    "admin_domain",
+    "reseller_domain",
+    # Portal behaviour
     "portal_language",
     "portal_auth_field",
     "portal_password_reset",

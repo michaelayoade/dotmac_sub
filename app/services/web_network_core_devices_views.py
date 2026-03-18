@@ -1564,6 +1564,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         )
     available_firmware = list(db.scalars(firmware_stmt.limit(20)).all())
 
+    # Vendor capabilities for feature badges
+    from app.services.network.ont_read import OntReadFacade
+
+    capabilities = OntReadFacade.get_capabilities(db, ont_id)
+
     return {
         "ont": ont,
         "assignment": assignment,
@@ -1574,6 +1579,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "provisioning_info": provisioning_info,
         "available_profiles": available_profiles,
         "available_firmware": available_firmware,
+        "capabilities": capabilities,
     }
 
 

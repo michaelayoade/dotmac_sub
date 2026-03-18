@@ -36,6 +36,9 @@ from app.api.gis import router as gis_router
 from app.api.imports import router as imports_router
 from app.api.integrations import router as integrations_router
 from app.api.nas import router as nas_router
+from app.api.network_catalog import router as network_catalog_router
+from app.api.network_olt_ops import router as network_olt_ops_router
+from app.api.network_ont_ops import router as network_ont_ops_router
 from app.api.nextcloud_talk import router as nextcloud_talk_router
 from app.api.notifications import router as notifications_router
 from app.api.provisioning import router as provisioning_api_router
@@ -201,6 +204,74 @@ async def audit_middleware(request: Request, call_next):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Domain-based portal routing
+# ---------------------------------------------------------------------------
+# Reads selfcare_domain from settings to redirect / → /portal/ and block
+# admin paths when accessed via the selfcare domain.  Changes in the admin
+# UI (System → Config → Customer Portal) take effect within 30 s (cache TTL).
+_domain_routing_cache: dict[str, object] = {"ts": 0.0, "selfcare": "", "redirect": "/portal/"}
+
+
+def _load_domain_routing(db: Session) -> dict[str, str]:
+    """Return cached selfcare domain + redirect target."""
+    now = monotonic()
+    if now - float(_domain_routing_cache["ts"]) < 30:
+        return _domain_routing_cache  # type: ignore[return-value]
+    from sqlalchemy import select
+
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    stmt = (
+        select(DomainSetting)
+        .where(DomainSetting.domain == SettingDomain.auth)
+        .where(DomainSetting.key.in_(["selfcare_domain", "selfcare_redirect_root"]))
+    )
+    rows = {r.key: (r.value_text or "") for r in db.scalars(stmt).all()}
+    _domain_routing_cache["selfcare"] = rows.get("selfcare_domain", "")
+    _domain_routing_cache["redirect"] = rows.get("selfcare_redirect_root", "/portal/")
+    _domain_routing_cache["ts"] = now
+    return _domain_routing_cache  # type: ignore[return-value]
+
+
+@app.middleware("http")
+async def domain_routing_middleware(request: Request, call_next):
+    """Enforce portal-only access on the selfcare domain."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if not host:
+        return await call_next(request)
+
+    db = SessionLocal()
+    try:
+        routing = _load_domain_routing(db)
+    finally:
+        db.close()
+
+    selfcare = str(routing.get("selfcare", "")).strip().lower()
+    if not selfcare or host != selfcare:
+        return await call_next(request)
+
+    path = request.url.path
+
+    # Allow portal, API, static, uploads, health, ws
+    allowed_prefixes = ("/portal", "/api/", "/static/", "/uploads/", "/health", "/ws")
+    if any(path.startswith(p) for p in allowed_prefixes):
+        return await call_next(request)
+
+    # Block admin/reseller/vendor/auth
+    blocked_prefixes = ("/admin", "/reseller", "/vendor", "/auth")
+    if any(path.startswith(p) for p in blocked_prefixes):
+        from starlette.responses import Response as StarletteResponse
+
+        return StarletteResponse(status_code=404)
+
+    # Root or unknown → redirect to portal
+    redirect_target = str(routing.get("redirect", "/portal/"))
+    from starlette.responses import RedirectResponse as StarletteRedirect
+
+    return StarletteRedirect(url=redirect_target, status_code=302)
+
+
 # CSRF Protection paths - protect all web portals and auth forms
 _CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
 _CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
@@ -222,7 +293,9 @@ async def csrf_middleware(request: Request, call_next):
         return await call_next(request)
 
     # Check if path needs CSRF protection
-    needs_protection = any(path.startswith(protected) for protected in _CSRF_PROTECTED_PATHS)
+    needs_protection = any(
+        path.startswith(protected) for protected in _CSRF_PROTECTED_PATHS
+    )
 
     if not needs_protection:
         return await call_next(request)
@@ -254,22 +327,30 @@ async def csrf_middleware(request: Request, call_next):
 
         if not cookie_token:
             # No CSRF cookie - reject request
-            return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+            return _csrf_forbidden(
+                "CSRF token missing. Please refresh the page and try again."
+            )
 
         # Check header first (for HTMX/fetch requests)
         header_token = request.headers.get(CSRF_HEADER_NAME)
         if header_token:
             if not secrets.compare_digest(cookie_token, header_token):
-                return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                return _csrf_forbidden(
+                    "CSRF token invalid. Please refresh the page and try again."
+                )
         else:
             # For form submissions, check form data
             content_type = request.headers.get("content-type", "")
-            if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            if (
+                "application/x-www-form-urlencoded" in content_type
+                or "multipart/form-data" in content_type
+            ):
                 # Read body and check token
                 body = await request.body()
 
                 # Parse form data to get CSRF token
                 from urllib.parse import parse_qs
+
                 form_token: str | None = None
                 try:
                     if "multipart/form-data" in content_type:
@@ -278,12 +359,13 @@ async def csrf_middleware(request: Request, call_next):
                         import re
                         from email.parser import BytesParser
                         from email.policy import HTTP
-                        boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
+
+                        boundary_match = re.search(r"boundary=([^\s;]+)", content_type)
                         if boundary_match:
                             boundary = boundary_match.group(1).strip('"')
                             # Construct a valid MIME message for parsing
                             mime_header = f"Content-Type: multipart/form-data; boundary={boundary}\r\n\r\n"
-                            mime_message = mime_header.encode('utf-8') + body
+                            mime_message = mime_header.encode("utf-8") + body
 
                             parser = BytesParser(policy=HTTP)
                             msg = parser.parsebytes(mime_message)
@@ -298,29 +380,40 @@ async def csrf_middleware(request: Request, call_next):
                                     ):
                                         payload = part.get_payload(decode=True)
                                         if isinstance(payload, (bytes, bytearray)):
-                                            form_token = payload.decode("utf-8", errors="ignore").strip()
+                                            form_token = payload.decode(
+                                                "utf-8", errors="ignore"
+                                            ).strip()
                                             break
                                         if isinstance(payload, str) and payload.strip():
                                             form_token = payload.strip()
                                             break
                     else:
-                        form_data = parse_qs(body.decode('utf-8'))
+                        form_data = parse_qs(body.decode("utf-8"))
                         form_token = form_data.get("_csrf_token", [None])[0]
 
                     if not form_token:
-                        return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+                        return _csrf_forbidden(
+                            "CSRF token missing. Please refresh the page and try again."
+                        )
                     if not secrets.compare_digest(cookie_token, form_token):
-                        return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                        return _csrf_forbidden(
+                            "CSRF token invalid. Please refresh the page and try again."
+                        )
                 except Exception:
-                    return _csrf_forbidden("CSRF token invalid. Please refresh the page and try again.")
+                    return _csrf_forbidden(
+                        "CSRF token invalid. Please refresh the page and try again."
+                    )
 
                 # Reconstruct request with body for downstream handlers
                 async def receive():
                     return {"type": "http.request", "body": body}
+
                 request = Request(scope=request.scope, receive=receive)
             else:
                 # Non-form state-changing requests must use header token.
-                return _csrf_forbidden("CSRF token missing. Please refresh the page and try again.")
+                return _csrf_forbidden(
+                    "CSRF token missing. Please refresh the page and try again."
+                )
 
     try:
         response = await call_next(request)
@@ -418,6 +511,7 @@ def _to_list(setting: DomainSetting, upper: bool) -> set[str] | list[str]:
 def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
     return any(path.startswith(prefix) for prefix in skip_paths)
 
+
 def _include_api_router(router, dependencies=None):
     app.include_router(router, prefix="/api/v1", dependencies=dependencies)
 
@@ -437,10 +531,21 @@ _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)]
 _include_api_router(support_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(domains_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_provisioning_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_monitoring_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_network_access_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_network_fiber_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(
+    domains_provisioning_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(
+    domains_monitoring_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(
+    domains_network_access_router, dependencies=[Depends(require_user_auth)]
+)
+_include_api_router(network_ont_ops_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(network_olt_ops_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(network_catalog_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(
+    domains_network_fiber_router, dependencies=[Depends(require_user_auth)]
+)
 _include_api_router(domains_usage_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(imports_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(audit_router)
@@ -484,4 +589,3 @@ def health_check():
 def metrics():
     data = generate_latest()
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)
-

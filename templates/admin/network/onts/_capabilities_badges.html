@@ -1,0 +1,33 @@
+{# Vendor capability badges — shown on ONT detail Overview tab #}
+{# Expects: capabilities dict (from ont_read.get_capabilities) #}
+{% if capabilities %}
+<div class="flex flex-wrap gap-1.5">
+    {# Color classes are fully spelled out to survive Tailwind purge #}
+    {% set badge_meta = [
+        ('wifi', 'WiFi', 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800'),
+        ('voip', 'VoIP', 'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800'),
+        ('catv', 'CATV', 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'),
+        ('iptv', 'IPTV', 'bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300 dark:border-cyan-800'),
+        ('tr069', 'TR-069', 'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800'),
+        ('vlan_tagging', 'VLAN Tag', 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800'),
+        ('qinq', 'Q-in-Q', 'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800'),
+        ('ipv6', 'IPv6', 'bg-teal-100 text-teal-700 border-teal-200 dark:bg-teal-900/30 dark:text-teal-300 dark:border-teal-800'),
+    ] %}
+    {% set disabled_class = 'bg-slate-50 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700 opacity-50' %}
+    {% for key, label, color_class in badge_meta %}
+    {% if key in capabilities %}
+    {% set is_enabled = capabilities[key] %}
+    <span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium {{ color_class if is_enabled else disabled_class }}{% if not is_enabled %} line-through{% endif %}">
+        {% if is_enabled %}
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+        {% else %}
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+        {% endif %}
+        {{ label }}
+    </span>
+    {% endif %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-xs text-slate-400 dark:text-slate-500">No vendor capability data available.</p>
+{% endif %}

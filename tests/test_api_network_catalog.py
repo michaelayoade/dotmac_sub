@@ -1,0 +1,159 @@
+"""Tests for network catalog API endpoints (Phase 3)."""
+
+from __future__ import annotations
+
+import pytest
+
+from app.schemas.network_catalog import (
+    NetworkZoneCreate,
+    NetworkZoneRead,
+    NetworkZoneUpdate,
+    OntProvisioningProfileRead,
+    OnuTypeCreate,
+    OnuTypeRead,
+    OnuTypeUpdate,
+    SpeedProfileCreate,
+    SpeedProfileRead,
+    SpeedProfileUpdate,
+    Tr069ParameterMapCreate,
+    Tr069ParameterMapRead,
+    VendorCapabilityCreate,
+    VendorCapabilityRead,
+    VendorCapabilityUpdate,
+)
+
+
+class TestOnuTypeSchemas:
+    """ONU type schema tests."""
+
+    def test_create_valid(self):
+        req = OnuTypeCreate(
+            name="EG8145V5",
+            pon_type="gpon",
+            gpon_channel="veip",
+            ethernet_ports=4,
+            wifi_ports=2,
+            capability="bridge_route",
+        )
+        assert req.name == "EG8145V5"
+        assert req.catv_ports == 0  # default
+
+    def test_create_empty_name(self):
+        with pytest.raises(Exception):
+            OnuTypeCreate(
+                name="",
+                pon_type="gpon",
+                gpon_channel="veip",
+                capability="bridge",
+            )
+
+    def test_update_partial(self):
+        req = OnuTypeUpdate(name="Updated Name")
+        data = req.model_dump(exclude_unset=True)
+        assert data == {"name": "Updated Name"}
+
+    def test_read_from_dict(self):
+        read = OnuTypeRead(
+            id="00000000-0000-0000-0000-000000000001",
+            name="Test",
+            pon_type="gpon",
+            gpon_channel="veip",
+            ethernet_ports=4,
+            wifi_ports=2,
+            voip_ports=0,
+            catv_ports=0,
+            allow_custom_profiles=True,
+            capability="bridge",
+            is_active=True,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+        )
+        assert read.is_active is True
+
+
+class TestSpeedProfileSchemas:
+    """Speed profile schema tests."""
+
+    def test_create_valid(self):
+        req = SpeedProfileCreate(
+            name="100M Download", direction="download", speed_kbps=100_000
+        )
+        assert req.speed_type == "internet"
+
+    def test_create_zero_speed(self):
+        req = SpeedProfileCreate(
+            name="Unlimited", direction="download", speed_kbps=0
+        )
+        assert req.speed_kbps == 0
+
+    def test_create_negative_speed(self):
+        with pytest.raises(Exception):
+            SpeedProfileCreate(
+                name="Bad", direction="download", speed_kbps=-1
+            )
+
+
+class TestNetworkZoneSchemas:
+    """Network zone schema tests."""
+
+    def test_create_minimal(self):
+        req = NetworkZoneCreate(name="Zone A")
+        assert req.is_active is True
+        assert req.parent_id is None
+
+    def test_create_with_coordinates(self):
+        req = NetworkZoneCreate(
+            name="Zone B", latitude=6.5244, longitude=3.3792
+        )
+        assert req.latitude == 6.5244
+
+    def test_update_clear_parent(self):
+        req = NetworkZoneUpdate(clear_parent=True)
+        assert req.clear_parent is True
+
+
+class TestVendorCapabilitySchemas:
+    """Vendor capability schema tests."""
+
+    def test_create_valid(self):
+        req = VendorCapabilityCreate(
+            vendor="Huawei",
+            model="EG8145V5",
+            supported_features={"wifi": True, "voip": True, "catv": False},
+        )
+        assert req.max_lan_ports == 4
+        assert req.supported_features["wifi"] is True
+
+    def test_update_partial(self):
+        req = VendorCapabilityUpdate(max_lan_ports=8)
+        data = req.model_dump(exclude_unset=True)
+        assert data == {"max_lan_ports": 8}
+
+
+class TestTr069ParameterMapSchemas:
+    """TR-069 parameter map schema tests."""
+
+    def test_create_valid(self):
+        req = Tr069ParameterMapCreate(
+            canonical_name="wifi_ssid",
+            tr069_path="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+        )
+        assert req.writable is True
+
+    def test_create_empty_name(self):
+        with pytest.raises(Exception):
+            Tr069ParameterMapCreate(canonical_name="", tr069_path="some.path")
+
+
+class TestRouterRegistration:
+    """Test that catalog router is properly registered."""
+
+    def test_catalog_routes_exist(self):
+        from app.main import app
+
+        paths = [r.path for r in app.routes]
+        assert any("/onu-types" in p for p in paths)
+        assert any("/speed-profiles" in p for p in paths)
+        assert any("/network-zones" in p for p in paths)
+        assert any("/vendor-capabilities" in p for p in paths)
+        assert any("/provisioning-profiles" in p for p in paths)
