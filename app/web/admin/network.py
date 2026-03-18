@@ -24,6 +24,15 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 
+@router.get("", response_class=HTMLResponse)
+def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Network hub landing page."""
+    return templates.TemplateResponse(
+        "admin/network/index.html",
+        _base_context(request, db, active_page="network"),
+    )
+
+
 @router.get("/devices", response_class=HTMLResponse)
 def devices_list(
     request: Request,

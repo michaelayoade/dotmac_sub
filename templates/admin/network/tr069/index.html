@@ -7,12 +7,21 @@
 {{ ambient_background("sky", "blue") }}
 
 <div class="relative space-y-6">
+    <div>
+        <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Network
+        </a>
+    </div>
     {% call page_header(
         title="TR-069 / ACS",
         subtitle="Manage ACS servers, discover CPEs, and run remote actions",
         icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>',
         color="sky",
-        color2="blue"
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "TR-069 / ACS"}]
     ) %}
         <a href="/admin/network/tr069/acs/new" class="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>

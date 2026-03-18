@@ -15,6 +15,17 @@
         <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Describe your issue and we'll get back to you as soon as possible</p>
     </div>
 
+    {% if crm_error %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-200">{{ crm_error_message }}</p>
+        </div>
+    </div>
+    {% endif %}
+
     <form method="POST" action="/portal/support/new" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
 
@@ -26,6 +37,7 @@
                 <div>
                     <label for="title" class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Subject</label>
                     <input type="text" id="title" name="title" required placeholder="Brief summary of your issue"
+                           value="{{ form_values.title if form_values is defined and form_values else '' }}"
                            class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:placeholder-stone-400">
                 </div>
 
@@ -35,7 +47,7 @@
                     <select id="priority" name="priority"
                             class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                         {% for p in priorities %}
-                        <option value="{{ p }}">{{ p | capitalize }}</option>
+                        <option value="{{ p }}" {% if (form_values is defined and form_values and form_values.priority == p) or ((form_values is not defined or not form_values) and p == 'normal') %}selected{% endif %}>{{ priority_display.get(p, p | title) }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -44,7 +56,7 @@
                 <div>
                     <label for="description" class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Description</label>
                     <textarea id="description" name="description" rows="5" placeholder="Provide as much detail as possible about your issue..."
-                              class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:placeholder-stone-400"></textarea>
+                              class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white dark:placeholder-stone-400">{{ form_values.description if form_values is defined and form_values else '' }}</textarea>
                 </div>
             </div>
         </div>

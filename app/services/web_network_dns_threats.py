@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import inspect
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
@@ -18,6 +20,10 @@ from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid, validate_enum
 
 logger = logging.getLogger(__name__)
+
+
+def _dns_threat_table_exists(db: Session) -> bool:
+    return inspect(db.bind).has_table("dns_threat_events")
 
 def _parse_float(raw: str | None) -> float | None:
     text = str(raw or "").strip()
@@ -81,6 +87,9 @@ def event_form_reference_data(db: Session) -> dict[str, object]:
 
 
 def create_event(db: Session, values: dict[str, object]) -> DnsThreatEvent:
+    if not _dns_threat_table_exists(db):
+        raise RuntimeError("DNS threat event storage is not available yet. Apply the database migration first.")
+
     payload = dict(values)
     for field in ("subscriber_id", "network_device_id", "pop_site_id"):
         if payload.get(field):
@@ -103,6 +112,26 @@ def list_page_data(
     subscriber_id: str | None = None,
     network_device_id: str | None = None,
 ) -> dict[str, object]:
+    if not _dns_threat_table_exists(db):
+        return {
+            "events": [],
+            "stats": {
+                "total": 0,
+                "blocked": 0,
+                "critical": 0,
+                "high": 0,
+            },
+            "filters": {
+                "search": str(search or "").strip(),
+                "severity": str(severity or "").strip().lower(),
+                "action": str(action or "").strip().lower(),
+                "subscriber_id": str(subscriber_id or "").strip(),
+                "network_device_id": str(network_device_id or "").strip(),
+            },
+            "schema_missing": True,
+            **event_form_reference_data(db),
+        }
+
     query = db.query(DnsThreatEvent).order_by(DnsThreatEvent.occurred_at.desc())
 
     severity_filter = str(severity or "").strip().lower()
@@ -121,7 +150,29 @@ def list_page_data(
     if device_filter:
         query = query.filter(DnsThreatEvent.network_device_id == coerce_uuid(device_filter))
 
-    items = query.limit(1000).all()
+    try:
+        items = query.limit(1000).all()
+    except ProgrammingError:
+        logger.exception("dns_threat_events query failed")
+        db.rollback()
+        return {
+            "events": [],
+            "stats": {
+                "total": 0,
+                "blocked": 0,
+                "critical": 0,
+                "high": 0,
+            },
+            "filters": {
+                "search": str(search or "").strip(),
+                "severity": severity_filter,
+                "action": action_filter,
+                "subscriber_id": subscriber_filter,
+                "network_device_id": device_filter,
+            },
+            "schema_missing": True,
+            **event_form_reference_data(db),
+        }
 
     search_q = str(search or "").strip().lower()
     if search_q:
@@ -160,5 +211,6 @@ def list_page_data(
             "subscriber_id": subscriber_filter,
             "network_device_id": device_filter,
         },
+        "schema_missing": False,
         **event_form_reference_data(db),
     }

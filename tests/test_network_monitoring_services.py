@@ -1,7 +1,9 @@
 """Tests for network monitoring service."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
+from app.models.network import OntUnit
 from app.models.network_monitoring import AlertOperator, AlertSeverity, AlertStatus, MetricType
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
@@ -14,6 +16,7 @@ from app.schemas.network_monitoring import (
     PopSiteUpdate,
 )
 from app.services import network_monitoring as monitoring_service
+from app.services import web_network_monitoring as web_network_monitoring_service
 
 
 def test_create_pop_site(db_session):
@@ -111,6 +114,24 @@ def test_list_network_devices_by_pop(db_session, pop_site):
     )
     assert len(devices) >= 2
     assert all(d.pop_site_id == pop_site.id for d in devices)
+
+
+def test_onu_auth_trend_returns_json_safe_series(db_session):
+    db_session.add_all(
+        [
+            OntUnit(serial_number="ONT-TREND-1"),
+            OntUnit(serial_number="ONT-TREND-2"),
+        ]
+    )
+    db_session.commit()
+
+    trend = web_network_monitoring_service._get_onu_auth_trend(db_session, days=30)
+
+    assert isinstance(trend["labels"], list)
+    assert isinstance(trend["values"], list)
+    assert all(isinstance(value, int) for value in trend["values"])
+    json.dumps(trend["labels"])
+    json.dumps(trend["values"])
 
 
 def test_create_device_interface(db_session, network_device):

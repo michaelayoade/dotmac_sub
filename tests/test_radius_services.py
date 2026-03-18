@@ -1,4 +1,5 @@
 """Tests for RADIUS service."""
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -210,6 +211,115 @@ def test_list_radius_clients_by_server(db_session, radius_server):
     )
     assert len(clients) >= 2
     assert all(c.server_id == radius_server.id for c in clients)
+
+
+def _write_external_radius_db(db_path, rows):
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE radcheck (username TEXT, attribute TEXT, op TEXT, value TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_import_access_credentials_from_external_radius_matches_subscription_login(
+    db_session, tmp_path, subscriber, catalog_offer
+):
+    db_session.add(
+        Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+            login="pppoe-001",
+        )
+    )
+    db_session.commit()
+
+    radius_db = tmp_path / "radius-login.db"
+    _write_external_radius_db(
+        radius_db,
+        [("pppoe-001", "Cleartext-Password", ":=", "secret123")],
+    )
+
+    result = radius_service.import_access_credentials_from_external_radius(
+        db_session,
+        config={
+            "db_url": f"sqlite:///{radius_db}",
+            "radcheck_table": '"radcheck"',
+        },
+    )
+
+    credential = (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.username == "pppoe-001")
+        .one()
+    )
+    assert credential.subscriber_id == subscriber.id
+    assert credential.secret_hash is not None
+    assert credential.secret_hash.startswith(("enc:", "plain:"))
+    assert result["created"] == 1
+    assert result["matched_subscription_login"] == 1
+    assert result["secrets_imported"] == 1
+
+
+def test_import_access_credentials_from_external_radius_skips_opaque_password_but_creates_credential(
+    db_session, tmp_path, subscriber
+):
+    subscriber.subscriber_number = "100000127"
+    db_session.commit()
+
+    radius_db = tmp_path / "radius-opaque.db"
+    _write_external_radius_db(
+        radius_db,
+        [("100000127", "Cleartext-Password", ":=", "fHbF0nDj7iT/NYQTWcpUYvpxAEZkGfMofjjQukY=")],
+    )
+
+    result = radius_service.import_access_credentials_from_external_radius(
+        db_session,
+        config={
+            "db_url": f"sqlite:///{radius_db}",
+            "radcheck_table": '"radcheck"',
+        },
+    )
+
+    credential = (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.username == "100000127")
+        .one()
+    )
+    assert credential.subscriber_id == subscriber.id
+    assert credential.secret_hash is None
+    assert result["created"] == 1
+    assert result["matched_subscriber_number"] == 1
+    assert result["secrets_skipped"] == 1
+
+
+def test_import_access_credentials_from_external_radius_reports_unmatched(
+    db_session, tmp_path
+):
+    radius_db = tmp_path / "radius-unmatched.db"
+    _write_external_radius_db(
+        radius_db,
+        [("unmatched-user", "Cleartext-Password", ":=", "secret123")],
+    )
+
+    result = radius_service.import_access_credentials_from_external_radius(
+        db_session,
+        config={
+            "db_url": f"sqlite:///{radius_db}",
+            "radcheck_table": '"radcheck"',
+        },
+    )
+
+    assert result["created"] == 0
+    assert result["unmatched"] == 1
+    assert result["unmatched_examples"] == ["unmatched-user"]
 
 
 def test_create_radius_sync_job(db_session, radius_server):

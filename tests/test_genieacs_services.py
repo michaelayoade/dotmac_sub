@@ -57,6 +57,11 @@ class TestGenieACSClientInit:
         client = GenieACSClient("http://localhost:7557", timeout=60.0)
         assert client.timeout == 60.0
 
+    def test_normalize_tr069_serial_removes_formatting(self):
+        from app.services.genieacs import normalize_tr069_serial
+
+        assert normalize_tr069_serial("HWTC-7D47 33:C3") == "HWTC7D4733C3"
+
 
 # =============================================================================
 # Request Error Handling Tests

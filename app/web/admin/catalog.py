@@ -1,6 +1,8 @@
 """Admin catalog management web routes."""
 
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -525,6 +527,8 @@ def catalog_subscription_edit(
     context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
     context["activities"] = build_audit_activities(db, "subscription", str(subscription_id))
     context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
+    context["notice"] = request.query_params.get("notice")
+    context["error"] = request.query_params.get("error") or context.get("error")
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -611,6 +615,35 @@ def catalog_subscription_update(
     )
     context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/send-credentials",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_send_credentials(
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        result = web_catalog_subscriptions_service.send_subscription_credentials(
+            db,
+            subscription_id=subscription_id,
+        )
+        notice = (
+            f"Sent credentials to {result['email_sent']} email target(s) "
+            f"and {result['sms_sent']} SMS target(s)."
+        )
+        return RedirectResponse(
+            f"/admin/catalog/subscriptions/{subscription_id}/edit?notice={quote_plus(notice)}",
+            status_code=303,
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            f"/admin/catalog/subscriptions/{subscription_id}/edit?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
 
 
 @router.post("/subscriptions/bulk/activate", dependencies=[Depends(require_permission("catalog:write"))])

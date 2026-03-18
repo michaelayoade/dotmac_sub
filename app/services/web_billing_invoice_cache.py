@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -79,13 +79,15 @@ def build_cache_page_state(
             }
         )
 
+    # Resolve account ids first. Selecting DISTINCT Subscriber rows breaks on Postgres
+    # when Subscriber.metadata is plain JSON because equality is undefined for that type.
     account_ids = db.scalars(
         select(Invoice.account_id)
         .where(Invoice.is_active.is_(True))
         .distinct()
         .limit(300)
     ).all()
-    accounts = []
+    accounts: Sequence[Subscriber] = []
     if account_ids:
         accounts = db.scalars(
             select(Subscriber)

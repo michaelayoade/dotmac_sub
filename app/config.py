@@ -43,6 +43,11 @@ class Settings:
         f"https://graph.facebook.com/{os.getenv('META_GRAPH_API_VERSION', 'v19.0')}",
     )
 
+    # CRM integration (DotMac Omni CRM)
+    crm_base_url: str = os.getenv("CRM_BASE_URL", "")
+    crm_username: str = os.getenv("CRM_USERNAME", "")
+    crm_password: str = os.getenv("CRM_PASSWORD", "")
+
     # S3-compatible object storage
     s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
     s3_access_key: str = os.getenv("S3_ACCESS_KEY", "")

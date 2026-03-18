@@ -13,7 +13,7 @@ from app.services.network.olt_command_gen import (
     OntProvisioningContext,
     build_spec_from_profile,
 )
-from app.services.network.olt_ssh import (
+from app.services.network.olt_ssh_profiles import (
     get_line_profiles,
     get_service_profiles,
     get_tr069_server_profiles,

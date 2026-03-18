@@ -8,7 +8,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.services import customer_portal, reseller_portal
+from app.services import crm_portal, customer_portal, reseller_portal
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,17 @@ def reseller_dashboard(
         offset=offset,
     )
 
+    # Add open tickets count from CRM (fails silently)
+    open_tickets = 0
+    try:
+        account_ids = [a["id"] for a in summary.get("accounts", [])]
+        if account_ids:
+            open_tickets = crm_portal.reseller_open_tickets_count(
+                db, str(context["reseller"].id), account_ids
+            )
+    except Exception:
+        logger.debug("Could not fetch CRM open tickets for reseller dashboard")
+
     return templates.TemplateResponse(
         "reseller/dashboard/index.html",
         {
@@ -58,6 +69,7 @@ def reseller_dashboard(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "open_tickets": open_tickets,
             "page": page,
             "per_page": per_page,
         },
@@ -303,6 +315,41 @@ def reseller_profile_update(
             "reseller": reseller,
             "success": "Profile updated successfully.",
         },
+    )
+
+
+def reseller_account_tickets(
+    request: Request,
+    db: Session,
+    account_id: str,
+):
+    """Show CRM tickets for a reseller's customer account."""
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    # Verify reseller owns this account
+    detail = reseller_portal.get_account_detail(
+        db,
+        reseller_id=str(context["reseller"].id),
+        account_id=account_id,
+    )
+    if not detail:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            status_code=404,
+        )
+
+    ticket_context = crm_portal.reseller_account_tickets_context(
+        request, db, account_id,
+        current_user=context["current_user"],
+        reseller=context["reseller"],
+    )
+    ticket_context["account"] = detail
+    return templates.TemplateResponse(
+        "reseller/accounts/tickets.html",
+        ticket_context,
     )
 
 

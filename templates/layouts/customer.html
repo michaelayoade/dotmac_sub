@@ -106,10 +106,9 @@
                     </a>
 
                     <!-- More dropdown for less-used items -->
-                    {% if show_portal_provisioning %}
                     <div x-data="{ open: false }" class="relative">
                         <button x-on:click="open = !open"
-                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['installations', 'service-orders'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
+                                class="flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page in ['installations', 'service-orders', 'work-orders'] else 'text-stone-600 hover:text-stone-900 hover:bg-stone-100 dark:text-stone-400 dark:hover:text-white dark:hover:bg-stone-800' }}">
                             More
                             <svg class="h-4 w-4 transition-transform" :class="open && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -125,6 +124,13 @@
                              x-transition:leave-end="opacity-0 -translate-y-1"
                              x-cloak
                              class="absolute right-0 mt-2 w-48 rounded-xl border border-stone-200 bg-white py-2 shadow-premium-lg dark:border-stone-700 dark:bg-stone-800">
+                            <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'work-orders' else '' }}">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.42 15.17l-5.73-2.37A1 1 0 015 11.93V4.32a1 1 0 011.42-.91l5.73 2.37a1 1 0 01.58.91v6.74a1 1 0 01-.58.91zM17.58 8.83l-5.73 2.37a1 1 0 01-.58-.91V3.55a1 1 0 01.58-.91l5.73-2.37A1 1 0 0119 1.18v6.74a1 1 0 01-1.42.91z"/>
+                                </svg>
+                                Work Orders
+                            </a>
+                            {% if show_portal_provisioning %}
                             <a href="/portal/installations" class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-700 hover:bg-stone-50 dark:text-stone-300 dark:hover:bg-stone-700/50 {{ 'bg-stone-50 dark:bg-stone-700/50' if active_page == 'installations' else '' }}">
                                 <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
@@ -137,9 +143,9 @@
                                 </svg>
                                 Service Orders
                             </a>
+                            {% endif %}
                         </div>
                     </div>
-                    {% endif %}
                 </nav>
 
                 <!-- Right side actions -->
@@ -214,12 +220,15 @@
                             </div>
 
                             <div class="border-t border-stone-100 dark:border-stone-700 pt-1">
-                                <a href="/portal/auth/logout" role="menuitem" class="flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
+                                <form method="post" action="/portal/auth/logout">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" role="menuitem" class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
                                     </svg>
                                     Sign out
-                                </a>
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     </div>
@@ -279,9 +288,13 @@
                     Support
                 </a>
 
-                {% if show_portal_provisioning %}
                 <div class="border-t border-stone-200 dark:border-stone-700 my-2 pt-2">
                     <p class="px-4 py-2 text-xs font-semibold text-stone-400 uppercase tracking-wider">More</p>
+                    <a href="/portal/work-orders" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'work-orders' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.42 15.17l-5.73-2.37A1 1 0 015 11.93V4.32a1 1 0 011.42-.91l5.73 2.37a1 1 0 01.58.91v6.74a1 1 0 01-.58.91zM17.58 8.83l-5.73 2.37a1 1 0 01-.58-.91V3.55a1 1 0 01.58-.91l5.73-2.37A1 1 0 0119 1.18v6.74a1 1 0 01-1.42.91z"/></svg>
+                        Work Orders
+                    </a>
+                    {% if show_portal_provisioning %}
                     <a href="/portal/installations" class="flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-xl {{ 'bg-stone-900 text-white dark:bg-white dark:text-stone-900' if active_page == 'installations' else 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800' }} transition-colors">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         Installations
@@ -290,8 +303,8 @@
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                         Service Orders
                     </a>
+                    {% endif %}
                 </div>
-                {% endif %}
             </nav>
         </div>
     </header>

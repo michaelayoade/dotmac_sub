@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.tr069 import (
@@ -30,12 +31,20 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.credential_crypto import encrypt_credential
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
 from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
 
 logger = logging.getLogger(__name__)
+
+
+def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
+    """Build a SQL expression that strips common serial formatting."""
+    expr = func.upper(column)
+    for token in ("-", " ", ":", ".", "_", "/"):
+        expr = func.replace(expr, token, "")
+    return expr
 
 
 class AcsServers(ListResponseMixin):
@@ -256,13 +265,26 @@ class CpeDevices(ListResponseMixin):
             )
             connection_url = CpeDevices._clip_text(connection_url, 255)
 
-            # Look for existing device by serial number and ACS server first.
+            normalized_serial = normalize_tr069_serial(serial_number)
+
+            # Look for existing device by exact serial number and ACS server first.
             existing = (
                 db.query(Tr069CpeDevice)
                 .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
                 .filter(Tr069CpeDevice.serial_number == serial_number)
                 .first()
             )
+            # Fallback: match using normalized serials to tolerate vendor formatting differences.
+            if not existing and normalized_serial:
+                existing = (
+                    db.query(Tr069CpeDevice)
+                    .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+                    .filter(
+                        _normalized_serial_expr(Tr069CpeDevice.serial_number)
+                        == normalized_serial
+                    )
+                    .first()
+                )
             # Fallback: update legacy/mis-parsed records by stable connection URL.
             if not existing and connection_url:
                 existing = (
@@ -320,9 +342,13 @@ class CpeDevices(ListResponseMixin):
                 if not cpe_dev.serial_number:
                     continue
                 # Link ONT's tr069_acs_server_id if it doesn't have one
+                normalized_cpe_serial = normalize_tr069_serial(cpe_dev.serial_number)
                 ont = (
                     db.query(OntUnit)
-                    .filter(OntUnit.serial_number == cpe_dev.serial_number)
+                    .filter(
+                        _normalized_serial_expr(OntUnit.serial_number)
+                        == normalized_cpe_serial
+                    )
                     .filter(OntUnit.is_active.is_(True))
                     .first()
                 )

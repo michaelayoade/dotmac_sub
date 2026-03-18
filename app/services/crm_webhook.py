@@ -8,12 +8,9 @@ from datetime import UTC, datetime
 
 from requests import RequestException, post
 
-logger = logging.getLogger(__name__)
+from app.config import settings
 
-# CRM API config
-CRM_BASE_URL = "http://149.102.149.5:8000"
-CRM_USERNAME = "admin@local"
-CRM_PASSWORD = "Admin123"
+logger = logging.getLogger(__name__)
 
 # Token cache
 _cached_token: str | None = None
@@ -29,8 +26,8 @@ def _get_token() -> str | None:
 
     try:
         resp = post(
-            f"{CRM_BASE_URL}/api/v1/auth/login",
-            json={"username": CRM_USERNAME, "password": CRM_PASSWORD},
+            f"{settings.crm_base_url}/api/v1/auth/login",
+            json={"username": settings.crm_username, "password": settings.crm_password},
             timeout=10,
         )
         if resp.status_code == 200:
@@ -66,7 +63,7 @@ def push_subscriber_change(
 
     try:
         resp = post(
-            f"{CRM_BASE_URL}/api/v1/subscribers/sync/webhook/splynx",
+            f"{settings.crm_base_url}/api/v1/subscribers/sync/webhook/splynx",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,

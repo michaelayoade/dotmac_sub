@@ -247,6 +247,50 @@ class TestAutoLinkOnts:
         db_session.refresh(ont)
         assert ont.tr069_acs_server_id == server.id
 
+    def test_sync_auto_links_ont_by_normalized_serial(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Normalized AutoLink ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+
+        ont = OntUnit(serial_number="HWTC-7D47-33C3", is_active=True)
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        mock_device = {
+            "_id": "00D09E-TestProduct-HWTC7D4733C3",
+            "_deviceId": {
+                "_OUI": "00D09E",
+                "_ProductClass": "TestProduct",
+                "_SerialNumber": "HWTC7D4733C3",
+            },
+            "_lastInform": datetime.now(UTC).isoformat(),
+        }
+        with patch("app.services.tr069.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+            instance.parse_device_id.return_value = ("00D09E", "TestProduct", "HWTC7D4733C3")
+            instance.extract_parameter_value.return_value = None
+
+            result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        assert result["created"] == 1
+        assert result["auto_linked"] == 1
+        db_session.refresh(ont)
+        assert ont.tr069_acs_server_id == server.id
+
 
 # ---------------------------------------------------------------------------
 # 5. Parameter map resolution
@@ -381,3 +425,86 @@ class TestDeviceResolution:
         result, reason = resolve_genieacs_with_reason(db_session, ont)
         assert result is None
         assert "No ACS server" in reason
+
+    def test_resolve_matches_device_by_normalized_serial(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Resolve ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.commit()
+        db_session.refresh(server)
+
+        ont = OntUnit(
+            serial_number="HWTC-7D47-33C3",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        mock_device = {
+            "_id": "00D09E-TestProduct-HWTC7D4733C3",
+            "_deviceId": {"_SerialNumber": "HWTC7D4733C3"},
+        }
+
+        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.side_effect = [[], [mock_device]]
+            instance.extract_parameter_value.side_effect = lambda device, path: None
+            instance.parse_device_id.return_value = ("00D09E", "TestProduct", "HWTC7D4733C3")
+
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        client, device_id = result
+        assert device_id == "00D09E-TestProduct-HWTC7D4733C3"
+        assert reason == "resolved_via_ont_acs"
+
+
+class TestAcsPropagation:
+    def test_queue_acs_propagation_includes_tr098_and_tr181_paths(self, db_session) -> None:
+        from app.models.network import OLTDevice, OntUnit
+        from app.services.web_network_olts import _queue_acs_propagation
+
+        server = Tr069AcsServer(
+            name="Propagation ACS",
+            base_url="http://genieacs:7557",
+            cwmp_url="http://acs.example.com/cwmp",
+            cwmp_username="cwmp-user",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.commit()
+        db_session.refresh(server)
+
+        olt = OLTDevice(name="OLT-TR069", tr069_acs_server_id=server.id)
+        db_session.add(olt)
+        db_session.commit()
+        db_session.refresh(olt)
+
+        ont = OntUnit(serial_number="PROP-001", is_active=True, olt_device_id=olt.id)
+        db_session.add(ont)
+        db_session.commit()
+
+        fake_client = MagicMock()
+
+        with patch(
+            "app.services.network._resolve.resolve_genieacs_with_reason",
+            return_value=((fake_client, "device-1"), "resolved_via_olt_acs"),
+        ):
+            stats = _queue_acs_propagation(db_session, olt)
+
+        assert stats["attempted"] == 1
+        assert stats["propagated"] == 1
+        fake_client.set_parameter_values.assert_called_once()
+        sent_params = fake_client.set_parameter_values.call_args.args[1]
+        assert sent_params["Device.ManagementServer.URL"] == "http://acs.example.com/cwmp"
+        assert sent_params["InternetGatewayDevice.ManagementServer.URL"] == "http://acs.example.com/cwmp"
+        assert sent_params["Device.ManagementServer.Username"] == "cwmp-user"
+        assert sent_params["InternetGatewayDevice.ManagementServer.Username"] == "cwmp-user"

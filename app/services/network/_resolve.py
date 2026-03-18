@@ -3,26 +3,58 @@
 from __future__ import annotations
 
 import logging
+import re
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
 
 logger = logging.getLogger(__name__)
+
+
+def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
+    """Build a SQL expression that strips common serial formatting."""
+    expr = func.upper(column)
+    for token in ("-", " ", ":", ".", "_", "/"):
+        expr = func.replace(expr, token, "")
+    return expr
+
+
+def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
+    """Fall back to active assignment → PON port → OLT resolution."""
+    from app.models.network import PonPort
+
+    for assignment in getattr(ont, "assignments", []):
+        if not assignment.active or not assignment.pon_port_id:
+            continue
+        pon_port = db.get(PonPort, str(assignment.pon_port_id))
+        if pon_port and pon_port.olt_id:
+            olt = db.get(OLTDevice, str(pon_port.olt_id))
+            if olt:
+                return olt
+    return None
 
 
 def _resolve_device_id_from_server(
     client: GenieACSClient,
     serial_number: str,
 ) -> str | None:
-    devices = client.list_devices(query={"_id": {"$regex": f".*-{serial_number}$"}})
+    serial = str(serial_number or "").strip()
+    devices = client.list_devices(query={"_id": {"$regex": f".*-{re.escape(serial)}$"}})
     if not devices:
-        return None
+        normalized_target = normalize_tr069_serial(serial)
+        if not normalized_target:
+            return None
+        devices = client.list_devices(
+            query={"_id": {"$regex": f".*-{re.escape(normalized_target)}$"}}
+        )
+        if not devices:
+            return None
     device_id = str(devices[0].get("_id") or "").strip()
     return device_id or None
 
@@ -61,11 +93,15 @@ def resolve_genieacs_with_reason(
         return None, "ONT serial number is missing."
 
     # 1) OLT profile (authoritative in inherited ACS model)
+    #    Try ont.olt_device_id first, then fall back to assignment → PON port → OLT
     olt_server = None
+    olt = None
     if ont.olt_device_id:
         olt = db.get(OLTDevice, str(ont.olt_device_id))
-        if olt and olt.tr069_acs_server_id:
-            olt_server = _resolve_server_by_id(db, str(olt.tr069_acs_server_id))
+    if not olt:
+        olt = _resolve_olt_via_assignment(db, ont)
+    if olt and olt.tr069_acs_server_id:
+        olt_server = _resolve_server_by_id(db, str(olt.tr069_acs_server_id))
     if olt_server:
         client = GenieACSClient(olt_server.base_url)
         try:
@@ -89,7 +125,10 @@ def resolve_genieacs_with_reason(
     # 3) Linked TR-069 device by serial number
     stmt = (
         select(Tr069CpeDevice)
-        .where(Tr069CpeDevice.serial_number == ont.serial_number)
+        .where(
+            _normalized_serial_expr(Tr069CpeDevice.serial_number)
+            == normalize_tr069_serial(ont.serial_number)
+        )
         .where(Tr069CpeDevice.is_active.is_(True))
         .limit(1)
     )

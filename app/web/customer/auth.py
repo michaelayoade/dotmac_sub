@@ -46,6 +46,12 @@ def customer_logout(request: Request):
     return web_customer_auth_service.customer_logout(request)
 
 
+@router.get("/logout")
+def customer_logout_get(request: Request):
+    """Backwards-compatible GET logout endpoint for link-based UI flows."""
+    return web_customer_auth_service.customer_logout(request)
+
+
 @router.post("/stop-impersonation")
 def customer_stop_impersonation(request: Request, next: str = Form("/admin/subscribers")):
     """Stop customer impersonation and return to admin."""

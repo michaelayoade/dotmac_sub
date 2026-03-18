@@ -2,7 +2,7 @@
 name = "dotmac_sm"
 version = "0.1.0"
 description = "Subscriber management API and web UI"
-authors = ["Codex <codex@local>"]
+authors = ["DotMac <engineering@dotmac.local>"]
 package-mode = false
 
 [tool.poetry.dependencies]

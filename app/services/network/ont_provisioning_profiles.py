@@ -152,6 +152,11 @@ class OntProvisioningProfiles:
         wifi_channel: str | None = None,
         wifi_band: str | None = None,
         voip_enabled: bool = False,
+        internet_config_ip_index: int | None = 0,
+        wan_config_profile_id: int | None = 0,
+        pppoe_omci_vlan: int | None = None,
+        cr_username: str | None = None,
+        cr_password: str | None = None,
         is_default: bool = False,
         notes: str | None = None,
     ) -> OntProvisioningProfile:
@@ -178,6 +183,11 @@ class OntProvisioningProfiles:
             wifi_channel=wifi_channel,
             wifi_band=wifi_band,
             voip_enabled=voip_enabled,
+            internet_config_ip_index=internet_config_ip_index,
+            wan_config_profile_id=wan_config_profile_id,
+            pppoe_omci_vlan=pppoe_omci_vlan,
+            cr_username=cr_username,
+            cr_password=cr_password,
             is_default=is_default,
             notes=notes,
         )

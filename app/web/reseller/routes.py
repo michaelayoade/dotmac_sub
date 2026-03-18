@@ -113,6 +113,17 @@ def reseller_profile_update(
     )
 
 
+@router.get("/accounts/{account_id}/tickets", response_class=HTMLResponse)
+def reseller_account_tickets(
+    request: Request,
+    account_id: str,
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_tickets(
+        request, db, account_id
+    )
+
+
 @router.get("/fiber-map", response_class=HTMLResponse)
 def reseller_fiber_map(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_fiber_map(request, db)

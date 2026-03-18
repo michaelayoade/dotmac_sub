@@ -1,5 +1,7 @@
 """Admin network RADIUS web routes."""
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -44,8 +46,34 @@ def radius_page(request: Request, db: Session = Depends(get_db)):
         ["radius_server", "radius_client", "radius_profile"],
         limit=10,
     )
-    context.update({**state, "activities": activities})
+    context.update({
+        **state,
+        "activities": activities,
+        "notice": request.query_params.get("notice"),
+        "error": request.query_params.get("error"),
+    })
     return templates.TemplateResponse("admin/network/radius/index.html", context)
+
+
+@router.post("/radius/import-credentials", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
+    try:
+        result = radius_service.import_access_credentials_from_external_radius(db)
+        notice = (
+            "Imported RADIUS credentials: "
+            f"scanned {result['scanned']}, created {result['created']}, "
+            f"updated {result['updated']}, unmatched {result['unmatched']}, "
+            f"conflicts {result['conflicts']}."
+        )
+        return RedirectResponse(
+            f"/admin/network/radius?notice={quote_plus(notice)}",
+            status_code=303,
+        )
+    except Exception as exc:
+        return RedirectResponse(
+            f"/admin/network/radius?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
 
 
 @router.get("/radius/servers/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])

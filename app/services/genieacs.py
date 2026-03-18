@@ -6,12 +6,18 @@ This module provides a client for interacting with the GenieACS NBI
 
 import json
 import logging
+import re
 from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_tr069_serial(value: str | None) -> str:
+    """Normalize device serials for cross-system matching."""
+    return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
 
 
 class GenieACSError(Exception):
@@ -503,6 +509,85 @@ class GenieACSClient:
     # -------------------------------------------------------------------------
     # Helper Methods
     # -------------------------------------------------------------------------
+
+    def clear_device_faults(self, device_id: str) -> int:
+        """Clear all faults for a device, returning the number cleared.
+
+        Args:
+            device_id: Device ID
+
+        Returns:
+            Number of faults cleared
+        """
+        faults = self.list_faults(device_id)
+        cleared = 0
+        for fault in faults:
+            fault_id = fault.get("_id", "")
+            if fault_id:
+                try:
+                    self.delete_fault(fault_id)
+                    cleared += 1
+                except GenieACSError:
+                    logger.warning("Failed to clear fault %s", fault_id)
+        return cleared
+
+    def wait_for_task_completion(
+        self,
+        device_id: str,
+        task_id: str,
+        *,
+        timeout_sec: int = 30,
+    ) -> tuple[bool, str]:
+        """Poll until a task completes or times out.
+
+        Args:
+            device_id: Device ID
+            task_id: Task ID to monitor
+
+        Returns:
+            Tuple of (completed, message)
+        """
+        import time
+
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            pending = self.get_pending_tasks(device_id)
+            task_still_pending = any(t.get("_id") == task_id for t in pending)
+            if not task_still_pending:
+                return True, "Task completed"
+            time.sleep(2)
+        return False, f"Task {task_id} did not complete within {timeout_sec}s"
+
+    def set_parameter_values_and_wait(
+        self,
+        device_id: str,
+        parameters: dict[str, Any],
+        *,
+        connection_request: bool = True,
+        timeout_sec: int = 30,
+    ) -> tuple[bool, str, dict]:
+        """Set parameter values and wait for the task to complete.
+
+        Args:
+            device_id: Device ID
+            parameters: Dict of parameter path -> value
+            connection_request: Whether to trigger connection request
+            timeout_sec: Max seconds to wait for completion
+
+        Returns:
+            Tuple of (success, message, task_result)
+        """
+        task_result = self.set_parameter_values(
+            device_id, parameters, connection_request
+        )
+        task_id = task_result.get("_id", "")
+        if not task_id:
+            return True, "Task accepted (no ID returned)", task_result
+
+        ok, msg = self.wait_for_task_completion(
+            device_id, task_id, timeout_sec=timeout_sec
+        )
+        return ok, msg, task_result
 
     def build_device_id(self, oui: str, product_class: str, serial_number: str) -> str:
         """Build GenieACS device ID from components.

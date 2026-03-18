@@ -1,0 +1,108 @@
+{% extends "layouts/customer.html" %}
+{% block title %}Work Order {{ work_order.get('order_number', '') if work_order else 'Not Found' }}{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    {% if crm_error or not work_order %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-200">{{ crm_error_message or 'Work order not found.' }}</p>
+        </div>
+    </div>
+    <a href="/portal/work-orders" class="inline-flex items-center gap-2 text-sm font-medium text-stone-600 hover:text-stone-900 dark:text-stone-400 dark:hover:text-white">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+        Back to Work Orders
+    </a>
+    {% else %}
+    {% set wo_status = work_order.get('status', 'draft') %}
+    {% set wo_type = work_order.get('work_order_type', work_order.get('type', '')) %}
+
+    <!-- Breadcrumb & Header -->
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
+            <a href="/portal/work-orders" class="hover:text-[var(--color-brand-600)]">Work Orders</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">{{ work_order.get('order_number', work_order.get('id', '')) }}</span>
+        </nav>
+        <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">{{ work_order.get('title', 'Work Order') }}</h1>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+            <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold {{ status_colors.get(wo_status, 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200') }}">
+                {{ status_display.get(wo_status, wo_status | replace('_', ' ') | title) }}
+            </span>
+            {% if wo_type %}
+            <span class="inline-flex items-center rounded-full bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-700 dark:bg-stone-700 dark:text-stone-300">
+                {{ type_display.get(wo_type, wo_type | replace('_', ' ') | title) }}
+            </span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Details Card -->
+    <section class="rounded-2xl border border-stone-200/60 bg-white p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
+        <h2 class="mb-4 text-sm font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Details</h2>
+        <dl class="grid gap-x-8 gap-y-4 sm:grid-cols-2">
+            {% if work_order.get('description') %}
+            <div class="sm:col-span-2">
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Description</dt>
+                <dd class="mt-1 whitespace-pre-wrap text-sm text-stone-700 dark:text-stone-300">{{ work_order.get('description', '') }}</dd>
+            </div>
+            {% endif %}
+
+            {% set sched_start = work_order.get('scheduled_start') or work_order.get('scheduled_at') %}
+            {% set sched_end = work_order.get('scheduled_end') %}
+            {% if sched_start %}
+            <div>
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Scheduled Start</dt>
+                <dd class="mt-1 text-sm font-medium text-stone-900 dark:text-white">{{ sched_start[:16] | replace('T', ' ') }}</dd>
+            </div>
+            {% endif %}
+            {% if sched_end %}
+            <div>
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Scheduled End</dt>
+                <dd class="mt-1 text-sm font-medium text-stone-900 dark:text-white">{{ sched_end[:16] | replace('T', ' ') }}</dd>
+            </div>
+            {% endif %}
+
+            {% if work_order.get('assigned_to_name') or work_order.get('assigned_to') %}
+            <div>
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Technician</dt>
+                <dd class="mt-1 text-sm font-medium text-stone-900 dark:text-white">{{ work_order.get('assigned_to_name') or work_order.get('assigned_to', 'TBD') }}</dd>
+            </div>
+            {% endif %}
+
+            {% if work_order.get('completed_at') %}
+            <div>
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Completed</dt>
+                <dd class="mt-1 text-sm font-medium text-emerald-600 dark:text-emerald-400">{{ work_order.get('completed_at', '')[:16] | replace('T', ' ') }}</dd>
+            </div>
+            {% endif %}
+
+            <div>
+                <dt class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Created</dt>
+                <dd class="mt-1 text-sm text-stone-600 dark:text-stone-400">{{ work_order.get('created_at', '')[:16] | replace('T', ' ') }}</dd>
+            </div>
+        </dl>
+    </section>
+
+    <!-- Notes -->
+    <section class="rounded-2xl border border-stone-200/60 bg-white p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
+        <h2 class="mb-4 text-sm font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Notes</h2>
+        <div class="space-y-4">
+            {% for note in notes %}
+            <article class="rounded-xl border border-stone-200/60 p-4 dark:border-stone-700/60">
+                <div class="mb-2 flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
+                    <span class="font-medium text-stone-700 dark:text-stone-300">{{ note.get('author_name', 'Technician') }}</span>
+                    <span>{{ note.get('created_at', '')[:16] | replace('T', ' ') }}</span>
+                </div>
+                <p class="whitespace-pre-wrap text-sm text-stone-700 dark:text-stone-300">{{ note.get('body', note.get('content', '')) }}</p>
+            </article>
+            {% else %}
+            <p class="text-sm text-stone-500 dark:text-stone-400">No notes yet.</p>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

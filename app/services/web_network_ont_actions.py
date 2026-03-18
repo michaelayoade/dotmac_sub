@@ -71,7 +71,7 @@ def run_traceroute_diagnostic(
 
 def execute_omci_reboot(db: Session, ont_id: str) -> tuple[bool, str]:
     """Reboot ONT via OMCI through the OLT."""
-    from app.services.network.olt_ssh import reboot_ont_omci
+    from app.services.network.olt_ssh_ont import reboot_ont_omci
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -90,7 +90,7 @@ def configure_management_ip(
     gateway: str | None = None,
 ) -> tuple[bool, str]:
     """Configure ONT management IP via OLT IPHOST command."""
-    from app.services.network.olt_ssh import configure_ont_iphost
+    from app.services.network.olt_ssh_ont import configure_ont_iphost
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -105,7 +105,7 @@ def configure_management_ip(
 
 def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, str]]:
     """Fetch ONT IPHOST config from OLT."""
-    from app.services.network.olt_ssh import get_ont_iphost_config
+    from app.services.network.olt_ssh_ont import get_ont_iphost_config
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -118,7 +118,7 @@ def bind_tr069_profile(
     db: Session, ont_id: str, profile_id: int
 ) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
-    from app.services.network.olt_ssh import bind_tr069_server_profile
+    from app.services.network.olt_ssh_ont import bind_tr069_server_profile
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)

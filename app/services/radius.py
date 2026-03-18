@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, or_, text
@@ -26,6 +27,7 @@ from app.models.radius import (
     RadiusSyncStatus,
     RadiusUser,
 )
+from app.models.subscriber import Subscriber
 from app.schemas.radius import (
     RadiusClientCreate,
     RadiusClientUpdate,
@@ -41,7 +43,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 from app.services.secrets import resolve_secret
 
@@ -55,6 +57,7 @@ RADIUS_SYNC_ELIGIBLE_STATUSES = (
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,
 )
+_OPAQUE_RADIUS_VALUE_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
 
 
 def _external_password_row(
@@ -121,6 +124,262 @@ def _coerce_int_setting(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _is_opaque_radius_password(value: str | None) -> bool:
+    text = str(value or "").strip()
+    if len(text) < 20:
+        return False
+    if not _OPAQUE_RADIUS_VALUE_RE.fullmatch(text):
+        return False
+    return any(ch in text for ch in "+/=")
+
+
+def _normalize_imported_radius_secret(
+    attribute: str | None,
+    value: str | None,
+) -> tuple[str | None, bool]:
+    attr = str(attribute or "").strip().lower()
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None, False
+    if attr == "crypt-password":
+        return raw_value, True
+    if attr == "cleartext-password":
+        if _is_opaque_radius_password(raw_value):
+            return None, False
+        return encrypt_credential(raw_value), True
+    return None, False
+
+
+def _dedupe_single_subscriber(rows: list[Subscriber]) -> list[Subscriber]:
+    deduped: dict[str, Subscriber] = {}
+    for row in rows:
+        deduped[str(row.id)] = row
+    return list(deduped.values())
+
+
+def _latest_sync_eligible_subscription_for_subscriber(
+    db: Session, subscriber_id: Any
+) -> Subscription | None:
+    return (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber_id)
+        .filter(Subscription.status.in_(RADIUS_SYNC_ELIGIBLE_STATUSES))
+        .order_by(
+            Subscription.start_at.desc().nullslast(),
+            Subscription.created_at.desc(),
+        )
+        .first()
+    )
+
+
+def _read_external_radius_credentials(config: dict) -> list[dict[str, str]]:
+    radcheck = config["radcheck_table"]
+    engine = create_engine(config["db_url"])
+    query = text(  # noqa: S608 — radcheck is from settings, not user input
+        f"""
+        SELECT username, attribute, op, value
+        FROM {radcheck}
+        WHERE lower(attribute) IN ('cleartext-password', 'crypt-password')
+        ORDER BY username
+        """
+    )
+    selected: dict[str, dict[str, str]] = {}
+    priority = {"cleartext-password": 2, "crypt-password": 1}
+    with engine.begin() as conn:
+        for row in conn.execute(query):
+            username = str(row.username or "").strip()
+            if not username:
+                continue
+            attribute = str(row.attribute or "").strip()
+            current = selected.get(username)
+            current_priority = priority.get(str(current.get("attribute") or "").lower(), 0) if current else 0
+            new_priority = priority.get(attribute.lower(), 0)
+            if current is None or new_priority > current_priority:
+                selected[username] = {
+                    "username": username,
+                    "attribute": attribute,
+                    "op": str(row.op or "").strip(),
+                    "value": str(row.value or "").strip(),
+                }
+    return list(selected.values())
+
+
+def import_access_credentials_from_external_radius(
+    db: Session,
+    *,
+    config: dict | None = None,
+) -> dict[str, Any]:
+    external_config = config or _bundled_external_db_config()
+    if not external_config:
+        raise ValueError("No external RADIUS database configuration is available.")
+
+    imported_rows = _read_external_radius_credentials(external_config)
+
+    existing_credentials = db.query(AccessCredential).all()
+    existing_by_username = {
+        str(credential.username).strip().lower(): credential
+        for credential in existing_credentials
+        if getattr(credential, "username", None)
+    }
+
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.login.isnot(None))
+        .order_by(Subscription.created_at.desc())
+        .all()
+    )
+    subscriptions_by_login: dict[str, list[Subscriber]] = {}
+    for subscription in subscriptions:
+        login = str(subscription.login or "").strip().lower()
+        if not login:
+            continue
+        linked_subscriber = db.get(Subscriber, subscription.subscriber_id)
+        if linked_subscriber and linked_subscriber.is_active:
+            subscriptions_by_login.setdefault(login, []).append(linked_subscriber)
+
+    subscribers = (
+        db.query(Subscriber)
+        .filter(Subscriber.is_active.is_(True))
+        .all()
+    )
+    subscribers_by_number: dict[str, list[Subscriber]] = {}
+    subscribers_by_account_number: dict[str, list[Subscriber]] = {}
+    for subscriber_record in subscribers:
+        subscriber_number = str(subscriber_record.subscriber_number or "").strip().lower()
+        if subscriber_number:
+            subscribers_by_number.setdefault(subscriber_number, []).append(subscriber_record)
+        account_number = str(subscriber_record.account_number or "").strip().lower()
+        if account_number:
+            subscribers_by_account_number.setdefault(account_number, []).append(subscriber_record)
+
+    created = 0
+    updated = 0
+    reactivated = 0
+    secrets_imported = 0
+    secrets_skipped = 0
+    matched_existing_credential = 0
+    matched_subscription_login = 0
+    matched_subscriber_number = 0
+    matched_account_number = 0
+    unmatched: list[str] = []
+    conflicts: list[str] = []
+
+    for row in imported_rows:
+        username = str(row["username"]).strip()
+        username_key = username.lower()
+        credential = existing_by_username.get(username_key)
+        subscriber: Subscriber | None = None
+        match_source = "none"
+
+        if credential is not None:
+            subscriber = db.get(Subscriber, credential.subscriber_id)
+            match_source = "existing_credential"
+            matched_existing_credential += 1
+        else:
+            login_matches = _dedupe_single_subscriber(
+                subscriptions_by_login.get(username_key, [])
+            )
+            if len(login_matches) == 1:
+                subscriber = login_matches[0]
+                match_source = "subscription_login"
+                matched_subscription_login += 1
+            elif len(login_matches) > 1:
+                conflicts.append(username)
+                continue
+            else:
+                number_matches = _dedupe_single_subscriber(
+                    subscribers_by_number.get(username_key, [])
+                )
+                if len(number_matches) == 1:
+                    subscriber = number_matches[0]
+                    match_source = "subscriber_number"
+                    matched_subscriber_number += 1
+                elif len(number_matches) > 1:
+                    conflicts.append(username)
+                    continue
+                else:
+                    account_matches = _dedupe_single_subscriber(
+                        subscribers_by_account_number.get(username_key, [])
+                    )
+                    if len(account_matches) == 1:
+                        subscriber = account_matches[0]
+                        match_source = "account_number"
+                        matched_account_number += 1
+                    elif len(account_matches) > 1:
+                        conflicts.append(username)
+                        continue
+
+        if subscriber is None:
+            unmatched.append(username)
+            continue
+
+        imported_secret, secret_usable = _normalize_imported_radius_secret(
+            row.get("attribute"),
+            row.get("value"),
+        )
+        if secret_usable:
+            secrets_imported += 1
+        else:
+            secrets_skipped += 1
+
+        if credential is None:
+            credential = AccessCredential(
+                subscriber_id=subscriber.id,
+                username=username,
+                secret_hash=imported_secret,
+                is_active=True,
+            )
+            db.add(credential)
+            db.flush()
+            existing_by_username[username_key] = credential
+            created += 1
+        else:
+            changed = False
+            if credential.subscriber_id != subscriber.id:
+                conflicts.append(username)
+                continue
+            if credential.username != username:
+                credential.username = username
+                changed = True
+            if credential.is_active is not True:
+                credential.is_active = True
+                reactivated += 1
+                changed = True
+            if imported_secret and credential.secret_hash != imported_secret:
+                credential.secret_hash = imported_secret
+                changed = True
+            if changed:
+                updated += 1
+
+        if match_source in {"subscriber_number", "account_number"}:
+            matched_subscription: Subscription | None = (
+                _latest_sync_eligible_subscription_for_subscriber(
+                db, subscriber.id
+            )
+            )
+            if matched_subscription and not str(matched_subscription.login or "").strip():
+                matched_subscription.login = username
+
+    db.commit()
+
+    return {
+        "scanned": len(imported_rows),
+        "created": created,
+        "updated": updated,
+        "reactivated": reactivated,
+        "matched_existing_credential": matched_existing_credential,
+        "matched_subscription_login": matched_subscription_login,
+        "matched_subscriber_number": matched_subscriber_number,
+        "matched_account_number": matched_account_number,
+        "secrets_imported": secrets_imported,
+        "secrets_skipped": secrets_skipped,
+        "unmatched": len(unmatched),
+        "conflicts": len(conflicts),
+        "unmatched_examples": unmatched[:10],
+        "conflict_examples": conflicts[:10],
+    }
 
 
 class RadiusServers(ListResponseMixin):

@@ -8,12 +8,21 @@
 {{ ambient_background("cyan", "sky") }}
 
 <div class="relative space-y-6">
+    <div>
+        <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-cyan-600 transition-colors hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Network
+        </a>
+    </div>
     {% call page_header(
         title="Speed Test Results",
         subtitle="Track link and subscriber speed verification for SLA compliance",
         icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7"/></svg>',
         color="cyan",
-        color2="sky"
+        color2="sky",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Speed Test Results"}]
     ) %}
         <a href="/admin/network/speedtests/analytics" class="inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-white px-4 py-2.5 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-700 dark:bg-slate-800 dark:text-cyan-300">
             Analytics

@@ -25,7 +25,7 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
-from app.models.subscriber import Subscriber
+from app.models.subscriber import ChannelType, Subscriber
 from app.schemas.billing import InvoiceCreate, InvoiceLineCreate
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
@@ -36,11 +36,13 @@ from app.services import catalog as catalog_service
 from app.services import email as email_service
 from app.services import network as network_service
 from app.services import settings_spec
+from app.services import sms as sms_service
 from app.services import subscriber as subscriber_service
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
+from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +392,122 @@ def _upsert_access_credential(
         )
     )
     db.commit()
+
+
+def _current_access_credential(db: Session, subscriber_id: str | UUID | None) -> AccessCredential | None:
+    if not subscriber_id:
+        return None
+    try:
+        subscriber_uuid = UUID(str(subscriber_id))
+    except ValueError:
+        return None
+    return (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscriber_uuid)
+        .order_by(AccessCredential.created_at.desc())
+        .first()
+    )
+
+
+def _current_service_password(db: Session, subscriber_id: str | UUID | None) -> str | None:
+    credential = _current_access_credential(db, subscriber_id)
+    if not credential or not credential.secret_hash:
+        return None
+    try:
+        return decrypt_credential(credential.secret_hash)
+    except Exception:
+        logger.warning(
+            "Failed to decrypt service credential for subscriber %s",
+            subscriber_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
+    emails: list[str] = []
+    phones: list[str] = []
+
+    def _push_unique(targets: list[str], value: str | None) -> None:
+        text = str(value or "").strip()
+        if text and text not in targets:
+            targets.append(text)
+
+    _push_unique(emails, subscriber.email)
+    _push_unique(phones, subscriber.phone)
+    for channel in getattr(subscriber, "channels", []) or []:
+        channel_type = getattr(channel, "channel_type", None)
+        if channel_type == ChannelType.email:
+            _push_unique(emails, getattr(channel, "address", None))
+        elif channel_type in {ChannelType.phone, ChannelType.sms}:
+            _push_unique(phones, getattr(channel, "address", None))
+
+    return {"email": emails, "sms": phones}
+
+
+def send_subscription_credentials(
+    db: Session,
+    *,
+    subscription_id: str,
+) -> dict[str, object]:
+    subscription = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    subscriber = db.get(Subscriber, subscription.subscriber_id)
+    if not subscriber:
+        raise ValueError("Subscriber not found for this subscription.")
+
+    credential = _current_access_credential(db, subscription.subscriber_id)
+    if not credential or not credential.username:
+        raise ValueError("No service credential is stored for this subscriber.")
+
+    password = _current_service_password(db, subscription.subscriber_id)
+    if not password:
+        raise ValueError("Current service password is not available for delivery.")
+
+    targets = _credential_contact_targets(subscriber)
+    if not targets["email"] and not targets["sms"]:
+        raise ValueError("Subscriber has no email or SMS contact targets.")
+
+    subject = "Your Internet service credentials"
+    body_text = (
+        f"Hello {subscriber.full_name},\n\n"
+        f"Your service login is: {credential.username}\n"
+        f"Your service password is: {password}\n\n"
+        "Please keep these details secure."
+    )
+    body_html = (
+        f"<p>Hello {subscriber.full_name},</p>"
+        f"<p>Your service login is: <strong>{credential.username}</strong><br>"
+        f"Your service password is: <strong>{password}</strong></p>"
+        "<p>Please keep these details secure.</p>"
+    )
+
+    email_sent = 0
+    sms_sent = 0
+    for email in targets["email"]:
+        email_service.send_email(
+            db=db,
+            to_email=email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            activity="subscription_welcome",
+        )
+        email_sent += 1
+
+    sms_body = (
+        f"Service login: {credential.username} | "
+        f"Password: {password}. Keep it secure."
+    )
+    for phone in targets["sms"]:
+        if sms_service.send_sms(db, phone, sms_body, track=True):
+            sms_sent += 1
+
+    return {
+        "email_sent": email_sent,
+        "sms_sent": sms_sent,
+        "email_targets": targets["email"],
+        "sms_targets": targets["sms"],
+    }
 
 
 def _reconcile_active_subscription_after_credential_sync(
@@ -786,6 +904,16 @@ def subscription_form_context(
 
     subscriber_id = subscription.get("subscriber_id") if isinstance(subscription, dict) else None
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
+    current_password = _current_service_password(db, str(subscriber_id or ""))
+    current_credential = _current_access_credential(db, str(subscriber_id or ""))
+    credential_targets = None
+    if subscriber_id:
+        try:
+            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+        except Exception:
+            subscriber = None
+        if subscriber:
+            credential_targets = _credential_contact_targets(subscriber)
     selected_router_label = ""
     provisioning_nas_device_id = str(subscription.get("provisioning_nas_device_id") or "").strip()
     if provisioning_nas_device_id:
@@ -827,6 +955,9 @@ def subscription_form_context(
         "billing_mode_postpaid_notice": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
         ) or "This subscription follows dunning steps.",
+        "current_service_login": getattr(current_credential, "username", "") if current_credential else "",
+        "current_service_password": current_password or "",
+        "credential_targets": credential_targets or {"email": [], "sms": []},
     }
     if error:
         context["error"] = error

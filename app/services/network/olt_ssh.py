@@ -14,8 +14,8 @@ from paramiko.transport import Transport
 logger = logging.getLogger(__name__)
 
 from app.models.network import OLTDevice
-from app.services.network.olt_command_gen import build_service_port_command
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.olt_command_gen import build_service_port_command
 
 
 @dataclass(frozen=True)
@@ -340,7 +340,7 @@ def authorize_ont(
             if ont_id is not None:
                 message += f" (ONT-ID {ont_id})"
             return True, message, ont_id
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning(
                 "Failed to authorize ONT %s on OLT %s: %s",
                 serial_number, olt.name, output.strip(),
@@ -429,6 +429,29 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
             state=state,
         ))
     return entries
+
+
+_HUAWEI_ERROR_PATTERNS = (
+    "failure",
+    "error",
+    "% parameter error",
+    "% unknown command",
+    "command not found",
+    "invalid",
+    "unrecognized",
+    "incomplete command",
+    "\u5931\u8d25",  # Chinese: "失败" (failure)
+    "\u9519\u8bef",  # Chinese: "错误" (error)
+)
+
+
+def is_error_output(output: str) -> bool:
+    """Check if Huawei CLI output indicates an error.
+
+    Detects common error patterns across English and Chinese locales.
+    """
+    lower = output.lower()
+    return any(pattern in lower for pattern in _HUAWEI_ERROR_PATTERNS)
 
 
 def _run_huawei_cmd(
@@ -541,7 +564,7 @@ def create_service_ports(
                 tag_transform=tag_transform,
             )
             output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
-            if "failure" in output.lower() or "error" in output.lower():
+            if is_error_output(output):
                 logger.warning(
                     "Service-port VLAN %d GEM %d failed on OLT %s: %s",
                     sp.vlan_id, sp.gem_index, olt.name, output.strip()[-150:],
@@ -611,7 +634,7 @@ def upgrade_firmware(
                 "Firmware upgrade initiated on OLT %s: %s", olt.name, file_url
             )
             return True, "Firmware upgrade initiated — OLT will reboot when download completes"
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning(
                 "Firmware upgrade failed on OLT %s: %s", olt.name, output.strip()[-200:]
             )
@@ -763,7 +786,7 @@ def delete_service_port(
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning(
                 "Failed to delete service-port %d on OLT %s: %s",
                 index, olt.name, output.strip()[-150:],
@@ -834,7 +857,7 @@ def create_single_service_port(
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning(
                 "Service-port creation failed on OLT %s: %s",
                 olt.name, output.strip()[-150:],
@@ -922,7 +945,7 @@ def configure_ont_iphost(
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning(
                 "IPHOST config failed for ONT %d on OLT %s: %s",
                 ont_id, olt.name, output.strip()[-150:],
@@ -1039,7 +1062,7 @@ def reboot_ont_omci(
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             logger.warning("ONT reset failed for %d on OLT %s: %s", ont_id, olt.name, output.strip()[-150:])
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
@@ -1093,7 +1116,7 @@ def bind_tr069_server_profile(
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             logger.warning(
@@ -1353,7 +1376,7 @@ def create_tr069_server_profile(
         )
         output = _run_huawei_cmd(channel, add_cmd, prompt=config_prompt)
 
-        if "failure" in output.lower() or "error" in output.lower():
+        if is_error_output(output):
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             return False, f"OLT rejected: {output.strip()[-200:]}"
 

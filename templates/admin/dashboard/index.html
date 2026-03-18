@@ -149,7 +149,7 @@
     </div>
 
     {# ── Key Metrics Row ── #}
-    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
         {{ stats_card(
             label="MRR",
             value="₦" ~ "{:,.0f}".format(stats.mrr),

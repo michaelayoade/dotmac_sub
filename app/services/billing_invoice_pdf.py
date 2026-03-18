@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -171,17 +171,21 @@ def _ensure_weasyprint_pydyf_compat() -> None:
     if getattr(pydyf.PDF, "_dotmac_weasyprint_compat", False):
         return
 
-    original_pdf = pydyf.PDF
+    original_pdf = cast(type[Any], pydyf.PDF)
 
-    class CompatPDF(original_pdf):
-        _dotmac_weasyprint_compat = True
+    def _compat_init(self: Any, version: Any = None, identifier: Any = None) -> None:
+        original_pdf.__init__(self)
+        self.version = version or b"1.7"
+        self.identifier = identifier
 
-        def __init__(self, version=None, identifier=None):
-            super().__init__()
-            self.version = version or b"1.7"
-            self.identifier = identifier
-
-    pydyf.PDF = CompatPDF
+    pydyf.PDF = type(
+        "CompatPDF",
+        (original_pdf,),
+        {
+            "_dotmac_weasyprint_compat": True,
+            "__init__": _compat_init,
+        },
+    )
 
 
 def _render_invoice_html(invoice: Invoice, db: Session) -> str:

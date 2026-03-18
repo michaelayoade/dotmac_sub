@@ -362,8 +362,9 @@ def _get_onu_auth_trend(db: Session, days: int = 30) -> dict[str, Any]:
 
     Queries OntUnit.created_at grouped by date for the last N days.
     """
-    from sqlalchemy import cast, func
-    from sqlalchemy.types import Date
+    from datetime import date
+
+    from sqlalchemy import func
 
     from app.models.network import OntUnit
 
@@ -371,7 +372,7 @@ def _get_onu_auth_trend(db: Session, days: int = 30) -> dict[str, Any]:
 
     rows = (
         db.query(
-            cast(OntUnit.created_at, Date).label("day"),
+            func.date(OntUnit.created_at).label("day"),
             func.count().label("cnt"),
         )
         .filter(OntUnit.created_at >= cutoff)
@@ -383,8 +384,17 @@ def _get_onu_auth_trend(db: Session, days: int = 30) -> dict[str, Any]:
     labels: list[str] = []
     values: list[int] = []
     for row in rows:
-        labels.append(row.day.isoformat() if row.day else "")
-        values.append(row.cnt)
+        day = row.day
+        if isinstance(day, datetime):
+            label = day.date().isoformat()
+        elif isinstance(day, date):
+            label = day.isoformat()
+        elif isinstance(day, str):
+            label = day
+        else:
+            label = ""
+        labels.append(label)
+        values.append(int(row.cnt or 0))
 
     return {
         "labels": labels,

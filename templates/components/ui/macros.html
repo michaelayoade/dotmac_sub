@@ -190,7 +190,7 @@
     <div class="relative flex items-center justify-between">
         <div>
             <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ label }}</p>
-            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ value }}</p>
+            <p class="mt-1 text-[clamp(1.25rem,2vw,1.875rem)] font-bold leading-tight text-slate-900 dark:text-white">{{ value }}</p>
             {% if change is not none %}
             {% set change_num = change %}
             {% if change is string %}

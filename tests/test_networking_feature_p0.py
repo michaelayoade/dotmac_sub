@@ -1123,6 +1123,20 @@ def test_dns_threat_list_page_data_filters_and_stats(db_session, subscriber):
     assert data["stats"]["critical"] == 1
 
 
+def test_dns_threat_list_page_data_handles_missing_table(db_session, monkeypatch):
+    monkeypatch.setattr(
+        web_network_dns_threats_service,
+        "_dns_threat_table_exists",
+        lambda _db: False,
+    )
+
+    data = web_network_dns_threats_service.list_page_data(db_session)
+
+    assert data["events"] == []
+    assert data["stats"]["total"] == 0
+    assert data["schema_missing"] is True
+
+
 def test_weathermap_data_builds_link_states_from_metrics(db_session, pop_site):
     parent = NetworkDevice(
         name="WM Parent",

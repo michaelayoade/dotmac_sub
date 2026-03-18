@@ -1,0 +1,82 @@
+{% extends "layouts/customer.html" %}
+{% block title %}Work Orders{% endblock %}
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Work Orders</h1>
+        <p class="text-sm text-stone-500 dark:text-stone-400">Track installations, repairs, and scheduled technician visits.</p>
+    </div>
+
+    {% if crm_error %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/30">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-200">{{ crm_error_message }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
+        <table class="min-w-full divide-y divide-stone-200/60 text-sm dark:divide-stone-700/60">
+            <thead>
+                <tr class="bg-stone-50/80 dark:bg-stone-900/40">
+                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Work Order</th>
+                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Type</th>
+                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Status</th>
+                    <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Scheduled</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
+                {% for wo in work_orders %}
+                {% set wo_status = wo.get('status', 'draft') %}
+                {% set wo_type = wo.get('work_order_type', wo.get('type', '')) %}
+                <tr class="transition-colors duration-200 hover:bg-stone-50 dark:hover:bg-stone-700/30">
+                    <td class="px-6 py-4">
+                        <a href="/portal/work-orders/{{ wo.id }}" class="font-semibold text-[var(--color-brand-600)] hover:underline">
+                            {{ wo.get('order_number') or wo.get('title', 'Work Order') }}
+                        </a>
+                        {% if wo.get('title') and wo.get('order_number') %}
+                        <p class="mt-0.5 text-xs text-stone-500 dark:text-stone-400">{{ wo.get('title', '') }}</p>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="text-sm text-stone-700 dark:text-stone-300">
+                            {{ type_display.get(wo_type, wo_type | replace('_', ' ') | title) }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold {{ status_colors.get(wo_status, 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200') }}">
+                            {{ status_display.get(wo_status, wo_status | replace('_', ' ') | title) }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">
+                        {% set sched = wo.get('scheduled_start') or wo.get('scheduled_at') %}
+                        {% if sched %}
+                        {{ sched[:16] | replace('T', ' ') }}
+                        {% else %}
+                        <span class="text-stone-400 dark:text-stone-500">Not scheduled</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="px-6 py-16">
+                        <div class="flex flex-col items-center justify-center text-center">
+                            <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-stone-100 to-stone-200 dark:from-stone-700 dark:to-stone-600">
+                                <svg class="h-8 w-8 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.42 15.17l-5.73-2.37A1 1 0 015 11.93V4.32a1 1 0 011.42-.91l5.73 2.37a1 1 0 01.58.91v6.74a1 1 0 01-.58.91zM17.58 8.83l-5.73 2.37a1 1 0 01-.58-.91V3.55a1 1 0 01.58-.91l5.73-2.37A1 1 0 0119 1.18v6.74a1 1 0 01-1.42.91z"/>
+                                </svg>
+                            </div>
+                            <h3 class="text-lg font-display font-semibold text-stone-900 dark:text-white">No work orders</h3>
+                            <p class="mt-1 max-w-sm text-sm text-stone-500 dark:text-stone-400">Scheduled installations and repairs will appear here.</p>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

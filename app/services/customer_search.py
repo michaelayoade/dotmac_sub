@@ -2,6 +2,7 @@ import logging
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.subscriber import Organization, Subscriber
 from app.services.response import list_response
@@ -27,7 +28,7 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
     # Split query into words for multi-word name matching
     # e.g. "Dotmac Karu" matches first_name~Dotmac AND last_name~Karu
     words = term.split()
-    conditions = [
+    conditions: list[ColumnElement[bool]] = [
         Subscriber.first_name.ilike(like_term),
         Subscriber.last_name.ilike(like_term),
         Subscriber.email.ilike(like_term),

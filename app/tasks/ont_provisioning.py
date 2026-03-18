@@ -1,11 +1,59 @@
 """Celery tasks for ONT provisioning profile management."""
 
 import logging
+from typing import Any
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="app.tasks.ont_provisioning.provision_ont_async")
+def provision_ont_async(
+    ont_id: str,
+    profile_id: str,
+    *,
+    tr069_olt_profile_id: int | None = None,
+) -> dict[str, Any]:
+    """Run the full ONT provisioning sequence as a background task.
+
+    Args:
+        ont_id: OntUnit UUID.
+        profile_id: OntProvisioningProfile UUID.
+        tr069_olt_profile_id: OLT-level TR-069 server profile ID.
+
+    Returns:
+        ProvisioningJobResult as a dict.
+    """
+    logger.info("Starting async provisioning for ONT %s with profile %s", ont_id, profile_id)
+    db = SessionLocal()
+    try:
+        from app.services.network.ont_provisioning_orchestrator import (
+            OntProvisioningOrchestrator,
+        )
+
+        result = OntProvisioningOrchestrator.provision_ont(
+            db,
+            ont_id,
+            profile_id,
+            dry_run=False,
+            tr069_olt_profile_id=tr069_olt_profile_id,
+        )
+        db.commit()
+
+        if result.success:
+            logger.info("Async provisioning completed for ONT %s", ont_id)
+        else:
+            logger.warning("Async provisioning failed for ONT %s: %s", ont_id, result.message)
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error("Error in async provisioning for ONT %s: %s", ont_id, e)
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.tasks.ont_provisioning.detect_profile_drift")

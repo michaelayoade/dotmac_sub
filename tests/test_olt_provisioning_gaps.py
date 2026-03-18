@@ -16,7 +16,11 @@ from __future__ import annotations
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
+
+from fastapi import Request
+from starlette.routing import Route
 
 from app.models.catalog import AccessCredential
 from app.models.network import (
@@ -159,7 +163,9 @@ class TestServicePortFiltering:
             olt,
             "0/2/1",
             7,
-            [
+            cast(
+                list[ServicePortEntry],
+                [
                 SimpleNamespace(
                     index=1,
                     vlan_id=201,
@@ -180,7 +186,8 @@ class TestServicePortFiltering:
                     state="up",
                     tag_transform="default",
                 ),
-            ],
+                ],
+            ),
         )
 
         assert ok is True
@@ -910,7 +917,7 @@ class TestProvisioningOrchestrator:
 
         assert result.success is True
         assert any(
-            step.step == 7 and step.success and "Skipped" in step.message
+            step.step == 9 and step.success and "Skipped" in step.message
             for step in result.steps
         )
         refreshed = db_session.get(OntUnit, ont.id)
@@ -1645,7 +1652,7 @@ class TestProvisionStatusRoute:
         )
 
         with patch("celery.result.AsyncResult", return_value=async_result):
-            response = ont_provision_status(None, str(uuid.uuid4()), task_id="task-1", db=db_session)
+            response = ont_provision_status(cast(Request, None), str(uuid.uuid4()), task_id="task-1", db=db_session)
 
         payload = json.loads(response.body.decode("utf-8"))
         assert payload["status"] == "failed"
@@ -1664,7 +1671,7 @@ class TestRouteRegistration:
     def test_new_routes_registered(self) -> None:
         from app.web.admin.network_olts_onts import router
 
-        route_paths = [r.path for r in router.routes]
+        route_paths = [route.path for route in router.routes if isinstance(route, Route)]
 
         # Phase 1: Service-port routes
         assert "/network/onts/{ont_id}/service-ports" in route_paths

@@ -449,8 +449,6 @@ class OntTR069:
             ont.mac_address = mac_address
         if wan_ip:
             ont.observed_wan_ip = wan_ip
-            # Maintain existing field used across views where runtime WAN IP is desired.
-            ont.mgmt_ip_address = wan_ip
         if pppoe_user:
             ont.pppoe_username = pppoe_user
         if pppoe_status:

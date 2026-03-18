@@ -7,6 +7,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.billing import InvoicePdfExport
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import (
@@ -227,7 +228,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
-    export = billing_invoice_pdf_service.generate_export_now(
+    export: InvoicePdfExport | None = billing_invoice_pdf_service.generate_export_now(
         db,
         invoice_id=str(invoice_id),
         requested_by_id=str(actor_id) if actor_id else None,
@@ -236,6 +237,11 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 
     db.expire_all()
     export = db.get(type(export), export.id) if export else None
+    if export is None:
+        return RedirectResponse(
+            url=f"/admin/billing/invoices/{invoice_id}?pdf=queued",
+            status_code=303,
+        )
     if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, export):
         response = _invoice_pdf_response(db, export, invoice)
         if response is not None:

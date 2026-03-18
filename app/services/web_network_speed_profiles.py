@@ -59,6 +59,11 @@ def list_context(
         "active_tab": active_tab,
         "download_profiles": download_profiles,
         "upload_profiles": upload_profiles,
+        "stats": {
+            "download": len(download_profiles),
+            "upload": len(upload_profiles),
+            "total": len(download_profiles) + len(upload_profiles),
+        },
         "profile_counts": profile_counts,
         "search": search or "",
         "format_speed": format_speed,

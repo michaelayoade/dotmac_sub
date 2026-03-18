@@ -11,6 +11,7 @@ from app.services import web_billing_invoice_cache as cache_service
 def test_build_cache_page_state_loads_accounts_without_distinct_subscriber_rows(
     db_session, subscriber_account
 ):
+    subscriber_account.metadata = {"source": "log-regression", "tags": ["json"]}
     invoice = billing_service.invoices.create(
         db_session,
         InvoiceCreate(

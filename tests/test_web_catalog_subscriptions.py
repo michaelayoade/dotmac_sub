@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.models.catalog import AccessCredential
 from app.models.network import IPAssignment
+from app.models.subscriber import ChannelType, SubscriberChannel
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
 from app.services import web_network_ip as web_network_ip_service
@@ -100,6 +101,105 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
 
     assert credential.secret_hash.startswith(("plain:", "enc:"))
     assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+
+
+def test_subscription_form_context_exposes_current_service_password(
+    db_session,
+    subscriber,
+):
+    web_catalog_subscriptions_service._upsert_access_credential(
+        db_session,
+        subscriber_id=subscriber.id,
+        username="10004167",
+        plain_password="VisiblePass123",
+        radius_profile_id=None,
+    )
+
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session,
+        {
+            "id": "sub-1",
+            "subscriber_id": str(subscriber.id),
+            "account_id": str(subscriber.id),
+            "login": "10004167",
+            "service_password": "",
+        },
+    )
+
+    assert context["current_service_login"] == "10004167"
+    assert context["current_service_password"] == "VisiblePass123"
+
+
+def test_send_subscription_credentials_uses_email_and_sms_targets(
+    db_session,
+    subscriber,
+    catalog_offer,
+    monkeypatch,
+):
+    subscriber.email = "primary@example.com"
+    subscriber.phone = "+2348000000001"
+    db_session.add(
+        SubscriberChannel(
+            subscriber_id=subscriber.id,
+            channel_type=ChannelType.email,
+            address="backup@example.com",
+        )
+    )
+    db_session.add(
+        SubscriberChannel(
+            subscriber_id=subscriber.id,
+            channel_type=ChannelType.sms,
+            address="+2348000000002",
+        )
+    )
+    db_session.commit()
+
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    web_catalog_subscriptions_service._upsert_access_credential(
+        db_session,
+        subscriber_id=subscriber.id,
+        username="10004167",
+        plain_password="SendablePass123",
+        radius_profile_id=None,
+    )
+
+    sent_emails = []
+    sent_sms = []
+
+    def _fake_send_email(**kwargs):
+        sent_emails.append(kwargs["to_email"])
+        return True
+
+    def _fake_send_sms(_db, phone, body, track=True):
+        sent_sms.append((phone, body, track))
+        return True
+
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service.email_service,
+        "send_email",
+        _fake_send_email,
+    )
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service.sms_service,
+        "send_sms",
+        _fake_send_sms,
+    )
+
+    result = web_catalog_subscriptions_service.send_subscription_credentials(
+        db_session,
+        subscription_id=str(subscription.id),
+    )
+
+    assert result["email_sent"] == 2
+    assert result["sms_sent"] == 2
+    assert sent_emails == ["primary@example.com", "backup@example.com"]
+    assert [row[0] for row in sent_sms] == ["+2348000000001", "+2348000000002"]
 
 
 def test_create_subscription_with_audit_uses_requested_free_ipv4(

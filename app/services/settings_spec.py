@@ -63,6 +63,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.auth,
+        key="credential_encryption_key",
+        label=None,
+        env_var="CREDENTIAL_ENCRYPTION_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
         key="jwt_algorithm",
         label=None,
         env_var="JWT_ALGORITHM",

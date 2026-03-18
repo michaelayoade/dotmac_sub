@@ -56,7 +56,7 @@
                     </svg>
                     {% endif %}
                 </div>
-                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">DotMac <span class="text-primary-600 dark:text-primary-400">Subs</span></span>
+                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</span>
             </a>
             <button x-on:click="sidebarCollapsed = !sidebarCollapsed"
                     aria-label="Toggle sidebar collapse"

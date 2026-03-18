@@ -15,13 +15,9 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import SessionLocal, get_db
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import Subscription
-from app.models.support import TicketChannel, TicketPriority
-from app.services import customer_portal
-from app.services import support as support_service
+from app.services import crm_portal, customer_portal
 from app.services import web_network_speedtests as web_network_speedtests_service
-from app.services.audit_helpers import build_audit_activities
 from app.services.bandwidth import bandwidth_samples
-from app.services.common import coerce_uuid
 from app.services.metrics_store import get_metrics_store
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -65,20 +61,18 @@ def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription 
         return None
 
 
-def _customer_allowed_ticket(db: Session, customer: dict, ticket_lookup: str):
-    ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
-    allowed_account_ids = set(customer_portal.get_allowed_account_ids(customer, db))
-    customer_subscriber_id = str(customer.get("subscriber_id") or "")
-    related_ids = {
-        str(ticket.subscriber_id) if ticket.subscriber_id else "",
-        str(ticket.customer_account_id) if ticket.customer_account_id else "",
-        str(ticket.customer_person_id) if ticket.customer_person_id else "",
-    }
-    if customer_subscriber_id in related_ids:
-        return ticket
-    if allowed_account_ids & related_ids:
-        return ticket
-    raise HTTPException(status_code=404, detail="Ticket not found")
+def _resolve_subscriber_id(customer: dict) -> str:
+    """Extract subscriber_id from customer session for CRM lookups."""
+    return str(customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id", ""))
+
+
+def _resolve_allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
+    """Resolve all customer-visible subscriber/account IDs for CRM access checks."""
+    allowed = customer_portal.get_allowed_account_ids(customer, db)
+    if allowed:
+        return [str(item) for item in allowed if item]
+    fallback = _resolve_subscriber_id(customer)
+    return [fallback] if fallback else []
 
 
 @router.get("", response_class=HTMLResponse)
@@ -125,49 +119,16 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
 @router.get("/support", response_class=HTMLResponse)
 def customer_support(
     request: Request,
-    search: str | None = None,
-    status: str | None = None,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=10, le=100),
     db: Session = Depends(get_db),
 ) -> Response:
+    """Customer support tickets (CRM-backed)."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
 
-    allowed_account_ids = customer_portal.get_allowed_account_ids(customer, db)
-    offset = (page - 1) * per_page
-    tickets: list = []
-    for account_id in allowed_account_ids:
-        tickets.extend(
-            support_service.tickets.list(
-                db,
-                search=search,
-                status=status,
-                subscriber_id=account_id,
-                limit=per_page,
-                offset=offset,
-            )
-        )
-    deduped = {str(ticket.id): ticket for ticket in tickets}
-    sorted_tickets = sorted(
-        deduped.values(),
-        key=lambda item: item.updated_at or item.created_at,
-        reverse=True,
-    )
-
-    return templates.TemplateResponse(
-        "customer/support/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            "tickets": sorted_tickets[:per_page],
-            "search": search or "",
-            "status": status or "",
-            "all_statuses": [item.value for item in support_service.TicketStatus],
-            "active_page": "support",
-        },
-    )
+    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    context = crm_portal.tickets_list_context(request, db, customer, subscriber_ids)
+    return templates.TemplateResponse("customer/support/index.html", context)
 
 
 @router.get("/support/new", response_class=HTMLResponse)
@@ -178,15 +139,8 @@ def customer_support_new(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/support/new", status_code=303)
-    return templates.TemplateResponse(
-        "customer/support/new.html",
-        {
-            "request": request,
-            "customer": customer,
-            "active_page": "support",
-            "priorities": [p.value for p in TicketPriority],
-        },
-    )
+    context = crm_portal.ticket_create_context(request, customer)
+    return templates.TemplateResponse("customer/support/new.html", context)
 
 
 @router.post("/support/new", response_class=HTMLResponse)
@@ -200,86 +154,118 @@ def customer_support_create(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    from app.schemas.support import TicketCreate
 
-    account_id, _ = customer_portal.resolve_customer_account(customer, db)
-    subscriber_uuid = coerce_uuid(account_id or customer.get("session", {}).get("subscriber_id"))
-    account_uuid = coerce_uuid(account_id)
-
-    try:
-        ticket_priority = TicketPriority(priority)
-    except ValueError:
-        ticket_priority = TicketPriority.normal
-
-    payload = TicketCreate(
-        subscriber_id=subscriber_uuid,
-        customer_account_id=account_uuid,
-        title=title,
-        description=description or None,
-        priority=ticket_priority,
-        channel=TicketChannel.web,
-    )
-    ticket = support_service.tickets.create(
+    subscriber_id, _subscription_id = customer_portal.resolve_customer_account(customer, db)
+    subscriber_lookup = str(subscriber_id or _resolve_subscriber_id(customer) or "")
+    result = crm_portal.handle_ticket_create(
         db,
-        payload,
-        actor_id=str(subscriber_uuid) if subscriber_uuid else None,
-        request=request,
+        customer,
+        subscriber_lookup,
+        title,
+        description,
+        priority,
     )
-    _emit_customer_event(db, "customer_ticket_created", {
-        "ticket_id": str(ticket.id),
-        "subscriber_id": str(subscriber_uuid) if subscriber_uuid else "",
-    })
-    return RedirectResponse(url=f"/portal/support/{ticket.number or ticket.id}", status_code=303)
+    if result["success"]:
+        ticket = result["ticket"]
+        ticket_id = ticket.get("id", "")
+        _emit_customer_event(db, "customer_ticket_created", {
+            "ticket_id": str(ticket_id),
+            "subscriber_id": subscriber_lookup,
+        })
+        return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
+    context = crm_portal.ticket_create_context(request, customer)
+    context["crm_error"] = True
+    context["crm_error_message"] = result.get("error") or "Unable to create ticket."
+    context["form_values"] = {
+        "title": title,
+        "description": description,
+        "priority": priority,
+    }
+    return templates.TemplateResponse(
+        "customer/support/new.html",
+        context,
+        status_code=400,
+    )
 
 
-@router.get("/support/{ticket_lookup}", response_class=HTMLResponse)
-def customer_support_detail(request: Request, ticket_lookup: str, db: Session = Depends(get_db)) -> Response:
+@router.get("/support/{ticket_id}", response_class=HTMLResponse)
+def customer_support_detail(
+    request: Request,
+    ticket_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
 
-    ticket = _customer_allowed_ticket(db, customer, ticket_lookup)
-    comments = [
-        comment
-        for comment in support_service.ticket_comments.list(db, str(ticket.id), limit=500, offset=0)
-        if not comment.is_internal
-    ]
-    activities = build_audit_activities(db, "support_ticket", str(ticket.id), limit=100)
-    return templates.TemplateResponse(
-        "customer/support/detail.html",
-        {
-            "request": request,
-            "customer": customer,
-            "ticket": ticket,
-            "comments": comments,
-            "activities": activities,
-            "active_page": "support",
-        },
+    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    context = crm_portal.ticket_detail_context(
+        request, db, customer, subscriber_ids, ticket_id
     )
+    return templates.TemplateResponse("customer/support/detail.html", context)
 
 
-@router.post("/support/{ticket_lookup}/comment", response_class=HTMLResponse)
+@router.post("/support/{ticket_id}/comment", response_class=HTMLResponse)
 def customer_support_add_comment(
     request: Request,
-    ticket_lookup: str,
+    ticket_id: str,
     body: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-    ticket = _customer_allowed_ticket(db, customer, ticket_lookup)
-    from app.schemas.support import TicketCommentCreate
 
-    account_id, _ = customer_portal.resolve_customer_account(customer, db)
-    actor_id = str(account_id) if account_id else None
-    support_service.ticket_comments.create(
-        db,
-        ticket=ticket,
-        payload=TicketCommentCreate(body=body, is_internal=False),
-        actor_id=actor_id,
+    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    result = crm_portal.handle_ticket_comment(db, customer, subscriber_ids, ticket_id, body)
+    if not result.get("success"):
+        context = crm_portal.ticket_detail_context(
+            request, db, customer, subscriber_ids, ticket_id
+        )
+        context["crm_error"] = True
+        context["crm_error_message"] = result.get("error") or "Unable to add comment."
+        return templates.TemplateResponse(
+            "customer/support/detail.html",
+            context,
+            status_code=400,
+        )
+    return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
+
+
+# ── Work Orders (CRM-backed) ─────────────────────────────────────────────
+
+
+@router.get("/work-orders", response_class=HTMLResponse)
+def customer_work_orders(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Customer work orders list (CRM-backed)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
+
+    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
+    return templates.TemplateResponse("customer/work-orders/index.html", context)
+
+
+@router.get("/work-orders/{work_order_id}", response_class=HTMLResponse)
+def customer_work_order_detail(
+    request: Request,
+    work_order_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Customer work order detail (CRM-backed)."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
+
+    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    context = crm_portal.work_order_detail_context(
+        request, db, customer, subscriber_ids, work_order_id
     )
-    return RedirectResponse(url=f"/portal/support/{ticket_lookup}", status_code=303)
+    return templates.TemplateResponse("customer/work-orders/detail.html", context)
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -1285,6 +1271,49 @@ def customer_submit_payment_arrangement(
 
         _logging.getLogger(__name__).exception("Payment arrangement error")
         raise
+
+
+@router.post("/billing/arrangements/{arrangement_id}/cancel", response_class=HTMLResponse)
+def customer_cancel_payment_arrangement(
+    request: Request,
+    arrangement_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Cancel a payment arrangement."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services import payment_arrangements as arrangement_service
+
+    account_id = customer.get("account_id")
+    try:
+        arrangement = arrangement_service.payment_arrangements.get(db, str(arrangement_id))
+    except HTTPException:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Payment arrangement not found"},
+            status_code=404,
+        )
+
+    if not account_id or str(arrangement.subscriber_id) != str(account_id):
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {"request": request, "message": "Payment arrangement not found"},
+            status_code=404,
+        )
+
+    try:
+        arrangement_service.payment_arrangements.cancel(
+            db, str(arrangement_id), notes="Canceled by customer via portal"
+        )
+    except HTTPException:
+        return RedirectResponse(
+            url=f"/portal/billing/arrangements/{arrangement_id}",
+            status_code=303,
+        )
+
+    return RedirectResponse(url="/portal/billing/arrangements", status_code=303)
 
 
 @router.get("/billing/arrangements/{arrangement_id}", response_class=HTMLResponse)

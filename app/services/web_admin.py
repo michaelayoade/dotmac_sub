@@ -121,6 +121,12 @@ def get_sidebar_stats(db: Session) -> dict:
     except Exception:
         favicon_url = ""
     try:
+        from app.services import web_system_company_info as web_system_company_info_service
+
+        app_name = (web_system_company_info_service.get_company_info(db).get("company_name") or "").strip()
+    except Exception:
+        app_name = ""
+    try:
         module_states = module_manager_service.load_module_states(db)
         feature_states = module_manager_service.load_feature_states(db)
     except Exception:
@@ -134,6 +140,7 @@ def get_sidebar_stats(db: Session) -> dict:
         "sidebar_logo_url": sidebar_logo_url,
         "sidebar_logo_dark_url": sidebar_logo_dark_url,
         "favicon_url": favicon_url,
+        "app_name": app_name,
         "module_states": module_states,
         "feature_states": feature_states,
     }
