@@ -53,6 +53,10 @@ htmlcov/
 .pytest_cache/
 .claude/
 
+# Migration runtime data
+scripts/migration/.rebind_checkpoints/
+/tmp/smartolt_*.json
+
 # Reference materials & artifacts
 screenshots/
 uploads/

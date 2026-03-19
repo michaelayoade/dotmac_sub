@@ -15,6 +15,7 @@ from app.models.network import (
     FiberAccessPoint,
     FiberSegment,
     FiberSpliceClosure,
+    OntUnit,
     Splitter,
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
@@ -209,6 +210,58 @@ def build_network_map_context(db: Session) -> dict:
             }
         )
 
+    # ONT Units with GPS coordinates
+    ont_units = (
+        db.query(OntUnit)
+        .filter(
+            OntUnit.is_active.is_(True),
+            OntUnit.use_gps.is_(True),
+            OntUnit.gps_latitude.isnot(None),
+            OntUnit.gps_longitude.isnot(None),
+        )
+        .all()
+    )
+    ont_online = 0
+    ont_offline = 0
+    ont_warning = 0
+    for ont in ont_units:
+        status = ont.online_status or "unknown"
+        if status == "online":
+            ont_online += 1
+        else:
+            ont_offline += 1
+        # Classify signal quality for marker color
+        signal_quality = "unknown"
+        if ont.olt_rx_signal_dbm is not None:
+            if ont.olt_rx_signal_dbm >= -25:
+                signal_quality = "good"
+            elif ont.olt_rx_signal_dbm >= -28:
+                signal_quality = "warning"
+                ont_warning += 1
+            else:
+                signal_quality = "critical"
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(ont.gps_longitude), float(ont.gps_latitude)],
+                },
+                "properties": {
+                    "id": str(ont.id),
+                    "type": "ont",
+                    "name": ont.name or ont.serial_number or "ONT",
+                    "serial_number": ont.serial_number,
+                    "status": status,
+                    "signal_quality": signal_quality,
+                    "olt_rx_dbm": ont.olt_rx_signal_dbm,
+                    "onu_rx_dbm": ont.onu_rx_signal_dbm,
+                    "vendor": ont.vendor,
+                    "model": ont.model,
+                },
+            }
+        )
+
     # Customers with addresses that have coordinates, including online status
     active_sessions_subq = (
         db.query(Subscription.subscriber_id)
@@ -339,6 +392,10 @@ def build_network_map_context(db: Session) -> dict:
             if device.status and device.status.value in {"degraded", "maintenance"}
         ),
         "survey_points": 0,
+        "onts": len(ont_units),
+        "onts_online": ont_online,
+        "onts_offline": ont_offline,
+        "onts_warning": ont_warning,
     }
 
     return {

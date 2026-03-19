@@ -57,9 +57,42 @@ def _resolve_snmp_community(db, olt: OLTDevice) -> str | None:
     return None
 
 
+def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
+    """Fetch full running configuration from an OLT via SSH.
+
+    Uses `display current-configuration` which returns the complete config
+    (Tconts, GEM ports, service-ports, VLANs, interfaces, etc.).
+
+    Returns the config text or None if SSH is unavailable.
+    """
+    try:
+        from app.services.network.olt_ssh import fetch_running_config_ssh
+
+        ok, message, config_text = fetch_running_config_ssh(olt)
+        if ok and config_text:
+            # Add metadata header
+            header = (
+                f"# OLT Full Running Config: {olt.name}\n"
+                f"# IP: {olt.mgmt_ip}\n"
+                f"# Vendor: {olt.vendor or 'unknown'}\n"
+                f"# Model: {olt.model or 'unknown'}\n"
+                f"# Serial: {olt.serial_number or 'unknown'}\n"
+                f"# Method: SSH (display current-configuration)\n"
+                f"# Captured: {datetime.now(UTC).isoformat()}\n"
+                f"#\n"
+            )
+            return header + config_text + "\n"
+        logger.warning("SSH config fetch for OLT %s: %s", olt.name, message)
+        return None
+    except Exception as e:
+        logger.warning("SSH config backup failed for OLT %s: %s", olt.name, e)
+        return None
+
+
 def _fetch_running_config(olt: OLTDevice, community_str: str | None = None) -> str | None:
     """Fetch running config from an OLT via SNMP sysDescr + entPhysicalTable.
 
+    This is the SNMP fallback when SSH is unavailable.
     Returns the config text or None if unreachable.
     """
     if not olt.mgmt_ip:
@@ -197,8 +230,11 @@ def backup_all_olts() -> dict[str, int]:
         olts = list(db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all())
 
         for olt in olts:
-            community_str = _resolve_snmp_community(db, olt)
-            config_text = _fetch_running_config(olt, community_str=community_str)
+            # Try SSH first (full running-config), fall back to SNMP metadata
+            config_text = _fetch_running_config_via_ssh(olt)
+            if config_text is None:
+                community_str = _resolve_snmp_community(db, olt)
+                config_text = _fetch_running_config(olt, community_str=community_str)
             if config_text is None:
                 skipped += 1
                 backup_alerts.queue_backup_failure_notification(

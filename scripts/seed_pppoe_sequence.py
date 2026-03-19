@@ -54,6 +54,8 @@ def seed_pppoe_sequence(
     Returns:
         Human-readable status message.
     """
+    from sqlalchemy import select
+
     from app.db import SessionLocal
     from app.models.sequence import DocumentSequence
 
@@ -64,11 +66,9 @@ def seed_pppoe_sequence(
 
     db = SessionLocal()
     try:
-        existing = (
-            db.query(DocumentSequence)
-            .filter(DocumentSequence.key == SEQUENCE_KEY)
-            .first()
-        )
+        existing = db.scalars(
+            select(DocumentSequence).where(DocumentSequence.key == SEQUENCE_KEY)
+        ).first()
         if existing and not force:
             return (
                 f"Sequence '{SEQUENCE_KEY}' already exists with "

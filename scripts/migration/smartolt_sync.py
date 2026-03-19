@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,8 +31,15 @@ logger = logging.getLogger("smartolt_sync")
 
 # ── SmartOLT API config ─────────────────────────────────────────────────────
 
-SMARTOLT_API_URL = "https://dotmac.smartolt.com/api"
-SMARTOLT_API_KEY = "f1fad2bc9506403cb1f2d09496f9a8de"
+SMARTOLT_API_URL = os.environ.get(
+    "SMARTOLT_API_URL", "https://dotmac.smartolt.com/api"
+)
+SMARTOLT_API_KEY = os.environ.get("SMARTOLT_API_KEY", "")
+if not SMARTOLT_API_KEY:
+    logger.warning(
+        "SMARTOLT_API_KEY not set — set via env var or .env file. "
+        "API calls will fail."
+    )
 
 HEADERS = {"X-Token": SMARTOLT_API_KEY}
 
@@ -494,6 +502,13 @@ def sync_onts(
     """Enrich existing ONTs and create new ones. Returns {smartolt_sn: ont_uuid}."""
     logger.info("Syncing %d ONTs from SmartOLT...", len(smartolt_onus))
 
+    # Import credential encryption for PPPoE passwords
+    try:
+        from app.services.credential_crypto import encrypt_credential
+    except ImportError:
+        encrypt_credential = None  # type: ignore[assignment]
+        logger.warning("credential_crypto not available — PPPoE passwords will be stored plaintext")
+
     # Build DB ONT index: (olt_uuid, db_board, port, onu_index) -> row
     db_ont_index: dict[tuple, dict] = {}
     rows = db.execute(
@@ -584,7 +599,11 @@ def sync_onts(
             "wan_mode": wan_mode,
             "online_status": online_status,
             "pppoe_username": o.get("username") or None,
-            "pppoe_password": o.get("password") or None,
+            "pppoe_password": (
+                encrypt_credential(o.get("password"))
+                if encrypt_credential and o.get("password")
+                else o.get("password") or None
+            ),
             "name": o.get("name") or None,
             "address_or_comment": o.get("address") or None,
             "mgmt_ip_mode": _mgmt_ip_mode(o.get("mgmt_ip_mode", "")),
@@ -857,12 +876,11 @@ def link_subscribers(
 
 
 def _safe_float(value: Any) -> float | None:
-    """Parse a float, returning None for invalid/empty values."""
-    if value is None:
+    """Parse a float, returning None for invalid/empty/blank values."""
+    if value is None or value == "":
         return None
     try:
-        f = float(value)
-        return f if f != 0 else None
+        return float(value)
     except (ValueError, TypeError):
         return None
 

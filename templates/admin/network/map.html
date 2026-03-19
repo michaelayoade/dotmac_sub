@@ -429,6 +429,24 @@
                         <span class="text-slate-500 dark:text-slate-400">Survey Points</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.survey_points }}</span>
                     </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">ONT Units (GPS)</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.onts }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-cyan-600 dark:text-cyan-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-cyan-500"></span>ONT Online</span>
+                        <span class="font-medium text-cyan-600 dark:text-cyan-400">{{ stats.onts_online }}</span>
+                    </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>ONT Offline</span>
+                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.onts_offline }}</span>
+                    </div>
+                    {% if stats.onts_warning %}
+                    <div class="flex justify-between pl-3">
+                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>ONT Low Signal</span>
+                        <span class="font-medium text-amber-600 dark:text-amber-400">{{ stats.onts_warning }}</span>
+                    </div>
+                    {% endif %}
                     <hr class="border-slate-200 dark:border-slate-700">
                     <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">Customers</span>
@@ -497,6 +515,18 @@
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Degraded)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-cyan-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">ONT (Online)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color bg-amber-500">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">ONT (Signal Warning)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-color bg-fuchsia-500">
@@ -570,6 +600,10 @@
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-network-devices" checked class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Devices</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-onts" checked class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">ONT Units</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-surveys" checked class="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500">
@@ -679,6 +713,7 @@
         closures: L.layerGroup().addTo(map),
         accessPoints: L.layerGroup().addTo(map),
         networkDevices: L.layerGroup().addTo(map),
+        onts: L.layerGroup().addTo(map),
         surveys: L.layerGroup().addTo(map),
         customers: L.layerGroup().addTo(map),
         feeder: L.layerGroup().addTo(map),
@@ -743,6 +778,27 @@
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
+        }),
+        ont_online: L.divIcon({
+            html: '<div style="background:#06b6d4;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            className: '',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+            popupAnchor: [0, -8]
+        }),
+        ont_offline: L.divIcon({
+            html: '<div style="background:#ef4444;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            className: '',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+            popupAnchor: [0, -8]
+        }),
+        ont_warning: L.divIcon({
+            html: '<div style="background:#f59e0b;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            className: '',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8],
+            popupAnchor: [0, -8]
         }),
         customer_online: L.divIcon({
             html: '<div style="background:#22c55e;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
@@ -841,6 +897,20 @@
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
                 typeLabel = 'Access Point';
                 break;
+            case 'ont':
+                if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
+                    iconBg = p.signal_quality === 'critical' ? '#dc2626' : '#f59e0b';
+                    typeLabel = `ONT (Signal ${p.signal_quality})`;
+                } else if (p.status === 'online') {
+                    iconBg = '#06b6d4';
+                    typeLabel = 'ONT (Online)';
+                } else {
+                    iconBg = '#ef4444';
+                    typeLabel = 'ONT (Offline)';
+                }
+                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>';
+                detailUrl = `/admin/network/onts/${p.id}`;
+                break;
             case 'network_device':
                 if (p.status === 'online') {
                     iconBg = '#16a34a';
@@ -903,7 +973,10 @@
         if (p.status) html += `<div class="asset-detail-row"><span class="asset-detail-label">Status</span><span class="asset-detail-value">${escapeHtml(p.status)}</span></div>`;
         if (p.role) html += `<div class="asset-detail-row"><span class="asset-detail-label">Role</span><span class="asset-detail-value">${escapeHtml(p.role)}</span></div>`;
         if (p.device_type) html += `<div class="asset-detail-row"><span class="asset-detail-label">Device Type</span><span class="asset-detail-value">${escapeHtml(p.device_type)}</span></div>`;
+        if (p.serial_number) html += `<div class="asset-detail-row"><span class="asset-detail-label">Serial</span><span class="asset-detail-value" style="font-family:monospace;font-size:12px">${escapeHtml(p.serial_number)}</span></div>`;
         if (p.vendor || p.model) html += `<div class="asset-detail-row"><span class="asset-detail-label">Vendor/Model</span><span class="asset-detail-value">${escapeHtml([p.vendor || '', p.model || ''].filter(Boolean).join(' / '))}</span></div>`;
+        if (p.olt_rx_dbm !== undefined && p.olt_rx_dbm !== null) html += `<div class="asset-detail-row"><span class="asset-detail-label">OLT Rx</span><span class="asset-detail-value" style="font-family:monospace">${Number(p.olt_rx_dbm).toFixed(2)} dBm</span></div>`;
+        if (p.onu_rx_dbm !== undefined && p.onu_rx_dbm !== null) html += `<div class="asset-detail-row"><span class="asset-detail-label">ONU Rx</span><span class="asset-detail-value" style="font-family:monospace">${Number(p.onu_rx_dbm).toFixed(2)} dBm</span></div>`;
         if (p.mgmt_ip) html += `<div class="asset-detail-row"><span class="asset-detail-label">Management IP</span><span class="asset-detail-value">${escapeHtml(p.mgmt_ip)}</span></div>`;
         if (p.pop_site_name) html += `<div class="asset-detail-row"><span class="asset-detail-label">POP Site</span><span class="asset-detail-value">${escapeHtml(p.pop_site_name)}</span></div>`;
         if (p.splitter_count !== undefined) html += `<div class="asset-detail-row"><span class="asset-detail-label">Splitters</span><span class="asset-detail-value">${p.splitter_count}</span></div>`;
@@ -984,6 +1057,14 @@
                 let icon;
                 if (p.type === 'customer') {
                     icon = p.is_online ? icons.customer_online : icons.customer_offline;
+                } else if (p.type === 'ont') {
+                    if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
+                        icon = icons.ont_warning;
+                    } else if (p.status === 'online') {
+                        icon = icons.ont_online;
+                    } else {
+                        icon = icons.ont_offline;
+                    }
                 } else if (p.type === 'network_device') {
                     if (p.status === 'online') {
                         icon = icons.network_device_online;
@@ -1028,6 +1109,7 @@
                     case 'splice_closure': layers.closures.addLayer(marker); break;
                     case 'access_point': layers.accessPoints.addLayer(marker); break;
                     case 'network_device': layers.networkDevices.addLayer(marker); break;
+                    case 'ont': layers.onts.addLayer(marker); break;
                     case 'survey_point': layers.surveys.addLayer(marker); break;
                     case 'customer': layers.customers.addLayer(marker); break;
                 }
@@ -1079,6 +1161,7 @@
         'layer-closures': 'closures',
         'layer-access-points': 'accessPoints',
         'layer-network-devices': 'networkDevices',
+        'layer-onts': 'onts',
         'layer-surveys': 'surveys',
         'layer-customers': 'customers',
         'layer-feeder': 'feeder',
@@ -1121,6 +1204,7 @@
         splice_closure: { label: 'Splice Closure', color: '#14b8a6' },
         access_point: { label: 'Access Point', color: '#8b5cf6' },
         network_device: { label: 'Network Device', color: '#16a34a' },
+        ont: { label: 'ONT', color: '#06b6d4' },
         survey_point: { label: 'Survey', color: '#d946ef' },
         customer: { label: 'Customer', color: '#22c55e' },
         fiber_segment: { label: 'Fiber', color: '#3b82f6' },

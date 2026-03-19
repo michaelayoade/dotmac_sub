@@ -77,6 +77,7 @@ class WanServiceSpec:
     nat_enabled: bool = True
     user_vlan: int | str | None = None
     tag_transform: str = "translate"
+    tcont_profile: str = ""  # T-CONT traffic profile name on OLT
     ip_protocol: str = "ipv4"  # ipv4, dual_stack
 
 
@@ -115,6 +116,71 @@ def _render_template(template: str, context: OntProvisioningContext) -> str:
 
 class HuaweiCommandGenerator:
     """Generates Huawei OLT CLI commands from provisioning specifications."""
+
+    @staticmethod
+    def generate_tcont_gem_commands(
+        spec: ProvisioningSpec,
+        context: OntProvisioningContext,
+    ) -> list[OltCommandSet]:
+        """Generate T-CONT and GEM port creation commands.
+
+        On Huawei OLTs, T-CONTs and GEM ports are normally defined in the
+        line profile and auto-created when the ONT is registered. This method
+        generates per-ONT T-CONT/GEM commands for cases where the profile
+        specifies explicit GEM port IDs or T-CONT profiles (OMCI config method).
+
+        T-CONT types:
+            1 = fixed bandwidth
+            2 = assured bandwidth
+            3 = non-assured bandwidth (most common for ISP)
+            4 = best-effort
+            5 = mixed (assured + best-effort)
+        """
+        if not spec.wan_services:
+            return []
+
+        # Collect unique (tcont_profile, gem_index) pairs from WAN services
+        tcont_gem_pairs: list[tuple[str, int]] = []
+        seen_gems: set[int] = set()
+        for ws in spec.wan_services:
+            if ws.gem_index not in seen_gems:
+                seen_gems.add(ws.gem_index)
+                # Derive T-CONT name from the WAN service spec
+                tcont_name = getattr(ws, "tcont_profile", None) or ""
+                tcont_gem_pairs.append((tcont_name, ws.gem_index))
+
+        if not tcont_gem_pairs:
+            return []
+
+        enter_cmd = f"interface gpon {context.frame_slot}"
+        commands: list[str] = [enter_cmd]
+
+        for idx, (tcont_name, gem_index) in enumerate(tcont_gem_pairs):
+            tcont_id = idx  # T-CONT IDs are 0-based per ONT
+            # Create T-CONT (type 3 = non-assured, typical for ISP traffic)
+            if tcont_name:
+                commands.append(
+                    f"ont traffic-table ip-index {context.port} {context.ont_id} "
+                    f"{tcont_id} profile-name {tcont_name}"
+                )
+            # Map GEM port to T-CONT
+            commands.append(
+                f"ont gemport {context.port} {context.ont_id} "
+                f"{gem_index} tcont {tcont_id}"
+            )
+
+        commands.append("quit")
+
+        return [
+            OltCommandSet(
+                step="Create T-CONTs and GEM Ports",
+                commands=commands,
+                description=(
+                    f"Create {len(tcont_gem_pairs)} T-CONT/GEM mapping(s) "
+                    f"for ONT {context.ont_id} on {context.fsp}"
+                ),
+            )
+        ]
 
     @staticmethod
     def generate_service_port_commands(
@@ -313,6 +379,7 @@ class HuaweiCommandGenerator:
         """Generate all provisioning commands in sequence."""
         gen = HuaweiCommandGenerator
         result: list[OltCommandSet] = []
+        result.extend(gen.generate_tcont_gem_commands(spec, context))
         result.extend(gen.generate_service_port_commands(spec, context))
         result.extend(gen.generate_iphost_commands(spec, context))
         result.extend(gen.generate_internet_config_commands(spec, context))
@@ -380,6 +447,7 @@ def build_spec_from_profile(
                 nat_enabled=ws.nat_enabled,
                 user_vlan=user_vlan,
                 tag_transform=tag_transform,
+                tcont_profile=ws.t_cont_profile or "",
             )
         )
 

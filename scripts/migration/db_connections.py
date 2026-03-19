@@ -7,6 +7,13 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 
+# Load .env for standalone script execution
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import pymysql
 import pymysql.cursors
 from sqlalchemy import create_engine
@@ -16,18 +23,20 @@ from sshtunnel import SSHTunnelForwarder
 logger = logging.getLogger(__name__)
 
 # --- Splynx MySQL via SSH tunnel ---
-SPLYNX_SSH_HOST = "138.68.165.175"
-SPLYNX_SSH_USER = "root"
-SPLYNX_SSH_KEY = os.path.expanduser("~/.ssh/id_ed25519")
-SPLYNX_MYSQL_DB = "splynx"
-SPLYNX_MYSQL_USER = "migration"
-SPLYNX_MYSQL_PASS = "MigDotmac2026!"
+SPLYNX_SSH_HOST = os.environ.get("SPLYNX_SSH_HOST", "138.68.165.175")
+SPLYNX_SSH_USER = os.environ.get("SPLYNX_SSH_USER", "root")
+SPLYNX_SSH_KEY = os.path.expanduser(os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519"))
+SPLYNX_MYSQL_DB = os.environ.get("SPLYNX_MYSQL_DB", "splynx")
+SPLYNX_MYSQL_USER = os.environ.get("SPLYNX_MYSQL_USER", "migration")
+SPLYNX_MYSQL_PASS = os.environ.get("SPLYNX_MYSQL_PASS", "")
+if not SPLYNX_MYSQL_PASS:
+    logger.warning(
+        "SPLYNX_MYSQL_PASS not set — set via env var or .env file. "
+        "Splynx connections will fail."
+    )
 
 # --- DotMac Sub PostgreSQL ---
-DOTMAC_DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@localhost:5434/dotmac_sub",
-)
+DOTMAC_DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
 @contextmanager

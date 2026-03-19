@@ -149,6 +149,9 @@ def get_signal_thresholds(db: Session) -> tuple[float, float]:
         return DEFAULT_WARN_THRESHOLD, DEFAULT_CRIT_THRESHOLD
 
 
+# Delta threshold: alert if signal changes by more than this amount between polls
+_DEFAULT_SIGNAL_DELTA_DB = 3.0
+
 _DEFAULT_ALERT_COOLDOWN_MINUTES = 30
 
 
@@ -826,6 +829,25 @@ def poll_olt_ont_signals(
                                 "severity": "warning",
                             }))
 
+                # ±3dB signal delta detection (relative change alert).
+                # Fires regardless of absolute threshold — catches sudden
+                # fibre events even when signal is still in "good" range.
+                if (
+                    reading.olt_rx_dbm is not None
+                    and prev_signal is not None
+                    and not recently_alerted
+                ):
+                    delta = abs(reading.olt_rx_dbm - prev_signal)
+                    if delta >= _DEFAULT_SIGNAL_DELTA_DB:
+                        direction = "drop" if reading.olt_rx_dbm < prev_signal else "rise"
+                        status_transitions.append((ont, "signal_delta", {
+                            "olt_rx_dbm": reading.olt_rx_dbm,
+                            "previous_dbm": prev_signal,
+                            "delta_db": round(delta, 2),
+                            "direction": direction,
+                            "threshold_db": _DEFAULT_SIGNAL_DELTA_DB,
+                        }))
+
         except Exception as e:
             logger.error("Error updating ONT %s: %s", ont.id, e)
             errors += 1
@@ -846,6 +868,8 @@ def poll_olt_ont_signals(
                 emit_event(db, EventType.ont_online, payload, actor="system")
             elif transition == "signal_degraded":
                 emit_event(db, EventType.ont_signal_degraded, payload, actor="system")
+            elif transition == "signal_delta":
+                emit_event(db, EventType.ont_signal_delta, payload, actor="system")
         except Exception as e:
             logger.warning("Failed to emit ONT %s event: %s", transition, e)
 
